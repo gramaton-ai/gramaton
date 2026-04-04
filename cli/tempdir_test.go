@@ -27,7 +27,18 @@ func TestTempDir(t *testing.T) {
 }
 
 func TestIsInTempDir(t *testing.T) {
-	dir := filepath.Join(os.TempDir(), tempSubdir)
+	// Ensure temp dir exists so EvalSymlinks can resolve it.
+	dir, err := TempDir()
+	if err != nil {
+		t.Fatalf("TempDir: %v", err)
+	}
+
+	// Create a subdirectory so the nested path test resolves.
+	subDir := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(subDir, 0o700); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	defer os.Remove(subDir)
 
 	tests := []struct {
 		path string
@@ -82,4 +93,36 @@ func TestSweepStaleTempFiles(t *testing.T) {
 	}
 
 	_ = os.Remove(freshPath)
+}
+
+func TestSweepRemovesSymlinks(t *testing.T) {
+	dir, err := TempDir()
+	if err != nil {
+		t.Fatalf("TempDir: %v", err)
+	}
+
+	// Create a symlink inside the temp dir.
+	linkName := fmt.Sprintf("symlink-test-%d", time.Now().UnixNano())
+	linkPath := filepath.Join(dir, linkName)
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "target.json")
+	if err := os.WriteFile(targetPath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	sweepStaleTempFiles()
+
+	// Symlink should be removed regardless of age.
+	if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
+		t.Error("symlink should have been removed by sweep")
+		_ = os.Remove(linkPath) // clean up on failure
+	}
+
+	// Target should be untouched.
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Error("symlink target should not be deleted")
+	}
 }

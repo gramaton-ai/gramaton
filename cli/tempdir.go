@@ -51,8 +51,10 @@ func TempDir() (string, error) {
 }
 
 // sweepStaleTempFiles removes files in the gramaton temp directory
-// that are older than staleTempAge. Errors on individual files are
-// silently ignored -- this is best-effort cleanup.
+// that are older than staleTempAge. Only removes regular files --
+// symlinks and other non-regular entries are removed unconditionally
+// since they should not exist in our temp directory. Errors on
+// individual files are silently ignored.
 func sweepStaleTempFiles() {
 	dir := filepath.Join(os.TempDir(), tempSubdir)
 	entries, err := os.ReadDir(dir)
@@ -65,28 +67,55 @@ func sweepStaleTempFiles() {
 		if entry.IsDir() {
 			continue
 		}
+		path := filepath.Join(dir, entry.Name())
+
+		// Remove symlinks and other non-regular entries unconditionally --
+		// they should never be in our temp directory.
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			_ = os.Remove(path)
+			continue
+		}
+
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+			_ = os.Remove(path)
 		}
 	}
 }
 
 // isInTempDir reports whether path is inside the gramaton temp directory.
+// Uses EvalSymlinks to handle platform symlinks (e.g., /var -> /private/var
+// on macOS). The path argument should already be resolved via EvalSymlinks
+// by the caller when checking against symlink attacks.
 func isInTempDir(path string) bool {
 	dir := filepath.Join(os.TempDir(), tempSubdir)
-	absPath, err := filepath.Abs(path)
+
+	// Resolve both sides with EvalSymlinks to normalize platform symlinks.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return false
+		// Dir may not exist yet -- fall back to Abs.
+		resolvedDir, err = filepath.Abs(dir)
+		if err != nil {
+			return false
+		}
 	}
-	absDir, err := filepath.Abs(dir)
+
+	// For the path, try EvalSymlinks first. If the file doesn't exist,
+	// resolve the parent directory and join the base name -- this handles
+	// paths to files that haven't been created yet.
+	resolvedPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return false
+		parentResolved, perr := filepath.EvalSymlinks(filepath.Dir(path))
+		if perr != nil {
+			return false
+		}
+		resolvedPath = filepath.Join(parentResolved, filepath.Base(path))
 	}
-	rel, err := filepath.Rel(absDir, absPath)
+
+	rel, err := filepath.Rel(resolvedDir, resolvedPath)
 	if err != nil {
 		return false
 	}

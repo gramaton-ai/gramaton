@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"unicode/utf8"
 
 
@@ -25,20 +26,54 @@ func readInputJSON(filePath string, target any, limits config.LimitsConfig) erro
 }
 
 // readFileJSON reads and parses JSON from a file with the same validation
-// as readStdinJSON. Deletes the file after successful parse if it is
-// inside the gramaton temp directory.
+// as readStdinJSON. Only accepts files inside the gramaton temp directory.
+// Deletes the file after successful parse.
 func readFileJSON(path string, target any, limits config.LimitsConfig) error {
-	data, err := os.ReadFile(path)
+	// Resolve symlinks before any checks to prevent symlink-based escapes.
+	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return fmt.Errorf("read file %s: %w", path, err)
+		return fmt.Errorf("resolve file path: %w", err)
 	}
 
-	if int64(len(data)) > int64(limits.MaxJSONSize) {
+	// Reject files outside the gramaton temp directory.
+	if !isInTempDir(resolved) {
+		return fmt.Errorf("--file path must be inside the gramaton temp directory (use 'gramaton tempdir' to find it)")
+	}
+
+	// Open the file and verify it is a regular file (not a device,
+	// pipe, or anything that appeared between EvalSymlinks and Open).
+	f, err := os.Open(resolved)
+	if err != nil {
+		return fmt.Errorf("open input file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat input file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("input file is not a regular file")
+	}
+
+	// Read with size limit. Using the fd avoids TOCTOU between
+	// validation and read.
+	maxSize := int64(limits.MaxJSONSize)
+	if info.Size() > maxSize {
 		return fmt.Errorf("file exceeds maximum size (%d bytes)", limits.MaxJSONSize)
 	}
 
+	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil {
+		return fmt.Errorf("read input file: %w", err)
+	}
+
 	if len(data) == 0 {
-		return fmt.Errorf("file %s is empty", path)
+		return fmt.Errorf("input file is empty")
+	}
+
+	if int64(len(data)) > maxSize {
+		return fmt.Errorf("file exceeds maximum size (%d bytes)", limits.MaxJSONSize)
 	}
 
 	// Strip UTF-8 BOM if present.
@@ -48,24 +83,22 @@ func readFileJSON(path string, target any, limits config.LimitsConfig) error {
 
 	// Validate UTF-8.
 	if !utf8.Valid(data) {
-		return fmt.Errorf("invalid UTF-8 in file %s", path)
+		return fmt.Errorf("invalid UTF-8 in input file")
 	}
 
 	// Check for null bytes.
 	for i, b := range data {
 		if b == 0 {
-			return fmt.Errorf("null byte at position %d in file %s", i, path)
+			return fmt.Errorf("null byte at position %d in input file", i)
 		}
 	}
 
 	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("JSON parse error in file %s: %w", path, err)
+		return fmt.Errorf("JSON parse error in input file: %w", err)
 	}
 
-	// Clean up if the file is in our temp directory.
-	if isInTempDir(path) {
-		_ = os.Remove(path)
-	}
+	// Clean up -- we already verified we're in the temp dir.
+	_ = os.Remove(resolved)
 
 	return nil
 }
