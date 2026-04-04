@@ -70,10 +70,12 @@ func loadEngine() (*engine, error) {
 		for k, v := range n.Properties {
 			propIdx.Add(id, k, v)
 		}
-		// Rebuild vector index from embedding properties.
-		for _, embKey := range []string{"embedding_keywords", "embedding_short", "embedding_abstract", "embedding_full"} {
+		// Rebuild vector index using the best available embedding.
+		// Prefer full > abstract > short > keywords.
+		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
 			if v, ok := n.Properties[embKey]; ok {
-				vecIdx.Add(id+":"+embKey, v.Vector())
+				vecIdx.Add(id, v.Vector())
+				break
 			}
 		}
 	}
@@ -168,7 +170,12 @@ func (e *engine) generateEmbeddings(ctx context.Context, nodeID string) error {
 		prop := graph.VectorProperty(vec)
 		e.graph.SetNodeProperty(nodeID, keys[i], prop)
 		e.propIdx.Add(nodeID, keys[i], prop)
-		e.vecIdx.Add(nodeID+":"+keys[i], vec)
+	}
+
+	// Add the best embedding to the vector index under the node ID.
+	// Prefer full > abstract > short > keywords (last in the list wins).
+	if len(vectors) > 0 {
+		e.vecIdx.Add(nodeID, vectors[len(vectors)-1])
 	}
 
 	// Track which model generated these embeddings.
