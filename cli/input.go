@@ -8,8 +8,67 @@ import (
 	"os"
 	"unicode/utf8"
 
+
 	"github.com/brandonlattin/gramaton/config"
 )
+
+// readInputJSON reads JSON from a file (if filePath is non-empty) or stdin.
+// If the file is inside the gramaton temp directory, it is deleted after
+// successful parsing. Also sweeps stale temp files on each call.
+func readInputJSON(filePath string, target any, limits config.LimitsConfig) error {
+	sweepStaleTempFiles()
+
+	if filePath != "" {
+		return readFileJSON(filePath, target, limits)
+	}
+	return readStdinJSON(target, limits)
+}
+
+// readFileJSON reads and parses JSON from a file with the same validation
+// as readStdinJSON. Deletes the file after successful parse if it is
+// inside the gramaton temp directory.
+func readFileJSON(path string, target any, limits config.LimitsConfig) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read file %s: %w", path, err)
+	}
+
+	if int64(len(data)) > int64(limits.MaxJSONSize) {
+		return fmt.Errorf("file exceeds maximum size (%d bytes)", limits.MaxJSONSize)
+	}
+
+	if len(data) == 0 {
+		return fmt.Errorf("file %s is empty", path)
+	}
+
+	// Strip UTF-8 BOM if present.
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		data = data[3:]
+	}
+
+	// Validate UTF-8.
+	if !utf8.Valid(data) {
+		return fmt.Errorf("invalid UTF-8 in file %s", path)
+	}
+
+	// Check for null bytes.
+	for i, b := range data {
+		if b == 0 {
+			return fmt.Errorf("null byte at position %d in file %s", i, path)
+		}
+	}
+
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("JSON parse error in file %s: %w", path, err)
+	}
+
+	// Clean up if the file is in our temp directory.
+	if isInTempDir(path) {
+		_ = os.Remove(path)
+	}
+
+	return nil
+}
 
 // readStdinJSON reads JSON from stdin with size limits and timeout,
 // validates UTF-8, strips BOM, and unmarshals into the target.

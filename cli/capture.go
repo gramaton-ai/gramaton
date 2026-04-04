@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var captureFile string
+
 var captureCmd = &cobra.Command{
 	Use:   "capture",
 	Short: "Store a knowledge record",
@@ -31,6 +33,7 @@ Optional fields:
 }
 
 func init() {
+	captureCmd.Flags().StringVarP(&captureFile, "file", "f", "", "read JSON input from file instead of stdin (deleted after read if in gramaton temp dir)")
 	rootCmd.AddCommand(captureCmd)
 }
 
@@ -72,7 +75,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 
 	// Read and parse JSON from stdin with size limit and timeout.
 	var input captureInput
-	if err := readStdinJSON(&input, eng.cfg.Limits); err != nil {
+	if err := readInputJSON(captureFile, &input, eng.cfg.Limits); err != nil {
 		return writeError("input_error", err.Error(), true)
 	}
 

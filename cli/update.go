@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var updateFile string
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update a record or create an edge",
@@ -21,6 +23,7 @@ Edge creation: set id, link_to, edge_type, and optionally edge_weight.
 }
 
 func init() {
+	updateCmd.Flags().StringVarP(&updateFile, "file", "f", "", "read JSON input from file instead of stdin (deleted after read if in gramaton temp dir)")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -50,7 +53,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	var input updateInput
-	if err := readStdinJSON(&input, eng.cfg.Limits); err != nil {
+	if err := readInputJSON(updateFile, &input, eng.cfg.Limits); err != nil {
 		return writeError("input_error", err.Error(), true)
 	}
 

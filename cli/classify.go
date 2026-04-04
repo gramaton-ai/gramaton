@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var classifyFile string
+
 var classifyCmd = &cobra.Command{
 	Use:   "classify",
 	Short: "Classify a pending record",
@@ -21,6 +23,7 @@ Example:
 }
 
 func init() {
+	classifyCmd.Flags().StringVarP(&classifyFile, "file", "f", "", "read JSON input from file instead of stdin (deleted after read if in gramaton temp dir)")
 	rootCmd.AddCommand(classifyCmd)
 }
 
@@ -43,7 +46,7 @@ func runClassify(cmd *cobra.Command, args []string) error {
 	}
 
 	var input classifyInput
-	if err := readStdinJSON(&input, eng.cfg.Limits); err != nil {
+	if err := readInputJSON(classifyFile, &input, eng.cfg.Limits); err != nil {
 		return writeError("input_error", err.Error(), true)
 	}
 

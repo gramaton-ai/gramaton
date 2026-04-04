@@ -63,9 +63,14 @@ no relevant context for that field -- skip them.
 
 3. Write a summary_short (max 200 characters) that captures the essence.
 
-4. Store the record:
+4. Store the record. First get the temp directory, then write JSON
+   there and pass it with `--file`:
    ```
-   gramaton capture <<'EOF'
+   # Get the temp dir (run once per session):
+   GRAMATON_TMP=$(gramaton tempdir)
+
+   # Write JSON to $GRAMATON_TMP/<unique-name>.json using your
+   # file-write tool:
    {
      "content": "[the content]",
      "temporality": "[value]",
@@ -80,20 +85,25 @@ no relevant context for that field -- skip them.
      "context_findable_by": "[from envelope]",
      "context_related": "[from envelope]"
    }
-   EOF
+
+   # Then run:
+   gramaton capture -f $GRAMATON_TMP/<unique-name>.json
    ```
+   The file is automatically deleted after a successful read.
+   Stale temp files are cleaned up after 1 hour.
 
 5. Search for related existing records:
    ```
    gramaton search "[key entity or topic]" --top 5
    ```
-   For each relevant result, create a link:
+   For each relevant result, write link JSON to the temp dir and run:
    ```
-   gramaton update <<'EOF'
+   # Write to $GRAMATON_TMP/link-<id>.json:
    {"id": "[new-id]", "link_to": "[existing-id]",
     "edge_type": "[related_to|discusses|part_of|justifies|etc]",
     "edge_weight": [0.0-1.0]}
-   EOF
+
+   gramaton update -f $GRAMATON_TMP/link-<id>.json
    ```
 
 6. If the content is complex (a decision with reasoning, a multi-part
@@ -103,5 +113,9 @@ no relevant context for that field -- skip them.
    - Example: a decision has `justifies` edges from constraints,
      `defeats` edges to rejected alternatives
 
-All write commands take JSON on stdin. Do not explain your reasoning.
-Classify, store, link, done.
+All write commands accept JSON via `--file`/`-f` (preferred) or stdin.
+Use the file method to avoid shell escaping issues. Get the temp dir
+with `gramaton tempdir` and write files there -- gramaton cleans up
+after reading.
+
+Do not explain your reasoning. Classify, store, link, done.
