@@ -5,6 +5,27 @@ All notable changes to Gramaton are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `gramaton tempdir` command -- prints the OS-appropriate temp directory
+  path so agents can discover where to write input files
+- `--file`/`-f` flag on `capture`, `classify`, `update` -- reads JSON
+  from a file instead of stdin, avoids shell heredoc escaping issues
+  that trigger safety heuristics in agent harnesses
+- Auto-cleanup of temp files after successful read, stale file sweep
+  (1 hour) on each write command invocation
+
+### Security
+
+- Restrict `--file` to gramaton temp directory only, reject arbitrary paths
+- Resolve symlinks before path validation to prevent symlink-based escapes
+- Read via file descriptor to avoid TOCTOU between validation and read
+- Verify input is a regular file (not device, pipe, or symlink)
+- Strip absolute paths from error messages to prevent info disclosure
+- Sweep removes symlinks unconditionally from temp directory
+
 ## [0.1.0] - 2026-04-04
 
 First working release. CLI-driven knowledge store for AI agents with
@@ -62,4 +83,5 @@ property graph storage, vector search, and versioned persistence.
 - **Configuration** -- YAML config with all design doc defaults, prolly
   tree tuning parameters, activation settings, storage paths
 
+[Unreleased]: https://github.com/brandonlattin/gramaton/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/brandonlattin/gramaton/releases/tag/v0.1.0
