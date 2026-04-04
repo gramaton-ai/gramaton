@@ -16,8 +16,10 @@ import (
 // determined by a rolling hash over the key, producing
 // content-defined chunks that share structure across similar trees.
 type ProllyTree struct {
-	store    *Store
-	rootHash string
+	store          *Store
+	rootHash       string
+	targetChunkSize int
+	splitMask      uint32
 }
 
 // ProllyNode is a single node in the prolly tree. Serialized as JSON
@@ -35,15 +37,6 @@ type ProllyEntry struct {
 }
 
 const (
-	// targetChunkSize is the target number of entries per chunk.
-	// Actual size varies due to content-defined boundaries.
-	targetChunkSize = 64
-
-	// splitMask determines the probability of a boundary.
-	// A key triggers a split when fnv32(key) & splitMask == 0.
-	// With mask 0x3F (63), average chunk size is 64 entries.
-	splitMask = 0x3F
-
 	// maxTreeDepth limits recursion depth to prevent stack overflow
 	// from corrupt or cyclic chunk data.
 	maxTreeDepth = 32
@@ -51,16 +44,53 @@ const (
 	// maxNodeEntries limits the number of entries per tree node
 	// during deserialization to prevent memory exhaustion.
 	maxNodeEntries = 100_000
+
+	// Default prolly tree parameters. Used when config values are
+	// zero (e.g., in tests or when loading trees created by others).
+	defaultTargetChunkSize = 64
+	defaultSplitBits       = 6
 )
 
-// NewProllyTree creates an empty prolly tree.
-func NewProllyTree(s *Store) *ProllyTree {
-	return &ProllyTree{store: s}
+// ProllyConfig holds tuning parameters for prolly tree construction.
+type ProllyConfig struct {
+	// TargetChunkSize is the target number of entries per leaf chunk.
+	// Controls the granularity of structural sharing between similar
+	// trees. Default: 64.
+	TargetChunkSize int
+
+	// SplitBits is the number of low bits of FNV-1a hash that must be
+	// zero to trigger a chunk boundary. Average chunk size is 2^bits.
+	// Default: 6 (average 64 entries per chunk).
+	SplitBits int
+}
+
+// NewProllyTree creates an empty prolly tree with the given config.
+func NewProllyTree(s *Store, cfg ProllyConfig) *ProllyTree {
+	target := cfg.TargetChunkSize
+	if target <= 0 {
+		target = defaultTargetChunkSize
+	}
+	bits := cfg.SplitBits
+	if bits <= 0 {
+		bits = defaultSplitBits
+	}
+	return &ProllyTree{
+		store:           s,
+		targetChunkSize: target,
+		splitMask:       (1 << bits) - 1,
+	}
 }
 
 // LoadProllyTree loads a prolly tree from an existing root hash.
+// Read-only operations (Get, AllEntries, Diff) do not need config
+// since they traverse existing structure without creating new chunks.
 func LoadProllyTree(s *Store, rootHash string) *ProllyTree {
-	return &ProllyTree{store: s, rootHash: rootHash}
+	return &ProllyTree{
+		store:           s,
+		rootHash:        rootHash,
+		targetChunkSize: defaultTargetChunkSize,
+		splitMask:       (1 << defaultSplitBits) - 1,
+	}
 }
 
 // RootHash returns the root hash, or empty string for an empty tree.
@@ -112,7 +142,7 @@ func (t *ProllyTree) buildLevel(entries []ProllyEntry, leaf bool) ([]string, []s
 	start := 0
 	for i, e := range entries {
 		// Check for split boundary after minimum chunk size.
-		atBoundary := i > start && shouldSplit(e.Key) && (i-start) >= targetChunkSize/4
+		atBoundary := i > start && t.shouldSplit(e.Key) && (i-start) >= t.targetChunkSize/4
 		atEnd := i == len(entries)-1
 
 		if atBoundary || atEnd {
@@ -310,10 +340,10 @@ func (t *ProllyTree) readNode(hash string) (*ProllyNode, error) {
 
 // shouldSplit returns true if this key should trigger a chunk boundary.
 // Uses FNV-1a hash for fast, deterministic boundary detection.
-func shouldSplit(key string) bool {
+func (t *ProllyTree) shouldSplit(key string) bool {
 	h := fnv.New32a()
 	h.Write([]byte(key))
-	return h.Sum32()&splitMask == 0
+	return h.Sum32()&t.splitMask == 0
 }
 
 // EntryCount returns the total number of key-value entries in the tree.

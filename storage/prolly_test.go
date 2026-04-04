@@ -17,7 +17,7 @@ func testStore(t *testing.T) *Store {
 
 func TestProllyTreeEmpty(t *testing.T) {
 	s := testStore(t)
-	tree := NewProllyTree(s)
+	tree := NewProllyTree(s, ProllyConfig{})
 	if tree.RootHash() != "" {
 		t.Fatal("empty tree should have empty root hash")
 	}
@@ -38,7 +38,7 @@ func TestProllyTreeEmpty(t *testing.T) {
 
 func TestProllyTreeBuildAndGet(t *testing.T) {
 	s := testStore(t)
-	tree := NewProllyTree(s)
+	tree := NewProllyTree(s, ProllyConfig{})
 
 	entries := make([]ProllyEntry, 100)
 	for i := range entries {
@@ -73,7 +73,7 @@ func TestProllyTreeBuildAndGet(t *testing.T) {
 
 func TestProllyTreeAllEntries(t *testing.T) {
 	s := testStore(t)
-	tree := NewProllyTree(s)
+	tree := NewProllyTree(s, ProllyConfig{})
 
 	entries := make([]ProllyEntry, 200)
 	for i := range entries {
@@ -100,7 +100,7 @@ func TestProllyTreeAllEntries(t *testing.T) {
 
 func TestProllyTreeEntryCount(t *testing.T) {
 	s := testStore(t)
-	tree := NewProllyTree(s)
+	tree := NewProllyTree(s, ProllyConfig{})
 
 	entries := make([]ProllyEntry, 150)
 	for i := range entries {
@@ -119,7 +119,7 @@ func TestProllyTreeEntryCount(t *testing.T) {
 
 func TestProllyTreeLoadFromRoot(t *testing.T) {
 	s := testStore(t)
-	tree := NewProllyTree(s)
+	tree := NewProllyTree(s, ProllyConfig{})
 
 	entries := make([]ProllyEntry, 50)
 	for i := range entries {
@@ -143,10 +143,10 @@ func TestProllyTreeDiffIdentical(t *testing.T) {
 		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
 	}
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries)
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries)
 
 	added, removed, err := tree1.Diff(tree2)
@@ -170,10 +170,10 @@ func TestProllyTreeDiffAdded(t *testing.T) {
 	copy(entries2, entries1)
 	entries2[100] = ProllyEntry{Key: "k0100", Value: "v0100"}
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries1)
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries2)
 
 	added, removed, err := tree1.Diff(tree2)
@@ -202,10 +202,10 @@ func TestProllyTreeDiffRemoved(t *testing.T) {
 	entries2 := make([]ProllyEntry, 99)
 	copy(entries2, entries1[:99]) // Remove the last entry.
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries1)
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries2)
 
 	added, removed, err := tree1.Diff(tree2)
@@ -235,10 +235,10 @@ func TestProllyTreeDiffModified(t *testing.T) {
 	copy(entries2, entries1)
 	entries2[50].Value = "modified" // Change one value.
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries1)
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries2)
 
 	added, removed, err := tree1.Diff(tree2)
@@ -270,11 +270,11 @@ func TestProllyTreeDiffSharesChunks(t *testing.T) {
 	copy(entries2, entries1)
 	entries2[1000] = ProllyEntry{Key: "k1000", Value: "v1000"}
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries1)
 	chunksBefore, _ := s.List()
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries2)
 	chunksAfter, _ := s.List()
 
@@ -291,13 +291,13 @@ func TestProllyTreeDiffSharesChunks(t *testing.T) {
 func TestProllyTreeDiffEmptyToFull(t *testing.T) {
 	s := testStore(t)
 
-	empty := NewProllyTree(s)
+	empty := NewProllyTree(s, ProllyConfig{})
 
 	entries := make([]ProllyEntry, 50)
 	for i := range entries {
 		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%02d", i), Value: fmt.Sprintf("v%02d", i)}
 	}
-	full := NewProllyTree(s)
+	full := NewProllyTree(s, ProllyConfig{})
 	full.Build(entries)
 
 	added, removed, err := empty.Diff(full)
@@ -336,10 +336,10 @@ func TestProllyTreeDeterministic(t *testing.T) {
 		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
 	}
 
-	tree1 := NewProllyTree(s)
+	tree1 := NewProllyTree(s, ProllyConfig{})
 	tree1.Build(entries)
 
-	tree2 := NewProllyTree(s)
+	tree2 := NewProllyTree(s, ProllyConfig{})
 	tree2.Build(entries)
 
 	if tree1.RootHash() != tree2.RootHash() {

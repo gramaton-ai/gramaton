@@ -26,7 +26,11 @@ type Commit struct {
 // Save persists the current graph state as a commit to the store.
 // Nodes and edges are stored as content-addressed chunks. Their IDs
 // and chunk hashes are indexed in prolly trees for efficient diff.
-func (g *Graph) Save(s *storage.Store, parent string, message string) (*Commit, error) {
+func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...storage.ProllyConfig) (*Commit, error) {
+	var treeCfg storage.ProllyConfig
+	if len(pCfg) > 0 {
+		treeCfg = pCfg[0]
+	}
 	// Write all nodes and build the ID -> hash mapping.
 	nodeMap := make(map[string]string, len(g.nodes))
 	for _, id := range sortedNodeIDs(g) {
@@ -58,12 +62,12 @@ func (g *Graph) Save(s *storage.Store, parent string, message string) (*Commit, 
 	}
 
 	// Build prolly trees.
-	nodeTree := storage.NewProllyTree(s)
+	nodeTree := storage.NewProllyTree(s, treeCfg)
 	if err := nodeTree.Build(storage.SortedEntries(nodeMap)); err != nil {
 		return nil, fmt.Errorf("save: build node tree: %w", err)
 	}
 
-	edgeTree := storage.NewProllyTree(s)
+	edgeTree := storage.NewProllyTree(s, treeCfg)
 	if err := edgeTree.Build(storage.SortedEntries(edgeMap)); err != nil {
 		return nil, fmt.Errorf("save: build edge tree: %w", err)
 	}

@@ -98,7 +98,10 @@ func loadEngine() (*engine, error) {
 
 // save commits the current graph state and updates HEAD and the active branch ref.
 func (e *engine) save(message string) (*graph.Commit, error) {
-	commit, err := e.graph.Save(e.store, e.headHash, message)
+	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
+		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
+		SplitBits:       e.cfg.Storage.ProllySplitBits,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("save commit: %w", err)
 	}

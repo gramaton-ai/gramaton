@@ -23,6 +23,7 @@ type Config struct {
 	Concepts   ConceptsConfig   `yaml:"concepts"`
 	Dedup      DedupConfig      `yaml:"dedup"`
 	Graph      GraphConfig      `yaml:"graph"`
+	Storage    StorageConfig    `yaml:"storage"`
 	Limits     LimitsConfig     `yaml:"limits"`
 	Merge      MergeConfig      `yaml:"merge"`
 }
@@ -121,6 +122,24 @@ type LimitsConfig struct {
 	MaxWritesPerSecond int           `yaml:"max_writes_per_second"`
 }
 
+type StorageConfig struct {
+	// ProllyTargetChunkSize is the target number of entries per leaf
+	// chunk in the prolly tree. Controls the tradeoff between chunk
+	// sharing granularity and per-chunk overhead. Smaller values mean
+	// finer sharing (less data rewritten per mutation) but more tree
+	// nodes and disk I/O on traversal. Larger values mean coarser
+	// sharing but fewer nodes. Default 64 works well for stores up
+	// to ~100K nodes.
+	ProllyTargetChunkSize int `yaml:"prolly_target_chunk_size"`
+
+	// ProllySplitBits is the number of low bits of the FNV-1a hash
+	// that must be zero to trigger a chunk boundary. Determines the
+	// average chunk size: 2^bits entries. 6 bits = average 64 entries.
+	// 5 bits = 32 entries (finer sharing, more overhead). 7 bits = 128
+	// entries (coarser sharing, less overhead). Must be between 3 and 10.
+	ProllySplitBits int `yaml:"prolly_split_bits"`
+}
+
 type MergeConfig struct {
 	ConflictStrategy string `yaml:"conflict_strategy"`
 }
@@ -197,6 +216,11 @@ func Defaults() Config {
 
 		Graph: GraphConfig{
 			EdgeWeightTraversalThreshold: 0.3,
+		},
+
+		Storage: StorageConfig{
+			ProllyTargetChunkSize: 64,
+			ProllySplitBits:       6,
 		},
 
 		Limits: LimitsConfig{
