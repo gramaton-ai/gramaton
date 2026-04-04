@@ -642,28 +642,149 @@ Use the official MCP Go SDK: `modelcontextprotocol/go-sdk`
 - Preferred over `mark3labs/mcp-go` (MIT, 8.5K stars) due to
   institutional backing and lower bus-factor risk
 
-## Open Questions
+## Decided: Migration from v0.1
 
-### 1. Migration from v0.1
+No breaking changes. Smooth upgrade path:
 
-- Existing stores: v0.2 server reads the same store format. No
-  migration needed for the data.
-- Existing CLAUDE.md instructions: must be updated to use the new
-  `--file` flag (already done) and eventually the HTTP API.
-- Agent prompts: subagent-capture.md and subagent-curate.md already
-  updated for `--file`. Server mode is transparent to agents using
-  the CLI.
-- The CLI command surface stays identical. Existing scripts and
-  integrations work without changes.
+- **Store format:** v0.2 server reads the existing v0.1 store
+  unchanged. Content-addressed storage, prolly trees, commit format
+  -- all the same. No migration tool needed.
+- **CLI surface:** identical commands, identical flags, identical
+  output. Existing scripts and agent integrations work without
+  changes. The only difference is that commands now delegate to the
+  daemon instead of doing direct file I/O.
+- **Agent prompts:** CLAUDE.md and subagent instructions continue to
+  work via CLI. MCP is an additional (better) path, not a
+  replacement. Agents can migrate to MCP tools at their own pace.
+- **Configuration:** `gramaton.yaml` gains new server, LLM, and auth
+  sections. Existing fields are unchanged. New fields have sensible
+  defaults.
+- **First run after upgrade:** first CLI command auto-starts the
+  daemon. User sees the same output, slightly faster on subsequent
+  calls. No ceremony, no "please run gramaton migrate."
 
-### 2. Implementation Phasing
+## Decided: Implementation Plan
 
-What is the minimum viable server? Suggested phases:
+### Goal
 
-- **Phase 1:** Server with core CRUD (records, search, status).
-  CLI thin client for those commands. Everything else stays direct.
-- **Phase 2:** Remaining endpoints (branches, diff, log, ingest).
-  Full CLI migration to thin client.
-- **Phase 3:** MCP endpoint, additional embedding providers,
-  autonomous curation.
-- **Phase 4:** Auth, TLS, network access (Topology B2).
+v0.2 must be a complete, functional tool that proves Gramaton's value
+against flat files and RAG. This is not a minimum viable product --
+it is the full realization of the server architecture with every
+feature needed for real-world comparison.
+
+**What Gramaton must prove:**
+- Epistemic metadata (confidence, temporality, status) produces
+  better retrieval than raw vector similarity
+- Knowledge graph relationships (edges, traversal, activation) surface
+  context that chunked documents miss
+- Curation pipeline means knowledge improves over time, not just
+  accumulates
+- Versioning provides provenance that flat files and RAG lack
+- MCP integration makes the agent experience frictionless
+
+Everything ships. The question is build order, not what to defer.
+
+### Build Order
+
+Sequenced by dependency -- each layer builds on the previous.
+
+**Layer 1: Server core**
+
+The daemon, HTTP listener, graph-level RWMutex, server lifecycle
+(auto-start, idle timeout, graceful shutdown, PID/lock management).
+This is the foundation everything else runs on.
+
+- `gramaton serve` (foreground and background)
+- Server info file and CLI discovery
+- Health endpoint (`GET /v1/status`)
+- Graph loaded into memory on startup, indexes rebuilt
+
+**Layer 2: REST API -- all endpoints**
+
+Every endpoint from the API spec, wired to the in-memory graph
+engine. The existing CLI handler logic (runCapture, runSearch, etc.)
+is refactored into HTTP handlers.
+
+- Records: create, get, update, delete, classify, history, edges
+- Search and explore
+- Pending
+- Branches: create, list, checkout, merge, discard
+- History: log, diff
+- Operations: revert, reembed, ingest (local + upload)
+
+**Layer 3: CLI thin client**
+
+Rewrite every CLI command to delegate to the server via HTTP.
+Auto-start the daemon on first call. Same command surface, same
+output format.
+
+- All existing commands work identically
+- `--file` flag still works (server reads from temp dir)
+- Server discovery via server.json
+
+**Layer 4: MCP**
+
+Streamable HTTP endpoint on the daemon. Stdio bridge command.
+13 MCP tools with typed JSON schemas. This is the usability
+breakthrough -- agents interact without shell friction.
+
+- `modelcontextprotocol/go-sdk` integration
+- `/mcp` endpoint on the daemon
+- `gramaton mcp` stdio bridge
+- Tool definitions with input schemas
+- Updated agent integration docs
+
+**Layer 5: Additional embedding providers**
+
+OpenAI-compatible and AWS Bedrock embedding providers. Provider
+selection in config. Model migration via reembed.
+
+- `embed/openai/` package (covers OpenAI, Azure, Mistral, Together)
+- `embed/bedrock/` package
+- `gramaton init` guided provider selection
+
+**Layer 6: Autonomous curation**
+
+Optional LLM provider config. Server-side classification on schedule.
+Complement to piggyback and manual curation.
+
+- LLM provider interface and implementations
+- Classification prompt with injection resistance
+- Configurable schedule (interval or pending threshold)
+- LLM output validation against existing field constraints
+
+**Layer 7: Auth and network access**
+
+Bearer token generation, constant-time comparison, TLS support.
+Enables Topology B2 (remote server).
+
+- Auto-generated auth token for non-loopback bind
+- `crypto/subtle` token comparison
+- Built-in TLS (cert/key config)
+- SSRF protection on ingest local path mode
+- Request body size limits (`http.MaxBytesReader`)
+
+### Testing Strategy
+
+Each layer gets integration tests before moving to the next.
+The v0.1 test suite continues to pass throughout -- the server
+must be a transparent improvement, not a rewrite that breaks
+things.
+
+End-to-end validation after Layer 4: an agent session using MCP
+tools to capture, search, classify, link, branch, diff, and
+explore. This is the proof point.
+
+### What This Enables
+
+After all layers ship, Gramaton supports:
+
+| Client | Access method |
+|--------|---------------|
+| Claude Code | MCP tools (Streamable HTTP) |
+| Kiro | MCP tools (Streamable HTTP) |
+| OpenClaw | REST API or MCP via mcporter |
+| Custom agents | REST API |
+| Power users | CLI (thin client to daemon) |
+| Remote containers | REST API or MCP, auth + TLS |
+| Curation | Autonomous (server), piggyback (agent), or manual (CLI) |
