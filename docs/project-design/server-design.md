@@ -275,27 +275,38 @@ Agent session pauses (container suspends). Later it resumes, possibly
 on different hardware. Server treats every startup as potential recovery.
 Content-addressed storage with atomic writes guarantees consistency.
 
+## Decided: Concurrency Model
+
+Graph-level `sync.RWMutex`. One lock for the entire graph and indexes.
+
+**Read operations** (search, inspect, explore, pending, log, diff,
+status) acquire `RLock`. Multiple readers run concurrently and never
+block each other.
+
+**Write operations** (capture, update, classify, delete, merge, revert)
+acquire `Lock`. One writer at a time. Blocks readers during the write.
+
+**Persistence:** synchronous commit on every write. Prolly trees make
+this cheap (O(changes), not O(N)). No write-ahead log, no batched
+commits. No crash window where data could be lost.
+
+**Branch model:** one active graph in memory. Branch operations
+(checkout, merge) are exclusive operations that reload the graph
+under the write lock. All clients see the same branch.
+Per-request branch selection deferred to v0.3.
+
+**Commit history:** linear. The RWMutex serializes all writes, so
+commits form a clean chain with no merge needed.
+
+**Rationale:** the workload is 2-5 concurrent clients, read-heavy,
+with writes lasting milliseconds. Graph-level locking is ~20 lines
+of code, correct by construction, and will never be a bottleneck for
+a personal knowledge store. If it ever becomes one, the upgrade path
+is branch-level locking.
+
 ## Open Questions
 
-### 1. Concurrency Model
-
-How do simultaneous reads and writes interleave?
-
-Options:
-- **Graph-level RWLock:** One writer at a time, multiple concurrent
-  readers. Simple, potentially contentious under high write load.
-- **Branch-level locking:** Writes to different branches don't block
-  each other. Reads never block. More granular, more complex.
-- **Node-level locking:** Maximum concurrency, maximum complexity.
-  Probably overkill for a personal knowledge store.
-
-Considerations:
-- Most workloads are read-heavy (search, inspect, explore)
-- Writes are relatively infrequent (capture, update, classify)
-- The store is personal (not multi-tenant), so contention is low
-- Correctness matters more than throughput
-
-### 2. Server Lifecycle
+### 1. Server Lifecycle
 
 - **Port selection:** Fixed default port? Random with discovery?
   How to avoid conflicts with other gramaton instances?
@@ -309,7 +320,7 @@ Considerations:
 - **Graceful shutdown:** Finish in-flight requests, flush writes,
   then exit. Signal handling (SIGTERM, SIGINT).
 
-### 3. CLI-to-Server Discovery
+### 2. CLI-to-Server Discovery
 
 How does the CLI find the running server?
 
@@ -321,7 +332,7 @@ Options:
   risks conflicts.
 - **Environment variable:** `GRAMATON_PORT` or `GRAMATON_URL`.
 
-### 4. Authentication
+### 3. Authentication
 
 Needed for Topology B2 (network-accessible server). Not needed for
 loopback-only access.
@@ -335,7 +346,7 @@ Options:
 For v0.2, bearer token generated on startup is likely sufficient.
 API key for remote access. mTLS deferred.
 
-### 5. Migration from v0.1
+### 4. Migration from v0.1
 
 - Existing stores: v0.2 server reads the same store format. No
   migration needed for the data.
@@ -347,7 +358,7 @@ API key for remote access. mTLS deferred.
 - The CLI command surface stays identical. Existing scripts and
   integrations work without changes.
 
-### 6. MCP Integration
+### 5. MCP Integration
 
 - Same server, separate endpoint (`/mcp`).
 - MCP tools map to API endpoints (search, capture, inspect, etc.).
@@ -355,7 +366,7 @@ API key for remote access. mTLS deferred.
   MCP protocol.
 - Question: does MCP support require a separate library/dependency?
 
-### 7. Implementation Phasing
+### 6. Implementation Phasing
 
 What is the minimum viable server? Suggested phases:
 
