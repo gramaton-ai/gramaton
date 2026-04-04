@@ -304,35 +304,106 @@ of code, correct by construction, and will never be a bottleneck for
 a personal knowledge store. If it ever becomes one, the upgrade path
 is branch-level locking.
 
+## Decided: Server Lifecycle and Discovery
+
+### Port and Bind Address
+
+Default port 42982 (unassigned by IANA, no known conflicts).
+Default bind address `127.0.0.1` (loopback only). Both configurable:
+
+```yaml
+server:
+  port: 42982
+  bind: "127.0.0.1"
+  idle_timeout: 30m
+```
+
+Fixed default port rather than OS-assigned because:
+- Remote/container users need a predictable port for firewall rules
+- Documentation and examples are clearer with a known port
+- Discovery is simpler
+
+### Server Info File
+
+The server writes `~/.gramaton/server.json` on startup:
+
+```json
+{
+  "pid": 12345,
+  "port": 42982,
+  "bind": "127.0.0.1",
+  "started_at": "2026-04-04T12:00:00Z",
+  "store_dir": "/Users/b/.gramaton/data",
+  "version": "0.2.0"
+}
+```
+
+The `store_dir` field prevents connecting to the wrong server when
+multiple stores exist (via `--config-dir`).
+
+### CLI-to-Server Discovery
+
+1. Read `~/.gramaton/server.json` (or `<config-dir>/server.json`)
+2. If found and PID is alive and store_dir matches → connect
+3. If found but PID is dead → delete stale file, start server
+4. If not found → start server
+
+### `gramaton serve`
+
+```
+gramaton serve            # background (default)
+gramaton serve --fg       # foreground, for containers/debugging
+gramaton serve --stop     # send shutdown to running server
+```
+
+### Auto-Start
+
+When the CLI needs a server and none is running:
+
+1. Start `gramaton serve` as a detached background process
+   - Unix: `Setsid: true` to create new session
+   - Windows: `CREATE_NEW_PROCESS_GROUP`
+2. Poll `GET /v1/status` with backoff (up to 10 seconds)
+3. Send the original request once the server is ready
+
+Race condition protection: server acquires `flock` on
+`~/.gramaton/server.lock` before binding. Second instance detects
+the port is taken, checks the health endpoint, and connects.
+
+### Idle Timeout
+
+Default: 30 minutes, configurable. Server tracks the time of the
+last client HTTP request. Background goroutine checks every 60
+seconds. Internal operations (autonomous curation, stale sweep)
+do not reset the timer.
+
+### Graceful Shutdown
+
+Triggered by SIGTERM, SIGINT, idle timeout, or `POST /v1/shutdown`
+(loopback only):
+
+1. Stop accepting new connections
+2. Wait for in-flight requests (30 second deadline)
+3. Let in-progress autonomous curation finish its current record
+4. Remove `server.json`
+5. Release lock file
+6. Exit 0
+
+Uses Go's `http.Server.Shutdown(ctx)` for steps 1-2.
+
+### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Server crashes | Atomic writes protect store. CLI detects dead PID, cleans up, restarts. |
+| Two stores, two servers | Each config dir has its own server.json. Different ports. |
+| Port conflict (non-gramaton) | Server fails to bind, exits with error. CLI reports it. |
+| Container SIGKILL | Same as crash. Next startup recovers cleanly. |
+| Slow graph load | CLI polls /v1/status with backoff, times out after 10s. |
+
 ## Open Questions
 
-### 1. Server Lifecycle
-
-- **Port selection:** Fixed default port? Random with discovery?
-  How to avoid conflicts with other gramaton instances?
-- **PID management:** PID file location and format. How to detect
-  stale PID files from crashed processes.
-- **Auto-start mechanism:** How does the CLI start the server as a
-  background process? `os/exec` with detach? Platform-specific
-  (launchd, systemd)?
-- **Idle timeout:** What counts as "idle"? No requests for N minutes?
-  Configurable? Default value?
-- **Graceful shutdown:** Finish in-flight requests, flush writes,
-  then exit. Signal handling (SIGTERM, SIGINT).
-
-### 2. CLI-to-Server Discovery
-
-How does the CLI find the running server?
-
-Options:
-- **Port in config file:** Server writes its port to a known location.
-  CLI reads it.
-- **Lock file with port:** PID file includes port number.
-- **Fixed default port:** Convention-based (e.g., 19876). Simple, but
-  risks conflicts.
-- **Environment variable:** `GRAMATON_PORT` or `GRAMATON_URL`.
-
-### 3. Authentication
+### 1. Authentication (Topology B2)
 
 Needed for Topology B2 (network-accessible server). Not needed for
 loopback-only access.
@@ -346,7 +417,7 @@ Options:
 For v0.2, bearer token generated on startup is likely sufficient.
 API key for remote access. mTLS deferred.
 
-### 4. Migration from v0.1
+### 2. Migration from v0.1
 
 - Existing stores: v0.2 server reads the same store format. No
   migration needed for the data.
@@ -358,7 +429,7 @@ API key for remote access. mTLS deferred.
 - The CLI command surface stays identical. Existing scripts and
   integrations work without changes.
 
-### 5. MCP Integration
+### 3. MCP Integration
 
 - Same server, separate endpoint (`/mcp`).
 - MCP tools map to API endpoints (search, capture, inspect, etc.).
@@ -366,7 +437,7 @@ API key for remote access. mTLS deferred.
   MCP protocol.
 - Question: does MCP support require a separate library/dependency?
 
-### 6. Implementation Phasing
+### 4. Implementation Phasing
 
 What is the minimum viable server? Suggested phases:
 
