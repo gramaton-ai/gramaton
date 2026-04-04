@@ -126,6 +126,12 @@ func runIngest(cmd *cobra.Command, args []string) error {
 			warnings = append(warnings, fmt.Sprintf("embedding failed for %s: %s", path, err))
 		}
 
+		if numChunks, err := eng.chunkIfNeeded(context.Background(), n.ID); err != nil {
+			warnings = append(warnings, fmt.Sprintf("chunking failed for %s: %s", path, err))
+		} else if numChunks > 0 {
+			warnings = append(warnings, fmt.Sprintf("%s chunked into %d segments", filepath.Base(path), numChunks))
+		}
+
 		created++
 	}
 

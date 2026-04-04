@@ -189,3 +189,89 @@ func (e *engine) generateEmbeddings(ctx context.Context, nodeID string) error {
 
 	return nil
 }
+
+// checkDedup checks if a node's embedding is too similar to existing records.
+// Returns the ID and similarity of the closest match above threshold, or empty
+// string if no near-duplicate found.
+func (e *engine) checkDedup(nodeID string) (string, float64) {
+	if e.vecIdx.Len() < 2 {
+		return "", 0
+	}
+
+	n, ok := e.graph.GetNode(nodeID)
+	if !ok {
+		return "", 0
+	}
+
+	// Find the node's best embedding.
+	var vec []float32
+	for _, key := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
+		if v, ok := n.Properties[key]; ok {
+			vec = v.Vector()
+			break
+		}
+	}
+	if vec == nil {
+		return "", 0
+	}
+
+	// Search for the most similar existing record (excluding self).
+	results := e.vecIdx.Search(vec, 2, nil)
+	for _, r := range results {
+		if r.NodeID == nodeID {
+			continue
+		}
+		if float64(r.Similarity) >= e.cfg.Dedup.SimilarityThreshold {
+			return r.NodeID, float64(r.Similarity)
+		}
+	}
+	return "", 0
+}
+
+// chunkIfNeeded splits a node's content_full into chunk child nodes if it
+// exceeds the configured threshold. Each chunk gets its own embedding and
+// a chunk_of edge to the parent. Returns the number of chunks created.
+func (e *engine) chunkIfNeeded(ctx context.Context, nodeID string) (int, error) {
+	n, ok := e.graph.GetNode(nodeID)
+	if !ok {
+		return 0, fmt.Errorf("node %s not found", nodeID)
+	}
+
+	contentProp, ok := n.Properties["content_full"]
+	if !ok {
+		return 0, nil
+	}
+	content := contentProp.String()
+
+	chunks := graph.ChunkText(
+		content,
+		e.cfg.Chunking.Threshold,
+		e.cfg.Chunking.ChunkSize,
+		e.cfg.Chunking.Overlap,
+	)
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+
+	for _, chunkText := range chunks {
+		chunkNode := e.graph.AddNode(graph.Properties{
+			"content_full": graph.StringProperty(chunkText),
+		})
+
+		// Create chunk_of edge.
+		e.graph.AddEdge(chunkNode.ID, nodeID, "chunk_of", 1.0, nil)
+
+		// Index chunk properties.
+		for k, v := range chunkNode.Properties {
+			e.propIdx.Add(chunkNode.ID, k, v)
+		}
+
+		// Generate embedding for the chunk.
+		if err := e.generateEmbeddings(ctx, chunkNode.ID); err != nil {
+			// Non-fatal: chunk stored without embedding.
+			continue
+		}
+	}
+
+	return len(chunks), nil
+}

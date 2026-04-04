@@ -181,6 +181,26 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		warnings = append(warnings, fmt.Sprintf("embedding generation failed: %s. Record stored without embeddings.", err))
 	}
 
+	// Check for near-duplicates.
+	if dupID, sim := eng.checkDedup(n.ID); dupID != "" {
+		msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
+		if eng.cfg.Dedup.Action == "reject" {
+			// Remove the node we just created.
+			eng.propIdx.RemoveNode(n.ID, n.Properties)
+			eng.vecIdx.Remove(n.ID)
+			eng.graph.DeleteNode(n.ID)
+			return writeError("duplicate", msg, false)
+		}
+		warnings = append(warnings, msg)
+	}
+
+	// Chunk long content.
+	if numChunks, err := eng.chunkIfNeeded(context.Background(), n.ID); err != nil {
+		warnings = append(warnings, fmt.Sprintf("chunking failed: %s", err))
+	} else if numChunks > 0 {
+		warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
+	}
+
 	// Save commit.
 	if _, err := eng.save("capture"); err != nil {
 		return writeError("save_error", err.Error(), false)
