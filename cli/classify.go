@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/spf13/cobra"
@@ -40,32 +37,47 @@ type classifyInput struct {
 }
 
 func runClassify(cmd *cobra.Command, args []string) error {
-	data, err := io.ReadAll(os.Stdin)
+	eng, err := loadEngine()
 	if err != nil {
-		return writeError("stdin_error", "Failed to read stdin", true)
-	}
-	if len(data) == 0 {
-		return writeError("empty_input", "No input received on stdin", true)
+		return writeError("engine_error", err.Error(), false)
 	}
 
 	var input classifyInput
-	if err := json.Unmarshal(data, &input); err != nil {
-		return writeError("malformed_json", fmt.Sprintf("JSON parse error: %s", err), true)
+	if err := readStdinJSON(&input, eng.cfg.Limits); err != nil {
+		return writeError("input_error", err.Error(), true)
 	}
+
 	if input.ID == "" {
 		return writeError("missing_field", "id is required", true)
 	}
 
-	eng, err := loadEngine()
-	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+	// Validate fields.
+	if err := validateFloat64Range("confidence", input.Confidence, 0.0, 1.0); err != nil {
+		return writeError("invalid_field", err.Error(), true)
+	}
+	if err := validateFloat64Range("importance", input.Importance, 0.0, 1.0); err != nil {
+		return writeError("invalid_field", err.Error(), true)
+	}
+	if err := validateEnum("temporality", input.Temporality, validTemporalities); err != nil {
+		return writeError("invalid_field", err.Error(), true)
+	}
+	if err := validateEnum("knowledge_type", input.KnowledgeType, validKnowledgeTypes); err != nil {
+		return writeError("invalid_field", err.Error(), true)
+	}
+	if err := validateEnum("epistemic_status", input.EpistemicStatus, validEpistemicStatuses); err != nil {
+		return writeError("invalid_field", err.Error(), true)
+	}
+	if len(input.Keywords) > eng.cfg.Limits.MaxKeywords {
+		return writeError("invalid_field", fmt.Sprintf("keywords exceeds maximum (%d)", eng.cfg.Limits.MaxKeywords), true)
+	}
+	if err := validateStringLength("summary_short", input.SummaryShort, eng.cfg.Limits.MaxSummaryShort); err != nil {
+		return writeError("invalid_field", err.Error(), true)
 	}
 
 	if _, ok := eng.graph.GetNode(input.ID); !ok {
 		return writeError("not_found", fmt.Sprintf("record %s not found", input.ID), false)
 	}
 
-	// Apply classification fields.
 	if input.Temporality != "" {
 		setProp(eng, input.ID, "temporality", graph.StringProperty(input.Temporality))
 	}
@@ -91,7 +103,6 @@ func runClassify(cmd *cobra.Command, args []string) error {
 		setProp(eng, input.ID, "content_abstract", graph.StringProperty(input.SummaryAbstract))
 	}
 
-	// Mark as processed.
 	setProp(eng, input.ID, "processing_status", graph.StringProperty("processed"))
 
 	if _, err := eng.save("classify"); err != nil {

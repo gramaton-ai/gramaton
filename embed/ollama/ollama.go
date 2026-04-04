@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // Client is an embedding provider that calls Ollama's HTTP API.
@@ -21,7 +22,7 @@ func New(endpoint, model string) *Client {
 	return &Client{
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{},
+		client:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
 

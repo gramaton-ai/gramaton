@@ -50,6 +50,25 @@ var branchCheckoutCmd = &cobra.Command{
 	RunE:  runBranchCheckout,
 }
 
+// validBranchName checks that a branch name is safe for use as a filename.
+func validBranchName(name string) error {
+	if name == "" {
+		return fmt.Errorf("branch name is required")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("branch name too long (max 128 characters)")
+	}
+	for _, c := range name {
+		if c == '/' || c == '\\' || c == '.' || c == '\x00' {
+			return fmt.Errorf("branch name contains invalid character %q", c)
+		}
+	}
+	if name == "HEAD" || name == "BRANCH" {
+		return fmt.Errorf("reserved name %q", name)
+	}
+	return nil
+}
+
 func init() {
 	branchCmd.AddCommand(branchCreateCmd)
 	branchCmd.AddCommand(branchListCmd)
@@ -77,7 +96,7 @@ func activeBranch(dataDir string) string {
 }
 
 func setActiveBranch(dataDir, name string) error {
-	return os.WriteFile(filepath.Join(dataDir, "BRANCH"), []byte(name), 0o644)
+	return atomicWriteFile(filepath.Join(dataDir, "BRANCH"), []byte(name), 0o600)
 }
 
 func readRef(dataDir, name string) (string, error) {
@@ -91,7 +110,7 @@ func readRef(dataDir, name string) (string, error) {
 func writeRef(dataDir, name, hash string) error {
 	dir := refsDir(dataDir)
 	os.MkdirAll(dir, 0o755)
-	return os.WriteFile(filepath.Join(dir, name), []byte(hash), 0o644)
+	return atomicWriteFile(filepath.Join(dir, name), []byte(hash), 0o600)
 }
 
 func deleteRef(dataDir, name string) error {
@@ -102,6 +121,9 @@ func deleteRef(dataDir, name string) error {
 
 func runBranchCreate(cmd *cobra.Command, args []string) error {
 	name := args[0]
+	if err := validBranchName(name); err != nil {
+		return writeError("invalid_name", err.Error(), false)
+	}
 	if name == "main" {
 		return writeError("invalid_name", "cannot create a branch named 'main'", false)
 	}
@@ -164,6 +186,9 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 
 func runBranchCheckout(cmd *cobra.Command, args []string) error {
 	name := args[0]
+	if err := validBranchName(name); err != nil {
+		return writeError("invalid_name", err.Error(), false)
+	}
 
 	eng, err := loadEngine()
 	if err != nil {
@@ -177,7 +202,7 @@ func runBranchCheckout(cmd *cobra.Command, args []string) error {
 
 	// Update HEAD to point to branch's commit.
 	headPath := filepath.Join(eng.cfg.DataDir, "HEAD")
-	if err := os.WriteFile(headPath, []byte(hash), 0o644); err != nil {
+	if err := atomicWriteFile(headPath, []byte(hash), 0o600); err != nil {
 		return writeError("write_error", err.Error(), false)
 	}
 
@@ -193,6 +218,9 @@ func runBranchCheckout(cmd *cobra.Command, args []string) error {
 
 func runBranchMerge(cmd *cobra.Command, args []string) error {
 	name := args[0]
+	if err := validBranchName(name); err != nil {
+		return writeError("invalid_name", err.Error(), false)
+	}
 	if name == "main" {
 		return writeError("invalid", "cannot merge main into itself", false)
 	}
@@ -239,6 +267,9 @@ func runBranchMerge(cmd *cobra.Command, args []string) error {
 
 func runBranchDiscard(cmd *cobra.Command, args []string) error {
 	name := args[0]
+	if err := validBranchName(name); err != nil {
+		return writeError("invalid_name", err.Error(), false)
+	}
 	if name == "main" {
 		return writeError("invalid", "cannot discard main", false)
 	}
@@ -257,7 +288,7 @@ func runBranchDiscard(cmd *cobra.Command, args []string) error {
 		mainHash, err := readRef(eng.cfg.DataDir, "main")
 		if err == nil {
 			headPath := filepath.Join(eng.cfg.DataDir, "HEAD")
-			os.WriteFile(headPath, []byte(mainHash), 0o644)
+			atomicWriteFile(headPath, []byte(mainHash), 0o600)
 		}
 		setActiveBranch(eng.cfg.DataDir, "main")
 	}

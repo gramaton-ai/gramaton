@@ -152,7 +152,21 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	})
 }
 
+// isSymlink returns true if the path is a symbolic link.
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
 func expandPath(path string, recursive bool) ([]string, error) {
+	// Reject symlinks at the top level.
+	if isSymlink(path) {
+		return nil, fmt.Errorf("symlinks not followed: %s", path)
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		// Try as glob.
@@ -168,7 +182,6 @@ func expandPath(path string, recursive bool) ([]string, error) {
 	}
 
 	if !recursive {
-		// Non-recursive: only files in the directory.
 		entries, err := os.ReadDir(path)
 		if err != nil {
 			return nil, err
@@ -176,17 +189,27 @@ func expandPath(path string, recursive bool) ([]string, error) {
 		var files []string
 		for _, e := range entries {
 			if !e.IsDir() {
-				files = append(files, filepath.Join(path, e.Name()))
+				fp := filepath.Join(path, e.Name())
+				if isSymlink(fp) {
+					continue // skip symlinks
+				}
+				files = append(files, fp)
 			}
 		}
 		return files, nil
 	}
 
-	// Recursive walk.
+	// Recursive walk -- skip symlinks.
 	var files []string
 	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip errors
+			return nil
+		}
+		if isSymlink(p) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if !d.IsDir() {
 			files = append(files, p)

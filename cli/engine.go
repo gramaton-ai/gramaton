@@ -117,7 +117,7 @@ func (e *engine) save(message string) (*graph.Commit, error) {
 	}
 
 	headPath := filepath.Join(e.cfg.DataDir, "HEAD")
-	if err := os.WriteFile(headPath, []byte(commit.Hash), 0o644); err != nil {
+	if err := atomicWriteFile(headPath, []byte(commit.Hash), 0o600); err != nil {
 		return nil, fmt.Errorf("write HEAD: %w", err)
 	}
 

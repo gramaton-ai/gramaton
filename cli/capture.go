@@ -2,12 +2,10 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"time"
 
+	"github.com/brandonlattin/gramaton/config"
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/spf13/cobra"
 )
@@ -38,25 +36,25 @@ func init() {
 
 // captureInput is the JSON schema for capture input.
 type captureInput struct {
-	Content          string   `json:"content"`
-	Temporality      string   `json:"temporality,omitempty"`
-	Confidence       *float64 `json:"confidence,omitempty"`
-	KnowledgeType    string   `json:"knowledge_type,omitempty"`
-	EpistemicStatus  string   `json:"epistemic_status,omitempty"`
-	Importance       *float64 `json:"importance,omitempty"`
-	Keywords         []string `json:"keywords,omitempty"`
-	SummaryShort     string   `json:"summary_short,omitempty"`
-	SummaryAbstract  string   `json:"summary_abstract,omitempty"`
-	SourceRef        string   `json:"source_ref,omitempty"`
+	Content           string   `json:"content"`
+	Temporality       string   `json:"temporality,omitempty"`
+	Confidence        *float64 `json:"confidence,omitempty"`
+	KnowledgeType     string   `json:"knowledge_type,omitempty"`
+	EpistemicStatus   string   `json:"epistemic_status,omitempty"`
+	Importance        *float64 `json:"importance,omitempty"`
+	Keywords          []string `json:"keywords,omitempty"`
+	SummaryShort      string   `json:"summary_short,omitempty"`
+	SummaryAbstract   string   `json:"summary_abstract,omitempty"`
+	SourceRef         string   `json:"source_ref,omitempty"`
 	SourceCredibility *float64 `json:"source_credibility,omitempty"`
-	TestimonyHops    *int64   `json:"testimony_hops,omitempty"`
-	ContextAbout     string   `json:"context_about,omitempty"`
-	ContextWho       string   `json:"context_who,omitempty"`
-	ContextPrompted  string   `json:"context_prompted,omitempty"`
-	ContextFindable  string   `json:"context_findable_by,omitempty"`
-	ContextRelated   string   `json:"context_related,omitempty"`
-	ValidFrom        string   `json:"valid_from,omitempty"`
-	ValidUntil       string   `json:"valid_until,omitempty"`
+	TestimonyHops     *int64   `json:"testimony_hops,omitempty"`
+	ContextAbout      string   `json:"context_about,omitempty"`
+	ContextWho        string   `json:"context_who,omitempty"`
+	ContextPrompted   string   `json:"context_prompted,omitempty"`
+	ContextFindable   string   `json:"context_findable_by,omitempty"`
+	ContextRelated    string   `json:"context_related,omitempty"`
+	ValidFrom         string   `json:"valid_from,omitempty"`
+	ValidUntil        string   `json:"valid_until,omitempty"`
 }
 
 // captureOutput is the JSON response from capture.
@@ -66,28 +64,26 @@ type captureOutput struct {
 }
 
 func runCapture(cmd *cobra.Command, args []string) error {
-	// Read JSON from stdin.
-	data, err := io.ReadAll(os.Stdin)
+	// Load engine first so we have config limits for stdin reading.
+	eng, err := loadEngine()
 	if err != nil {
-		return writeError("stdin_error", "Failed to read stdin", true)
-	}
-	if len(data) == 0 {
-		return writeError("empty_input", "No input received on stdin", true)
+		return writeError("engine_error", err.Error(), false)
 	}
 
+	// Read and parse JSON from stdin with size limit and timeout.
 	var input captureInput
-	if err := json.Unmarshal(data, &input); err != nil {
-		return writeError("malformed_json", fmt.Sprintf("JSON parse error: %s", err), true)
+	if err := readStdinJSON(&input, eng.cfg.Limits); err != nil {
+		return writeError("input_error", err.Error(), true)
 	}
 
+	// Validate required fields.
 	if input.Content == "" {
 		return writeError("missing_field", "content is required", true)
 	}
 
-	// Load engine.
-	eng, err := loadEngine()
-	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+	// Validate field values.
+	if err := validateCaptureInput(&input, eng.cfg.Limits); err != nil {
+		return writeError("invalid_field", err.Error(), true)
 	}
 
 	// Build properties.
@@ -96,7 +92,6 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		"created_at":   graph.TimestampProperty(time.Now().UTC()),
 	}
 
-	// Determine processing status.
 	hasClassification := input.Temporality != "" || input.Confidence != nil
 	if hasClassification {
 		props["processing_status"] = graph.StringProperty("processed")
@@ -104,7 +99,6 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		props["processing_status"] = graph.StringProperty("captured")
 	}
 
-	// Set optional metadata.
 	if input.Temporality != "" {
 		props["temporality"] = graph.StringProperty(input.Temporality)
 	}
@@ -164,28 +158,21 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Initialize lifecycle metadata.
 	props["access_count"] = graph.Int64Property(0)
 
-	// Create the node.
 	n := eng.graph.AddNode(props)
-
-	// Index all properties.
 	for k, v := range n.Properties {
 		eng.propIdx.Add(n.ID, k, v)
 	}
 
-	// Generate embeddings.
 	var warnings []string
 	if err := eng.generateEmbeddings(context.Background(), n.ID); err != nil {
 		warnings = append(warnings, fmt.Sprintf("embedding generation failed: %s. Record stored without embeddings.", err))
 	}
 
-	// Check for near-duplicates.
 	if dupID, sim := eng.checkDedup(n.ID); dupID != "" {
 		msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
 		if eng.cfg.Dedup.Action == "reject" {
-			// Remove the node we just created.
 			eng.propIdx.RemoveNode(n.ID, n.Properties)
 			eng.vecIdx.Remove(n.ID)
 			eng.graph.DeleteNode(n.ID)
@@ -194,24 +181,54 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		warnings = append(warnings, msg)
 	}
 
-	// Chunk long content.
 	if numChunks, err := eng.chunkIfNeeded(context.Background(), n.ID); err != nil {
 		warnings = append(warnings, fmt.Sprintf("chunking failed: %s", err))
 	} else if numChunks > 0 {
 		warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
 	}
 
-	// Save commit.
 	if _, err := eng.save("capture"); err != nil {
 		return writeError("save_error", err.Error(), false)
 	}
 
-	// Output result.
-	out := captureOutput{
-		ID:       n.ID,
-		Warnings: warnings,
+	return printJSON(captureOutput{ID: n.ID, Warnings: warnings})
+}
+
+func validateCaptureInput(input *captureInput, limits config.LimitsConfig) error {
+	if err := validateStringLength("content", input.Content, limits.MaxContentLength); err != nil {
+		return err
 	}
-	return printJSON(out)
+	if err := validateFloat64Range("confidence", input.Confidence, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateFloat64Range("importance", input.Importance, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateFloat64Range("source_credibility", input.SourceCredibility, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateEnum("temporality", input.Temporality, validTemporalities); err != nil {
+		return err
+	}
+	if err := validateEnum("knowledge_type", input.KnowledgeType, validKnowledgeTypes); err != nil {
+		return err
+	}
+	if err := validateEnum("epistemic_status", input.EpistemicStatus, validEpistemicStatuses); err != nil {
+		return err
+	}
+	if len(input.Keywords) > limits.MaxKeywords {
+		return fmt.Errorf("keywords array exceeds maximum (%d items)", limits.MaxKeywords)
+	}
+	if err := validateStringLength("summary_short", input.SummaryShort, limits.MaxSummaryShort); err != nil {
+		return err
+	}
+	if err := validateStringLength("summary_abstract", input.SummaryAbstract, limits.MaxSummaryAbstract); err != nil {
+		return err
+	}
+	if err := validateStringFieldUTF8("content", input.Content); err != nil {
+		return err
+	}
+	return nil
 }
 
 type errorOutput struct {

@@ -309,6 +309,11 @@ func (p Property) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// maxDeserializeAlloc is the maximum number of elements allowed in a
+// deserialized slice (vector, string list, bytes). Prevents memory
+// exhaustion from crafted data.
+const maxDeserializeAlloc = 10_000_000
+
 // UnmarshalProperty decodes a Property from bytes produced by MarshalBinary.
 func UnmarshalProperty(data []byte) (Property, error) {
 	if len(data) == 0 {
@@ -353,6 +358,9 @@ func UnmarshalProperty(data []byte) (Property, error) {
 		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 			return Property{}, fmt.Errorf("unmarshal Vector length: %w", err)
 		}
+		if length > maxDeserializeAlloc {
+			return Property{}, fmt.Errorf("unmarshal Vector: length %d exceeds maximum", length)
+		}
 		vec := make([]float32, length)
 		for i := range vec {
 			if err := binary.Read(r, binary.BigEndian, &vec[i]); err != nil {
@@ -364,6 +372,9 @@ func UnmarshalProperty(data []byte) (Property, error) {
 		var length uint32
 		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 			return Property{}, fmt.Errorf("unmarshal StringList length: %w", err)
+		}
+		if length > maxDeserializeAlloc {
+			return Property{}, fmt.Errorf("unmarshal StringList: length %d exceeds maximum", length)
 		}
 		list := make([]string, length)
 		for i := range list {
@@ -378,6 +389,9 @@ func UnmarshalProperty(data []byte) (Property, error) {
 		var length uint32
 		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
 			return Property{}, fmt.Errorf("unmarshal Bytes length: %w", err)
+		}
+		if length > maxDeserializeAlloc {
+			return Property{}, fmt.Errorf("unmarshal Bytes: length %d exceeds maximum", length)
 		}
 		b := make([]byte, length)
 		if length > 0 {
@@ -499,6 +513,9 @@ func readString(r *bytes.Reader) (string, error) {
 	}
 	if length == 0 {
 		return "", nil
+	}
+	if length > maxDeserializeAlloc {
+		return "", fmt.Errorf("string length %d exceeds maximum", length)
 	}
 	b := make([]byte, length)
 	if _, err := r.Read(b); err != nil {

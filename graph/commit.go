@@ -150,17 +150,6 @@ func unmarshalCommit(data []byte) (*Commit, error) {
 	return &c, nil
 }
 
-// HeadFile is the filename that stores the current HEAD commit hash.
-const HeadFile = "HEAD"
-
-// SaveHead writes the current HEAD commit hash to the store as a
-// well-known key. This is how we find the latest state on startup.
-func SaveHead(s store, commitHash string) error {
-	// Write HEAD as a simple file. We use a separate mechanism from
-	// content-addressed storage since HEAD is mutable.
-	_, err := s.Write([]byte("HEAD:" + commitHash))
-	return err
-}
 
 
 func sortedNodeIDs(g *Graph) []string {

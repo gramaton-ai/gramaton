@@ -30,7 +30,7 @@ type Store struct {
 // New creates a Store rooted at the given directory. The directory is
 // created if it does not exist.
 func New(root string) (*Store, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("storage: create root %q: %w", root, err)
 	}
 	return &Store{root: root}, nil
@@ -47,7 +47,10 @@ func (s *Store) Root() string {
 func (s *Store) Write(data []byte) (string, error) {
 	hash := Hash(data)
 
-	path := s.chunkPath(hash)
+	path, err := s.chunkPath(hash)
+	if err != nil {
+		return "", err
+	}
 
 	// Fast path: chunk already exists.
 	if _, err := os.Stat(path); err == nil {
@@ -56,7 +59,7 @@ func (s *Store) Write(data []byte) (string, error) {
 
 	// Ensure prefix directory exists.
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("storage: create dir %q: %w", dir, err)
 	}
 
@@ -97,7 +100,11 @@ func (s *Store) Write(data []byte) (string, error) {
 // Read returns the data for the given content hash. Returns an error
 // wrapping ErrNotFound if the chunk does not exist.
 func (s *Store) Read(hash string) ([]byte, error) {
-	data, err := os.ReadFile(s.chunkPath(hash))
+	path, err := s.chunkPath(hash)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("storage: chunk %s: %w", hash, ErrNotFound)
@@ -109,14 +116,22 @@ func (s *Store) Read(hash string) ([]byte, error) {
 
 // Has reports whether a chunk with the given hash exists.
 func (s *Store) Has(hash string) bool {
-	_, err := os.Stat(s.chunkPath(hash))
-	return err == nil
+	path, err := s.chunkPath(hash)
+	if err != nil {
+		return false
+	}
+	_, statErr := os.Stat(path)
+	return statErr == nil
 }
 
 // Delete removes a chunk by hash. Returns ErrNotFound if the chunk
 // does not exist.
 func (s *Store) Delete(hash string) error {
-	err := os.Remove(s.chunkPath(hash))
+	path, err := s.chunkPath(hash)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("storage: chunk %s: %w", hash, ErrNotFound)
@@ -157,8 +172,22 @@ func (s *Store) List() ([]string, error) {
 
 // chunkPath returns the filesystem path for a given content hash.
 // Layout: <root>/<first-2-chars>/<full-hash>
-func (s *Store) chunkPath(hash string) string {
-	return filepath.Join(s.root, hash[:2], hash)
+// Returns an error if the hash is not a valid hex string.
+func (s *Store) chunkPath(hash string) (string, error) {
+	if !isValidHex(hash) || len(hash) < 2 {
+		return "", fmt.Errorf("storage: invalid hash %q", hash)
+	}
+	return filepath.Join(s.root, hash[:2], hash), nil
+}
+
+// isValidHex reports whether s contains only lowercase hex characters.
+func isValidHex(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // ErrNotFound is returned when a chunk does not exist in the store.
