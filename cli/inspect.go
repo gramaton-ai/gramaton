@@ -50,6 +50,17 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		return writeError("not_found", fmt.Sprintf("record %s not found", nodeID), false)
 	}
 
+	// Record access and spread activation.
+	now := time.Now().UTC()
+	eng.graph.RecordAccess(nodeID, now, graph.ActivationConfig{
+		BaseAmount:        eng.cfg.Activation.BaseAmount,
+		AttenuationFactor: eng.cfg.Activation.AttenuationFactor,
+	})
+	eng.save("access")
+
+	// Re-read node after access update.
+	n, _ = eng.graph.GetNode(nodeID)
+
 	// Convert properties to a JSON-friendly format.
 	props := make(map[string]any, len(n.Properties))
 	for k, v := range n.Properties {

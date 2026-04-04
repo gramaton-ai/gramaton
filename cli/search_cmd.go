@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/brandonlattin/gramaton/graph"
 	"github.com/brandonlattin/gramaton/search"
 	"github.com/spf13/cobra"
 )
@@ -69,6 +71,19 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	results, err := eng.searcher.Execute(context.Background(), q)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
+	}
+
+	// Record access and spread activation for returned results.
+	if len(results) > 0 {
+		now := time.Now().UTC()
+		activationCfg := graph.ActivationConfig{
+			BaseAmount:        eng.cfg.Activation.BaseAmount,
+			AttenuationFactor: eng.cfg.Activation.AttenuationFactor,
+		}
+		for _, r := range results {
+			eng.graph.RecordAccess(r.ID, now, activationCfg)
+		}
+		eng.save("access")
 	}
 
 	return printJSON(results)
