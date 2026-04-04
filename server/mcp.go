@@ -46,12 +46,12 @@ func (s *Server) MCPServer() *mcp.Server {
 func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	type searchInput struct {
 		Text              string   `json:"text,omitempty" jsonschema:"search query text"`
-		Top               int      `json:"top,omitempty" jsonschema:"number of results (default 10)"`
+		Top               int      `json:"top,omitempty" jsonschema:"integer, number of results (default 10)"`
 		Temporality       string   `json:"temporality,omitempty" jsonschema:"filter: immutable|durable|temporal|ephemeral"`
 		KnowledgeType     string   `json:"knowledge_type,omitempty" jsonschema:"filter: episodic|semantic|procedural|conceptual|reference"`
 		EpistemicStatus   string   `json:"epistemic_status,omitempty" jsonschema:"filter: well_established|probable|speculative|contested|refuted"`
-		ConfidenceMin     *float64 `json:"confidence_min,omitempty" jsonschema:"minimum confidence (0.0-1.0)"`
-		ConfidenceMax     *float64 `json:"confidence_max,omitempty" jsonschema:"maximum confidence (0.0-1.0)"`
+		ConfidenceMin     *float64 `json:"confidence_min,omitempty" jsonschema:"number between 0.0 and 1.0"`
+		ConfidenceMax     *float64 `json:"confidence_max,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		IncludeHistorical bool     `json:"include_historical,omitempty" jsonschema:"include records past valid_until"`
 		Since             string   `json:"since,omitempty" jsonschema:"filter: created after date (YYYY-MM-DD or RFC3339)"`
 	}
@@ -123,22 +123,26 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	type captureInput struct {
 		Content           string   `json:"content" jsonschema:"the knowledge to store (required)"`
 		Temporality       string   `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
-		Confidence        *float64 `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
+		Confidence        *float64 `json:"confidence,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		KnowledgeType     string   `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
 		EpistemicStatus   string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
-		Importance        *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
-		Keywords          []string `json:"keywords,omitempty" jsonschema:"search keywords"`
+		Importance        *float64 `json:"importance,omitempty" jsonschema:"number between 0.0 and 1.0"`
+		Keywords          []string `json:"keywords,omitempty" jsonschema:"array of keyword strings for search"`
 		SummaryShort      string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
 		SummaryAbstract   string   `json:"summary_abstract,omitempty" jsonschema:"longer summary"`
 		SourceRef         string   `json:"source_ref,omitempty" jsonschema:"source URL or path"`
-		SourceCredibility *float64 `json:"source_credibility,omitempty" jsonschema:"0.0-1.0"`
+		SourceCredibility *float64 `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		ContextAbout      string   `json:"context_about,omitempty" jsonschema:"topic/domain"`
 		ContextWho        string   `json:"context_who,omitempty" jsonschema:"entities involved"`
 		ContextFindable   string   `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture",
-		Description: "Store a knowledge record in the graph. Returns the new record ID.",
+		Name: "gramaton_capture",
+		Description: `Store a knowledge record in the graph. Returns the new record ID.
+
+Example: gramaton_capture(content="User prefers dark mode", temporality="durable", confidence=0.95, knowledge_type="semantic", keywords=["preference", "ui"], summary_short="User prefers dark mode")
+
+IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args captureInput) (*mcp.CallToolResult, any, error) {
 		if args.Content == "" {
 			return mcpErr("content is required")
@@ -347,11 +351,11 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 
 	type classifyInput struct {
 		ID              string   `json:"id" jsonschema:"record ID to classify"`
-		Temporality     string   `json:"temporality,omitempty"`
-		Confidence      *float64 `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
-		KnowledgeType   string   `json:"knowledge_type,omitempty"`
-		EpistemicStatus string   `json:"epistemic_status,omitempty"`
-		Keywords        []string `json:"keywords,omitempty"`
+		Temporality     string   `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
+		Confidence      *float64 `json:"confidence,omitempty" jsonschema:"number between 0.0 and 1.0"`
+		KnowledgeType   string   `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
+		EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
+		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
 		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
