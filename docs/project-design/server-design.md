@@ -54,6 +54,12 @@ gramaton server (daemon)
   guarantees consistency. Every startup is treated as potential recovery.
 - **The store directory is the only state.** Mount it into a new
   container, start gramaton, and all knowledge is there.
+- **High-quality, well-supported dependencies only.** No risky or
+  niche libraries. Dependencies must be: well-maintained (active
+  commits, multiple contributors), industry-standard, and licensed
+  under MIT or Apache 2.0 for enterprise compatibility. We don't
+  want to solve all problems ourselves, but we don't take on
+  dependencies that could become liabilities.
 
 ## Decisions Made
 
@@ -531,6 +537,111 @@ Mitigations (defense in depth, not prevention):
 - Ultimately the consuming agent decides what to trust
 - This risk should be documented in the agent integration guide
 
+## Decided: MCP Integration
+
+### Why MCP is High Priority
+
+MCP is not just a protocol integration -- it solves the core usability
+problem. Today, every capture, classify, and link operation goes through
+the shell, triggering heredoc safety heuristics and requiring user
+approval. MCP eliminates this entirely: agents call typed tools with
+structured parameters. No shell, no escaping, no permission prompts.
+
+### Transport Strategy
+
+**Primary: Streamable HTTP** on the same server, same port.
+
+The daemon serves MCP at `/mcp` alongside the REST API. No additional
+process. No stdio reliability issues (stdout contamination, orphaned
+processes, silent hangs). The server is already running -- MCP is just
+another protocol on the same HTTP listener.
+
+**Secondary: stdio bridge** for clients that only support stdio.
+
+`gramaton mcp` is a thin stateless process that auto-starts the daemon
+and translates stdio JSON-RPC to HTTP API calls. If it crashes, the
+daemon keeps running. No state loss. The stdio reliability problems
+(process lifecycle coupling, reconnection races) are mitigated because
+the bridge is stateless.
+
+```
+MCP-native agents (Claude Code, Cursor):
+  Agent <--Streamable HTTP--> gramaton server :42982/mcp
+
+Stdio-only agents:
+  Agent <--stdio--> gramaton mcp <--HTTP--> gramaton server :42982
+
+REST API agents (OpenClaw, custom):
+  Agent <--HTTP--> gramaton server :42982/v1/...
+```
+
+### MCP Tools (13)
+
+All tools map to REST API endpoints. The MCP layer is thin protocol
+translation, not business logic.
+
+| Tool | Maps to | Description |
+|------|---------|-------------|
+| `gramaton_search` | `POST /v1/search` | Search the knowledge store |
+| `gramaton_capture` | `POST /v1/records` | Store a record |
+| `gramaton_inspect` | `GET /v1/records/{id}` | Get full record details |
+| `gramaton_update` | `PATCH /v1/records/{id}` | Update record properties |
+| `gramaton_link` | `POST /v1/records/{id}/edges` | Create an edge between records |
+| `gramaton_classify` | `POST /v1/records/{id}/classify` | Classify a pending record |
+| `gramaton_explore` | `POST /v1/explore` | Graph traversal |
+| `gramaton_pending` | `GET /v1/pending` | List unclassified records |
+| `gramaton_status` | `GET /v1/status` | Health and stats |
+| `gramaton_branch` | `/v1/branches/*` | Create, checkout, merge, discard branches |
+| `gramaton_diff` | `GET /v1/diff` | What changed since a date/topic |
+| `gramaton_log` | `GET /v1/log` | Commit history, per-record history |
+| `gramaton_reembed` | `POST /v1/reembed` | Regenerate stale embeddings |
+
+Not exposed as MCP tools (CLI/API only):
+- `revert` -- destructive, requires explicit user intent
+- `ingest` -- complex (file uploads, bulk), better via CLI or API
+
+### Agent Workflow Patterns
+
+The dominant capture workflow is three MCP calls:
+
+```
+gramaton_capture(content="...", temporality="durable", ...)
+  → returns {id: "01ABC..."}
+gramaton_search(text="related topics")
+  → returns related records
+gramaton_link(id="01ABC...", target_id="01DEF...", edge_type="related_to")
+```
+
+Common read pattern is two calls:
+
+```
+gramaton_search(text="auth decisions")
+  → scan results
+gramaton_inspect(id="01ABC...")
+  → full content for the relevant record
+```
+
+Curation is a tight loop of classify + search + link per record.
+
+### Impact on Agent Integration
+
+| Before (v0.1) | After (v0.2) |
+|---------------|--------------|
+| CLAUDE.md teaches how to call gramaton (heredocs, file flags, command syntax) | MCP handles mechanics; CLAUDE.md teaches when and why (behavioral guidance) |
+| Shell permission prompts on every capture | MCP tools auto-allowed or approved once |
+| Agent-specific instructions (Claude Code, Kiro, OpenClaw) | Universal MCP tools work across any MCP-compatible harness |
+| Agents collapse Write + Bash into heredocs, triggering safety heuristics | No shell involvement at all |
+
+### Go MCP Library
+
+Use the official MCP Go SDK: `modelcontextprotocol/go-sdk`
+
+- License: Apache-2.0 (enterprise-compatible)
+- Maintained by Google engineers under the MCP GitHub org
+- 4.3K stars, actively developed (last commit April 2026)
+- Preferred over `mark3labs/mcp-go` (MIT, 8.5K stars) due to
+  institutional backing and lower bus-factor risk
+
 ## Open Questions
 
 ### 1. Migration from v0.1
@@ -545,15 +656,7 @@ Mitigations (defense in depth, not prevention):
 - The CLI command surface stays identical. Existing scripts and
   integrations work without changes.
 
-### 2. MCP Integration
-
-- Same server, separate endpoint (`/mcp`).
-- MCP tools map to API endpoints (search, capture, inspect, etc.).
-- MCP tool discovery: server advertises available tools via the
-  MCP protocol.
-- Question: does MCP support require a separate library/dependency?
-
-### 3. Implementation Phasing
+### 2. Implementation Phasing
 
 What is the minimum viable server? Suggested phases:
 
