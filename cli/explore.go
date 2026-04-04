@@ -53,5 +53,11 @@ func runExplore(cmd *cobra.Command, args []string) error {
 	}
 
 	sub := eng.graph.Traverse(nodeID, opts)
-	return printJSON(sub)
+	return printJSON(struct {
+		graph.Subgraph
+		Curation CurationStatus `json:"curation"`
+	}{
+		Subgraph: sub,
+		Curation: computeCurationStatus(eng.graph, eng.propIdx),
+	})
 }

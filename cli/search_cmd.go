@@ -98,5 +98,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return printJSON(results)
+	return printJSON(struct {
+		Results  []search.Result `json:"results"`
+		Curation CurationStatus  `json:"curation"`
+	}{
+		Results:  results,
+		Curation: computeCurationStatus(eng.graph, eng.propIdx),
+	})
 }

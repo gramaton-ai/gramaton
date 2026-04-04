@@ -106,7 +106,13 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		out.Related = append(out.Related, rel)
 	}
 
-	return printJSON(out)
+	return printJSON(struct {
+		inspectOutput
+		Curation CurationStatus `json:"curation"`
+	}{
+		inspectOutput: out,
+		Curation:      computeCurationStatus(eng.graph, eng.propIdx),
+	})
 }
 
 func inspectMetadataSummary(props graph.Properties) string {
