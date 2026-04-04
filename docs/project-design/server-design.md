@@ -102,6 +102,9 @@ classification still work. Three mechanisms, no single point of failure:
 | Piggyback         | Agent sees overdue in response   | Agent with LLM access   |
 | Manual            | User runs classify               | Human judgment          |
 
+**Privacy note:** cloud LLM providers send record content off-device.
+`gramaton init` must warn about this. Ollama keeps everything local.
+
 ### Tiered Capability
 
 Every tier is fully functional. Higher tiers add capability, nothing
@@ -350,7 +353,11 @@ multiple stores exist (via `--config-dir`).
 ### CLI-to-Server Discovery
 
 1. Read `~/.gramaton/server.json` (or `<config-dir>/server.json`)
-2. If found and PID is alive and store_dir matches → connect
+2. If found and PID is alive and store_dir matches:
+   a. Hit `GET /v1/status` to verify it's a gramaton process
+      (guards against PID reuse by a different process)
+   b. If health check passes → connect
+   c. If health check fails → treat as stale, delete file, start server
 3. If found but PID is dead → delete stale file, start server
 4. If not found → start server
 
@@ -455,8 +462,11 @@ server:
 
 ### Scope
 
-- `/v1/shutdown` is always restricted to loopback, regardless of
-  auth. Even with a valid token, remote shutdown is not allowed.
+- `/v1/shutdown` is always restricted to loopback. If auth is
+  enabled (non-loopback bind), shutdown also requires a valid token
+  as defense in depth.
+- Tokens are accepted only via the `Authorization` header, never
+  via URL query string (query strings leak to logs and history).
 - mTLS and OAuth are out of scope. Personal tool, single user.
 
 ## Security Considerations
@@ -467,10 +477,16 @@ server:
 accepts a local file path. A remote attacker with a valid auth token
 could read arbitrary server files via `{"path": "/etc/shadow"}`.
 
-Mitigation: local path mode is restricted to loopback requests only.
-Network clients must use the upload mode (send file content in the
-request body). The server checks the source address -- if non-loopback
-and the request uses `path` instead of file content, reject with 403.
+Mitigations (layered):
+1. Local path mode is restricted to loopback requests only. Network
+   clients must use upload mode (file content in the request body).
+   The server checks the source address -- if non-loopback and the
+   request uses `path` instead of file content, reject with 403.
+2. Even from loopback, paths must be under explicitly configured
+   allowed directories (`ingest_allowed_paths` in config). An agent
+   tricked via prompt injection into ingesting `/etc/shadow` or
+   `~/.ssh/id_ed25519` is blocked by the allowlist. Default: current
+   working directory only.
 
 **Token timing attacks.** Bearer token comparison must use
 `crypto/subtle.ConstantTimeCompare` to prevent timing-based token
@@ -484,6 +500,21 @@ existing `MaxJSONSize` config limit. File uploads (ingest) get a
 separate, larger configurable limit (default 50MB per file, 200MB
 per bulk request).
 
+**HTTP server timeouts.** Without read/write/idle timeouts, a
+Slowloris attack can exhaust server goroutines by opening many
+connections and sending data slowly. Go's default is no timeout.
+
+Mitigation: configure `http.Server` timeouts:
+```go
+server := &http.Server{
+    ReadTimeout:  10 * time.Second,
+    WriteTimeout: 30 * time.Second,
+    IdleTimeout:  120 * time.Second,
+}
+```
+Long-running operations (reembed, bulk ingest) need streaming
+responses or a longer write timeout with per-handler override.
+
 ### High
 
 **Auth token and API key leakage.** Bearer tokens, embedding provider
@@ -491,17 +522,39 @@ API keys, and LLM provider API keys must never appear in server logs,
 error messages, or API responses. The server must redact `Authorization`
 headers and credential values from all output.
 
-**File permissions.** All sensitive files must be 0o600:
-- `server.json` -- if writable by an attacker, they could redirect
-  the CLI to a malicious server
-- `auth_token` -- full store access if leaked
-- `gramaton.yaml` -- contains API keys for cloud providers
+**Token in URL query string.** Some clients might send `?token=xxx`
+instead of the `Authorization` header. URL query strings appear in
+access logs, proxy logs, and browser history. The server must only
+accept tokens via the `Authorization` header and explicitly reject
+query string auth with a clear error.
+
+**Error verbosity.** API error responses must not contain stack
+traces, internal file paths, or system information. Internal errors
+return a generic message with an error code; diagnostic details go
+to server-side logs only. Extend the path-stripping discipline from
+the v0.1 `--file` security fix to all HTTP error responses.
+
+**File and directory permissions.** All sensitive files must be 0o600,
+config directory must be 0o700:
+- `~/.gramaton/` directory -- 0o700 (owner-only listing and traversal)
+- `server.json` -- 0o600 (if writable by attacker, redirects CLI
+  to a malicious server)
+- `auth_token` -- 0o600 (full store access if leaked)
+- `gramaton.yaml` -- 0o600 (contains API keys for cloud providers)
+- `gramaton init` should verify and fix directory permissions
 
 ### Medium
 
 **Auto-start binary resolution.** The CLI starts `gramaton serve` as
 a subprocess. Must use `os.Executable()` (resolved absolute path),
 not `os.Args[0]` (could be relative or manipulated via PATH).
+
+**Environment sanitization on auto-start.** The child server process
+inherits the parent's full environment, including sensitive env vars
+(cloud credentials, API keys for other services). The server should
+only read env vars explicitly referenced in its config (via
+`api_key_env` fields), not rely on ambient environment. Document
+that the server inherits the spawning process's environment.
 
 **LLM classification prompt injection.** With autonomous curation,
 the server feeds record content to an LLM for classification. A
@@ -514,14 +567,46 @@ Mitigations:
   everywhere else (`validateEnum`, `validateFloat64Range`)
 - A poisoned classification still has to pass all field validation
 
+**X-Gramaton-Branch header validation.** Branch names from the HTTP
+header must pass the same `validBranchName` sanitization as CLI
+branch creation. Reject path traversal (`../../`), excessively long
+strings, and special characters. Invalid branch headers return 400.
+
 **server.json tampering.** If an attacker can overwrite `server.json`,
-they could point the CLI to a malicious server. Mitigation: 0o600
-permissions, and the CLI verifies the PID corresponds to a running
-gramaton process before connecting.
+they could point the CLI to a malicious server. Mitigations:
+- 0o600 file permissions
+- CLI verifies PID is alive AND hits `GET /v1/status` to confirm the
+  response identifies as Gramaton with a matching `store_dir`
+- PID-alive check alone is insufficient due to PID reuse
 
 **Ingest upload size.** Bulk uploads and large files need configurable
 size limits to prevent resource exhaustion. Defaults: 50MB per file,
 200MB per bulk request.
+
+**Response security headers.** Every HTTP response must include:
+- `Content-Type: application/json` (prevents content-type sniffing)
+- `X-Content-Type-Options: nosniff` (prevents browsers from guessing)
+- `Cache-Control: no-store` (responses contain sensitive knowledge)
+
+Applied via middleware to all endpoints.
+
+**CORS policy.** Default: no CORS headers (deny all cross-origin
+requests). Browsers block cross-origin requests without explicit
+CORS headers. If a web UI is added later, CORS can be configured
+via an allowlist. No wildcard CORS ever.
+
+### Low
+
+**Shutdown endpoint defense in depth.** `/v1/shutdown` is loopback-only.
+As a belt-and-suspenders measure, if auth is enabled (non-loopback bind),
+the shutdown endpoint also requires a valid bearer token. Protects
+against bugs in the loopback check (IPv6 edge cases, proxy
+`X-Forwarded-For` spoofing).
+
+**Networked filesystem warning.** `flock` does not work reliably on
+NFS or other networked filesystems. The server lock file assumes a
+local filesystem. Running a store on NFS is unsupported and should
+produce a warning on startup if detected.
 
 ### Known Risks (Cannot Fully Solve)
 
@@ -536,6 +621,13 @@ Mitigations (defense in depth, not prevention):
 - `source_ref` and `testimony_hops` provide provenance tracking
 - Ultimately the consuming agent decides what to trust
 - This risk should be documented in the agent integration guide
+
+**LLM provider privacy.** When using cloud LLM providers (OpenAI,
+Anthropic, AWS) for autonomous curation, record content is sent to
+third-party APIs. Users with sensitive data must be aware of this.
+`gramaton init` should explicitly warn when a cloud LLM provider is
+configured, and the config file should document which data leaves
+the machine. Local providers (Ollama) keep all data on-device.
 
 ## Decided: MCP Integration
 
