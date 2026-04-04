@@ -1,0 +1,104 @@
+# Glossary
+
+Quick reference for terminology used across the project.
+
+## System
+
+| Term | Definition |
+|------|-----------|
+| **Gramaton** | The complete system — service + agent integration kit. Placeholder name. |
+| **Gramaton Service** | The Go server binary. Stores knowledge, delegates embedding to an external provider (Ollama/API/Bedrock), serves queries. No LLM dependency. Pure Go, no native dependencies. |
+| **Agent Integration Kit** | Prompt patterns, system prompt templates, subagent prompts, and skill definitions that give agents the ability to use Gramaton transparently. |
+| **Context envelope** | Five domain-neutral structured fields the agent packages alongside content at capture time: what is this about, who/what is involved, what prompted this, what should this be findable by, what else relates. Contains implicit knowledge that isn't in the content itself. What makes records findable by context, not just by content. |
+| **Retrieval funnel** | The enforced query pattern: cheap/broad tools first, expensive/deep tools require IDs from narrower tools. Enforced by API shape, not prompt instructions. |
+| **Store manifest** | Lightweight summary of what the knowledge store contains (domains, projects, counts, temporal range, strengths/gaps). Injected into agent system prompt so the agent knows what the store covers. |
+
+## Data Model
+
+| Term | Definition |
+|------|-----------|
+| **Node** | The fundamental unit. A bag of typed key-value properties with a unique ID. |
+| **Edge** | A first-class relationship between two nodes. Has ID, type (string), weight (0.0–1.0), and optional properties. Bidirectionally indexed. |
+| **Property** | A typed key-value pair on a node or edge. 8 types: String, Float64, Int64, Bool, Timestamp, Vector, StringList, Bytes. Always flat — no nesting. |
+| **Knowledge record** | A node populated with Gramaton's metadata schema — content, embeddings, epistemic metadata, lifecycle, provenance. |
+| **Concept node** | A source-independent node representing a concept (e.g., "Kafka", "OAuth2"). Acts as a hub — many knowledge records link to it. `knowledge_type: conceptual`. |
+| **Chunk node** | A fragment of a long document, linked to its parent via `part_of` edge. Holds chunk text + embedding. Minimal metadata. |
+
+## Summary Pyramid
+
+| Term | Definition |
+|------|-----------|
+| **Summary pyramid** | Multiple representations of the same content at different token costs. A retrieval optimization, not a decomposition strategy. |
+| **content_keywords** | StringList. Extracted topic keywords. ~10 tokens. Used for cheap pre-filtering. |
+| **content_short** | String. Max ~200 characters (~50 tokens). Brief summary for relevance scanning. |
+| **content_abstract** | String. Max ~2000 characters (~500 tokens). Paragraph-level summary. |
+| **content_full** | String. No limit. Complete processed content. |
+| **source_ref** | String. Pointer to the raw unprocessed source on the filesystem. |
+| **embedding_*** | Vector properties. One per pyramid level. Each independently searchable. |
+
+## Epistemic Metadata
+
+| Term | Definition |
+|------|-----------|
+| **temporality** | How long this knowledge remains valid. `immutable` (definitional truths), `durable` (stable until contradicted), `temporal` (time-bound, will decay), `ephemeral` (minutes/hours lifespan). |
+| **confidence** | Float64 (0.0–1.0). How likely correct. Used for retrieval scoring. |
+| **importance** | Float64 (0.0–1.0). Retrieval priority floor. Prevents high-importance records from decaying. |
+| **epistemic_status** | Qualitative state: `well_established`, `probable`, `speculative`, `contested`, `refuted`. Distinct from confidence — a refuted record has high confidence (we're confident it's wrong). |
+| **knowledge_type** | What kind: `episodic` (events), `semantic` (facts), `procedural` (how-to), `conceptual` (definitions), `reference` (lookup data). |
+
+## Query & Retrieval
+
+| Term | Definition |
+|------|-----------|
+| **Filter → Rank → Traverse** | Gramaton's primary query pattern. (1) Filter nodes by metadata, (2) rank by vector similarity, (3) traverse edges from top results. |
+| **Tier 1: Discovery** | `gramaton search`. Cheap, broad. Returns lightweight results (ID, keywords, short summary, metadata). |
+| **Tier 2: Inspection** | `gramaton inspect`. Medium cost. Returns full content, all metadata, one-hop related nodes. |
+| **Tier 3: Exploration** | `gramaton explore`. Graph traversal. Returns a subgraph fragment. |
+| **Tier 4: Raw Access** | `gramaton raw`. Returns the original unprocessed source from filesystem. |
+| **Spreading activation** | Accessing a node increments `access_count`, updates `last_accessed`, and adds to `activation_boost` on direct neighbors (weighted by edge weight × attenuation factor). Single-hop only. |
+| **Decay** | Retrieval priority decreases over time. Exponential decay with rate determined by temporality: ephemeral (4h half-life), temporal (3d), durable (90d), immutable (never). Computed at query time, not stored. |
+| **activation_boost** | Float64 property on a node. Accumulated indirect activation from neighbor access. Decays over time independently. Part of the scoring model. |
+| **effective_score** | Computed at query time. Weighted combination of vector similarity, recency, frequency, activation, and confidence. Importance acts as a floor. Never stored. |
+
+## Capture & Processing
+
+| Term | Definition |
+|------|-----------|
+| **Transparent capture** | The agent decides autonomously to store knowledge, spawning a subagent without interrupting the user's conversation. |
+| **Transparent retrieval** | The agent searches Gramaton as part of normal reasoning without the user explicitly asking. |
+| **Subagent** | A separate agent context spawned by the main agent to handle classification and storage. Its context is discarded when done. |
+| **Processing status** | `captured` (raw, unclassified), `pending` (queued for enrichment), `processed` (fully classified). |
+| **Chunking** | Splitting long content into overlapping fragments for embedding. Each chunk becomes a child node. |
+
+## Architecture
+
+| Term | Definition |
+|------|-----------|
+| **Embeddable** | A library linked into your application — one process, no network. (This is what Gramaton is NOT — it's a server.) |
+| **Content-addressed storage** | Data identified by hash of content. Same content always produces the same hash. Enables deduplication and efficient diffing. |
+| **StorageBackend** | Go interface abstracting the on-disk format. All storage access goes through this — no component assumes files, directories, or any physical layout. |
+| **VectorIndex** | Go interface abstracting the vector search implementation. HNSW for large sets, flat scan for small filtered sets. Dynamic switching. |
+| **HNSW** | Hierarchical Navigable Small World. Algorithm for approximate nearest neighbor search in vector spaces. The primary vector index. |
+| **Embedding** | A numerical vector representing the "meaning" of text. Semantically similar texts produce similar vectors. Generated by an embedding provider (Ollama, OpenAI-compatible API, or AWS Bedrock), not an LLM. |
+| **EmbeddingProvider** | Go interface abstracting how embeddings are generated. Implementations: Ollama (default), OpenAI-compatible, AWS Bedrock. All pure Go HTTP clients. |
+
+## Versioning
+
+| Term | Definition |
+|------|-----------|
+| **Commit** | An immutable snapshot of the graph state, with parent pointers and metadata (author, timestamp, message). Every mutation creates a commit. |
+| **Branch** | A named mutable pointer to a commit. Enables speculative reasoning, curation safety, and per-project isolation. |
+| **Three-way merge** | Conflict resolution: find common ancestor, diff both sides, combine non-conflicting changes, surface conflicts. |
+| **Knowledge diffing** | Querying what changed between two points in the store's history, optionally scoped to a topic. A retrieval pattern unique to versioned knowledge stores — answers "what evolved" not just "what exists." |
+| **Speculative branching** | Creating a branch to explore a design option or hypothesis without polluting the main store. Merge if adopted, discard if rejected. Maps to hippocampal working memory in neuroscience. |
+| **Audit trail** | The commit history of a specific record — when it was created, how it changed, why confidence was adjusted, what contradicted it. Enables provenance-aware reasoning by agents. |
+| **Rollback** | Atomic revert of any commit. Undoes a batch of captures or a bad curation run cleanly. |
+
+## Neuroscience-Inspired
+
+| Term | Definition |
+|------|-----------|
+| **Engram** | The physical trace of a memory in the brain. Gramaton's spiritual ancestor. |
+| **Dual-store model** | Fast capture + slow integration. Maps to: immediate storage with embeddings (fast) + deferred LLM classification (slow). |
+| **Default mode network** | Brain network active during rest that consolidates memory. Maps to Gramaton's curation — background maintenance during idle time. |
+| **Principled forgetting** | Not all forgetting is bad. Low-value records are intentionally deprioritized to keep retrieval efficient. |

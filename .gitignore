@@ -1,0 +1,70 @@
+# Stray markdown in project root (LLM temp files)
+/*.md
+!/README.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+
+# Binaries
+gramaton
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build output
+/bin/
+/dist/
+/build/
+/out/
+/release/
+*.test
+*.out
+cover.out
+coverage.html
+
+# Dependencies
+/vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+.claude/
+.kiro/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.secret
+credentials.json
+aws-credentials
+*.token
+
+# Gramaton data (never commit user data)
+.gramaton/
+*.gramaton
+
+# ONNX models (if ever bundled locally for testing)
+*.onnx
+*.gguf
+*.bin
+*.safetensors
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*.log
+
+# OS files
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+desktop.ini
