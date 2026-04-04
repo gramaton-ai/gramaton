@@ -1,19 +1,22 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/brandonlattin/gramaton/config"
+	"github.com/brandonlattin/gramaton/embed/ollama"
 	"github.com/spf13/cobra"
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize Gramaton configuration",
-	Long: `Creates the configuration directory and default config file.
-Sets up the data directory for the knowledge store.`,
+	Long: `Creates the configuration directory, default config file, and data
+directory. Detects and configures an embedding provider automatically.`,
 	RunE: runInit,
 }
 
@@ -40,25 +43,102 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
+	fmt.Printf("Initialized Gramaton at %s\n", dir)
+	fmt.Printf("  Config: %s\n", cfgPath)
+	fmt.Printf("  Data:   %s\n", cfg.DataDir)
+	fmt.Println()
+
+	// Detect and configure embedding provider.
+	configured := setupEmbedding(&cfg, cfgPath)
+
 	// Save config.
 	if err := config.Save(cfg, cfgPath); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Printf("Initialized Gramaton at %s\n", dir)
-	fmt.Printf("  Config: %s\n", cfgPath)
-	fmt.Printf("  Data:   %s\n", cfg.DataDir)
-	fmt.Println()
-	fmt.Println("No embedding provider configured. Gramaton works without one")
-	fmt.Println("(keyword and graph search still work), but semantic similarity")
-	fmt.Println("search requires an embedding provider.")
-	fmt.Println()
-	fmt.Println("To configure Ollama (recommended):")
-	fmt.Println("  1. Install Ollama: brew install ollama")
-	fmt.Println("  2. Pull a model:   ollama pull nomic-embed-text")
-	fmt.Printf("  3. Edit %s and set:\n", cfgPath)
-	fmt.Println("     embedding:")
-	fmt.Println("       provider: ollama")
+	if configured {
+		fmt.Println()
+		fmt.Println("Gramaton is ready. Start capturing knowledge.")
+	}
 
 	return nil
+}
+
+// setupEmbedding detects Ollama, starts it if needed, pulls the default
+// model, and configures the embedding provider. Returns true if embedding
+// was configured.
+func setupEmbedding(cfg *config.Config, cfgPath string) bool {
+	fmt.Println("Checking for embedding providers...")
+	fmt.Println()
+
+	endpoint := cfg.Embedding.Endpoint
+	model := cfg.Embedding.Model
+
+	// Check if Ollama binary exists.
+	bin := ollama.FindBinary()
+	if bin == "" {
+		printNoOllama()
+		return false
+	}
+
+	fmt.Printf("  [found] Ollama binary: %s\n", bin)
+
+	// Ensure Ollama is running.
+	if !ollama.IsReachable(endpoint) {
+		fmt.Println("  [....] Starting Ollama...")
+		if err := ollama.EnsureRunning(endpoint); err != nil {
+			fmt.Printf("  [fail] Could not start Ollama: %s\n", err)
+			printManualSetup(cfgPath)
+			return false
+		}
+	}
+	fmt.Printf("  [ok]    Ollama responding at %s\n", endpoint)
+
+	// Check for embedding model.
+	if !ollama.HasModel(endpoint, model) {
+		fmt.Printf("  [....] Pulling %s...\n", model)
+		err := ollama.PullModel(context.Background(), endpoint, model, func(msg string) {
+			fmt.Printf("  [info] %s\n", msg)
+		})
+		if err != nil {
+			fmt.Printf("  [fail] Could not pull model: %s\n", err)
+			printManualSetup(cfgPath)
+			return false
+		}
+	}
+	fmt.Printf("  [ok]    Model %s available\n", model)
+
+	// Configure.
+	cfg.Embedding.Provider = "ollama"
+	fmt.Println()
+	fmt.Println("  Embedding configured: Ollama with " + model)
+
+	return true
+}
+
+func printNoOllama() {
+	fmt.Println("  Ollama not found.")
+	fmt.Println()
+	fmt.Println("  Ollama provides local, private embedding (recommended).")
+	fmt.Println("  Install it:")
+	switch runtime.GOOS {
+	case "darwin":
+		fmt.Println("    brew install ollama")
+	case "linux":
+		fmt.Println("    curl -fsSL https://ollama.com/install.sh | sh")
+	default:
+		fmt.Println("    Download from https://ollama.com")
+	}
+	fmt.Println()
+	fmt.Println("  Then re-run: gramaton init")
+	fmt.Println()
+	fmt.Println("  Gramaton works without embeddings (keyword and graph search")
+	fmt.Println("  still work), but semantic similarity search requires them.")
+}
+
+func printManualSetup(cfgPath string) {
+	fmt.Println()
+	fmt.Printf("  To configure manually, edit %s:\n", cfgPath)
+	fmt.Println("    embedding:")
+	fmt.Println("      provider: ollama")
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/brandonlattin/gramaton/config"
 	"github.com/brandonlattin/gramaton/embed"
+	"github.com/brandonlattin/gramaton/embed/ollama"
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/brandonlattin/gramaton/index"
 	"github.com/brandonlattin/gramaton/search"
@@ -81,6 +82,14 @@ func loadEngine() (*engine, error) {
 	}
 
 	// Create embedding provider (may be nil).
+	// If configured for Ollama, ensure it's running first.
+	if cfg.Embedding.Provider == "ollama" {
+		if err := ollama.EnsureRunning(cfg.Embedding.Endpoint); err != nil {
+			// Non-fatal: proceed without embeddings.
+			fmt.Fprintf(os.Stderr, "Warning: %s. Continuing without embeddings.\n", err)
+			cfg.Embedding.Provider = ""
+		}
+	}
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
