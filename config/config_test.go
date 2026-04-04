@@ -1,0 +1,173 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestDefaults(t *testing.T) {
+	cfg := Defaults()
+
+	// Spot-check key defaults from the design docs.
+	if cfg.Server.AutoStart != true {
+		t.Fatal("server.auto_start should default to true")
+	}
+	if cfg.Server.IdleTimeout != 30*time.Minute {
+		t.Fatalf("server.idle_timeout: expected 30m, got %v", cfg.Server.IdleTimeout)
+	}
+	if cfg.Scoring.WeightSimilarity != 0.35 {
+		t.Fatalf("scoring.weight_similarity: expected 0.35, got %f", cfg.Scoring.WeightSimilarity)
+	}
+	if cfg.Scoring.WeightConfidence != 0.2 {
+		t.Fatalf("scoring.weight_confidence: expected 0.2, got %f", cfg.Scoring.WeightConfidence)
+	}
+	if cfg.Decay.Rates.Ephemeral != 0.173 {
+		t.Fatalf("decay.rates.ephemeral: expected 0.173, got %f", cfg.Decay.Rates.Ephemeral)
+	}
+	if cfg.Decay.Rates.Durable != 0.000321 {
+		t.Fatalf("decay.rates.durable: expected 0.000321, got %f", cfg.Decay.Rates.Durable)
+	}
+	if cfg.Freshness.Scale != 8760 {
+		t.Fatalf("freshness.scale: expected 8760, got %f", cfg.Freshness.Scale)
+	}
+	if cfg.Chunking.Threshold != 512 {
+		t.Fatalf("chunking.threshold: expected 512, got %d", cfg.Chunking.Threshold)
+	}
+	if cfg.Concepts.EmergenceThreshold != 3 {
+		t.Fatalf("concepts.emergence_threshold: expected 3, got %d", cfg.Concepts.EmergenceThreshold)
+	}
+	if cfg.Dedup.SimilarityThreshold != 0.92 {
+		t.Fatalf("dedup.similarity_threshold: expected 0.92, got %f", cfg.Dedup.SimilarityThreshold)
+	}
+	if cfg.Dedup.Action != "flag" {
+		t.Fatalf("dedup.action: expected 'flag', got %q", cfg.Dedup.Action)
+	}
+	if cfg.Graph.EdgeWeightTraversalThreshold != 0.3 {
+		t.Fatalf("graph.edge_weight_traversal_threshold: expected 0.3, got %f", cfg.Graph.EdgeWeightTraversalThreshold)
+	}
+	if cfg.Limits.MaxJSONSize != 2*1024*1024 {
+		t.Fatalf("limits.max_json_size: expected 2MB, got %d", cfg.Limits.MaxJSONSize)
+	}
+	if cfg.Limits.StdinTimeout != 30*time.Second {
+		t.Fatalf("limits.stdin_timeout: expected 30s, got %v", cfg.Limits.StdinTimeout)
+	}
+	if cfg.Merge.ConflictStrategy != "timestamp_wins" {
+		t.Fatalf("merge.conflict_strategy: expected 'timestamp_wins', got %q", cfg.Merge.ConflictStrategy)
+	}
+	if cfg.Embedding.Endpoint != "http://localhost:11434" {
+		t.Fatalf("embedding.endpoint: expected ollama default, got %q", cfg.Embedding.Endpoint)
+	}
+}
+
+func TestSaveAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cfg := Defaults()
+	cfg.Scoring.WeightSimilarity = 0.5
+	cfg.Embedding.Provider = "ollama"
+	cfg.Dedup.Action = "reject"
+
+	if err := Save(cfg, path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if loaded.Scoring.WeightSimilarity != 0.5 {
+		t.Fatalf("expected 0.5, got %f", loaded.Scoring.WeightSimilarity)
+	}
+	if loaded.Embedding.Provider != "ollama" {
+		t.Fatalf("expected 'ollama', got %q", loaded.Embedding.Provider)
+	}
+	if loaded.Dedup.Action != "reject" {
+		t.Fatalf("expected 'reject', got %q", loaded.Dedup.Action)
+	}
+}
+
+func TestLoadMissingFileReturnsDefaults(t *testing.T) {
+	cfg, err := Load("/nonexistent/path/config.yaml")
+	if err != nil {
+		t.Fatalf("Load should not error on missing file: %v", err)
+	}
+
+	defaults := Defaults()
+	if cfg.Scoring.WeightSimilarity != defaults.Scoring.WeightSimilarity {
+		t.Fatal("missing file should return defaults")
+	}
+}
+
+func TestLoadPartialOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Write a config that only sets one field.
+	content := []byte("scoring:\n  weight_similarity: 0.99\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Overridden field.
+	if cfg.Scoring.WeightSimilarity != 0.99 {
+		t.Fatalf("expected 0.99, got %f", cfg.Scoring.WeightSimilarity)
+	}
+
+	// Non-overridden fields should retain defaults.
+	if cfg.Scoring.WeightConfidence != 0.2 {
+		t.Fatalf("expected default 0.2, got %f", cfg.Scoring.WeightConfidence)
+	}
+	if cfg.Chunking.Threshold != 512 {
+		t.Fatalf("expected default 512, got %d", cfg.Chunking.Threshold)
+	}
+}
+
+func TestLoadInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := os.WriteFile(path, []byte("{{invalid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestSaveCreatesDirectories(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "deep", "config.yaml")
+
+	if err := Save(Defaults(), path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("config file not created: %v", err)
+	}
+}
+
+func TestDefaultDir(t *testing.T) {
+	dir := DefaultDir()
+	if dir == "" {
+		t.Fatal("DefaultDir should not be empty")
+	}
+}
+
+func TestDefaultConfigPath(t *testing.T) {
+	path := DefaultConfigPath()
+	if filepath.Base(path) != "config.yaml" {
+		t.Fatalf("expected config.yaml, got %s", filepath.Base(path))
+	}
+}
