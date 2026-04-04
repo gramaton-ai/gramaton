@@ -65,7 +65,7 @@ func New(engine *core.Engine, cfg Config) *Server {
 		Addr:         fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
 		Handler:      s.securityHeaders(mux),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 120 * time.Second, // embedding and bulk ops can be slow
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -170,6 +170,43 @@ func (s *Server) idleWatcher(shutdownCh chan<- string) {
 
 // registerRoutes sets up the HTTP routes.
 func (s *Server) registerRoutes(mux *http.ServeMux) {
+	// Records
+	mux.HandleFunc("POST /v1/records", s.handleCreateRecord)
+	mux.HandleFunc("GET /v1/records/{id}", s.handleGetRecord)
+	mux.HandleFunc("PATCH /v1/records/{id}", s.handleUpdateRecord)
+	mux.HandleFunc("DELETE /v1/records/{id}", s.handleDeleteRecord)
+	mux.HandleFunc("POST /v1/records/{id}/edges", s.handleCreateEdge)
+	mux.HandleFunc("POST /v1/records/{id}/classify", s.handleClassifyRecord)
+	mux.HandleFunc("GET /v1/records/{id}/history", func(w http.ResponseWriter, r *http.Request) {
+		// Redirect to log endpoint with record query param.
+		id := r.PathValue("id")
+		r.URL.RawQuery = "record=" + id
+		s.handleLog(w, r)
+	})
+
+	// Search and traversal
+	mux.HandleFunc("POST /v1/search", s.handleSearch)
+	mux.HandleFunc("POST /v1/explore", s.handleExplore)
+
+	// Pending
+	mux.HandleFunc("GET /v1/pending", s.handlePending)
+
+	// Branches
+	mux.HandleFunc("GET /v1/branches", s.handleListBranches)
+	mux.HandleFunc("POST /v1/branches", s.handleCreateBranch)
+	mux.HandleFunc("POST /v1/branches/{name}/checkout", s.handleCheckoutBranch)
+	mux.HandleFunc("POST /v1/branches/{name}/merge", s.handleMergeBranch)
+	mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDiscardBranch)
+
+	// History
+	mux.HandleFunc("GET /v1/log", s.handleLog)
+	mux.HandleFunc("GET /v1/diff", s.handleDiff)
+
+	// Operations
+	mux.HandleFunc("POST /v1/revert", s.handleRevert)
+	mux.HandleFunc("POST /v1/reembed", s.handleReembed)
+	mux.HandleFunc("POST /v1/ingest", s.handleIngest)
+
 	// System
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
