@@ -17,7 +17,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Auto-cleanup of temp files after successful read, stale file sweep
   (1 hour) on each write command invocation
 - v0.2 server design document covering on-demand daemon model, HTTP
-  REST API, CLI thin client, autonomous curation, and usage topologies
+  REST API, CLI thin client, autonomous curation, MCP integration,
+  and usage topologies. All architecture decisions resolved. Security
+  review completed with 12 additional findings documented.
 
 ### Security
 
