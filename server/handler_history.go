@@ -49,7 +49,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 		commits = []map[string]any{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"commits": commits})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"commits": commits})
 }
 
 func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, limit int) {
@@ -93,7 +93,7 @@ func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, lim
 		changes = []map[string]any{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"id":      recordID,
 		"changes": changes,
 	})
@@ -133,7 +133,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sinceHash == "" && sinceStr != "" {
-		s.writeJSON(w, http.StatusOK, map[string]any{
+		s.writeJSONLocked(w, http.StatusOK, map[string]any{
 			"added": []any{}, "modified": []any{}, "removed": []any{},
 		})
 		return
@@ -189,7 +189,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		removed = []map[string]any{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"added": added, "removed": removed,
 	})
 }

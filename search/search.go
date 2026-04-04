@@ -73,8 +73,27 @@ type Result struct {
 	LastAccessed    string  `json:"last_accessed,omitempty"`
 }
 
-// Execute runs the search query and returns results.
+// Execute runs the search query and returns results. This calls
+// the embedder inline -- for the server, use ExecuteWithVector to
+// pre-embed outside the lock.
 func (t *Tool) Execute(ctx context.Context, q Query) ([]Result, error) {
+	var queryVec []float32
+	if q.Text != "" && t.embedder != nil {
+		vecs, err := t.embedder.Embed(ctx, []string{q.Text})
+		if err != nil {
+			return nil, fmt.Errorf("search: embed query: %w", err)
+		}
+		if len(vecs) > 0 {
+			queryVec = vecs[0]
+		}
+	}
+	return t.ExecuteWithVector(ctx, q, queryVec)
+}
+
+// ExecuteWithVector runs the search query using a pre-computed query
+// vector. If queryVec is nil, similarity scoring is skipped (metadata-
+// only search). This allows the caller to embed outside a lock.
+func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32) ([]Result, error) {
 	if q.Top <= 0 {
 		q.Top = 10
 	}
@@ -83,23 +102,16 @@ func (t *Tool) Execute(ctx context.Context, q Query) ([]Result, error) {
 	// Step 1: Build candidate set via metadata filters.
 	candidates := t.filterCandidates(q, now)
 
-	// Step 2: If we have query text and an embedder, compute vector similarity.
+	// Step 2: Compute vector similarity using the pre-embedded vector.
 	similarities := make(map[string]float64)
-	if q.Text != "" && t.embedder != nil && t.vecIdx != nil {
-		vecs, err := t.embedder.Embed(ctx, []string{q.Text})
-		if err != nil {
-			return nil, fmt.Errorf("search: embed query: %w", err)
+	if queryVec != nil && t.vecIdx != nil {
+		candidateSet := make(map[string]struct{}, len(candidates))
+		for _, id := range candidates {
+			candidateSet[id] = struct{}{}
 		}
-		if len(vecs) > 0 {
-			candidateSet := make(map[string]struct{}, len(candidates))
-			for _, id := range candidates {
-				candidateSet[id] = struct{}{}
-			}
-
-			results := t.vecIdx.Search(vecs[0], len(candidates), candidateSet)
-			for _, r := range results {
-				similarities[r.NodeID] = float64(r.Similarity)
-			}
+		results := t.vecIdx.Search(queryVec, len(candidates), candidateSet)
+		for _, r := range results {
+			similarities[r.NodeID] = float64(r.Similarity)
 		}
 	}
 

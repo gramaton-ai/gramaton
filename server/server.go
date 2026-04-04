@@ -225,11 +225,24 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 }
 
 // writeJSON writes a JSON response with the standard envelope.
+// Callers that already hold a lock should use writeJSONWithCuration
+// to avoid deadlock (RWMutex is not reentrant).
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	s.engine.RLock()
 	curation := computeCuration(s.engine)
 	s.engine.RUnlock()
 
+	s.writeJSONRaw(w, status, data, curation)
+}
+
+// writeJSONLocked writes a JSON response when the caller already holds
+// a lock. Computes curation without acquiring a separate lock.
+func (s *Server) writeJSONLocked(w http.ResponseWriter, status int, data any) {
+	curation := computeCuration(s.engine)
+	s.writeJSONRaw(w, status, data, curation)
+}
+
+func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curation CurationStatus) {
 	envelope := ResponseEnvelope{
 		Data:     data,
 		Curation: curation,

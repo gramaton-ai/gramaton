@@ -30,7 +30,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"embedding": embedding,
 	}
 
-	s.writeJSON(w, http.StatusOK, status)
+	s.writeJSONLocked(w, http.StatusOK, status)
 }
 
 // handleShutdown triggers graceful server shutdown. Restricted to
@@ -42,7 +42,7 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]string{
+	s.writeJSONLocked(w, http.StatusOK, map[string]string{
 		"message": "shutting down",
 	})
 

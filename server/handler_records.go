@@ -77,6 +77,10 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-embed content outside the lock. Embedding can take seconds
+	// (Ollama model load) and would block the entire server under lock.
+	preEmbedded := s.preEmbedContent(&req)
+
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
@@ -100,9 +104,10 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		s.engine.PropIdx().Add(n.ID, k, v)
 	}
 
+	// Apply pre-computed embeddings under the lock (fast, no I/O).
 	var warnings []string
-	if err := s.engine.GenerateEmbeddings(context.Background(), n.ID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("embedding generation failed: %s", err))
+	if err := s.applyPreEmbedded(n.ID, preEmbedded); err != nil {
+		warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
 	}
 
 	if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
@@ -129,10 +134,121 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]any{
+	s.writeJSONLocked(w, http.StatusCreated, map[string]any{
 		"id":       n.ID,
 		"warnings": warnings,
 	})
+}
+
+// preEmbeddedVectors holds vectors computed outside the lock.
+type preEmbeddedVectors struct {
+	vectors map[string][]float32 // embedKey -> vector
+	model   string
+	err     error
+}
+
+// preEmbedContent generates embeddings before acquiring the lock.
+func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
+	if s.engine.Embedder() == nil {
+		return nil
+	}
+
+	type target struct {
+		sourceKey string
+		embedKey  string
+		text      string
+	}
+
+	sources := []struct {
+		sourceKey string
+		embedKey  string
+	}{
+		{"content_keywords", "embedding_keywords"},
+		{"content_short", "embedding_short"},
+		{"content_abstract", "embedding_abstract"},
+		{"content_full", "embedding_full"},
+	}
+
+	var targets []target
+	texts := map[string]string{
+		"content_full": req.Content,
+	}
+	if req.SummaryShort != "" {
+		texts["content_short"] = req.SummaryShort
+	}
+	if req.SummaryAbstract != "" {
+		texts["content_abstract"] = req.SummaryAbstract
+	}
+	if len(req.Keywords) > 0 {
+		texts["content_keywords"] = joinStrings(req.Keywords)
+	}
+
+	var embedTexts []string
+	for _, src := range sources {
+		if t, ok := texts[src.sourceKey]; ok && t != "" {
+			targets = append(targets, target{src.sourceKey, src.embedKey, t})
+			embedTexts = append(embedTexts, t)
+		}
+	}
+
+	if len(embedTexts) == 0 {
+		return nil
+	}
+
+	vecs, err := s.engine.Embedder().Embed(context.Background(), embedTexts)
+	if err != nil {
+		return &preEmbeddedVectors{err: err}
+	}
+
+	result := &preEmbeddedVectors{
+		vectors: make(map[string][]float32, len(vecs)),
+		model:   s.engine.Embedder().ModelID(),
+	}
+	for i, vec := range vecs {
+		result.vectors[targets[i].embedKey] = vec
+	}
+
+	return result
+}
+
+// applyPreEmbedded stores pre-computed vectors on a node. Caller must
+// hold the write lock.
+func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error {
+	if pre == nil {
+		return nil
+	}
+	if pre.err != nil {
+		return pre.err
+	}
+
+	var bestVec []float32
+	for key, vec := range pre.vectors {
+		prop := graph.VectorProperty(vec)
+		s.engine.Graph().SetNodeProperty(nodeID, key, prop)
+		s.engine.PropIdx().Add(nodeID, key, prop)
+		bestVec = vec // last one wins (full > abstract > short > keywords)
+	}
+
+	if bestVec != nil {
+		s.engine.VecIdx().Add(nodeID, bestVec)
+	}
+
+	modelProp := graph.StringProperty(pre.model)
+	s.engine.Graph().SetNodeProperty(nodeID, "embedding_model", modelProp)
+	s.engine.PropIdx().Add(nodeID, "embedding_model", modelProp)
+
+	return nil
+}
+
+func joinStrings(ss []string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += " "
+		}
+		result += s
+	}
+	return result
 }
 
 func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +315,7 @@ func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	out["related"] = related
 
-	s.writeJSON(w, http.StatusOK, out)
+	s.writeJSONLocked(w, http.StatusOK, out)
 }
 
 func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +369,7 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "updated": updated})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"id": id, "updated": updated})
 }
 
 func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +396,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
 func (s *Server) handleCreateEdge(w http.ResponseWriter, r *http.Request) {
@@ -333,7 +449,7 @@ func (s *Server) handleCreateEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]any{
+	s.writeJSONLocked(w, http.StatusCreated, map[string]any{
 		"id":      sourceID,
 		"edge_id": e.ID,
 		"updated": true,
@@ -394,7 +510,7 @@ func (s *Server) handleClassifyRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "updated": true})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"id": id, "updated": true})
 }
 
 // --- Helpers ---

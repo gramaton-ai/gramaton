@@ -54,7 +54,7 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		records = []map[string]any{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"records": records})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"records": records})
 }
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +96,7 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"reverted_to": core.TruncHash(fullHash),
 		"new_hash":    core.TruncHash(commit.Hash),
 	})
@@ -161,7 +161,7 @@ func (s *Server) handleReembed(w http.ResponseWriter, r *http.Request) {
 		s.engine.Save("reembed")
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"reembedded": reembedded,
 		"skipped":    len(staleIDs) - reembedded - errors,
 		"errors":     errors,
@@ -245,7 +245,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		s.engine.Save("ingest")
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"ingested": ingested,
 		"skipped":  len(files) - ingested,
 		"warnings": warnings,

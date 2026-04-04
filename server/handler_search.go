@@ -61,18 +61,30 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		q.Since = &t
 	}
 
-	// Take write lock because search records access and spreads activation.
-	s.engine.Lock()
-	defer s.engine.Unlock()
+	// Pre-embed the query text outside the lock. Embedding can take
+	// seconds (Ollama model load), and holding the lock would block
+	// the entire server.
+	var queryVec []float32
+	if q.Text != "" && s.engine.Embedder() != nil {
+		vecs, err := s.engine.Embedder().Embed(context.Background(), []string{q.Text})
+		if err == nil && len(vecs) > 0 {
+			queryVec = vecs[0]
+		}
+	}
 
-	results, err := s.engine.Searcher().Execute(context.Background(), q)
+	// Search under read lock with the pre-computed vector.
+	s.engine.RLock()
+	results, err := s.engine.Searcher().ExecuteWithVector(context.Background(), q, queryVec)
+	s.engine.RUnlock()
+
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "search_error", "search failed", false)
 		return
 	}
 
-	// Record access for returned results.
+	// Record access under write lock (fast, no embedding involved).
 	if len(results) > 0 {
+		s.engine.Lock()
 		now := time.Now().UTC()
 		cfg := s.engine.Config()
 		activationCfg := graph.ActivationConfig{
@@ -83,13 +95,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			s.engine.Graph().RecordAccess(r.ID, now, activationCfg)
 		}
 		s.engine.Save("access")
+		s.engine.Unlock()
 	}
 
 	if results == nil {
 		results = []search.Result{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +135,7 @@ func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := s.engine.Graph().Traverse(req.NodeID, opts)
-	s.writeJSON(w, http.StatusOK, sub)
+	s.writeJSONLocked(w, http.StatusOK, sub)
 }
 
 // parseDateArg parses a date string in YYYY-MM-DD or RFC3339 format.

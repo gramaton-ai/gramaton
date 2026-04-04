@@ -21,7 +21,7 @@ func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
 	dir := core.RefsDir(dataDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		s.writeJSON(w, http.StatusOK, map[string]any{
+		s.writeJSONLocked(w, http.StatusOK, map[string]any{
 			"branches": []any{},
 			"current":  core.ActiveBranch(dataDir),
 		})
@@ -48,7 +48,7 @@ func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
 		branches = []map[string]any{}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"branches": branches,
 		"current":  active,
 	})
@@ -83,7 +83,7 @@ func (s *Server) handleCreateBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]any{
+	s.writeJSONLocked(w, http.StatusCreated, map[string]any{
 		"name":    req.Name,
 		"commit":  core.TruncHash(headHash),
 		"created": true,
@@ -123,7 +123,7 @@ func (s *Server) handleCheckoutBranch(w http.ResponseWriter, r *http.Request) {
 	s.engine.Graph().Load(s.engine.Store(), hash)
 	s.engine.RebuildAllIndexes()
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"name":         name,
 		"commit":       core.TruncHash(hash),
 		"checked_out":  true,
@@ -169,7 +169,7 @@ func (s *Server) handleMergeBranch(w http.ResponseWriter, r *http.Request) {
 	core.WriteRef(dataDir, "main", commit.Hash)
 	core.DeleteRef(dataDir, name)
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"merged":     name,
 		"new_commit": core.TruncHash(commit.Hash),
 	})
@@ -209,5 +209,5 @@ func (s *Server) handleDiscardBranch(w http.ResponseWriter, r *http.Request) {
 
 	core.DeleteRef(dataDir, name)
 
-	s.writeJSON(w, http.StatusOK, map[string]any{"discarded": name})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"discarded": name})
 }
