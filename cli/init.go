@@ -123,7 +123,8 @@ func printNoOllama() {
 	fmt.Println("  Install it:")
 	switch runtime.GOOS {
 	case "darwin":
-		fmt.Println("    brew install ollama")
+		fmt.Println("    Download from https://ollama.com/download/mac")
+		fmt.Println("    Or if you have Homebrew: brew install ollama")
 	case "linux":
 		fmt.Println("    curl -fsSL https://ollama.com/install.sh | sh")
 	default:
