@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -33,31 +32,21 @@ func init() {
 }
 
 func runExplore(cmd *cobra.Command, args []string) error {
-	nodeID := args[0]
-
-	eng, err := loadEngine()
-	if err != nil {
-		return fmt.Errorf("load engine: %w", err)
-	}
-
-	if _, ok := eng.graph.GetNode(nodeID); !ok {
-		return writeError("not_found", fmt.Sprintf("record %s not found", nodeID), false)
-	}
-
-	opts := graph.TraverseOptions{
-		MaxDepth:      exploreDepth,
-		MinEdgeWeight: exploreMinWeight,
+	body := map[string]any{
+		"node_id": args[0],
+		"depth":   exploreDepth,
 	}
 	if exploreEdgeTypes != "" {
-		opts.EdgeTypes = strings.Split(exploreEdgeTypes, ",")
+		body["edge_types"] = strings.Split(exploreEdgeTypes, ",")
+	}
+	if exploreMinWeight > 0 {
+		body["min_weight"] = exploreMinWeight
 	}
 
-	sub := eng.graph.Traverse(nodeID, opts)
-	return printJSON(struct {
-		graph.Subgraph
-		Curation CurationStatus `json:"curation"`
-	}{
-		Subgraph: sub,
-		Curation: computeCurationStatus(eng.graph, eng.propIdx),
-	})
+	resp, err := serverPost("/v1/explore", body)
+	if err != nil {
+		return fmt.Errorf("explore: %w", err)
+	}
+
+	return printEnvelope(resp)
 }

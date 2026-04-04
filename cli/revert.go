@@ -21,40 +21,13 @@ func init() {
 	rootCmd.AddCommand(revertCmd)
 }
 
-type revertOutput struct {
-	RevertedTo string `json:"reverted_to"`
-	NewCommit  string `json:"new_commit"`
-}
-
 func runRevert(cmd *cobra.Command, args []string) error {
-	targetHash := args[0]
+	hash := args[0]
 
-	eng, err := loadEngine()
+	resp, err := serverPost("/v1/revert", map[string]string{"hash": hash})
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("revert_error", fmt.Sprintf("revert: %s", err), false)
 	}
 
-	// Resolve short hash.
-	fullHash, err := resolveHash(eng.store, targetHash)
-	if err != nil {
-		return writeError("hash_error", err.Error(), false)
-	}
-
-	// Load the target commit's state into the graph.
-	_, err = eng.graph.Load(eng.store, fullHash)
-	if err != nil {
-		return writeError("load_error", fmt.Sprintf("failed to load commit %s: %s", targetHash, err), false)
-	}
-	eng.rebuildAllIndexes()
-
-	// Save as new commit with current HEAD as parent.
-	commit, err := eng.save(fmt.Sprintf("revert to %s", fullHash[:12]))
-	if err != nil {
-		return writeError("save_error", err.Error(), false)
-	}
-
-	return printJSON(revertOutput{
-		RevertedTo: fullHash[:12],
-		NewCommit:  commit.Hash[:12],
-	})
+	return printEnvelope(resp)
 }

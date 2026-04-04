@@ -1,0 +1,173 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+
+	"github.com/brandonlattin/gramaton/server"
+)
+
+// serverURL returns the base URL for the running server, starting it
+// if necessary. Returns an error if the server cannot be reached.
+func serverURL() (string, error) {
+	dir := configDir()
+
+	// Check for running server.
+	info, err := server.ReadServerInfo(dir)
+	if err == nil && server.IsProcessAlive(info.PID) {
+		url := fmt.Sprintf("http://%s:%d", info.Bind, info.Port)
+		// Verify it's actually gramaton (PID reuse protection).
+		if verifyServer(url) {
+			return url, nil
+		}
+		// Stale info, clean up.
+		server.RemoveServerInfo(dir)
+	} else if err == nil {
+		// PID file exists but process is dead.
+		server.RemoveServerInfo(dir)
+	}
+
+	// No running server -- auto-start.
+	if err := startBackground(); err != nil {
+		return "", fmt.Errorf("auto-start server: %w", err)
+	}
+
+	info, err = server.ReadServerInfo(dir)
+	if err != nil {
+		return "", fmt.Errorf("server started but info not found")
+	}
+
+	return fmt.Sprintf("http://%s:%d", info.Bind, info.Port), nil
+}
+
+// verifyServer checks that a URL responds to the gramaton health check.
+func verifyServer(baseURL string) bool {
+	resp, err := httpGet(baseURL + "/v1/status")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// serverGet sends a GET request to the server and returns the parsed
+// response envelope.
+func serverGet(path string) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := httpGet(base + path)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
+// serverPost sends a POST request to the server and returns the parsed
+// response envelope.
+func serverPost(path string, body any) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	var reqBody []byte
+	if body != nil {
+		reqBody, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
+	}
+
+	resp, err := httpPost(base+path, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
+// serverPatch sends a PATCH request to the server.
+func serverPatch(path string, body any) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, base+path, bytesReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
+// serverDelete sends a DELETE request to the server.
+func serverDelete(path string) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, base+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
+// parseResponse reads an HTTP response and returns the envelope.
+// If the response is an error, returns a formatted error.
+func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp server.ErrorResponse
+		if json.Unmarshal(data, &errResp) == nil {
+			return nil, fmt.Errorf("%s: %s", errResp.Error.Code, errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("server error: HTTP %d", resp.StatusCode)
+	}
+
+	var envelope server.ResponseEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	return &envelope, nil
+}
+
+// bytesReader creates an io.Reader from a byte slice.
+func bytesReader(b []byte) io.Reader {
+	return bytes.NewReader(b)
+}

@@ -1,16 +1,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
+	"net/url"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -40,247 +33,28 @@ func init() {
 	rootCmd.AddCommand(diffCmd)
 }
 
-type diffOutput struct {
-	OldCommit   string       `json:"old_commit"`
-	NewCommit   string       `json:"new_commit"`
-	TopicFilter string       `json:"topic_filter,omitempty"`
-	Added       []diffRecord `json:"added,omitempty"`
-	Removed     []diffRecord `json:"removed,omitempty"`
-}
-
-type diffRecord struct {
-	ID           string `json:"id"`
-	SummaryShort string `json:"summary_short,omitempty"`
-}
-
 func runDiff(cmd *cobra.Command, args []string) error {
-	dir := configDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
+	params := url.Values{}
 
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+	if len(args) == 1 {
+		params.Set("range", args[0])
 	}
-	if cfg.DataDir == "" {
-		cfg.DataDir = filepath.Join(dir, "data")
+	if diffSince != "" {
+		params.Set("since", diffSince)
 	}
-
-	s, err := storage.New(cfg.DataDir)
-	if err != nil {
-		return fmt.Errorf("open storage: %w", err)
-	}
-
-	var oldHash, newHash string
-
-	if len(args) == 1 && strings.Contains(args[0], "..") {
-		parts := strings.SplitN(args[0], "..", 2)
-		oldHash = parts[0]
-		newHash = parts[1]
-	} else if diffSince != "" {
-		// Find the commit closest to the --since date.
-		sinceTime, err := parseDateArg(diffSince)
-		if err != nil {
-			return fmt.Errorf("parse --since: %w", err)
-		}
-		newHash, oldHash, err = findCommitsSince(s, cfg.DataDir, sinceTime)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Default: compare HEAD with its parent.
-		headPath := filepath.Join(cfg.DataDir, "HEAD")
-		headData, err := os.ReadFile(headPath)
-		if err != nil {
-			return writeError("no_commits", "No commits found", false)
-		}
-		newHash = strings.TrimSpace(string(headData))
-
-		newCommit, err := loadCommit(s, newHash)
-		if err != nil {
-			return fmt.Errorf("load HEAD commit: %w", err)
-		}
-		oldHash = newCommit.Parent
-		if oldHash == "" {
-			return writeError("no_parent", "HEAD has no parent commit to diff against", false)
-		}
-	}
-
-	// Resolve short hashes.
-	oldHash, err = resolveHash(s, oldHash)
-	if err != nil {
-		return fmt.Errorf("resolve old commit: %w", err)
-	}
-	newHash, err = resolveHash(s, newHash)
-	if err != nil {
-		return fmt.Errorf("resolve new commit: %w", err)
-	}
-
-	oldCommit, err := loadCommit(s, oldHash)
-	if err != nil {
-		return fmt.Errorf("load old commit: %w", err)
-	}
-	newCommit, err := loadCommit(s, newHash)
-	if err != nil {
-		return fmt.Errorf("load new commit: %w", err)
-	}
-
-	diff, err := graph.DiffCommits(s, oldCommit, newCommit)
-	if err != nil {
-		return fmt.Errorf("diff commits: %w", err)
-	}
-
-	out := diffOutput{
-		OldCommit:   oldHash[:12],
-		NewCommit:   newHash[:12],
-		TopicFilter: diffTopic,
-	}
-
-	for _, entry := range diff.Added {
-		rec := resolveNodeHash(s, entry.Value)
-		if rec.ID == "" && entry.Key != "" {
-			rec.ID = entry.Key
-		}
-		out.Added = append(out.Added, rec)
-	}
-	for _, entry := range diff.Removed {
-		rec := resolveNodeHash(s, entry.Value)
-		if rec.ID == "" && entry.Key != "" {
-			rec.ID = entry.Key
-		}
-		out.Removed = append(out.Removed, rec)
-	}
-
-	// Apply topic filter if specified.
 	if diffTopic != "" {
-		topicLower := strings.ToLower(diffTopic)
-		out.Added = filterByTopic(s, out.Added, topicLower)
-		out.Removed = filterByTopic(s, out.Removed, topicLower)
+		params.Set("topic", diffTopic)
 	}
 
-	return printJSON(out)
-}
-
-// filterByTopic keeps only records whose keywords or content match the topic.
-func filterByTopic(s *storage.Store, records []diffRecord, topicLower string) []diffRecord {
-	var filtered []diffRecord
-	for _, rec := range records {
-		if matchesTopic(rec, topicLower) {
-			filtered = append(filtered, rec)
-		}
+	path := "/v1/diff"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
 	}
-	return filtered
-}
 
-// matchesTopic checks if a record's summary or ID-referenced node matches
-// the topic string via keyword matching.
-func matchesTopic(rec diffRecord, topicLower string) bool {
-	// Check summary_short.
-	if strings.Contains(strings.ToLower(rec.SummaryShort), topicLower) {
-		return true
-	}
-	// Check ID (node IDs don't match topics, but included for completeness).
-	return false
-}
-
-// findCommitsSince walks the commit chain from HEAD and finds the oldest
-// commit after the given date. Returns (HEAD hash, old commit hash).
-func findCommitsSince(s *storage.Store, dataDir string, since time.Time) (string, string, error) {
-	headPath := filepath.Join(dataDir, "HEAD")
-	headData, err := os.ReadFile(headPath)
+	resp, err := serverGet(path)
 	if err != nil {
-		return "", "", writeError("no_commits", "No commits found", false)
-	}
-	newHash := strings.TrimSpace(string(headData))
-
-	// Walk backward to find the commit just before --since.
-	currentHash := newHash
-	oldHash := ""
-	for i := 0; i < 1000 && currentHash != ""; i++ {
-		commit, err := loadCommit(s, currentHash)
-		if err != nil {
-			break
-		}
-		if commit.Timestamp.Before(since) {
-			oldHash = currentHash
-			break
-		}
-		if commit.Parent == "" {
-			// Reached the beginning. Use this as the old commit.
-			oldHash = currentHash
-			break
-		}
-		currentHash = commit.Parent
+		return writeError("diff_error", fmt.Sprintf("diff: %s", err), false)
 	}
 
-	if oldHash == "" {
-		return "", "", writeError("no_commits_before", fmt.Sprintf("No commits found before %s", since.Format("2006-01-02")), false)
-	}
-
-	return newHash, oldHash, nil
-}
-
-func parseDateArg(s string) (time.Time, error) {
-	// Try full RFC3339 first, then date-only.
-	t, err := time.Parse(time.RFC3339, s)
-	if err == nil {
-		return t, nil
-	}
-	t, err = time.Parse("2006-01-02", s)
-	if err == nil {
-		return t, nil
-	}
-	return time.Time{}, fmt.Errorf("expected date format YYYY-MM-DD or RFC3339, got %q", s)
-}
-
-func loadCommit(s *storage.Store, hash string) (*graph.Commit, error) {
-	data, err := s.Read(hash)
-	if err != nil {
-		return nil, err
-	}
-	var c graph.Commit
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, err
-	}
-	c.Hash = hash
-	return &c, nil
-}
-
-func resolveNodeHash(s *storage.Store, hash string) diffRecord {
-	data, err := s.Read(hash)
-	if err != nil {
-		return diffRecord{ID: hash[:12]}
-	}
-	n, err := graph.UnmarshalNode(data)
-	if err != nil {
-		return diffRecord{ID: hash[:12]}
-	}
-	rec := diffRecord{ID: n.ID}
-	if v, ok := n.Properties.GetString("content_short"); ok {
-		rec.SummaryShort = v
-	}
-	return rec
-}
-
-// resolveHash expands a short hash prefix to a full hash by scanning storage.
-func resolveHash(s *storage.Store, hash string) (string, error) {
-	if len(hash) == 64 {
-		return hash, nil
-	}
-	chunks, err := s.List()
-	if err != nil {
-		return hash, nil
-	}
-	var matches []string
-	for _, h := range chunks {
-		if strings.HasPrefix(h, hash) {
-			matches = append(matches, h)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) > 1 {
-		return "", fmt.Errorf("ambiguous hash prefix %q matches %d chunks", hash, len(matches))
-	}
-	return hash, nil
+	return printEnvelope(resp)
 }

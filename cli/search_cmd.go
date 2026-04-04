@@ -1,13 +1,8 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/search"
 	"github.com/spf13/cobra"
 )
 
@@ -15,7 +10,7 @@ var (
 	searchConfMin    float64
 	searchConfMax    float64
 	searchTemp       string
-	searchKnowType   string
+	searchKnowType  string
 	searchEpStatus   string
 	searchTop        int
 	searchHistorical bool
@@ -47,62 +42,38 @@ func init() {
 }
 
 func runSearch(cmd *cobra.Command, args []string) error {
-	eng, err := loadEngine()
-	if err != nil {
-		return fmt.Errorf("load engine: %w", err)
-	}
-
-	q := search.Query{
-		Top:               searchTop,
-		Temporality:       searchTemp,
-		KnowledgeType:     searchKnowType,
-		EpistemicStatus:   searchEpStatus,
-		IncludeHistorical: searchHistorical,
+	body := map[string]any{
+		"top":               searchTop,
+		"include_historical": searchHistorical,
 	}
 
 	if len(args) > 0 {
-		q.Text = args[0]
+		body["text"] = args[0]
 	}
-
+	if searchTemp != "" {
+		body["temporality"] = searchTemp
+	}
+	if searchKnowType != "" {
+		body["knowledge_type"] = searchKnowType
+	}
+	if searchEpStatus != "" {
+		body["epistemic_status"] = searchEpStatus
+	}
 	if cmd.Flags().Changed("confidence-min") {
-		q.ConfidenceMin = &searchConfMin
+		body["confidence_min"] = searchConfMin
 	}
 	if cmd.Flags().Changed("confidence-max") {
-		q.ConfidenceMax = &searchConfMax
+		body["confidence_max"] = searchConfMax
 	}
 	if searchSince != "" {
-		t, err := parseDateArg(searchSince)
-		if err != nil {
-			return fmt.Errorf("parse --since: %w", err)
-		}
-		q.Since = &t
+		body["since"] = searchSince
 	}
 
-	results, err := eng.searcher.Execute(context.Background(), q)
+	resp, err := serverPost("/v1/search", body)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
 
-	// Record access and spread activation for returned results.
-	if len(results) > 0 {
-		now := time.Now().UTC()
-		activationCfg := graph.ActivationConfig{
-			BaseAmount:        eng.cfg.Activation.BaseAmount,
-			AttenuationFactor: eng.cfg.Activation.AttenuationFactor,
-		}
-		for _, r := range results {
-			eng.graph.RecordAccess(r.ID, now, activationCfg)
-		}
-		if _, err := eng.save("access"); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to save access data: %s\n", err)
-		}
-	}
-
-	return printJSON(struct {
-		Results  []search.Result `json:"results"`
-		Curation CurationStatus  `json:"curation"`
-	}{
-		Results:  results,
-		Curation: computeCurationStatus(eng.graph, eng.propIdx),
-	})
+	return printEnvelope(resp)
 }
+

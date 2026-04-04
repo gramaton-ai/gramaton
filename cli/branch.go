@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,25 +51,6 @@ var branchCheckoutCmd = &cobra.Command{
 	RunE:  runBranchCheckout,
 }
 
-// validBranchName checks that a branch name is safe for use as a filename.
-func validBranchName(name string) error {
-	if name == "" {
-		return fmt.Errorf("branch name is required")
-	}
-	if len(name) > 128 {
-		return fmt.Errorf("branch name too long (max 128 characters)")
-	}
-	for _, c := range name {
-		if c == '/' || c == '\\' || c == '.' || c == '\x00' {
-			return fmt.Errorf("branch name contains invalid character %q", c)
-		}
-	}
-	if name == "HEAD" || name == "BRANCH" {
-		return fmt.Errorf("reserved name %q", name)
-	}
-	return nil
-}
-
 func init() {
 	branchCmd.AddCommand(branchCreateCmd)
 	branchCmd.AddCommand(branchListCmd)
@@ -78,10 +60,7 @@ func init() {
 	rootCmd.AddCommand(branchCmd)
 }
 
-// Branch ref layout:
-//   <data_dir>/refs/<branch_name>  -- file containing commit hash
-//   <data_dir>/HEAD                -- commit hash of current state
-//   <data_dir>/BRANCH              -- name of active branch (default: "main")
+// Branch ref helpers used by engine.go for save operations.
 
 func refsDir(dataDir string) string {
 	return filepath.Join(dataDir, "refs")
@@ -95,208 +74,66 @@ func activeBranch(dataDir string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func setActiveBranch(dataDir, name string) error {
-	return atomicWriteFile(filepath.Join(dataDir, "BRANCH"), []byte(name), 0o600)
-}
-
-func readRef(dataDir, name string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(refsDir(dataDir), name))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
 func writeRef(dataDir, name, hash string) error {
 	dir := refsDir(dataDir)
 	os.MkdirAll(dir, 0o755)
 	return atomicWriteFile(filepath.Join(dir, name), []byte(hash), 0o600)
 }
 
-func deleteRef(dataDir, name string) error {
-	return os.Remove(filepath.Join(refsDir(dataDir), name))
-}
-
 // --- Command implementations ---
 
 func runBranchCreate(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	if err := validBranchName(name); err != nil {
-		return writeError("invalid_name", err.Error(), false)
-	}
-	if name == "main" {
-		return writeError("invalid_name", "cannot create a branch named 'main'", false)
-	}
 
-	eng, err := loadEngine()
+	resp, err := serverPost("/v1/branches", map[string]string{"name": name})
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("branch_error", fmt.Sprintf("create branch: %s", err), false)
 	}
 
-	// Check branch doesn't already exist.
-	if _, err := readRef(eng.cfg.DataDir, name); err == nil {
-		return writeError("exists", fmt.Sprintf("branch %q already exists", name), false)
-	}
-
-	// Create branch pointing to current HEAD.
-	if err := writeRef(eng.cfg.DataDir, name, eng.headHash); err != nil {
-		return writeError("write_error", err.Error(), false)
-	}
-
-	return printJSON(map[string]string{
-		"branch":  name,
-		"commit":  eng.headHash[:12],
-		"message": fmt.Sprintf("branch %q created from HEAD", name),
-	})
+	return printEnvelope(resp)
 }
 
 func runBranchList(cmd *cobra.Command, args []string) error {
-	eng, err := loadEngine()
+	resp, err := serverGet("/v1/branches")
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("branch_error", fmt.Sprintf("list branches: %s", err), false)
 	}
 
-	dir := refsDir(eng.cfg.DataDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		// No refs dir = no branches.
-		return printJSON([]map[string]string{})
-	}
-
-	active := activeBranch(eng.cfg.DataDir)
-
-	var branches []map[string]string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		hash, _ := readRef(eng.cfg.DataDir, e.Name())
-		b := map[string]string{
-			"name":   e.Name(),
-			"commit": truncHash(hash),
-		}
-		if e.Name() == active {
-			b["active"] = "true"
-		}
-		branches = append(branches, b)
-	}
-
-	return printJSON(branches)
+	return printEnvelope(resp)
 }
 
 func runBranchCheckout(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	if err := validBranchName(name); err != nil {
-		return writeError("invalid_name", err.Error(), false)
-	}
+	path := fmt.Sprintf("/v1/branches/%s/checkout", url.PathEscape(name))
 
-	eng, err := loadEngine()
+	resp, err := serverPost(path, nil)
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("branch_error", fmt.Sprintf("checkout branch: %s", err), false)
 	}
 
-	hash, err := readRef(eng.cfg.DataDir, name)
-	if err != nil {
-		return writeError("not_found", fmt.Sprintf("branch %q not found", name), false)
-	}
-
-	// Update HEAD to point to branch's commit.
-	headPath := filepath.Join(eng.cfg.DataDir, "HEAD")
-	if err := atomicWriteFile(headPath, []byte(hash), 0o600); err != nil {
-		return writeError("write_error", err.Error(), false)
-	}
-
-	if err := setActiveBranch(eng.cfg.DataDir, name); err != nil {
-		return writeError("write_error", err.Error(), false)
-	}
-
-	return printJSON(map[string]string{
-		"branch": name,
-		"commit": truncHash(hash),
-	})
+	return printEnvelope(resp)
 }
 
 func runBranchMerge(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	if err := validBranchName(name); err != nil {
-		return writeError("invalid_name", err.Error(), false)
-	}
-	if name == "main" {
-		return writeError("invalid", "cannot merge main into itself", false)
-	}
+	path := fmt.Sprintf("/v1/branches/%s/merge", url.PathEscape(name))
 
-	eng, err := loadEngine()
+	resp, err := serverPost(path, nil)
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("branch_error", fmt.Sprintf("merge branch: %s", err), false)
 	}
 
-	// Ensure we're on main.
-	if err := setActiveBranch(eng.cfg.DataDir, "main"); err != nil {
-		return writeError("write_error", err.Error(), false)
-	}
-
-	branchHash, err := readRef(eng.cfg.DataDir, name)
-	if err != nil {
-		return writeError("not_found", fmt.Sprintf("branch %q not found", name), false)
-	}
-
-	// Load the branch state as current state.
-	// For v0.1, merge = fast-forward (adopt the branch's state as the new main).
-	// Proper three-way merge is a future feature.
-	_, err = eng.graph.Load(eng.store, branchHash)
-	if err != nil {
-		return writeError("load_error", err.Error(), false)
-	}
-	eng.rebuildAllIndexes()
-
-	commit, err := eng.save(fmt.Sprintf("merge branch %q", name))
-	if err != nil {
-		return writeError("save_error", err.Error(), false)
-	}
-
-	// Update main ref.
-	writeRef(eng.cfg.DataDir, "main", commit.Hash)
-
-	// Clean up branch ref.
-	deleteRef(eng.cfg.DataDir, name)
-
-	return printJSON(map[string]string{
-		"merged":     name,
-		"new_commit": commit.Hash[:12],
-	})
+	return printEnvelope(resp)
 }
 
 func runBranchDiscard(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	if err := validBranchName(name); err != nil {
-		return writeError("invalid_name", err.Error(), false)
-	}
-	if name == "main" {
-		return writeError("invalid", "cannot discard main", false)
-	}
+	path := fmt.Sprintf("/v1/branches/%s", url.PathEscape(name))
 
-	eng, err := loadEngine()
+	resp, err := serverDelete(path)
 	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+		return writeError("branch_error", fmt.Sprintf("discard branch: %s", err), false)
 	}
 
-	if _, err := readRef(eng.cfg.DataDir, name); err != nil {
-		return writeError("not_found", fmt.Sprintf("branch %q not found", name), false)
-	}
-
-	// If we're on the discarded branch, switch back to main.
-	if activeBranch(eng.cfg.DataDir) == name {
-		mainHash, err := readRef(eng.cfg.DataDir, "main")
-		if err == nil {
-			headPath := filepath.Join(eng.cfg.DataDir, "HEAD")
-			atomicWriteFile(headPath, []byte(mainHash), 0o600)
-		}
-		setActiveBranch(eng.cfg.DataDir, "main")
-	}
-
-	deleteRef(eng.cfg.DataDir, name)
-
-	return printJSON(map[string]string{
-		"discarded": name,
-	})
+	return printEnvelope(resp)
 }
