@@ -1,0 +1,165 @@
+package storage
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+// Store is a content-addressed chunk store backed by the filesystem.
+// Chunks are identified by their SHA-256 content hash. The on-disk layout
+// splits the hash into a 2-character prefix directory for filesystem
+// friendliness:
+//
+//	<root>/
+//	  ab/
+//	    abcdef1234...  (full hash as filename)
+//	  cd/
+//	    cdef5678...
+//
+// All writes are atomic: data is written to a temp file in the root
+// directory, then renamed to the final path. This ensures no partial
+// chunks exist on disk even if the process crashes mid-write.
+type Store struct {
+	root string
+}
+
+// New creates a Store rooted at the given directory. The directory is
+// created if it does not exist.
+func New(root string) (*Store, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("storage: create root %q: %w", root, err)
+	}
+	return &Store{root: root}, nil
+}
+
+// Root returns the store's root directory path.
+func (s *Store) Root() string {
+	return s.root
+}
+
+// Write stores data and returns its content hash. If a chunk with the
+// same hash already exists, the write is a no-op (content-addressed
+// deduplication). The write is atomic: temp file + rename.
+func (s *Store) Write(data []byte) (string, error) {
+	hash := Hash(data)
+
+	path := s.chunkPath(hash)
+
+	// Fast path: chunk already exists.
+	if _, err := os.Stat(path); err == nil {
+		return hash, nil
+	}
+
+	// Ensure prefix directory exists.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("storage: create dir %q: %w", dir, err)
+	}
+
+	// Atomic write: temp file in root, then rename.
+	tmp, err := os.CreateTemp(s.root, ".chunk-*")
+	if err != nil {
+		return "", fmt.Errorf("storage: create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	// Clean up temp file on any error.
+	success := false
+	defer func() {
+		if !success {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		return "", fmt.Errorf("storage: write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return "", fmt.Errorf("storage: sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("storage: close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("storage: rename %q to %q: %w", tmpPath, path, err)
+	}
+
+	success = true
+	return hash, nil
+}
+
+// Read returns the data for the given content hash. Returns an error
+// wrapping ErrNotFound if the chunk does not exist.
+func (s *Store) Read(hash string) ([]byte, error) {
+	data, err := os.ReadFile(s.chunkPath(hash))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("storage: chunk %s: %w", hash, ErrNotFound)
+		}
+		return nil, fmt.Errorf("storage: read chunk %s: %w", hash, err)
+	}
+	return data, nil
+}
+
+// Has reports whether a chunk with the given hash exists.
+func (s *Store) Has(hash string) bool {
+	_, err := os.Stat(s.chunkPath(hash))
+	return err == nil
+}
+
+// Delete removes a chunk by hash. Returns ErrNotFound if the chunk
+// does not exist.
+func (s *Store) Delete(hash string) error {
+	err := os.Remove(s.chunkPath(hash))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("storage: chunk %s: %w", hash, ErrNotFound)
+		}
+		return fmt.Errorf("storage: delete chunk %s: %w", hash, err)
+	}
+	return nil
+}
+
+// List returns all chunk hashes in the store, sorted lexicographically.
+func (s *Store) List() ([]string, error) {
+	var hashes []string
+
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("storage: read root: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || len(entry.Name()) != 2 {
+			continue
+		}
+		subdir := filepath.Join(s.root, entry.Name())
+		chunks, err := os.ReadDir(subdir)
+		if err != nil {
+			return nil, fmt.Errorf("storage: read subdir %q: %w", subdir, err)
+		}
+		for _, chunk := range chunks {
+			if !chunk.IsDir() {
+				hashes = append(hashes, chunk.Name())
+			}
+		}
+	}
+
+	sort.Strings(hashes)
+	return hashes, nil
+}
+
+// chunkPath returns the filesystem path for a given content hash.
+// Layout: <root>/<first-2-chars>/<full-hash>
+func (s *Store) chunkPath(hash string) string {
+	return filepath.Join(s.root, hash[:2], hash)
+}
+
+// ErrNotFound is returned when a chunk does not exist in the store.
+var ErrNotFound = errors.New("not found")
