@@ -2,99 +2,152 @@
 
 How to integrate Gramaton with any agent framework.
 
-## What You Need
+## Access Methods
 
-1. **Shell access** -- the agent must be able to run `gramaton` CLI commands
-2. **System prompt** -- instructions telling the agent when to search and capture
-3. **Subagent support** (optional) -- for async capture without blocking
+Gramaton offers three ways for agents to interact with the knowledge
+store. Choose based on your framework's capabilities:
 
-## CLI Interface
+### 1. MCP (Recommended)
 
-All interaction happens through the `gramaton` CLI. Commands accept
-flags for read operations and JSON on stdin for write operations.
+The fastest path. Gramaton exposes 13 MCP tools via Streamable HTTP.
+Agents call typed tools with structured parameters -- no shell, no
+escaping, no permission prompts.
 
-### Read Commands
+**Setup:**
+- Ensure the gramaton daemon is running (`gramaton serve`)
+- Configure your MCP client to connect to `http://localhost:42982/mcp`
+- For stdio-based MCP clients, use `gramaton mcp` as the command
+
+**Available tools:**
+| Tool | Description |
+|------|-------------|
+| `gramaton_search` | Search the knowledge store |
+| `gramaton_capture` | Store a knowledge record |
+| `gramaton_inspect` | Get full record details |
+| `gramaton_update` | Update record properties |
+| `gramaton_link` | Create an edge between records |
+| `gramaton_classify` | Classify a pending record |
+| `gramaton_explore` | Graph traversal |
+| `gramaton_pending` | List unclassified records |
+| `gramaton_status` | Health and stats |
+| `gramaton_branch` | Branch management |
+| `gramaton_diff` | What changed since a date |
+| `gramaton_log` | Commit and record history |
+| `gramaton_reembed` | Regenerate stale embeddings |
+
+### 2. REST API
+
+Direct HTTP calls to the Gramaton server. Best for frameworks that
+can make HTTP requests but don't support MCP.
+
+**Base URL:** `http://localhost:42982`
+
+**Key endpoints:**
+```
+POST   /v1/records              Create a record
+GET    /v1/records/{id}         Get a record
+PATCH  /v1/records/{id}         Update properties
+DELETE /v1/records/{id}         Soft delete
+POST   /v1/records/{id}/edges   Create an edge
+POST   /v1/records/{id}/classify  Classify a record
+POST   /v1/search               Search the store
+POST   /v1/explore              Graph traversal
+GET    /v1/pending              List unclassified records
+GET    /v1/branches             List branches
+POST   /v1/branches             Create a branch
+GET    /v1/log                  Commit history
+GET    /v1/diff                 Compare commits
+GET    /v1/status               Health and stats
+```
+
+All responses use a standard envelope:
+```json
+{
+  "data": { ... },
+  "curation": {"pending_count": 5, "overdue": true},
+  "meta": {"version": "0.2.0"}
+}
+```
+
+### 3. CLI
+
+Shell commands for frameworks with shell access. The CLI auto-starts
+the server daemon on first use.
 
 ```bash
-gramaton search <query> [flags]       # Tier 1: find records
-gramaton inspect <record-id>          # Tier 2: full content + edges
-gramaton explore <record-id> [flags]  # Tier 3: graph traversal
-gramaton pending                      # List unclassified records
-gramaton status                       # Store health and counts
-gramaton log [--last N]               # Commit history
-gramaton diff [ref1..ref2]            # What changed between commits
+gramaton search "<query>" [flags]
+gramaton inspect <record-id>
+gramaton explore <record-id> [flags]
+gramaton capture -f <json-file>
+gramaton classify -f <json-file>
+gramaton update -f <json-file>
+gramaton pending
+gramaton status
 ```
 
-### Write Commands (JSON on stdin)
+The CLI returns JSON to stdout. Write commands accept JSON via
+`--file` flag (preferred) or stdin.
 
-```bash
-gramaton capture <<'EOF'
-{"content": "...", "temporality": "durable", "confidence": 0.9,
- "keywords": ["k1", "k2"], "summary_short": "..."}
-EOF
+## Agent Behavior Guidelines
 
-gramaton classify <<'EOF'
-{"id": "...", "temporality": "durable", "confidence": 0.9}
-EOF
+Regardless of which access method you use, your agent's system
+prompt should include these behavioral instructions:
 
-gramaton update <<'EOF'
-{"id": "...", "link_to": "...", "edge_type": "justifies", "edge_weight": 0.9}
-EOF
+### When to Search
+
+- Before answering questions about past decisions or context
+- When the user references prior sessions
+- When you need context beyond the current conversation
+- When uncertain whether the user expressed a preference before
+
+### When to Capture
+
+- User makes a decision or states a preference
+- A significant fact, insight, or design rationale emerges
+- An architecture or design choice is made with reasoning
+- Research findings or domain knowledge are discussed
+- A constraint, requirement, or tradeoff is identified
+
+### When NOT to Capture
+
+- Trivial exchanges, greetings, small talk
+- Questions without answers
+- Work-in-progress that hasn't solidified
+- Your own generated responses or analysis
+
+### Capture Workflow
+
+The standard capture workflow is three operations:
+
+1. **Capture** the knowledge with classification metadata
+2. **Search** for related existing records
+3. **Link** the new record to related ones
+
+This creates a connected knowledge graph, not just a list of facts.
+
+### Interpreting Metadata
+
+Results include `metadata_summary` -- a one-line LLM-readable trust
+assessment. Example: "Current. Durable, high-confidence (0.90),
+well-established. Last accessed 3 days ago."
+
+Use this for quick assessment. For critical decisions, check the
+raw fields (confidence, temporality, epistemic_status) directly.
+
+### Curation
+
+Responses include a `curation` field:
+```json
+{"pending_count": 14, "overdue": true}
 ```
 
-### Search Flags
-
-```
---confidence-min <float>       Filter: minimum confidence
---confidence-max <float>       Filter: maximum confidence
---temporality <value>          Filter: immutable|durable|temporal|ephemeral
---knowledge-type <value>       Filter: episodic|semantic|procedural|conceptual|reference
---epistemic-status <value>     Filter: well_established|probable|speculative|contested|refuted
---include-historical           Include records with valid_until in the past
---top <int>                    Number of results (default: 10)
-```
-
-## Capture Modes
-
-### Mode 1: Subagent Capture (Preferred)
-
-The main agent spawns a separate context to classify and store.
-Zero context pollution in the main conversation.
-
-Use when: The framework supports subagents or parallel invocations.
-
-### Mode 2: Inline Capture
-
-The main agent classifies and stores directly in the conversation.
-
-Use when: No subagent support. Best for simple, quick captures.
-
-### Mode 3: Raw Capture
-
-Store content with no classification. Classified later by curation.
-
-```bash
-gramaton capture <<'EOF'
-{"content": "The thing to remember"}
-EOF
-```
-
-Use when: Minimal overhead needed, or bulk ingestion.
-
-## System Prompt Template
-
-Add to your agent's system prompt (see integration/claude-code/CLAUDE.md
-for the full template). The key instructions:
-
-1. **Search before answering** questions about past decisions or context
-2. **Capture decisions and preferences** via subagent when they emerge
-3. **Don't capture your own output** -- only user-stated or external knowledge
-4. **Use metadata_summary** for quick trustworthiness assessment
-5. **Run curation** when the system signals it's overdue
+When `overdue` is true, spawn background curation to classify
+pending records. This keeps the store healthy without user
+intervention.
 
 ## Output Format
 
-All commands return JSON. Search results include:
+All operations return structured JSON. Search results include:
 
 ```json
 {
@@ -107,6 +160,3 @@ All commands return JSON. Search results include:
   "effective_score": 0.78
 }
 ```
-
-The `metadata_summary` field is designed to be read by LLMs -- it's
-a natural language trustworthiness assessment.

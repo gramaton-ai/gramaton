@@ -1,8 +1,9 @@
 ## Knowledge Store (Gramaton)
 
-You have access to a persistent knowledge store via the `gramaton` CLI.
-The store contains knowledge accumulated across prior sessions -- decisions,
-preferences, architecture context, domain knowledge, and more.
+You have access to a persistent knowledge store via MCP tools or
+the `gramaton` CLI. The store contains knowledge accumulated across
+prior sessions -- decisions, preferences, architecture context,
+domain knowledge, and more.
 
 ### Retrieval
 
@@ -14,10 +15,10 @@ preferences, architecture context, domain knowledge, and more.
 - When you're unsure whether the user has expressed a preference before
 
 **How to search:**
-1. `gramaton search "<query>" --top 5` -- find relevant records
-2. Scan the results -- read `metadata_summary` for a quick trustworthiness
+1. Call `gramaton_search` with the query text and any relevant filters
+2. Scan the results -- read `metadata_summary` for a quick trust
    assessment, `summary_short` for content relevance
-3. `gramaton inspect <id>` for records that look relevant
+3. Call `gramaton_inspect` for records that look relevant
 4. Use the retrieved knowledge to inform your response
 
 Do NOT tell the user you're searching unless the results meaningfully
@@ -63,17 +64,16 @@ to the user.
 
 ### Provenance-Aware Retrieval
 
-When a retrieved record has low confidence, contested status, or seems
-surprising, check its history:
-  `gramaton log --record <id>`
-Use the history to understand WHY -- was it downgraded by curation?
-Contradicted by another record? Explain provenance to the user when
-it affects your recommendation.
+When a retrieved record has low confidence, contested status, or
+seems surprising, use `gramaton_log` with the record ID to check
+its history. Was it downgraded by curation? Contradicted by another
+record? Explain provenance to the user when it affects your
+recommendation.
 
 ### Diffing for Catch-Up Questions
 
-When the user asks "what changed" or "catch me up" about a topic:
-  `gramaton diff --since <date> --topic "<topic>"`
+When the user asks "what changed" or "catch me up" about a topic,
+use `gramaton_diff` with a since date and optional topic filter.
 Narrate the structured change set rather than just searching for
 recent records.
 
@@ -85,6 +85,8 @@ recent records.
 - A significant fact or insight emerges from discussion
 - An architecture or design choice is made with reasoning
 - A useful procedure or workflow is established
+- Research findings or domain knowledge are discussed
+- A constraint, requirement, or tradeoff is identified
 
 **When NOT to capture:**
 - Trivial exchanges, greetings, small talk
@@ -105,10 +107,10 @@ Content: [the knowledge to store]
 
 Context:
   What is this about: [topic, domain, subject area]
-  Who or what is involved: [people, organizations, entities, systems]
+  Who or what is involved: [people, organizations, entities]
   What prompted this: [why this knowledge emerged right now]
-  What should this be findable by: [terms, names, IDs for future retrieval]
-  What else in the store relates to this: [known related topics or records]
+  What should this be findable by: [terms, names for future retrieval]
+  What else in the store relates to this: [known related topics]
 
 Follow the capture subagent instructions in
 integration/claude-code/subagent-capture.md"
@@ -118,12 +120,14 @@ continue immediately.
 
 ### Curation
 
-When any Gramaton response includes `"curation": {"overdue": true, ...}`,
+When any Gramaton response includes `"curation": {"overdue": true}`,
 spawn a subagent to run background curation. Do this once per session.
 
 The curation subagent should:
-1. Call `gramaton pending` to get unclassified records
+1. Call `gramaton_pending` to get unclassified records
 2. Process them in order (most recent first), classifying each one
-3. Check for keywords that appear across 3+ records without a concept
-   node -- create concept nodes for these and link all related records
-4. Do not interrupt the user. Run entirely in the background.
+   via `gramaton_classify`
+3. Search for related records and link them via `gramaton_link`
+4. Check for keywords that appear across 3+ records without a concept
+   node -- create concept nodes and link all related records
+5. Do not interrupt the user. Run entirely in the background.

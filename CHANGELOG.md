@@ -9,26 +9,57 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `gramaton tempdir` command -- prints the OS-appropriate temp directory
-  path so agents can discover where to write input files
-- `--file`/`-f` flag on `capture`, `classify`, `update` -- reads JSON
-  from a file instead of stdin, avoids shell heredoc escaping issues
-  that trigger safety heuristics in agent harnesses
+- **On-demand server daemon** -- Gramaton now runs as an HTTP server
+  that auto-starts on first CLI invocation and shuts down after idle
+  timeout (default 30 min). Graph stays in memory for fast access.
+  `gramaton serve` for explicit control (`--fg`, `--stop`).
+- **REST API** -- 22 HTTP endpoints for all operations (records CRUD,
+  search, explore, branches, diff, log, revert, reembed, ingest,
+  status). Standard response envelope with curation status and meta.
+- **MCP integration** -- 13 MCP tools via Streamable HTTP at `/mcp`.
+  Agents call `gramaton_search`, `gramaton_capture`, etc. as typed
+  tools with no shell involvement. Uses official MCP Go SDK
+  (Apache-2.0). Stdio bridge via `gramaton mcp` for legacy clients.
+- **CLI thin client** -- all CLI commands now delegate to the server.
+  Same commands, same output format, backward-compatible with v0.1
+  agent prompts. Auto-starts the daemon transparently.
+- **Core engine extraction** -- graph engine, indexes, and providers
+  extracted into `core/` package with `sync.RWMutex` for concurrent
+  read/write safety. Embedding calls happen outside the lock.
+- **Server lifecycle** -- port 42982, PID file discovery, flock-based
+  race protection, health check verification, graceful shutdown.
+- `gramaton tempdir` command -- prints the OS-appropriate temp
+  directory path for agent file input
+- `--file`/`-f` flag on `capture`, `classify`, `update` -- reads
+  JSON from a file instead of stdin
 - Auto-cleanup of temp files after successful read, stale file sweep
   (1 hour) on each write command invocation
-- v0.2 server design document covering on-demand daemon model, HTTP
-  REST API, CLI thin client, autonomous curation, MCP integration,
-  and usage topologies. All architecture decisions resolved. Security
-  review completed with 12 additional findings documented.
+- v0.2 server design document with all architecture decisions resolved
+
+### Changed
+
+- Search pre-embeds query text outside the lock to avoid blocking
+  the server during Ollama model load
+- Capture pre-embeds content outside the lock for the same reason
+- Server does not auto-start Ollama -- connects to whatever
+  embedding provider is configured
 
 ### Security
 
-- Restrict `--file` to gramaton temp directory only, reject arbitrary paths
-- Resolve symlinks before path validation to prevent symlink-based escapes
-- Read via file descriptor to avoid TOCTOU between validation and read
+- Restrict `--file` to gramaton temp directory only, reject arbitrary
+  paths
+- Resolve symlinks before path validation to prevent symlink-based
+  escapes
+- Read via file descriptor to avoid TOCTOU between validation and
+  read
 - Verify input is a regular file (not device, pipe, or symlink)
 - Strip absolute paths from error messages to prevent info disclosure
 - Sweep removes symlinks unconditionally from temp directory
+- HTTP server timeouts (read 10s, write 120s, idle 120s)
+- Security headers on all REST responses (Content-Type, nosniff,
+  no-store)
+- MCP endpoint excluded from REST security headers (own content
+  negotiation)
 
 ## [0.1.0] - 2026-04-04
 

@@ -11,20 +11,22 @@ Search the Gramaton knowledge store for relevant records.
 
 ## Steps
 
-1. Run `gramaton search "<query>" --top 5` with the user's question
-   as the query text
-2. Apply metadata filters if the question implies constraints:
-   - `--confidence-min 0.7` for high-confidence results
-   - `--temporality durable` for stable knowledge
-   - `--knowledge-type procedural` for how-to questions
-3. Scan `metadata_summary` and `summary_short` in results
-4. For relevant results, run `gramaton inspect <id>` for full content
-5. Use the retrieved knowledge to inform your response
+1. Call `gramaton_search` with the query text and relevant filters:
+   - `text`: the search query
+   - `top`: number of results (default 10)
+   - `temporality`: filter by immutable|durable|temporal|ephemeral
+   - `knowledge_type`: filter by episodic|semantic|procedural|conceptual|reference
+   - `confidence_min`: minimum confidence (0.0-1.0)
+2. Scan `metadata_summary` and `summary_short` in results
+3. For relevant results, call `gramaton_inspect` for full content
+4. Use the retrieved knowledge to inform your response
 
 ## Output
 
-Returns JSON array of results sorted by effective_score:
+Returns JSON with results sorted by effective_score:
 ```json
-[{"id": "...", "summary_short": "...", "metadata_summary": "...",
-  "confidence": 0.9, "temporality": "durable", "effective_score": 0.78}]
+{"results": [
+  {"id": "...", "summary_short": "...", "metadata_summary": "...",
+   "confidence": 0.9, "temporality": "durable", "effective_score": 0.78}
+]}
 ```

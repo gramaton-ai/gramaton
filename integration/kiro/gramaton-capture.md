@@ -20,27 +20,28 @@ Capture knowledge into the Gramaton store.
 
 3. Write a summary_short (max 200 characters)
 
-4. Store via CLI:
+4. Store via `gramaton_capture`:
    ```
-   gramaton capture <<'EOF'
-   {
-     "content": "[knowledge to store]",
-     "temporality": "[value]",
-     "confidence": [float],
-     "knowledge_type": "[value]",
-     "keywords": ["k1", "k2"],
-     "summary_short": "[brief summary]"
-   }
-   EOF
+   gramaton_capture(
+     content="[knowledge to store]",
+     temporality="[value]",
+     confidence=[float],
+     knowledge_type="[value]",
+     keywords=["k1", "k2"],
+     summary_short="[brief summary]"
+   )
    ```
 
-5. Search for related existing records and create edges:
+5. Search for related records and create edges:
    ```
-   gramaton search "[key terms]" --top 5
-   gramaton update <<'EOF'
-   {"id": "[new-id]", "link_to": "[related-id]",
-    "edge_type": "related_to", "edge_weight": 0.7}
-   EOF
+   gramaton_search(text="[key terms]", top=5)
+
+   gramaton_link(
+     id="[new-id]",
+     target_id="[related-id]",
+     edge_type="related_to",
+     edge_weight=0.7
+   )
    ```
 
 ## Do Not Capture

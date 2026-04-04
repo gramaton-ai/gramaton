@@ -4,7 +4,7 @@ Run knowledge store maintenance tasks.
 
 ## When to Use
 
-- When `gramaton status` or any CLI response shows pending records
+- When any Gramaton response shows `"overdue": true` in curation
 - Periodically during longer sessions
 - When the user explicitly asks for curation
 
@@ -12,40 +12,54 @@ Run knowledge store maintenance tasks.
 
 ### Classify Pending Records
 
-1. Run `gramaton pending` to list unclassified records
+1. Get unclassified records:
+   ```
+   gramaton_pending()
+   ```
+
 2. For each record, inspect and classify:
    ```
-   gramaton inspect <id>
-   gramaton classify <<'EOF'
-   {"id": "<id>", "temporality": "durable", "confidence": 0.85,
-    "knowledge_type": "semantic", "keywords": ["topic"],
-    "summary_short": "Brief description"}
-   EOF
+   gramaton_inspect(id="<id>")
+
+   gramaton_classify(
+     id="<id>",
+     temporality="durable",
+     confidence=0.85,
+     knowledge_type="semantic",
+     keywords=["topic"],
+     summary_short="Brief description"
+   )
    ```
 
 ### Concept Promotion
 
 3. Look for keywords appearing across 3+ records without a concept node
+
 4. Create concept nodes and link related records:
    ```
-   gramaton capture <<'EOF'
-   {"content": "Concept name: brief definition",
-    "knowledge_type": "conceptual", "temporality": "durable",
-    "confidence": 0.95, "keywords": ["concept-name"]}
-   EOF
-   gramaton update <<'EOF'
-   {"id": "<record>", "link_to": "<concept>",
-    "edge_type": "discusses", "edge_weight": 0.8}
-   EOF
+   gramaton_capture(
+     content="Concept name: brief definition",
+     knowledge_type="conceptual",
+     temporality="durable",
+     confidence=0.95,
+     keywords=["concept-name"]
+   )
+
+   gramaton_link(
+     id="<record>",
+     target_id="<concept>",
+     edge_type="discusses",
+     edge_weight=0.8
+   )
    ```
 
 ### Safety
 
 5. Run curation on a branch:
    ```
-   gramaton branch create curation-session
-   gramaton branch checkout curation-session
+   gramaton_branch(action="create", name="curation-session")
+   gramaton_branch(action="checkout", name="curation-session")
    [do curation work]
-   gramaton branch checkout main
-   gramaton branch merge curation-session
+   gramaton_branch(action="checkout", name="main")
+   gramaton_branch(action="merge", name="curation-session")
    ```
