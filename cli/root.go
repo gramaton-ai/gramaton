@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/brandonlattin/gramaton/config"
 	"github.com/spf13/cobra"
 )
 
@@ -37,15 +38,7 @@ func configDir() string {
 	if cfgDir != "" {
 		return cfgDir
 	}
-	return defaultConfigDir()
-}
-
-func defaultConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".gramaton"
-	}
-	return home + "/.gramaton"
+	return config.DefaultDir()
 }
 
 func printJSON(v any) error {

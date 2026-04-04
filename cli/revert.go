@@ -45,6 +45,7 @@ func runRevert(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return writeError("load_error", fmt.Sprintf("failed to load commit %s: %s", targetHash, err), false)
 	}
+	eng.rebuildAllIndexes()
 
 	// Save as new commit with current HEAD as parent.
 	commit, err := eng.save(fmt.Sprintf("revert to %s", fullHash[:12]))

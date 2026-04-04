@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/brandonlattin/gramaton/graph"
@@ -56,7 +57,9 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		BaseAmount:        eng.cfg.Activation.BaseAmount,
 		AttenuationFactor: eng.cfg.Activation.AttenuationFactor,
 	})
-	eng.save("access")
+	if _, err := eng.save("access"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save access data: %s\n", err)
+	}
 
 	// Re-read node after access update.
 	n, _ = eng.graph.GetNode(nodeID)
@@ -121,8 +124,7 @@ func inspectMetadataSummary(props graph.Properties) string {
 	}
 
 	if v, ok := props["temporality"]; ok {
-		s := v.String()
-		parts = append(parts, s[0:1]+s[1:]) // preserve case
+		parts = append(parts, v.String())
 	}
 	if v, ok := props["confidence"]; ok {
 		parts = append(parts, fmt.Sprintf("confidence %.2f", v.Float64()))

@@ -148,14 +148,18 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		props["context_related"] = graph.StringProperty(input.ContextRelated)
 	}
 	if input.ValidFrom != "" {
-		if t, err := time.Parse(time.RFC3339, input.ValidFrom); err == nil {
-			props["valid_from"] = graph.TimestampProperty(t)
+		t, err := time.Parse(time.RFC3339, input.ValidFrom)
+		if err != nil {
+			return writeError("invalid_field", fmt.Sprintf("valid_from must be RFC3339 format, got %q", input.ValidFrom), true)
 		}
+		props["valid_from"] = graph.TimestampProperty(t)
 	}
 	if input.ValidUntil != "" {
-		if t, err := time.Parse(time.RFC3339, input.ValidUntil); err == nil {
-			props["valid_until"] = graph.TimestampProperty(t)
+		t, err := time.Parse(time.RFC3339, input.ValidUntil)
+		if err != nil {
+			return writeError("invalid_field", fmt.Sprintf("valid_until must be RFC3339 format, got %q", input.ValidUntil), true)
 		}
+		props["valid_until"] = graph.TimestampProperty(t)
 	}
 
 	props["access_count"] = graph.Int64Property(0)

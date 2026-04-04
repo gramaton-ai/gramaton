@@ -133,24 +133,7 @@ func UnmarshalEdge(data []byte) (*Edge, error) {
 	}, nil
 }
 
-// writeStr writes a length-prefixed string to a buffer.
-func writeStr(buf *bytes.Buffer, s string) {
-	_ = binary.Write(buf, binary.BigEndian, uint32(len(s)))
-	buf.WriteString(s)
-}
-
-// readStr reads a length-prefixed string from a reader.
-func readStr(r *bytes.Reader) (string, error) {
-	var length uint32
-	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
-		return "", err
-	}
-	if length == 0 {
-		return "", nil
-	}
-	b := make([]byte, length)
-	if _, err := r.Read(b); err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
+// writeStr and readStr delegate to the shared helpers in property.go
+// which include allocation bounds checking.
+func writeStr(buf *bytes.Buffer, s string) { writeString(buf, s) }
+func readStr(r *bytes.Reader) (string, error) { return readString(r) }

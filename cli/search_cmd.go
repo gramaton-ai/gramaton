@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/brandonlattin/gramaton/graph"
@@ -11,13 +12,14 @@ import (
 )
 
 var (
-	searchConfMin   float64
-	searchConfMax   float64
-	searchTemp      string
-	searchKnowType  string
-	searchEpStatus  string
-	searchTop       int
+	searchConfMin    float64
+	searchConfMax    float64
+	searchTemp       string
+	searchKnowType   string
+	searchEpStatus   string
+	searchTop        int
 	searchHistorical bool
+	searchSince      string
 )
 
 var searchCmd = &cobra.Command{
@@ -40,6 +42,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchEpStatus, "epistemic-status", "", "filter by epistemic status")
 	searchCmd.Flags().IntVar(&searchTop, "top", 10, "number of results")
 	searchCmd.Flags().BoolVar(&searchHistorical, "include-historical", false, "include records with valid_until in the past")
+	searchCmd.Flags().StringVar(&searchSince, "since", "", "filter: created after this date (YYYY-MM-DD or RFC3339)")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -67,6 +70,13 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("confidence-max") {
 		q.ConfidenceMax = &searchConfMax
 	}
+	if searchSince != "" {
+		t, err := parseDateArg(searchSince)
+		if err != nil {
+			return fmt.Errorf("parse --since: %w", err)
+		}
+		q.Since = &t
+	}
 
 	results, err := eng.searcher.Execute(context.Background(), q)
 	if err != nil {
@@ -83,7 +93,9 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		for _, r := range results {
 			eng.graph.RecordAccess(r.ID, now, activationCfg)
 		}
-		eng.save("access")
+		if _, err := eng.save("access"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save access data: %s\n", err)
+		}
 	}
 
 	return printJSON(results)

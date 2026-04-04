@@ -106,10 +106,11 @@ func frequencyScore(accessCount, maxAccessCount int64) float64 {
 	return math.Log(1+float64(accessCount)) / math.Log(1+float64(maxAccessCount))
 }
 
-// activationScore computes activation_boost (already decaying via the
-// activation_decay_rate applied at boost time). For now, return the
-// raw boost value clamped to [0, 1].
-func activationScore(boost float64, cfg config.ActivationConfig) float64 {
+// activationScore normalizes activation_boost to [0, 1]. Full temporal
+// decay of activation_boost (per retrieval.md) requires tracking when
+// each boost was applied, which is deferred to v0.2. For v0.1, the raw
+// accumulated boost is clamped.
+func activationScore(boost float64, _ config.ActivationConfig) float64 {
 	if boost <= 0 {
 		return 0
 	}

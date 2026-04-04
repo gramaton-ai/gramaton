@@ -26,6 +26,7 @@ type nodeReader interface {
 	GetNode(id string) (*graph.Node, bool)
 	AllNodeIDs() []string
 	NodeCount() int
+	EdgesFrom(nodeID string) []*graph.Edge
 }
 
 type embedder interface {
@@ -58,16 +59,18 @@ type Query struct {
 
 // Result is a single search result.
 type Result struct {
-	ID              string    `json:"id"`
-	Keywords        []string  `json:"keywords,omitempty"`
-	SummaryShort    string    `json:"summary_short,omitempty"`
-	MetadataSummary string    `json:"metadata_summary"`
-	Confidence      float64   `json:"confidence"`
-	Temporality     string    `json:"temporality"`
-	KnowledgeType   string    `json:"knowledge_type,omitempty"`
-	EpistemicStatus string    `json:"epistemic_status,omitempty"`
-	EffectiveScore  float64   `json:"effective_score"`
-	LastAccessed    string    `json:"last_accessed,omitempty"`
+	ID              string  `json:"id"`
+	Keywords        []string `json:"keywords,omitempty"`
+	SummaryShort    string  `json:"summary_short,omitempty"`
+	MetadataSummary string  `json:"metadata_summary"`
+	Confidence      float64 `json:"confidence"`
+	Temporality     string  `json:"temporality"`
+	KnowledgeType   string  `json:"knowledge_type,omitempty"`
+	EpistemicStatus string  `json:"epistemic_status,omitempty"`
+	ValidFrom       string  `json:"valid_from,omitempty"`
+	ValidUntil      string  `json:"valid_until,omitempty"`
+	EffectiveScore  float64 `json:"effective_score"`
+	LastAccessed    string  `json:"last_accessed,omitempty"`
 }
 
 // Execute runs the search query and returns results.
@@ -188,6 +191,11 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 			continue
 		}
 
+		// Exclude chunk nodes -- they surface their parent instead.
+		if isChunkNode(t.graph, id) {
+			continue
+		}
+
 		if q.ConfidenceMin != nil {
 			if c, ok := n.Properties["confidence"]; ok {
 				if c.Float64() < *q.ConfidenceMin {
@@ -287,6 +295,12 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 	if v, ok := n.Properties["epistemic_status"]; ok {
 		r.EpistemicStatus = v.String()
 	}
+	if v, ok := n.Properties["valid_from"]; ok {
+		r.ValidFrom = v.Timestamp().Format(time.RFC3339)
+	}
+	if v, ok := n.Properties["valid_until"]; ok {
+		r.ValidUntil = v.Timestamp().Format(time.RFC3339)
+	}
 	if v, ok := n.Properties["last_accessed"]; ok {
 		r.LastAccessed = v.Timestamp().Format(time.RFC3339)
 	}
@@ -297,48 +311,77 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 }
 
 // buildMetadataSummary generates a one-line LLM-readable summary.
+// Format: "Current. Durable, high-confidence (0.85), well-established. Last accessed 3 days ago."
 func buildMetadataSummary(props graph.Properties) string {
+	now := time.Now().UTC()
 	var parts []string
 
 	// Validity status.
 	if vu, ok := props["valid_until"]; ok {
-		if vu.Timestamp().Before(time.Now().UTC()) {
-			parts = append(parts, "Historical")
+		if vu.Timestamp().Before(now) {
+			parts = append(parts, "Historical.")
 		} else {
-			parts = append(parts, "Current")
+			parts = append(parts, "Current.")
 		}
 	} else {
-		parts = append(parts, "Current")
+		parts = append(parts, "Current.")
 	}
 
-	// Temporality + confidence.
+	// Temporality.
 	if v, ok := props["temporality"]; ok {
-		parts = append(parts, v.String())
+		parts = append(parts, capitalize(v.String()))
 	}
+
+	// Confidence with qualifier.
 	if v, ok := props["confidence"]; ok {
-		parts = append(parts, fmt.Sprintf("confidence %.2f", v.Float64()))
+		c := v.Float64()
+		var qualifier string
+		switch {
+		case c >= 0.9:
+			qualifier = "high-confidence"
+		case c >= 0.7:
+			qualifier = "confidence"
+		case c >= 0.4:
+			qualifier = "moderate-confidence"
+		default:
+			qualifier = "low-confidence"
+		}
+		parts = append(parts, fmt.Sprintf("%s (%.2f)", qualifier, c))
 	}
+
+	// Epistemic status.
 	if v, ok := props["epistemic_status"]; ok {
 		s := v.String()
-		// Format for readability.
-		switch s {
-		case "well_established":
-			parts = append(parts, "well-established")
-		default:
-			parts = append(parts, s)
+		if s == "well_established" {
+			s = "well-established"
+		}
+		parts = append(parts, s)
+	}
+
+	// Build the main line.
+	result := parts[0] // "Current." or "Historical."
+	for i := 1; i < len(parts); i++ {
+		if i == 1 {
+			result += " " + parts[i]
+		} else {
+			result += ", " + parts[i]
 		}
 	}
 
-	result := ""
-	for i, p := range parts {
-		if i == 0 {
-			result = p + "."
-		} else if i == 1 {
-			result += " " + capitalize(p)
-		} else {
-			result += ", " + p
+	// Last accessed.
+	if v, ok := props["last_accessed"]; ok {
+		la := v.Timestamp()
+		days := int(now.Sub(la).Hours() / 24)
+		switch {
+		case days == 0:
+			result += ". Last accessed today"
+		case days == 1:
+			result += ". Last accessed yesterday"
+		default:
+			result += fmt.Sprintf(". Last accessed %d days ago", days)
 		}
 	}
+
 	return result
 }
 
@@ -351,6 +394,16 @@ func capitalize(s string) string {
 		r[0] -= 32
 	}
 	return string(r)
+}
+
+// isChunkNode checks if a node is a chunk (has an outbound chunk_of edge).
+func isChunkNode(g nodeReader, id string) bool {
+	for _, e := range g.EdgesFrom(id) {
+		if e.Type == "chunk_of" {
+			return true
+		}
+	}
+	return false
 }
 
 func toSet(ids []string) map[string]struct{} {

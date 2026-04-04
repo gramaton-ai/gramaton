@@ -43,8 +43,8 @@ func (g *Graph) Traverse(startID string, opts TraverseOptions) Subgraph {
 	filterByType := len(edgeTypeSet) > 0
 
 	visited := make(map[string]struct{})
-	var resultNodes []SubgraphNode
-	var resultEdges []SubgraphEdge
+	resultNodes := make([]SubgraphNode, 0)
+	resultEdges := make([]SubgraphEdge, 0)
 	seenEdges := make(map[string]struct{})
 
 	// BFS queue: (nodeID, currentDepth).

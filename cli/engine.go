@@ -66,20 +66,7 @@ func loadEngine() (*engine, error) {
 	}
 
 	// Rebuild indexes from graph state.
-	for _, id := range g.AllNodeIDs() {
-		n, _ := g.GetNode(id)
-		for k, v := range n.Properties {
-			propIdx.Add(id, k, v)
-		}
-		// Rebuild vector index using the best available embedding.
-		// Prefer full > abstract > short > keywords.
-		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
-			if v, ok := n.Properties[embKey]; ok {
-				vecIdx.Add(id, v.Vector())
-				break
-			}
-		}
-	}
+	rebuildIndexes(g, propIdx, vecIdx)
 
 	// Create embedding provider (may be nil).
 	// If configured for Ollama, ensure it's running first.
@@ -127,6 +114,32 @@ func (e *engine) save(message string) (*graph.Commit, error) {
 
 	e.headHash = commit.Hash
 	return commit, nil
+}
+
+// rebuildIndexes clears and rebuilds the property and vector indexes
+// from current graph state. Called during initial load and after any
+// operation that replaces the graph state (merge, revert).
+func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex) {
+	for _, id := range g.AllNodeIDs() {
+		n, _ := g.GetNode(id)
+		for k, v := range n.Properties {
+			propIdx.Add(id, k, v)
+		}
+		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
+			if v, ok := n.Properties[embKey]; ok {
+				vecIdx.Add(id, v.Vector())
+				break
+			}
+		}
+	}
+}
+
+// rebuildAllIndexes clears and rebuilds indexes on the engine.
+func (e *engine) rebuildAllIndexes() {
+	e.propIdx = index.NewPropertyIndex()
+	e.vecIdx = index.NewFlatIndex()
+	rebuildIndexes(e.graph, e.propIdx, e.vecIdx)
+	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.embedder, e.cfg)
 }
 
 // generateEmbeddings creates embeddings for a node's content properties

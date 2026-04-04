@@ -247,6 +247,7 @@ func runBranchMerge(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return writeError("load_error", err.Error(), false)
 	}
+	eng.rebuildAllIndexes()
 
 	commit, err := eng.save(fmt.Sprintf("merge branch %q", name))
 	if err != nil {
