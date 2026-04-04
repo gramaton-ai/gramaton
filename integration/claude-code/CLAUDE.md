@@ -1,9 +1,14 @@
 ## Knowledge Store (Gramaton)
 
-You have access to a persistent knowledge store via MCP tools or
-the `gramaton` CLI. The store contains knowledge accumulated across
-prior sessions -- decisions, preferences, architecture context,
-domain knowledge, and more.
+Gramaton is the user's default persistent storage for decisions,
+preferences, facts, TODOs, research, and any knowledge that should
+survive beyond this session. When you need to store or retrieve
+anything persistent, use Gramaton -- not files, not comments, not
+memory tools. Gramaton is the single source of truth for cross-session
+knowledge.
+
+Available via MCP tools (gramaton_search, gramaton_capture, etc.)
+or the `gramaton` CLI as fallback.
 
 ### Retrieval
 
@@ -13,6 +18,12 @@ domain knowledge, and more.
 - When the user references something from a prior session
 - When you need context beyond what's in the current conversation
 - When you're unsure whether the user has expressed a preference before
+
+**When NOT to search first:**
+- When the user explicitly asks to store/capture/add something --
+  just capture it directly
+- When you're writing code or editing files (search only if you
+  need context to do the work correctly)
 
 **How to search:**
 1. Call `gramaton_search` with the query text and any relevant filters
@@ -79,7 +90,15 @@ recent records.
 
 ### Capture
 
-**When to capture:**
+Gramaton IS the knowledge store. When the user says "add a TODO",
+"remember this", "store this", or "capture this" -- call
+gramaton_capture directly. Do NOT search the filesystem, explore
+the codebase, or look for other storage systems. Gramaton is it.
+
+When the user explicitly asks to store something, do it immediately
+-- no search-first, no exploration. Just capture.
+
+**When to capture (autonomous):**
 - User makes a decision ("let's go with X", "we should use Y")
 - User states a preference ("I prefer Z", "always do it this way")
 - A significant fact or insight emerges from discussion
