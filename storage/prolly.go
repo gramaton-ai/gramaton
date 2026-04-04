@@ -1,0 +1,378 @@
+package storage
+
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+)
+
+// ProllyTree is a content-addressed sorted map backed by a prolly tree.
+// Keys are sorted strings (node/edge IDs). Values are content hashes
+// (hex strings). The tree is persistent and immutable -- mutations
+// produce a new root.
+//
+// Leaf nodes contain sorted key-value entries. Internal nodes contain
+// the first key and chunk hash of each child. Split boundaries are
+// determined by a rolling hash over the key, producing
+// content-defined chunks that share structure across similar trees.
+type ProllyTree struct {
+	store    *Store
+	rootHash string
+}
+
+// ProllyNode is a single node in the prolly tree. Serialized as JSON
+// and stored as a content-addressed chunk.
+type ProllyNode struct {
+	Leaf     bool           `json:"leaf"`
+	Entries  []ProllyEntry  `json:"entries"`
+}
+
+// ProllyEntry is a key-value pair in a leaf, or a key-pointer pair
+// in an internal node.
+type ProllyEntry struct {
+	Key   string `json:"k"`
+	Value string `json:"v"` // content hash (leaf) or child node hash (internal)
+}
+
+const (
+	// targetChunkSize is the target number of entries per chunk.
+	// Actual size varies due to content-defined boundaries.
+	targetChunkSize = 64
+
+	// splitMask determines the probability of a boundary.
+	// A key triggers a split when fnv32(key) & splitMask == 0.
+	// With mask 0x3F (63), average chunk size is 64 entries.
+	splitMask = 0x3F
+)
+
+// NewProllyTree creates an empty prolly tree.
+func NewProllyTree(s *Store) *ProllyTree {
+	return &ProllyTree{store: s}
+}
+
+// LoadProllyTree loads a prolly tree from an existing root hash.
+func LoadProllyTree(s *Store, rootHash string) *ProllyTree {
+	return &ProllyTree{store: s, rootHash: rootHash}
+}
+
+// RootHash returns the root hash, or empty string for an empty tree.
+func (t *ProllyTree) RootHash() string {
+	return t.rootHash
+}
+
+// Build constructs a prolly tree from a sorted slice of key-value entries.
+// This is more efficient than inserting one at a time.
+func (t *ProllyTree) Build(entries []ProllyEntry) error {
+	if len(entries) == 0 {
+		t.rootHash = ""
+		return nil
+	}
+
+	// Build leaf level: split entries into chunks at content-defined boundaries.
+	leafHashes, leafFirstKeys, err := t.buildLevel(entries, true)
+	if err != nil {
+		return err
+	}
+
+	// Build internal levels until we have a single root.
+	childHashes := leafHashes
+	childFirstKeys := leafFirstKeys
+
+	for len(childHashes) > 1 {
+		// Create internal entries pointing to children.
+		internalEntries := make([]ProllyEntry, len(childHashes))
+		for i := range childHashes {
+			internalEntries[i] = ProllyEntry{Key: childFirstKeys[i], Value: childHashes[i]}
+		}
+
+		childHashes, childFirstKeys, err = t.buildLevel(internalEntries, false)
+		if err != nil {
+			return err
+		}
+	}
+
+	t.rootHash = childHashes[0]
+	return nil
+}
+
+// buildLevel splits entries into content-defined chunks and writes them.
+// Returns the hash and first key of each chunk.
+func (t *ProllyTree) buildLevel(entries []ProllyEntry, leaf bool) ([]string, []string, error) {
+	var hashes []string
+	var firstKeys []string
+
+	start := 0
+	for i, e := range entries {
+		// Check for split boundary after minimum chunk size.
+		atBoundary := i > start && shouldSplit(e.Key) && (i-start) >= targetChunkSize/4
+		atEnd := i == len(entries)-1
+
+		if atBoundary || atEnd {
+			end := i + 1
+			chunk := ProllyNode{
+				Leaf:    leaf,
+				Entries: entries[start:end],
+			}
+			hash, err := t.writeNode(chunk)
+			if err != nil {
+				return nil, nil, err
+			}
+			hashes = append(hashes, hash)
+			firstKeys = append(firstKeys, entries[start].Key)
+			start = end
+		}
+	}
+
+	return hashes, firstKeys, nil
+}
+
+// Get looks up a value by key. Returns ("", false) if not found.
+func (t *ProllyTree) Get(key string) (string, bool) {
+	if t.rootHash == "" {
+		return "", false
+	}
+	return t.get(t.rootHash, key)
+}
+
+func (t *ProllyTree) get(nodeHash, key string) (string, bool) {
+	node, err := t.readNode(nodeHash)
+	if err != nil {
+		return "", false
+	}
+
+	if node.Leaf {
+		// Binary search in sorted entries.
+		lo, hi := 0, len(node.Entries)
+		for lo < hi {
+			mid := (lo + hi) / 2
+			if node.Entries[mid].Key < key {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		if lo < len(node.Entries) && node.Entries[lo].Key == key {
+			return node.Entries[lo].Value, true
+		}
+		return "", false
+	}
+
+	// Internal node: find the child whose range contains the key.
+	childIdx := len(node.Entries) - 1
+	for i := len(node.Entries) - 1; i >= 0; i-- {
+		if key >= node.Entries[i].Key {
+			childIdx = i
+			break
+		}
+	}
+	return t.get(node.Entries[childIdx].Value, key)
+}
+
+// AllEntries returns all key-value pairs in sorted order.
+func (t *ProllyTree) AllEntries() ([]ProllyEntry, error) {
+	if t.rootHash == "" {
+		return nil, nil
+	}
+	return t.allEntries(t.rootHash)
+}
+
+func (t *ProllyTree) allEntries(nodeHash string) ([]ProllyEntry, error) {
+	node, err := t.readNode(nodeHash)
+	if err != nil {
+		return nil, err
+	}
+
+	if node.Leaf {
+		return node.Entries, nil
+	}
+
+	var result []ProllyEntry
+	for _, e := range node.Entries {
+		children, err := t.allEntries(e.Value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, children...)
+	}
+	return result, nil
+}
+
+// Diff returns the entries that differ between two trees.
+// Added: in other but not in t. Removed: in t but not in other.
+// Skips entire subtrees when their hashes match.
+func (t *ProllyTree) Diff(other *ProllyTree) (added, removed []ProllyEntry, err error) {
+	oldEntries, newEntries, err := t.diffNodes(t.rootHash, other.rootHash)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Compute set differences.
+	oldMap := make(map[string]string, len(oldEntries))
+	for _, e := range oldEntries {
+		oldMap[e.Key] = e.Value
+	}
+	newMap := make(map[string]string, len(newEntries))
+	for _, e := range newEntries {
+		newMap[e.Key] = e.Value
+	}
+
+	for _, e := range newEntries {
+		if oldVal, ok := oldMap[e.Key]; !ok || oldVal != e.Value {
+			added = append(added, e)
+		}
+	}
+	for _, e := range oldEntries {
+		if newVal, ok := newMap[e.Key]; !ok || newVal != e.Value {
+			removed = append(removed, e)
+		}
+	}
+
+	return added, removed, nil
+}
+
+func (t *ProllyTree) diffNodes(oldHash, newHash string) ([]ProllyEntry, []ProllyEntry, error) {
+	// If hashes match, subtrees are identical -- skip entirely.
+	if oldHash == newHash {
+		return nil, nil, nil
+	}
+
+	// If either is empty, return the other's full contents.
+	if oldHash == "" {
+		entries, err := LoadProllyTree(t.store, newHash).AllEntries()
+		return nil, entries, err
+	}
+	if newHash == "" {
+		entries, err := t.AllEntries()
+		return entries, nil, err
+	}
+
+	oldNode, err := t.readNode(oldHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	newNode, err := t.readNode(newHash)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// If both are leaves, return their entries for comparison.
+	if oldNode.Leaf && newNode.Leaf {
+		return oldNode.Entries, newNode.Entries, nil
+	}
+
+	// If mixed levels or both internal, fall back to full enumeration
+	// of the differing subtrees. A more sophisticated implementation
+	// would align internal nodes by key ranges, but this is correct
+	// and the subtree skip on matching hashes handles the common case.
+	oldEntries, err := t.allEntries(oldHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	newEntries, err := LoadProllyTree(t.store, newHash).allEntries(newHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return oldEntries, newEntries, nil
+}
+
+// writeNode serializes and stores a prolly node.
+func (t *ProllyTree) writeNode(node ProllyNode) (string, error) {
+	data, err := json.Marshal(node)
+	if err != nil {
+		return "", fmt.Errorf("prolly: marshal node: %w", err)
+	}
+	return t.store.Write(data)
+}
+
+// readNode loads and deserializes a prolly node.
+func (t *ProllyTree) readNode(hash string) (*ProllyNode, error) {
+	data, err := t.store.Read(hash)
+	if err != nil {
+		return nil, fmt.Errorf("prolly: read node %s: %w", hash, err)
+	}
+	var node ProllyNode
+	if err := json.Unmarshal(data, &node); err != nil {
+		return nil, fmt.Errorf("prolly: unmarshal node: %w", err)
+	}
+	return &node, nil
+}
+
+// shouldSplit returns true if this key should trigger a chunk boundary.
+// Uses FNV-1a hash for fast, deterministic boundary detection.
+func shouldSplit(key string) bool {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return h.Sum32()&splitMask == 0
+}
+
+// EntryCount returns the total number of key-value entries in the tree.
+func (t *ProllyTree) EntryCount() (int, error) {
+	if t.rootHash == "" {
+		return 0, nil
+	}
+	return t.countEntries(t.rootHash)
+}
+
+func (t *ProllyTree) countEntries(nodeHash string) (int, error) {
+	node, err := t.readNode(nodeHash)
+	if err != nil {
+		return 0, err
+	}
+	if node.Leaf {
+		return len(node.Entries), nil
+	}
+	total := 0
+	for _, e := range node.Entries {
+		n, err := t.countEntries(e.Value)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// Helpers for building sorted entry lists from maps.
+
+// SortedEntries creates a sorted slice of entries from a map.
+func SortedEntries(m map[string]string) []ProllyEntry {
+	entries := make([]ProllyEntry, 0, len(m))
+	for k, v := range m {
+		entries = append(entries, ProllyEntry{Key: k, Value: v})
+	}
+	sortEntries(entries)
+	return entries
+}
+
+func sortEntries(entries []ProllyEntry) {
+	// Insertion sort for small slices, stdlib sort for larger.
+	if len(entries) <= 32 {
+		for i := 1; i < len(entries); i++ {
+			for j := i; j > 0 && entries[j].Key < entries[j-1].Key; j-- {
+				entries[j], entries[j-1] = entries[j-1], entries[j]
+			}
+		}
+		return
+	}
+	// Use bytes.Compare-based sort for stability.
+	n := len(entries)
+	quickSort(entries, 0, n-1)
+}
+
+func quickSort(entries []ProllyEntry, lo, hi int) {
+	if lo >= hi {
+		return
+	}
+	pivot := entries[hi].Key
+	i := lo
+	for j := lo; j < hi; j++ {
+		if entries[j].Key < pivot {
+			entries[i], entries[j] = entries[j], entries[i]
+			i++
+		}
+	}
+	entries[i], entries[hi] = entries[hi], entries[i]
+	quickSort(entries, lo, i-1)
+	quickSort(entries, i+1, hi)
+}
+

@@ -31,11 +31,8 @@ func TestSaveAndLoadEmpty(t *testing.T) {
 	if commit.Message != "empty graph" {
 		t.Fatalf("expected message 'empty graph', got %q", commit.Message)
 	}
-	if len(commit.NodeHashes) != 0 {
-		t.Fatal("expected 0 node hashes")
-	}
-	if len(commit.EdgeHashes) != 0 {
-		t.Fatal("expected 0 edge hashes")
+	if commit.NodeTreeRoot != "" {
+		t.Fatal("empty graph should have empty node tree root")
 	}
 
 	// Load into a new graph.
@@ -74,11 +71,14 @@ func TestSaveAndLoadWithData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if len(commit.NodeHashes) != 2 {
-		t.Fatalf("expected 2 node hashes, got %d", len(commit.NodeHashes))
+	if commit.Version != 1 {
+		t.Fatalf("expected version 1, got %d", commit.Version)
 	}
-	if len(commit.EdgeHashes) != 1 {
-		t.Fatalf("expected 1 edge hash, got %d", len(commit.EdgeHashes))
+	if commit.NodeTreeRoot == "" {
+		t.Fatal("expected non-empty node tree root")
+	}
+	if commit.EdgeTreeRoot == "" {
+		t.Fatal("expected non-empty edge tree root")
 	}
 
 	// Load into a fresh graph.

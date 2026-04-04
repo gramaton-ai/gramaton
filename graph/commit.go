@@ -5,34 +5,30 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/brandonlattin/gramaton/storage"
 )
 
 // Commit is an immutable snapshot of the graph state.
 type Commit struct {
-	Hash      string    `json:"hash"`
-	Parent    string    `json:"parent,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Message   string    `json:"message"`
-	// NodeHashes and EdgeHashes are the content-addressed hashes of all
-	// nodes and edges in the graph at this commit. Flat hash lists (D19).
-	NodeHashes []string `json:"node_hashes"`
-	EdgeHashes []string `json:"edge_hashes"`
-}
-
-// store is the consumer-defined interface for what the graph needs
-// from content-addressed storage.
-type store interface {
-	Write(data []byte) (string, error)
-	Read(hash string) ([]byte, error)
-	Has(hash string) bool
+	Version      int       `json:"version"`
+	Hash         string    `json:"hash"`
+	Parent       string    `json:"parent,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+	Message      string    `json:"message"`
+	NodeTreeRoot string    `json:"node_tree_root,omitempty"`
+	EdgeTreeRoot string    `json:"edge_tree_root,omitempty"`
+	// NodeHashes/EdgeHashes retained for reading v0 commits only.
+	NodeHashes []string `json:"node_hashes,omitempty"`
+	EdgeHashes []string `json:"edge_hashes,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.
-// Returns the commit. Each node and edge is written as a separate
-// content-addressed chunk. The commit itself is also a chunk.
-func (g *Graph) Save(s store, parent string, message string) (*Commit, error) {
-	// Write all nodes.
-	nodeHashes := make([]string, 0, len(g.nodes))
+// Nodes and edges are stored as content-addressed chunks. Their IDs
+// and chunk hashes are indexed in prolly trees for efficient diff.
+func (g *Graph) Save(s *storage.Store, parent string, message string) (*Commit, error) {
+	// Write all nodes and build the ID -> hash mapping.
+	nodeMap := make(map[string]string, len(g.nodes))
 	for _, id := range sortedNodeIDs(g) {
 		n := g.nodes[id]
 		data, err := MarshalNode(n)
@@ -43,11 +39,11 @@ func (g *Graph) Save(s store, parent string, message string) (*Commit, error) {
 		if err != nil {
 			return nil, fmt.Errorf("save: write node %s: %w", id, err)
 		}
-		nodeHashes = append(nodeHashes, hash)
+		nodeMap[id] = hash
 	}
 
-	// Write all edges.
-	edgeHashes := make([]string, 0, len(g.edges))
+	// Write all edges and build the ID -> hash mapping.
+	edgeMap := make(map[string]string, len(g.edges))
 	for _, id := range sortedEdgeIDs(g) {
 		e := g.edges[id]
 		data, err := MarshalEdge(e)
@@ -58,19 +54,30 @@ func (g *Graph) Save(s store, parent string, message string) (*Commit, error) {
 		if err != nil {
 			return nil, fmt.Errorf("save: write edge %s: %w", id, err)
 		}
-		edgeHashes = append(edgeHashes, hash)
+		edgeMap[id] = hash
 	}
 
-	// Build and write the commit.
+	// Build prolly trees.
+	nodeTree := storage.NewProllyTree(s)
+	if err := nodeTree.Build(storage.SortedEntries(nodeMap)); err != nil {
+		return nil, fmt.Errorf("save: build node tree: %w", err)
+	}
+
+	edgeTree := storage.NewProllyTree(s)
+	if err := edgeTree.Build(storage.SortedEntries(edgeMap)); err != nil {
+		return nil, fmt.Errorf("save: build edge tree: %w", err)
+	}
+
 	commit := &Commit{
-		Parent:     parent,
-		Timestamp:  time.Now().UTC(),
-		Message:    message,
-		NodeHashes: nodeHashes,
-		EdgeHashes: edgeHashes,
+		Version:      1,
+		Parent:       parent,
+		Timestamp:    time.Now().UTC(),
+		Message:      message,
+		NodeTreeRoot: nodeTree.RootHash(),
+		EdgeTreeRoot: edgeTree.RootHash(),
 	}
 
-	commitData, err := marshalCommit(commit)
+	commitData, err := json.Marshal(commit)
 	if err != nil {
 		return nil, fmt.Errorf("save: marshal commit: %w", err)
 	}
@@ -84,15 +91,15 @@ func (g *Graph) Save(s store, parent string, message string) (*Commit, error) {
 }
 
 // Load restores graph state from a commit. Clears the current graph
-// and replaces it with the committed state.
-func (g *Graph) Load(s store, commitHash string) (*Commit, error) {
-	// Read and parse the commit.
+// and replaces it with the committed state. Handles both v0 (flat
+// hash lists) and v1 (prolly tree) commit formats.
+func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	commitData, err := s.Read(commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("load: read commit %s: %w", commitHash, err)
 	}
-	commit, err := unmarshalCommit(commitData)
-	if err != nil {
+	var commit Commit
+	if err := json.Unmarshal(commitData, &commit); err != nil {
 		return nil, fmt.Errorf("load: unmarshal commit: %w", err)
 	}
 	commit.Hash = commitHash
@@ -104,8 +111,39 @@ func (g *Graph) Load(s store, commitHash string) (*Commit, error) {
 	g.inEdges = make(map[string]map[string]struct{})
 	g.typeEdges = make(map[string]map[string]struct{})
 
+	// Collect node/edge hashes based on commit version.
+	var nodeHashes []string
+	var edgeHashes []string
+
+	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
+		// v1: read from prolly tree.
+		nodeTree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
+		entries, err := nodeTree.AllEntries()
+		if err != nil {
+			return nil, fmt.Errorf("load: read node tree: %w", err)
+		}
+		for _, e := range entries {
+			nodeHashes = append(nodeHashes, e.Value)
+		}
+
+		if commit.EdgeTreeRoot != "" {
+			edgeTree := storage.LoadProllyTree(s, commit.EdgeTreeRoot)
+			entries, err := edgeTree.AllEntries()
+			if err != nil {
+				return nil, fmt.Errorf("load: read edge tree: %w", err)
+			}
+			for _, e := range entries {
+				edgeHashes = append(edgeHashes, e.Value)
+			}
+		}
+	} else {
+		// v0: flat hash lists.
+		nodeHashes = commit.NodeHashes
+		edgeHashes = commit.EdgeHashes
+	}
+
 	// Load nodes.
-	for _, hash := range commit.NodeHashes {
+	for _, hash := range nodeHashes {
 		data, err := s.Read(hash)
 		if err != nil {
 			return nil, fmt.Errorf("load: read node chunk %s: %w", hash, err)
@@ -118,7 +156,7 @@ func (g *Graph) Load(s store, commitHash string) (*Commit, error) {
 	}
 
 	// Load edges and rebuild indexes.
-	for _, hash := range commit.EdgeHashes {
+	for _, hash := range edgeHashes {
 		data, err := s.Read(hash)
 		if err != nil {
 			return nil, fmt.Errorf("load: read edge chunk %s: %w", hash, err)
@@ -133,24 +171,85 @@ func (g *Graph) Load(s store, commitHash string) (*Commit, error) {
 		addToIndex(g.typeEdges, e.Type, e.ID)
 	}
 
-	return commit, nil
+	return &commit, nil
 }
 
-// marshalCommit encodes a commit as JSON. Using JSON here (not binary)
-// because commits are small and human-inspectability is valuable.
-func marshalCommit(c *Commit) ([]byte, error) {
-	return json.Marshal(c)
-}
-
-func unmarshalCommit(data []byte) (*Commit, error) {
-	var c Commit
-	if err := json.Unmarshal(data, &c); err != nil {
+// NodeIDsInCommit returns all node IDs in a commit without loading
+// the full graph. Uses the prolly tree for v1 commits, falls back
+// to reading all chunks for v0 commits.
+func NodeIDsInCommit(s *storage.Store, commitHash string) ([]string, error) {
+	commitData, err := s.Read(commitHash)
+	if err != nil {
 		return nil, err
 	}
-	return &c, nil
+	var commit Commit
+	if err := json.Unmarshal(commitData, &commit); err != nil {
+		return nil, err
+	}
+
+	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
+		tree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
+		entries, err := tree.AllEntries()
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, len(entries))
+		for i, e := range entries {
+			ids[i] = e.Key
+		}
+		return ids, nil
+	}
+
+	// v0 fallback: read each chunk to get the node ID.
+	var ids []string
+	for _, hash := range commit.NodeHashes {
+		data, err := s.Read(hash)
+		if err != nil {
+			continue
+		}
+		n, err := UnmarshalNode(data)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, n.ID)
+	}
+	return ids, nil
 }
 
+// NodeHashInCommit returns the content hash for a specific node ID
+// in a commit. Uses prolly tree lookup for v1 commits (O(log N)).
+func NodeHashInCommit(s *storage.Store, commitHash, nodeID string) (string, bool, error) {
+	commitData, err := s.Read(commitHash)
+	if err != nil {
+		return "", false, err
+	}
+	var commit Commit
+	if err := json.Unmarshal(commitData, &commit); err != nil {
+		return "", false, err
+	}
 
+	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
+		tree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
+		hash, ok := tree.Get(nodeID)
+		return hash, ok, nil
+	}
+
+	// v0 fallback: read each chunk.
+	for _, hash := range commit.NodeHashes {
+		data, err := s.Read(hash)
+		if err != nil {
+			continue
+		}
+		n, err := UnmarshalNode(data)
+		if err != nil {
+			continue
+		}
+		if n.ID == nodeID {
+			return hash, true, nil
+		}
+	}
+	return "", false, nil
+}
 
 func sortedNodeIDs(g *Graph) []string {
 	ids := make([]string, 0, len(g.nodes))

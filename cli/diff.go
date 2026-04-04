@@ -41,13 +41,11 @@ func init() {
 }
 
 type diffOutput struct {
-	OldCommit    string       `json:"old_commit"`
-	NewCommit    string       `json:"new_commit"`
-	TopicFilter  string       `json:"topic_filter,omitempty"`
-	Added        []diffRecord `json:"added,omitempty"`
-	Removed      []diffRecord `json:"removed,omitempty"`
-	AddedEdges   int          `json:"added_edges"`
-	RemovedEdges int          `json:"removed_edges"`
+	OldCommit   string       `json:"old_commit"`
+	NewCommit   string       `json:"new_commit"`
+	TopicFilter string       `json:"topic_filter,omitempty"`
+	Added       []diffRecord `json:"added,omitempty"`
+	Removed     []diffRecord `json:"removed,omitempty"`
 }
 
 type diffRecord struct {
@@ -126,23 +124,29 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load new commit: %w", err)
 	}
 
-	diff := graph.DiffCommits(oldCommit, newCommit)
+	diff, err := graph.DiffCommits(s, oldCommit, newCommit)
+	if err != nil {
+		return fmt.Errorf("diff commits: %w", err)
+	}
 
 	out := diffOutput{
-		OldCommit:    oldHash[:12],
-		NewCommit:    newHash[:12],
-		TopicFilter:  diffTopic,
-		AddedEdges:   len(diff.AddedEdges),
-		RemovedEdges: len(diff.RemovedEdges),
+		OldCommit:   oldHash[:12],
+		NewCommit:   newHash[:12],
+		TopicFilter: diffTopic,
 	}
 
-	// Resolve node hashes to records.
-	for _, hash := range diff.AddedNodes {
-		rec := resolveNodeHash(s, hash)
+	for _, entry := range diff.Added {
+		rec := resolveNodeHash(s, entry.Value)
+		if rec.ID == "" && entry.Key != "" {
+			rec.ID = entry.Key
+		}
 		out.Added = append(out.Added, rec)
 	}
-	for _, hash := range diff.RemovedNodes {
-		rec := resolveNodeHash(s, hash)
+	for _, entry := range diff.Removed {
+		rec := resolveNodeHash(s, entry.Value)
+		if rec.ID == "" && entry.Key != "" {
+			rec.ID = entry.Key
+		}
 		out.Removed = append(out.Removed, rec)
 	}
 

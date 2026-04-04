@@ -159,23 +159,22 @@ func runRecordLog(s *storage.Store, headHash string) error {
 	return printJSON(entries)
 }
 
-// findNodeInCommit reads all node chunks from a commit to find a specific
-// node by ID. Returns nil if not found.
+// findNodeInCommit looks up a specific node by ID in a commit.
+// Uses prolly tree lookup for v1 commits (O(log N)).
 func findNodeInCommit(s *storage.Store, commit *graph.Commit, nodeID string) *graph.Node {
-	for _, hash := range commit.NodeHashes {
-		data, err := s.Read(hash)
-		if err != nil {
-			continue
-		}
-		n, err := graph.UnmarshalNode(data)
-		if err != nil {
-			continue
-		}
-		if n.ID == nodeID {
-			return n
-		}
+	hash, found, err := graph.NodeHashInCommit(s, commit.Hash, nodeID)
+	if err != nil || !found {
+		return nil
 	}
-	return nil
+	data, err := s.Read(hash)
+	if err != nil {
+		return nil
+	}
+	n, err := graph.UnmarshalNode(data)
+	if err != nil {
+		return nil
+	}
+	return n
 }
 
 // diffProperties compares two property maps and returns the changes.
