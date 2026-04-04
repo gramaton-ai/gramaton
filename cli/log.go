@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,17 +12,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var logLast int
+var (
+	logLast   int
+	logRecord string
+)
 
 var logCmd = &cobra.Command{
 	Use:   "log",
 	Short: "Show commit history",
-	Long:  `Displays the chain of commits from HEAD, showing what changed and when.`,
-	RunE:  runLog,
+	Long: `Displays the chain of commits from HEAD.
+
+With --record, shows only commits that affected a specific node,
+including what changed at each step.`,
+	RunE: runLog,
 }
 
 func init() {
-	logCmd.Flags().IntVar(&logLast, "last", 10, "number of commits to show")
+	logCmd.Flags().IntVar(&logLast, "last", 20, "number of commits to walk")
+	logCmd.Flags().StringVar(&logRecord, "record", "", "show history for a specific record ID")
 	rootCmd.AddCommand(logCmd)
 }
 
@@ -34,6 +40,14 @@ type logEntry struct {
 	Message   string `json:"message"`
 	Nodes     int    `json:"nodes"`
 	Edges     int    `json:"edges"`
+}
+
+type recordLogEntry struct {
+	Hash      string         `json:"hash"`
+	Timestamp string         `json:"timestamp"`
+	Action    string         `json:"action"`
+	Message   string         `json:"message"`
+	Changes   map[string]any `json:"changes,omitempty"`
 }
 
 func runLog(cmd *cobra.Command, args []string) error {
@@ -63,17 +77,20 @@ func runLog(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open storage: %w", err)
 	}
 
+	if logRecord != "" {
+		return runRecordLog(s, headHash)
+	}
+
+	return runFullLog(s, headHash)
+}
+
+func runFullLog(s *storage.Store, headHash string) error {
 	var entries []logEntry
 	currentHash := headHash
 
 	for i := 0; i < logLast && currentHash != ""; i++ {
-		data, err := s.Read(currentHash)
+		commit, err := loadCommit(s, currentHash)
 		if err != nil {
-			break
-		}
-
-		var commit graph.Commit
-		if err := json.Unmarshal(data, &commit); err != nil {
 			break
 		}
 
@@ -90,6 +107,99 @@ func runLog(cmd *cobra.Command, args []string) error {
 	}
 
 	return printJSON(entries)
+}
+
+func runRecordLog(s *storage.Store, headHash string) error {
+	var entries []recordLogEntry
+	currentHash := headHash
+
+	for i := 0; i < logLast && currentHash != ""; i++ {
+		commit, err := loadCommit(s, currentHash)
+		if err != nil {
+			break
+		}
+
+		// Find the node in this commit's node hashes.
+		nodeInCurrent := findNodeInCommit(s, commit, logRecord)
+
+		// Find the node in the parent commit.
+		var nodeInParent *graph.Node
+		if commit.Parent != "" {
+			parentCommit, err := loadCommit(s, commit.Parent)
+			if err == nil {
+				nodeInParent = findNodeInCommit(s, parentCommit, logRecord)
+			}
+		}
+
+		// Determine what happened to the node at this commit.
+		entry := recordLogEntry{
+			Hash:      currentHash[:12],
+			Timestamp: commit.Timestamp.Format("2006-01-02T15:04:05Z"),
+			Message:   commit.Message,
+		}
+
+		if nodeInCurrent != nil && nodeInParent == nil {
+			entry.Action = "created"
+			entries = append(entries, entry)
+		} else if nodeInCurrent == nil && nodeInParent != nil {
+			entry.Action = "deleted"
+			entries = append(entries, entry)
+		} else if nodeInCurrent != nil && nodeInParent != nil {
+			changes := diffProperties(nodeInParent.Properties, nodeInCurrent.Properties)
+			if len(changes) > 0 {
+				entry.Action = "modified"
+				entry.Changes = changes
+				entries = append(entries, entry)
+			}
+		}
+
+		currentHash = commit.Parent
+	}
+
+	return printJSON(entries)
+}
+
+// findNodeInCommit reads all node chunks from a commit to find a specific
+// node by ID. Returns nil if not found.
+func findNodeInCommit(s *storage.Store, commit *graph.Commit, nodeID string) *graph.Node {
+	for _, hash := range commit.NodeHashes {
+		data, err := s.Read(hash)
+		if err != nil {
+			continue
+		}
+		n, err := graph.UnmarshalNode(data)
+		if err != nil {
+			continue
+		}
+		if n.ID == nodeID {
+			return n
+		}
+	}
+	return nil
+}
+
+// diffProperties compares two property maps and returns the changes.
+func diffProperties(old, new graph.Properties) map[string]any {
+	changes := make(map[string]any)
+
+	for k, newVal := range new {
+		oldVal, existed := old[k]
+		if !existed {
+			changes[k] = map[string]any{"added": newVal.FormatValue()}
+		} else if !oldVal.Equal(newVal) {
+			changes[k] = map[string]any{
+				"from": oldVal.FormatValue(),
+				"to":   newVal.FormatValue(),
+			}
+		}
+	}
+	for k := range old {
+		if _, exists := new[k]; !exists {
+			changes[k] = map[string]any{"removed": old[k].FormatValue()}
+		}
+	}
+
+	return changes
 }
 
 func truncHash(h string) string {
