@@ -126,8 +126,8 @@ func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.
 			propIdx.Add(id, k, v)
 		}
 		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
-			if v, ok := n.Properties[embKey]; ok {
-				vecIdx.Add(id, v.Vector())
+			if v, ok := n.Properties.GetVector(embKey); ok {
+				vecIdx.Add(id, v)
 				break
 			}
 		}
@@ -169,17 +169,15 @@ func (e *engine) generateEmbeddings(ctx context.Context, nodeID string) error {
 	var texts []string
 	var keys []string
 	for _, t := range targets {
-		if v, ok := n.Properties[t.sourceKey]; ok {
-			var text string
-			if v.Type == graph.TypeStringList {
-				text = strings.Join(v.StringList(), " ")
-			} else if v.Type == graph.TypeString {
-				text = v.String()
-			}
-			if text != "" {
-				texts = append(texts, text)
-				keys = append(keys, t.embedKey)
-			}
+		var text string
+		if sl, ok := n.Properties.GetStringList(t.sourceKey); ok {
+			text = strings.Join(sl, " ")
+		} else if s, ok := n.Properties.GetString(t.sourceKey); ok {
+			text = s
+		}
+		if text != "" {
+			texts = append(texts, text)
+			keys = append(keys, t.embedKey)
 		}
 	}
 
@@ -228,8 +226,8 @@ func (e *engine) checkDedup(nodeID string) (string, float64) {
 	// Find the node's best embedding.
 	var vec []float32
 	for _, key := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
-		if v, ok := n.Properties[key]; ok {
-			vec = v.Vector()
+		if v, ok := n.Properties.GetVector(key); ok {
+			vec = v
 			break
 		}
 	}

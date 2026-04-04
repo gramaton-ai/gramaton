@@ -197,22 +197,22 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 		}
 
 		if q.ConfidenceMin != nil {
-			if c, ok := n.Properties["confidence"]; ok {
-				if c.Float64() < *q.ConfidenceMin {
+			if c, ok := n.Properties.GetFloat64("confidence"); ok {
+				if c < *q.ConfidenceMin {
 					continue
 				}
 			}
 		}
 		if q.ConfidenceMax != nil {
-			if c, ok := n.Properties["confidence"]; ok {
-				if c.Float64() > *q.ConfidenceMax {
+			if c, ok := n.Properties.GetFloat64("confidence"); ok {
+				if c > *q.ConfidenceMax {
 					continue
 				}
 			}
 		}
 		if q.Since != nil {
-			if ca, ok := n.Properties["created_at"]; ok {
-				if ca.Timestamp().Before(*q.Since) {
+			if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
+				if ca.Before(*q.Since) {
 					continue
 				}
 			}
@@ -240,32 +240,32 @@ func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64, maxAccess int
 		MaxAccessCount: maxAccess,
 	}
 
-	if v, ok := n.Properties["temporality"]; ok {
-		inputs.Temporality = v.String()
+	if v, ok := n.Properties.GetString("temporality"); ok {
+		inputs.Temporality = v
 	}
-	if v, ok := n.Properties["confidence"]; ok {
-		inputs.Confidence = v.Float64()
+	if v, ok := n.Properties.GetFloat64("confidence"); ok {
+		inputs.Confidence = v
 	}
-	if v, ok := n.Properties["importance"]; ok {
-		inputs.Importance = v.Float64()
+	if v, ok := n.Properties.GetFloat64("importance"); ok {
+		inputs.Importance = v
 	}
-	if v, ok := n.Properties["access_count"]; ok {
-		inputs.AccessCount = v.Int64()
+	if v, ok := n.Properties.GetInt64("access_count"); ok {
+		inputs.AccessCount = v
 	}
-	if v, ok := n.Properties["last_accessed"]; ok {
-		inputs.LastAccessed = v.Timestamp()
+	if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
+		inputs.LastAccessed = v
 	}
-	if v, ok := n.Properties["activation_boost"]; ok {
-		inputs.ActivationBoost = v.Float64()
+	if v, ok := n.Properties.GetFloat64("activation_boost"); ok {
+		inputs.ActivationBoost = v
 	}
-	if v, ok := n.Properties["valid_from"]; ok {
-		inputs.ValidFrom = v.Timestamp()
+	if v, ok := n.Properties.GetTimestamp("valid_from"); ok {
+		inputs.ValidFrom = v
 	}
-	if v, ok := n.Properties["valid_until"]; ok {
-		inputs.ValidUntil = v.Timestamp()
+	if v, ok := n.Properties.GetTimestamp("valid_until"); ok {
+		inputs.ValidUntil = v
 	}
-	if v, ok := n.Properties["created_at"]; ok {
-		inputs.CreatedAt = v.Timestamp()
+	if v, ok := n.Properties.GetTimestamp("created_at"); ok {
+		inputs.CreatedAt = v
 	}
 
 	return inputs
@@ -277,32 +277,32 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 		EffectiveScore: score,
 	}
 
-	if v, ok := n.Properties["content_keywords"]; ok {
-		r.Keywords = v.StringList()
+	if v, ok := n.Properties.GetStringList("content_keywords"); ok {
+		r.Keywords = v
 	}
-	if v, ok := n.Properties["content_short"]; ok {
-		r.SummaryShort = v.String()
+	if v, ok := n.Properties.GetString("content_short"); ok {
+		r.SummaryShort = v
 	}
-	if v, ok := n.Properties["confidence"]; ok {
-		r.Confidence = v.Float64()
+	if v, ok := n.Properties.GetFloat64("confidence"); ok {
+		r.Confidence = v
 	}
-	if v, ok := n.Properties["temporality"]; ok {
-		r.Temporality = v.String()
+	if v, ok := n.Properties.GetString("temporality"); ok {
+		r.Temporality = v
 	}
-	if v, ok := n.Properties["knowledge_type"]; ok {
-		r.KnowledgeType = v.String()
+	if v, ok := n.Properties.GetString("knowledge_type"); ok {
+		r.KnowledgeType = v
 	}
-	if v, ok := n.Properties["epistemic_status"]; ok {
-		r.EpistemicStatus = v.String()
+	if v, ok := n.Properties.GetString("epistemic_status"); ok {
+		r.EpistemicStatus = v
 	}
-	if v, ok := n.Properties["valid_from"]; ok {
-		r.ValidFrom = v.Timestamp().Format(time.RFC3339)
+	if v, ok := n.Properties.GetTimestamp("valid_from"); ok {
+		r.ValidFrom = v.Format(time.RFC3339)
 	}
-	if v, ok := n.Properties["valid_until"]; ok {
-		r.ValidUntil = v.Timestamp().Format(time.RFC3339)
+	if v, ok := n.Properties.GetTimestamp("valid_until"); ok {
+		r.ValidUntil = v.Format(time.RFC3339)
 	}
-	if v, ok := n.Properties["last_accessed"]; ok {
-		r.LastAccessed = v.Timestamp().Format(time.RFC3339)
+	if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
+		r.LastAccessed = v.Format(time.RFC3339)
 	}
 
 	r.MetadataSummary = buildMetadataSummary(n.Properties)
@@ -317,8 +317,8 @@ func buildMetadataSummary(props graph.Properties) string {
 	var parts []string
 
 	// Validity status.
-	if vu, ok := props["valid_until"]; ok {
-		if vu.Timestamp().Before(now) {
+	if vu, ok := props.GetTimestamp("valid_until"); ok {
+		if vu.Before(now) {
 			parts = append(parts, "Historical.")
 		} else {
 			parts = append(parts, "Current.")
@@ -328,13 +328,12 @@ func buildMetadataSummary(props graph.Properties) string {
 	}
 
 	// Temporality.
-	if v, ok := props["temporality"]; ok {
-		parts = append(parts, capitalize(v.String()))
+	if v, ok := props.GetString("temporality"); ok {
+		parts = append(parts, capitalize(v))
 	}
 
 	// Confidence with qualifier.
-	if v, ok := props["confidence"]; ok {
-		c := v.Float64()
+	if c, ok := props.GetFloat64("confidence"); ok {
 		var qualifier string
 		switch {
 		case c >= 0.9:
@@ -350,8 +349,7 @@ func buildMetadataSummary(props graph.Properties) string {
 	}
 
 	// Epistemic status.
-	if v, ok := props["epistemic_status"]; ok {
-		s := v.String()
+	if s, ok := props.GetString("epistemic_status"); ok {
 		if s == "well_established" {
 			s = "well-established"
 		}
@@ -369,8 +367,7 @@ func buildMetadataSummary(props graph.Properties) string {
 	}
 
 	// Last accessed.
-	if v, ok := props["last_accessed"]; ok {
-		la := v.Timestamp()
+	if la, ok := props.GetTimestamp("last_accessed"); ok {
 		days := int(now.Sub(la).Hours() / 24)
 		switch {
 		case days == 0:

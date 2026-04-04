@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/spf13/cobra"
@@ -39,11 +40,11 @@ func runPending(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		p := pendingOutput{ID: id}
-		if v, ok := n.Properties["content_short"]; ok {
-			p.SummaryShort = v.String()
+		if v, ok := n.Properties.GetString("content_short"); ok {
+			p.SummaryShort = v
 		}
-		if v, ok := n.Properties["created_at"]; ok {
-			p.CreatedAt = v.FormatValue()
+		if v, ok := n.Properties.GetTimestamp("created_at"); ok {
+			p.CreatedAt = v.Format(time.RFC3339)
 		}
 		results = append(results, p)
 	}

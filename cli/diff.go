@@ -251,8 +251,8 @@ func resolveNodeHash(s *storage.Store, hash string) diffRecord {
 		return diffRecord{ID: hash[:12]}
 	}
 	rec := diffRecord{ID: n.ID}
-	if v, ok := n.Properties["content_short"]; ok {
-		rec.SummaryShort = v.String()
+	if v, ok := n.Properties.GetString("content_short"); ok {
+		rec.SummaryShort = v
 	}
 	return rec
 }

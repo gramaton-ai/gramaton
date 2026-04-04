@@ -24,8 +24,8 @@ func (g *Graph) RecordAccess(nodeID string, now time.Time, cfg ActivationConfig)
 
 	// Direct access updates.
 	var count int64
-	if v, ok := n.Properties["access_count"]; ok {
-		count = v.Int64()
+	if v, ok := n.Properties.GetInt64("access_count"); ok {
+		count = v
 	}
 	n.Properties["access_count"] = Int64Property(count + 1)
 	n.Properties["last_accessed"] = TimestampProperty(now)
@@ -53,8 +53,8 @@ func boostNeighbor(g *Graph, neighborID string, amount float64) {
 		return
 	}
 	var current float64
-	if v, ok := n.Properties["activation_boost"]; ok {
-		current = v.Float64()
+	if v, ok := n.Properties.GetFloat64("activation_boost"); ok {
+		current = v
 	}
 	n.Properties["activation_boost"] = Float64Property(current + amount)
 }

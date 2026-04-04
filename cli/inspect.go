@@ -85,8 +85,8 @@ func runInspect(cmd *cobra.Command, args []string) error {
 			Direction:  "outbound",
 		}
 		if target, ok := eng.graph.GetNode(e.TargetID); ok {
-			if v, ok := target.Properties["content_short"]; ok {
-				rel.SummaryShort = v.String()
+			if v, ok := target.Properties.GetString("content_short"); ok {
+				rel.SummaryShort = v
 			}
 		}
 		out.Related = append(out.Related, rel)
@@ -99,8 +99,8 @@ func runInspect(cmd *cobra.Command, args []string) error {
 			Direction:  "inbound",
 		}
 		if source, ok := eng.graph.GetNode(e.SourceID); ok {
-			if v, ok := source.Properties["content_short"]; ok {
-				rel.SummaryShort = v.String()
+			if v, ok := source.Properties.GetString("content_short"); ok {
+				rel.SummaryShort = v
 			}
 		}
 		out.Related = append(out.Related, rel)
@@ -113,8 +113,8 @@ func inspectMetadataSummary(props graph.Properties) string {
 	now := time.Now().UTC()
 	var parts []string
 
-	if vu, ok := props["valid_until"]; ok {
-		if vu.Timestamp().Before(now) {
+	if vu, ok := props.GetTimestamp("valid_until"); ok {
+		if vu.Before(now) {
 			parts = append(parts, "Historical.")
 		} else {
 			parts = append(parts, "Current.")
@@ -123,14 +123,13 @@ func inspectMetadataSummary(props graph.Properties) string {
 		parts = append(parts, "Current.")
 	}
 
-	if v, ok := props["temporality"]; ok {
-		parts = append(parts, v.String())
+	if v, ok := props.GetString("temporality"); ok {
+		parts = append(parts, v)
 	}
-	if v, ok := props["confidence"]; ok {
-		parts = append(parts, fmt.Sprintf("confidence %.2f", v.Float64()))
+	if c, ok := props.GetFloat64("confidence"); ok {
+		parts = append(parts, fmt.Sprintf("confidence %.2f", c))
 	}
-	if v, ok := props["epistemic_status"]; ok {
-		s := v.String()
+	if s, ok := props.GetString("epistemic_status"); ok {
 		if s == "well_established" {
 			s = "well-established"
 		}

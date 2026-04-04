@@ -63,8 +63,8 @@ func runReembed(cmd *cobra.Command, args []string) error {
 		}
 
 		// Check if embedding model matches current.
-		if v, ok := n.Properties["embedding_model"]; ok {
-			if v.String() == currentModel {
+		if v, ok := n.Properties.GetString("embedding_model"); ok {
+			if v == currentModel {
 				continue // up to date
 			}
 		}

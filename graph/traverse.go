@@ -65,11 +65,11 @@ func (g *Graph) Traverse(startID string, opts TraverseOptions) Subgraph {
 			continue
 		}
 		sn := SubgraphNode{ID: n.ID}
-		if v, ok := n.Properties["content_keywords"]; ok {
-			sn.Keywords = v.StringList()
+		if v, ok := n.Properties.GetStringList("content_keywords"); ok {
+			sn.Keywords = v
 		}
-		if v, ok := n.Properties["content_short"]; ok {
-			sn.SummaryShort = v.String()
+		if v, ok := n.Properties.GetString("content_short"); ok {
+			sn.SummaryShort = v
 		}
 		resultNodes = append(resultNodes, sn)
 

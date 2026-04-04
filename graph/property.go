@@ -409,6 +409,82 @@ func UnmarshalProperty(data []byte) (Property, error) {
 // value or absent. No nulls.
 type Properties map[string]Property
 
+// Safe accessors on Properties. These combine key lookup + type check
+// in one call, returning a zero value and false if the key is missing
+// or the property is the wrong type. Use these when reading from stored
+// data. The panicking accessors on Property are for internal use where
+// type is guaranteed by the serialization format.
+
+func (ps Properties) GetString(key string) (string, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeString {
+		return "", false
+	}
+	return p.str, true
+}
+
+func (ps Properties) GetFloat64(key string) (float64, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeFloat64 {
+		return 0, false
+	}
+	return p.float64, true
+}
+
+func (ps Properties) GetInt64(key string) (int64, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeInt64 {
+		return 0, false
+	}
+	return p.int64, true
+}
+
+func (ps Properties) GetBool(key string) (bool, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeBool {
+		return false, false
+	}
+	return p.bool, true
+}
+
+func (ps Properties) GetTimestamp(key string) (time.Time, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeTimestamp {
+		return time.Time{}, false
+	}
+	return p.time, true
+}
+
+func (ps Properties) GetVector(key string) ([]float32, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeVector {
+		return nil, false
+	}
+	cp := make([]float32, len(p.vector))
+	copy(cp, p.vector)
+	return cp, true
+}
+
+func (ps Properties) GetStringList(key string) ([]string, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeStringList {
+		return nil, false
+	}
+	cp := make([]string, len(p.strList))
+	copy(cp, p.strList)
+	return cp, true
+}
+
+func (ps Properties) GetBytes(key string) ([]byte, bool) {
+	p, ok := ps[key]
+	if !ok || p.Type != TypeBytes {
+		return nil, false
+	}
+	cp := make([]byte, len(p.bytes))
+	copy(cp, p.bytes)
+	return cp, true
+}
+
 // Clone returns a deep copy.
 func (ps Properties) Clone() Properties {
 	if ps == nil {
