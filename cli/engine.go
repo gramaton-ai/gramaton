@@ -100,7 +100,7 @@ func loadEngine() (*engine, error) {
 	}, nil
 }
 
-// save commits the current graph state and updates HEAD.
+// save commits the current graph state and updates HEAD and the active branch ref.
 func (e *engine) save(message string) (*graph.Commit, error) {
 	commit, err := e.graph.Save(e.store, e.headHash, message)
 	if err != nil {
@@ -111,6 +111,10 @@ func (e *engine) save(message string) (*graph.Commit, error) {
 	if err := os.WriteFile(headPath, []byte(commit.Hash), 0o644); err != nil {
 		return nil, fmt.Errorf("write HEAD: %w", err)
 	}
+
+	// Update the active branch ref.
+	branch := activeBranch(e.cfg.DataDir)
+	writeRef(e.cfg.DataDir, branch, commit.Hash)
 
 	e.headHash = commit.Hash
 	return commit, nil
