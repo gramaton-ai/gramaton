@@ -43,6 +43,14 @@ const (
 	// A key triggers a split when fnv32(key) & splitMask == 0.
 	// With mask 0x3F (63), average chunk size is 64 entries.
 	splitMask = 0x3F
+
+	// maxTreeDepth limits recursion depth to prevent stack overflow
+	// from corrupt or cyclic chunk data.
+	maxTreeDepth = 32
+
+	// maxNodeEntries limits the number of entries per tree node
+	// during deserialization to prevent memory exhaustion.
+	maxNodeEntries = 100_000
 )
 
 // NewProllyTree creates an empty prolly tree.
@@ -131,17 +139,19 @@ func (t *ProllyTree) Get(key string) (string, bool) {
 	if t.rootHash == "" {
 		return "", false
 	}
-	return t.get(t.rootHash, key)
+	return t.get(t.rootHash, key, 0)
 }
 
-func (t *ProllyTree) get(nodeHash, key string) (string, bool) {
+func (t *ProllyTree) get(nodeHash, key string, depth int) (string, bool) {
+	if depth > maxTreeDepth {
+		return "", false
+	}
 	node, err := t.readNode(nodeHash)
 	if err != nil {
 		return "", false
 	}
 
 	if node.Leaf {
-		// Binary search in sorted entries.
 		lo, hi := 0, len(node.Entries)
 		for lo < hi {
 			mid := (lo + hi) / 2
@@ -157,7 +167,6 @@ func (t *ProllyTree) get(nodeHash, key string) (string, bool) {
 		return "", false
 	}
 
-	// Internal node: find the child whose range contains the key.
 	childIdx := len(node.Entries) - 1
 	for i := len(node.Entries) - 1; i >= 0; i-- {
 		if key >= node.Entries[i].Key {
@@ -165,7 +174,7 @@ func (t *ProllyTree) get(nodeHash, key string) (string, bool) {
 			break
 		}
 	}
-	return t.get(node.Entries[childIdx].Value, key)
+	return t.get(node.Entries[childIdx].Value, key, depth+1)
 }
 
 // AllEntries returns all key-value pairs in sorted order.
@@ -173,10 +182,13 @@ func (t *ProllyTree) AllEntries() ([]ProllyEntry, error) {
 	if t.rootHash == "" {
 		return nil, nil
 	}
-	return t.allEntries(t.rootHash)
+	return t.allEntries(t.rootHash, 0)
 }
 
-func (t *ProllyTree) allEntries(nodeHash string) ([]ProllyEntry, error) {
+func (t *ProllyTree) allEntries(nodeHash string, depth int) ([]ProllyEntry, error) {
+	if depth > maxTreeDepth {
+		return nil, fmt.Errorf("prolly: tree depth exceeds maximum (%d)", maxTreeDepth)
+	}
 	node, err := t.readNode(nodeHash)
 	if err != nil {
 		return nil, err
@@ -188,7 +200,7 @@ func (t *ProllyTree) allEntries(nodeHash string) ([]ProllyEntry, error) {
 
 	var result []ProllyEntry
 	for _, e := range node.Entries {
-		children, err := t.allEntries(e.Value)
+		children, err := t.allEntries(e.Value, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -201,12 +213,11 @@ func (t *ProllyTree) allEntries(nodeHash string) ([]ProllyEntry, error) {
 // Added: in other but not in t. Removed: in t but not in other.
 // Skips entire subtrees when their hashes match.
 func (t *ProllyTree) Diff(other *ProllyTree) (added, removed []ProllyEntry, err error) {
-	oldEntries, newEntries, err := t.diffNodes(t.rootHash, other.rootHash)
+	oldEntries, newEntries, err := t.diffNodes(t.rootHash, other.rootHash, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Compute set differences.
 	oldMap := make(map[string]string, len(oldEntries))
 	for _, e := range oldEntries {
 		oldMap[e.Key] = e.Value
@@ -230,13 +241,15 @@ func (t *ProllyTree) Diff(other *ProllyTree) (added, removed []ProllyEntry, err 
 	return added, removed, nil
 }
 
-func (t *ProllyTree) diffNodes(oldHash, newHash string) ([]ProllyEntry, []ProllyEntry, error) {
-	// If hashes match, subtrees are identical -- skip entirely.
+func (t *ProllyTree) diffNodes(oldHash, newHash string, depth int) ([]ProllyEntry, []ProllyEntry, error) {
+	if depth > maxTreeDepth {
+		return nil, nil, fmt.Errorf("prolly: diff depth exceeds maximum (%d)", maxTreeDepth)
+	}
+
 	if oldHash == newHash {
 		return nil, nil, nil
 	}
 
-	// If either is empty, return the other's full contents.
 	if oldHash == "" {
 		entries, err := LoadProllyTree(t.store, newHash).AllEntries()
 		return nil, entries, err
@@ -255,20 +268,15 @@ func (t *ProllyTree) diffNodes(oldHash, newHash string) ([]ProllyEntry, []Prolly
 		return nil, nil, err
 	}
 
-	// If both are leaves, return their entries for comparison.
 	if oldNode.Leaf && newNode.Leaf {
 		return oldNode.Entries, newNode.Entries, nil
 	}
 
-	// If mixed levels or both internal, fall back to full enumeration
-	// of the differing subtrees. A more sophisticated implementation
-	// would align internal nodes by key ranges, but this is correct
-	// and the subtree skip on matching hashes handles the common case.
-	oldEntries, err := t.allEntries(oldHash)
+	oldEntries, err := t.allEntries(oldHash, depth+1)
 	if err != nil {
 		return nil, nil, err
 	}
-	newEntries, err := LoadProllyTree(t.store, newHash).allEntries(newHash)
+	newEntries, err := LoadProllyTree(t.store, newHash).allEntries(newHash, depth+1)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -294,6 +302,9 @@ func (t *ProllyTree) readNode(hash string) (*ProllyNode, error) {
 	if err := json.Unmarshal(data, &node); err != nil {
 		return nil, fmt.Errorf("prolly: unmarshal node: %w", err)
 	}
+	if len(node.Entries) > maxNodeEntries {
+		return nil, fmt.Errorf("prolly: node has %d entries, exceeds maximum %d", len(node.Entries), maxNodeEntries)
+	}
 	return &node, nil
 }
 
@@ -310,10 +321,13 @@ func (t *ProllyTree) EntryCount() (int, error) {
 	if t.rootHash == "" {
 		return 0, nil
 	}
-	return t.countEntries(t.rootHash)
+	return t.countEntries(t.rootHash, 0)
 }
 
-func (t *ProllyTree) countEntries(nodeHash string) (int, error) {
+func (t *ProllyTree) countEntries(nodeHash string, depth int) (int, error) {
+	if depth > maxTreeDepth {
+		return 0, fmt.Errorf("prolly: count depth exceeds maximum (%d)", maxTreeDepth)
+	}
 	node, err := t.readNode(nodeHash)
 	if err != nil {
 		return 0, err
@@ -323,7 +337,7 @@ func (t *ProllyTree) countEntries(nodeHash string) (int, error) {
 	}
 	total := 0
 	for _, e := range node.Entries {
-		n, err := t.countEntries(e.Value)
+		n, err := t.countEntries(e.Value, depth+1)
 		if err != nil {
 			return 0, err
 		}
