@@ -1,14 +1,10 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +27,7 @@ type StatusOutput struct {
 	NodeCount   int    `json:"node_count"`
 	EdgeCount   int    `json:"edge_count"`
 	ChunkCount  int    `json:"chunk_count"`
+	HeadCommit  string `json:"head_commit,omitempty"`
 	Embedding   string `json:"embedding_provider"`
 }
 
@@ -40,48 +37,27 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Check initialization.
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		out := StatusOutput{
+		return printJSON(StatusOutput{
 			Initialized: false,
 			ConfigPath:  cfgPath,
-		}
-		return printJSON(out)
+		})
 	}
 
-	cfg, err := config.Load(cfgPath)
+	eng, err := loadEngine()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return fmt.Errorf("load engine: %w", err)
 	}
 
-	out := StatusOutput{
+	chunks, _ := eng.store.List()
+
+	return printJSON(StatusOutput{
 		Initialized: true,
 		ConfigPath:  cfgPath,
-		DataDir:     cfg.DataDir,
-		Embedding:   cfg.Embedding.Provider,
-	}
-
-	// Count storage chunks if data dir exists.
-	if _, err := os.Stat(cfg.DataDir); err == nil {
-		store, err := storage.New(cfg.DataDir)
-		if err == nil {
-			chunks, err := store.List()
-			if err == nil {
-				out.ChunkCount = len(chunks)
-			}
-		}
-	}
-
-	// Load graph and count nodes/edges.
-	// For now, the graph is in-memory only, so we report 0.
-	// Once persistence is wired, this will load from storage.
-	g := graph.New()
-	out.NodeCount = g.NodeCount()
-	out.EdgeCount = g.EdgeCount()
-
-	return printJSON(out)
-}
-
-func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+		DataDir:     eng.cfg.DataDir,
+		NodeCount:   eng.graph.NodeCount(),
+		EdgeCount:   eng.graph.EdgeCount(),
+		ChunkCount:  len(chunks),
+		HeadCommit:  eng.headHash,
+		Embedding:   eng.cfg.Embedding.Provider,
+	})
 }
