@@ -401,23 +401,139 @@ Uses Go's `http.Server.Shutdown(ctx)` for steps 1-2.
 | Container SIGKILL | Same as crash. Next startup recovers cleanly. |
 | Slow graph load | CLI polls /v1/status with backoff, times out after 10s. |
 
+## Decided: Authentication
+
+### Loopback (Topologies A, B1, C)
+
+No authentication required. The OS enforces that only local processes
+can reach 127.0.0.1. Same trust model as Ollama and Docker daemon.
+
+### Network-Accessible (Topology B2)
+
+When `bind: "0.0.0.0"`, the server generates a 256-bit cryptographically
+random bearer token on first start:
+
+```
+~/.gramaton/auth_token    # 0o600 permissions, owner-read-only
+```
+
+Every request must include:
+```
+Authorization: Bearer <token>
+```
+
+The CLI reads the token from the local file automatically. Remote
+clients configure the token manually (copy once).
+
+Token regeneration: `gramaton serve --stop && rm ~/.gramaton/auth_token
+&& gramaton serve` generates a new token.
+
+If the server binds to a non-loopback address and no token file exists,
+it generates one and logs a warning with the file location.
+
+### TLS
+
+Auth without TLS sends the token in plaintext. For network access:
+
+- **Reverse proxy (recommended):** nginx/caddy/Tailscale handles TLS.
+  Gramaton serves plain HTTP.
+- **Built-in TLS:** Server accepts cert and key paths in config.
+
+```yaml
+server:
+  port: 42982
+  bind: "0.0.0.0"
+  tls_cert: ""        # path to cert file (optional)
+  tls_key: ""         # path to key file (optional)
+```
+
+### Scope
+
+- `/v1/shutdown` is always restricted to loopback, regardless of
+  auth. Even with a valid token, remote shutdown is not allowed.
+- mTLS and OAuth are out of scope. Personal tool, single user.
+
+## Security Considerations
+
+### Critical
+
+**SSRF via ingest local path mode.** The `POST /v1/ingest` endpoint
+accepts a local file path. A remote attacker with a valid auth token
+could read arbitrary server files via `{"path": "/etc/shadow"}`.
+
+Mitigation: local path mode is restricted to loopback requests only.
+Network clients must use the upload mode (send file content in the
+request body). The server checks the source address -- if non-loopback
+and the request uses `path` instead of file content, reject with 403.
+
+**Token timing attacks.** Bearer token comparison must use
+`crypto/subtle.ConstantTimeCompare` to prevent timing-based token
+extraction.
+
+**Request body DoS.** Without size limits, a client can send a
+multi-GB request body and exhaust server memory.
+
+Mitigation: `http.MaxBytesReader` on all endpoints, enforcing the
+existing `MaxJSONSize` config limit. File uploads (ingest) get a
+separate, larger configurable limit (default 50MB per file, 200MB
+per bulk request).
+
+### High
+
+**Auth token and API key leakage.** Bearer tokens, embedding provider
+API keys, and LLM provider API keys must never appear in server logs,
+error messages, or API responses. The server must redact `Authorization`
+headers and credential values from all output.
+
+**File permissions.** All sensitive files must be 0o600:
+- `server.json` -- if writable by an attacker, they could redirect
+  the CLI to a malicious server
+- `auth_token` -- full store access if leaked
+- `gramaton.yaml` -- contains API keys for cloud providers
+
+### Medium
+
+**Auto-start binary resolution.** The CLI starts `gramaton serve` as
+a subprocess. Must use `os.Executable()` (resolved absolute path),
+not `os.Args[0]` (could be relative or manipulated via PATH).
+
+**LLM classification prompt injection.** With autonomous curation,
+the server feeds record content to an LLM for classification. A
+malicious record could attempt to manipulate classification output.
+
+Mitigations:
+- Feed content as a clearly delimited data block, not inline in the
+  instruction
+- Validate LLM output against the same enums and ranges used
+  everywhere else (`validateEnum`, `validateFloat64Range`)
+- A poisoned classification still has to pass all field validation
+
+**server.json tampering.** If an attacker can overwrite `server.json`,
+they could point the CLI to a malicious server. Mitigation: 0o600
+permissions, and the CLI verifies the PID corresponds to a running
+gramaton process before connecting.
+
+**Ingest upload size.** Bulk uploads and large files need configurable
+size limits to prevent resource exhaustion. Defaults: 50MB per file,
+200MB per bulk request.
+
+### Known Risks (Cannot Fully Solve)
+
+**Store content as prompt injection vector.** Records returned by
+search are consumed by AI agents. A poisoned record could attempt
+to hijack the agent's behavior. This is inherent to any knowledge
+store for AI agents.
+
+Mitigations (defense in depth, not prevention):
+- Confidence, epistemic_status, and source metadata provide trust
+  signals that agents can use to assess reliability
+- `source_ref` and `testimony_hops` provide provenance tracking
+- Ultimately the consuming agent decides what to trust
+- This risk should be documented in the agent integration guide
+
 ## Open Questions
 
-### 1. Authentication (Topology B2)
-
-Needed for Topology B2 (network-accessible server). Not needed for
-loopback-only access.
-
-Options:
-- **Bearer token:** Server generates a token on startup, writes it
-  to a file. CLI reads and sends it. Remote clients configured manually.
-- **API key:** User-configured, stored in gramaton config.
-- **mTLS:** Certificate-based. Strong but complex setup.
-
-For v0.2, bearer token generated on startup is likely sufficient.
-API key for remote access. mTLS deferred.
-
-### 2. Migration from v0.1
+### 1. Migration from v0.1
 
 - Existing stores: v0.2 server reads the same store format. No
   migration needed for the data.
@@ -429,7 +545,7 @@ API key for remote access. mTLS deferred.
 - The CLI command surface stays identical. Existing scripts and
   integrations work without changes.
 
-### 3. MCP Integration
+### 2. MCP Integration
 
 - Same server, separate endpoint (`/mcp`).
 - MCP tools map to API endpoints (search, capture, inspect, etc.).
@@ -437,7 +553,7 @@ API key for remote access. mTLS deferred.
   MCP protocol.
 - Question: does MCP support require a separate library/dependency?
 
-### 4. Implementation Phasing
+### 3. Implementation Phasing
 
 What is the minimum viable server? Suggested phases:
 
