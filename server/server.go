@@ -61,6 +61,12 @@ func New(engine *core.Engine, cfg Config) *Server {
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
+	// Mount MCP Streamable HTTP handler directly (not through security
+	// middleware -- MCP has its own content types and headers).
+	mux.Handle("/mcp", s.MCPHandler())
+
+	// Wrap REST routes with security headers. MCP handler is already
+	// mounted before the wrapper, so it won't be affected.
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
 		Handler:      s.securityHeaders(mux),
@@ -213,13 +219,19 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 }
 
 // securityHeaders wraps a handler with security response headers.
+// Skips the /mcp path since MCP has its own content types.
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Cache-Control", "no-store")
-
 		s.recordActivity()
+
+		// Don't set JSON content-type for MCP -- it uses SSE and
+		// has its own content negotiation.
+		if r.URL.Path != "/mcp" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-store")
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
