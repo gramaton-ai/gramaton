@@ -413,6 +413,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		KnowledgeType   string   `json:"knowledge_type,omitempty"`
 		EpistemicStatus string   `json:"epistemic_status,omitempty"`
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
+		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
+		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
+		ValidUntil      string   `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
@@ -448,6 +451,22 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 		if args.Importance != nil {
 			s.engine.SetProp(args.ID, "importance", graph.Float64Property(*args.Importance))
+			updated = true
+		}
+		if len(args.Keywords) > 0 {
+			s.engine.SetProp(args.ID, "content_keywords", graph.StringListProperty(args.Keywords))
+			updated = true
+		}
+		if args.SummaryShort != "" {
+			s.engine.SetProp(args.ID, "content_short", graph.StringProperty(args.SummaryShort))
+			updated = true
+		}
+		if args.ValidUntil != "" {
+			t, err := parseDateArg(args.ValidUntil)
+			if err != nil {
+				return mcpErr("invalid valid_until date")
+			}
+			s.engine.SetProp(args.ID, "valid_until", graph.TimestampProperty(t))
 			updated = true
 		}
 		if updated {

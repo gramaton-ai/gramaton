@@ -39,6 +39,9 @@ type updateRequest struct {
 	KnowledgeType   string   `json:"knowledge_type,omitempty"`
 	EpistemicStatus string   `json:"epistemic_status,omitempty"`
 	Importance      *float64 `json:"importance,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	SummaryShort    string   `json:"summary_short,omitempty"`
+	ValidUntil      string   `json:"valid_until,omitempty"`
 }
 
 type classifyRequest struct {
@@ -387,6 +390,23 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Importance != nil {
 		s.engine.SetProp(id, "importance", graph.Float64Property(*req.Importance))
+		updated = true
+	}
+	if len(req.Keywords) > 0 {
+		s.engine.SetProp(id, "content_keywords", graph.StringListProperty(req.Keywords))
+		updated = true
+	}
+	if req.SummaryShort != "" {
+		s.engine.SetProp(id, "content_short", graph.StringProperty(req.SummaryShort))
+		updated = true
+	}
+	if req.ValidUntil != "" {
+		t, err := parseDateArg(req.ValidUntil)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field", "invalid valid_until date", true)
+			return
+		}
+		s.engine.SetProp(id, "valid_until", graph.TimestampProperty(t))
 		updated = true
 	}
 
