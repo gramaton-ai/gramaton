@@ -19,6 +19,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   creates a `supersedes` edge. No agent involvement required.
 - **MCP branch tool** -- all 5 branch operations (list, create,
   checkout, merge, discard) now work via MCP. Previously a stub.
+- **Deterministic curation** -- background goroutine runs every 5
+  minutes (configurable). Lifecycle transitions expire stale ephemeral/
+  temporal records. Orphan linking creates `related_to` edges for
+  records with zero connections. Duplicate consolidation auto-supersedes
+  near-duplicate pairs. Concept candidate flagging identifies keywords
+  above emergence threshold. Store manifest computes aggregate stats.
+- **Autonomous LLM curation** -- when an LLM provider is configured
+  (Anthropic API), the server classifies pending records, generates
+  missing summaries, and promotes concept candidates. Rate-limited
+  (default 20 LLM calls per cycle, batch size 10). Each mutation is
+  atomic (no branches for routine classification).
+- **LLM provider interface** -- `llm.Provider` with `Complete` and
+  `ModelID`. Anthropic Messages API client as first implementation.
+  Config supports env var name or direct API key.
+- **Curation endpoints** -- `GET /v1/curation` (status, concept
+  candidates, manifest) and `POST /v1/curation/trigger` (manual
+  cycle). `gramaton_curation` MCP tool with status/trigger actions.
+- **Enhanced curation status** -- response envelope now includes
+  concept_candidates, stale_count, orphan_count, last_curated,
+  and autonomous flag alongside pending_count and overdue.
+- **Store manifest** -- computed each curation cycle: total records,
+  edges, pending, orphans, stale, records by type, temporal range.
+- `gramaton curation` CLI command with `--trigger` flag.
 - **MCP diff and log tools** -- both now fully implemented. Previously
   stubs that returned error messages.
 - CLI commands `stats` and `duplicates` for the new endpoints.

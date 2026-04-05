@@ -306,6 +306,20 @@ func (idx *PropertyIndex) NodesWithKey(key string) map[string]struct{} {
 	return result
 }
 
+// KeywordCounts returns keyword -> count for all keywords under the
+// given key. Used by curation to find concept candidates.
+func (idx *PropertyIndex) KeywordCounts(key string) map[string]int {
+	byKW, ok := idx.keywords[key]
+	if !ok {
+		return nil
+	}
+	counts := make(map[string]int, len(byKW))
+	for kw, nodes := range byKW {
+		counts[kw] = len(nodes)
+	}
+	return counts
+}
+
 // Count returns the total number of indexed entries across all keys.
 func (idx *PropertyIndex) Count() int {
 	total := 0

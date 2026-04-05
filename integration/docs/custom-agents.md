@@ -9,7 +9,7 @@ store. Choose based on your framework's capabilities:
 
 ### 1. MCP (Recommended)
 
-The fastest path. Gramaton exposes 15 MCP tools via Streamable HTTP.
+The fastest path. Gramaton exposes 16 MCP tools via Streamable HTTP.
 Agents call typed tools with structured parameters -- no shell, no
 escaping, no permission prompts.
 
@@ -36,6 +36,7 @@ escaping, no permission prompts.
 | `gramaton_reembed` | Regenerate stale embeddings |
 | `gramaton_stats` | Aggregate statistics |
 | `gramaton_duplicates` | Find near-duplicate records |
+| `gramaton_curation` | View curation status or trigger a cycle |
 
 ### 2. REST API
 
@@ -62,6 +63,8 @@ GET    /v1/diff                 Compare commits
 GET    /v1/status               Health and stats
 GET    /v1/stats                Aggregate statistics
 POST   /v1/duplicates           Find near-duplicates
+GET    /v1/curation             Curation status and candidates
+POST   /v1/curation/trigger     Trigger a curation cycle
 ```
 
 All responses use a standard envelope:

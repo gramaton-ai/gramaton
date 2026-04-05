@@ -26,6 +26,9 @@ type Config struct {
 	Storage    StorageConfig    `yaml:"storage"`
 	Limits     LimitsConfig     `yaml:"limits"`
 	Merge      MergeConfig      `yaml:"merge"`
+	Curation   CurationConfig   `yaml:"curation"`
+	LLM        LLMConfig        `yaml:"llm"`
+	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
 }
 
 type ServerConfig struct {
@@ -144,6 +147,30 @@ type MergeConfig struct {
 	ConflictStrategy string `yaml:"conflict_strategy"`
 }
 
+type CurationConfig struct {
+	Enabled             bool          `yaml:"enabled"`
+	Interval            time.Duration `yaml:"interval"`
+	OrphanSimilarityMin float64       `yaml:"orphan_similarity_min"`
+	StaleEphemeralScore float64       `yaml:"stale_ephemeral_score"`
+	StaleTemporalScore  float64       `yaml:"stale_temporal_score"`
+	MaxOrphansPerRun    int           `yaml:"max_orphans_per_run"`
+	MaxDedupPerRun      int           `yaml:"max_dedup_per_run"`
+}
+
+type LLMConfig struct {
+	Provider   string `yaml:"provider"`
+	Model      string `yaml:"model"`
+	BaseURL    string `yaml:"base_url,omitempty"`
+	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
+	Region     string `yaml:"region,omitempty"`
+	AWSProfile string `yaml:"aws_profile,omitempty"`
+}
+
+type LLMCurationConfig struct {
+	BatchSize      int `yaml:"batch_size"`
+	MaxCallsPerRun int `yaml:"max_calls_per_run"`
+}
+
 // Defaults returns a Config with all values set to their documented defaults.
 func Defaults() Config {
 	return Config{
@@ -237,6 +264,25 @@ func Defaults() Config {
 		Merge: MergeConfig{
 			ConflictStrategy: "timestamp_wins",
 		},
+
+		Curation: CurationConfig{
+			Enabled:             true,
+			Interval:            5 * time.Minute,
+			OrphanSimilarityMin: 0.6,
+			StaleEphemeralScore: 0.95,
+			StaleTemporalScore:  0.99,
+			MaxOrphansPerRun:    20,
+			MaxDedupPerRun:      20,
+		},
+
+		LLM: LLMConfig{
+			Model: "claude-sonnet-4-6",
+		},
+
+		LLMCuration: LLMCurationConfig{
+			BatchSize:      10,
+			MaxCallsPerRun: 20,
+		},
 	}
 }
 
@@ -265,6 +311,20 @@ func Load(path string) (Config, error) {
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	// Enforce bounds on configurable limits.
+	if cfg.LLMCuration.MaxCallsPerRun > 1000 {
+		cfg.LLMCuration.MaxCallsPerRun = 1000
+	}
+	if cfg.LLMCuration.BatchSize > 100 {
+		cfg.LLMCuration.BatchSize = 100
+	}
+	if cfg.Curation.MaxOrphansPerRun > 200 {
+		cfg.Curation.MaxOrphansPerRun = 200
+	}
+	if cfg.Curation.MaxDedupPerRun > 200 {
+		cfg.Curation.MaxDedupPerRun = 200
 	}
 
 	return cfg, nil

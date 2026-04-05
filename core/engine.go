@@ -16,6 +16,7 @@ import (
 	"github.com/brandonlattin/gramaton/embed"
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/brandonlattin/gramaton/index"
+	"github.com/brandonlattin/gramaton/llm"
 	"github.com/brandonlattin/gramaton/search"
 	"github.com/brandonlattin/gramaton/storage"
 )
@@ -31,6 +32,7 @@ type Engine struct {
 	propIdx  *index.PropertyIndex
 	vecIdx   *index.FlatIndex
 	embedder embed.Provider
+	llmProv  llm.Provider
 	searcher *search.Tool
 	headHash string
 }
@@ -81,6 +83,12 @@ func LoadEngine(cfgDir string) (*Engine, error) {
 
 	searcher := search.New(g, propIdx, vecIdx, emb, cfg)
 
+	llmProv, err := llm.New(cfg.LLM)
+	if err != nil {
+		// LLM is optional -- log the error but don't fail.
+		llmProv = nil
+	}
+
 	return &Engine{
 		cfg:      cfg,
 		store:    s,
@@ -88,6 +96,7 @@ func LoadEngine(cfgDir string) (*Engine, error) {
 		propIdx:  propIdx,
 		vecIdx:   vecIdx,
 		embedder: emb,
+		llmProv:  llmProv,
 		searcher: searcher,
 		headHash: headHash,
 	}, nil
@@ -124,6 +133,9 @@ func (e *Engine) VecIdx() *index.FlatIndex { return e.vecIdx }
 
 // Embedder returns the embedding provider (may be nil).
 func (e *Engine) Embedder() embed.Provider { return e.embedder }
+
+// LLM returns the LLM provider (may be nil if not configured).
+func (e *Engine) LLM() llm.Provider { return e.llmProv }
 
 // Searcher returns the search tool.
 func (e *Engine) Searcher() *search.Tool { return e.searcher }

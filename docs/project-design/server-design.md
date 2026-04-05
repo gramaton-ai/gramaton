@@ -669,7 +669,7 @@ REST API agents (OpenClaw, custom):
   Agent <--HTTP--> gramaton server :42982/v1/...
 ```
 
-### MCP Tools (15)
+### MCP Tools (16)
 
 All tools map to REST API endpoints. The MCP layer is thin protocol
 translation, not business logic.
@@ -691,6 +691,7 @@ translation, not business logic.
 | `gramaton_diff` | `GET /v1/diff` | What changed since a date/topic |
 | `gramaton_log` | `GET /v1/log` | Commit history, per-record history |
 | `gramaton_reembed` | `POST /v1/reembed` | Regenerate stale embeddings |
+| `gramaton_curation` | `GET /v1/curation` | View curation status or trigger a cycle |
 
 Not exposed as MCP tools (CLI/API only):
 - `revert` -- destructive, requires explicit user intent

@@ -595,7 +595,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		s.engine.RLock()
 		defer s.engine.RUnlock()
 
-		curation := computeCuration(s.engine)
+		curation := computeCuration(s.engine, s.runner)
 		return mcpJSONResult(map[string]any{
 			"nodes":     s.engine.Graph().NodeCount(),
 			"edges":     s.engine.Graph().EdgeCount(),
@@ -668,6 +668,33 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 				"unset":    confUnset,
 			},
 		})
+	})
+
+	type curationInput struct {
+		Action string `json:"action" jsonschema:"status|trigger"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_curation",
+		Description: "View curation status (concept candidates, stale/orphan counts, manifest) or trigger a curation cycle.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args curationInput) (*mcp.CallToolResult, any, error) {
+		if s.runner == nil {
+			return mcpErr("curation is not enabled")
+		}
+
+		switch args.Action {
+		case "trigger":
+			s.runner.Trigger(ctx)
+			return mcpJSONResult(map[string]any{
+				"triggered": true,
+				"status":    s.runner.Status(),
+			})
+		default: // "status" or empty
+			return mcpJSONResult(map[string]any{
+				"status":             s.runner.Status(),
+				"concept_candidates": s.runner.ConceptCandidates(),
+				"manifest":           s.runner.Manifest(),
+			})
+		}
 	})
 
 	type branchInput struct {

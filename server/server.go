@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/brandonlattin/gramaton/core"
+	"github.com/brandonlattin/gramaton/curation"
 	"github.com/brandonlattin/gramaton/graph"
 )
 
@@ -44,6 +45,7 @@ type Server struct {
 	cfg        Config
 	httpServer *http.Server
 	logger     *log.Logger
+	runner     *curation.Runner
 
 	mu          sync.Mutex
 	lastRequest time.Time
@@ -104,6 +106,20 @@ func (s *Server) Run() error {
 	// Idle timeout checker.
 	shutdownCh := make(chan string, 1)
 	go s.idleWatcher(shutdownCh)
+
+	// Start curation runner.
+	engineCfg := s.engine.Config()
+	if engineCfg.Curation.Enabled {
+		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.logger)
+		curationCtx, curationCancel := context.WithCancel(context.Background())
+		defer curationCancel()
+		go s.runner.Start(curationCtx)
+		if s.engine.LLM() != nil {
+			s.logger.Printf("curation: deterministic + autonomous (LLM: %s)", s.engine.LLM().ModelID())
+		} else {
+			s.logger.Println("curation: deterministic only (no LLM configured)")
+		}
+	}
 
 	// Serve in background.
 	errCh := make(chan error, 1)
@@ -219,6 +235,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
+
+	// Curation
+	mux.HandleFunc("GET /v1/curation", s.handleCurationStatus)
+	mux.HandleFunc("POST /v1/curation/trigger", s.handleCurationTrigger)
 }
 
 // securityHeaders wraps a handler with security response headers.
@@ -244,7 +264,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 // to avoid deadlock (RWMutex is not reentrant).
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	s.engine.RLock()
-	curation := computeCuration(s.engine)
+	curation := computeCuration(s.engine, s.runner)
 	s.engine.RUnlock()
 
 	s.writeJSONRaw(w, status, data, curation)
@@ -253,7 +273,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 // writeJSONLocked writes a JSON response when the caller already holds
 // a lock. Computes curation without acquiring a separate lock.
 func (s *Server) writeJSONLocked(w http.ResponseWriter, status int, data any) {
-	curation := computeCuration(s.engine)
+	curation := computeCuration(s.engine, s.runner)
 	s.writeJSONRaw(w, status, data, curation)
 }
 
@@ -301,8 +321,13 @@ type ResponseMeta struct {
 
 // CurationStatus reports pending curation state.
 type CurationStatus struct {
-	PendingCount int  `json:"pending_count"`
-	Overdue      bool `json:"overdue"`
+	PendingCount      int        `json:"pending_count"`
+	Overdue           bool       `json:"overdue"`
+	ConceptCandidates int        `json:"concept_candidates,omitempty"`
+	StaleCount        int        `json:"stale_count,omitempty"`
+	OrphanCount       int        `json:"orphan_count,omitempty"`
+	LastCurated       *time.Time `json:"last_curated,omitempty"`
+	Autonomous        bool       `json:"autonomous,omitempty"`
 }
 
 // ErrorResponse is the standard error wrapper.
@@ -318,12 +343,25 @@ type ErrorDetail struct {
 }
 
 // computeCuration checks pending record count. Caller must hold
-// at least a read lock on the engine.
-func computeCuration(e *core.Engine) CurationStatus {
+// at least a read lock on the engine. If a runner is provided,
+// enriches with curation state (uses runner's own mutex, not the
+// engine lock, so no deadlock risk).
+func computeCuration(e *core.Engine, runner *curation.Runner) CurationStatus {
 	captured := e.PropIdx().Lookup("processing_status",
 		graph.StringProperty("captured"))
-	return CurationStatus{
+	status := CurationStatus{
 		PendingCount: len(captured),
 		Overdue:      len(captured) > 0,
 	}
+
+	if runner != nil {
+		enhanced := runner.Status()
+		status.ConceptCandidates = enhanced.ConceptCandidates
+		status.StaleCount = enhanced.StaleCount
+		status.OrphanCount = enhanced.OrphanCount
+		status.LastCurated = enhanced.LastCurated
+		status.Autonomous = enhanced.Autonomous
+	}
+
+	return status
 }

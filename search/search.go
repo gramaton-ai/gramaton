@@ -317,7 +317,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		case SortEdgeCount:
 			sr.sortVal = float64(edgeCount(t.graph, id))
 		case SortStaleness:
-			sr.sortVal = computeStaleness(n, now, t.cfg.Decay)
+			sr.sortVal = ComputeStaleness(n, now, t.cfg.Decay)
 		}
 
 		scoredResults = append(scoredResults, sr)
@@ -638,7 +638,7 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 		r.ContentLength = len(v)
 	}
 	r.EdgeCount = edgeCount(t.graph, n.ID)
-	r.Staleness = computeStaleness(n, time.Now().UTC(), t.cfg.Decay)
+	r.Staleness = ComputeStaleness(n, time.Now().UTC(), t.cfg.Decay)
 
 	r.MetadataSummary = buildMetadataSummary(n.Properties)
 
@@ -731,7 +731,9 @@ func capitalize(s string) string {
 // computeStaleness returns 0.0-1.0 representing how stale a record is.
 // Uses the same decay model as access recency but inverted: 1.0 = maximally
 // stale, 0.0 = just accessed. Immutable records always return 0.
-func computeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) float64 {
+// ComputeStaleness returns 0.0-1.0 representing how stale a record is.
+// Exported for use by the curation layer.
+func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) float64 {
 	temp, _ := n.Properties.GetString("temporality")
 	if temp == "immutable" {
 		return 0
