@@ -30,6 +30,7 @@ type Config struct {
 	Curation   CurationConfig   `yaml:"curation"`
 	LLM        LLMConfig        `yaml:"llm"`
 	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
+	Backup      BackupConfig      `yaml:"backup"`
 }
 
 type ServerConfig struct {
@@ -178,6 +179,13 @@ type LLMCurationConfig struct {
 	MaxCallsPerRun int `yaml:"max_calls_per_run"`
 }
 
+type BackupConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Dir      string        `yaml:"dir"`
+	Retain   int           `yaml:"retain"`
+	Schedule time.Duration `yaml:"schedule"`
+}
+
 // Defaults returns a Config with all values set to their documented defaults.
 func Defaults() Config {
 	return Config{
@@ -295,6 +303,12 @@ func Defaults() Config {
 		LLMCuration: LLMCurationConfig{
 			BatchSize:      10,
 			MaxCallsPerRun: 20,
+		},
+
+		Backup: BackupConfig{
+			Enabled:  false,
+			Retain:   2,
+			Schedule: 24 * time.Hour,
 		},
 	}
 }

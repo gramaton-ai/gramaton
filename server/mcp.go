@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/brandonlattin/gramaton/backup"
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/brandonlattin/gramaton/search"
@@ -1114,6 +1115,65 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			"threshold": threshold,
 			"count":     len(pairs),
 		})
+	})
+
+	type backupToolInput struct {
+		Action string `json:"action" jsonschema:"backup|status"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_backup",
+		Description: "Create a backup of the knowledge store or list existing backups.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args backupToolInput) (*mcp.CallToolResult, any, error) {
+		cfg := s.engine.Config()
+		backupDir := cfg.Backup.Dir
+		if backupDir == "" {
+			backupDir = backup.DefaultBackupDir()
+		}
+
+		switch args.Action {
+		case "backup":
+			cfgPath := filepath.Join(s.cfg.ConfigDir, "config.yaml")
+			s.engine.RLock()
+			archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir)
+			s.engine.RUnlock()
+			if err != nil {
+				return mcpErr("backup failed")
+			}
+			deleted, _ := backup.ApplyRetention(backupDir, cfg.Backup.Retain)
+			info, _ := os.Stat(archivePath)
+			var sizeBytes int64
+			if info != nil {
+				sizeBytes = info.Size()
+			}
+			return mcpJSONResult(map[string]any{
+				"path":        archivePath,
+				"size_bytes":  sizeBytes,
+				"deleted_old": deleted,
+			})
+
+		default: // "status" or empty
+			files, _ := filepath.Glob(filepath.Join(backupDir, "gramaton-backup-*.tar.gz"))
+			var backups []map[string]any
+			for _, f := range files {
+				info, err := os.Stat(f)
+				if err != nil {
+					continue
+				}
+				backups = append(backups, map[string]any{
+					"path":       f,
+					"size_bytes": info.Size(),
+					"created":    info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+				})
+			}
+			if backups == nil {
+				backups = []map[string]any{}
+			}
+			return mcpJSONResult(map[string]any{
+				"backup_dir": backupDir,
+				"backups":    backups,
+				"count":      len(backups),
+			})
+		}
 	})
 }
 

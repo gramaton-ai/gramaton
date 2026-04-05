@@ -14,13 +14,14 @@ import (
 
 // Runner manages the background curation goroutine.
 type Runner struct {
-	engine *core.Engine
-	llm    llm.Provider // may be nil
-	cfg    config.Config
-	state  *State
-	logger *slog.Logger
-	stopCh chan struct{}
-	done   chan struct{}
+	engine        *core.Engine
+	llm           llm.Provider // may be nil
+	cfg           config.Config
+	state         *State
+	logger        *slog.Logger
+	stopCh        chan struct{}
+	done          chan struct{}
+	postCycleHook func()
 }
 
 // State holds curation results for the response envelope. It has its
@@ -140,6 +141,12 @@ func (r *Runner) Manifest() *StoreManifest {
 	return r.state.LastDeterministic.Manifest
 }
 
+// SetPostCycleHook registers a function to call after each curation
+// cycle. Used by the server to trigger auto-backup.
+func (r *Runner) SetPostCycleHook(hook func()) {
+	r.postCycleHook = hook
+}
+
 // Trigger runs a curation cycle immediately. Returns false if a
 // cycle is already in progress.
 func (r *Runner) Trigger(ctx context.Context) bool {
@@ -211,5 +218,10 @@ func (r *Runner) cycle(ctx context.Context) {
 			}
 			r.state.mu.Unlock()
 		}
+	}
+
+	// 3. Run post-cycle hook (auto-backup).
+	if r.postCycleHook != nil {
+		r.postCycleHook()
 	}
 }

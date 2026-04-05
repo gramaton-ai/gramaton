@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/brandonlattin/gramaton/backup"
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/curation"
 	"github.com/brandonlattin/gramaton/graph"
@@ -49,6 +51,7 @@ type Server struct {
 
 	mu          sync.Mutex
 	lastRequest time.Time
+	lastBackup  time.Time
 }
 
 // New creates a new server wrapping the given engine.
@@ -120,6 +123,11 @@ func (s *Server) Run() error {
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		defer curationCancel()
 		go s.runner.Start(curationCtx)
+		if engineCfg.Backup.Enabled {
+			s.runner.SetPostCycleHook(func() {
+				s.runAutoBackup()
+			})
+		}
 		if s.engine.LLM() != nil {
 			s.log.Info("curation started", "mode", "deterministic+autonomous", "llm", s.engine.LLM().ModelID())
 		} else {
@@ -242,6 +250,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
 
+	// Backup/Export/Import
+	mux.HandleFunc("POST /v1/backup", s.handleBackup)
+	mux.HandleFunc("POST /v1/restore", s.handleRestore)
+	mux.HandleFunc("POST /v1/export", s.handleExport)
+	mux.HandleFunc("POST /v1/import", s.handleImport)
+
 	// Curation
 	mux.HandleFunc("GET /v1/curation", s.handleCurationStatus)
 	mux.HandleFunc("POST /v1/curation/trigger", s.handleCurationTrigger)
@@ -249,6 +263,47 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 // Log returns the server's structured logger.
 func (s *Server) Log() *slog.Logger { return s.log }
+
+// runAutoBackup creates a backup if enough time has elapsed since the last one.
+func (s *Server) runAutoBackup() {
+	cfg := s.engine.Config()
+	schedule := cfg.Backup.Schedule
+	if schedule <= 0 {
+		schedule = 24 * time.Hour
+	}
+
+	s.mu.Lock()
+	elapsed := time.Since(s.lastBackup)
+	s.mu.Unlock()
+
+	if elapsed < schedule {
+		return
+	}
+
+	backupDir := cfg.Backup.Dir
+	if backupDir == "" {
+		backupDir = backup.DefaultBackupDir()
+	}
+
+	cfgPath := filepath.Join(s.cfg.ConfigDir, "config.yaml")
+
+	s.engine.RLock()
+	archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir)
+	s.engine.RUnlock()
+
+	if err != nil {
+		s.log.Error("auto-backup failed", "err", err)
+		return
+	}
+
+	deleted, _ := backup.ApplyRetention(backupDir, cfg.Backup.Retain)
+
+	s.mu.Lock()
+	s.lastBackup = time.Now()
+	s.mu.Unlock()
+
+	s.log.Info("auto-backup created", "path", archivePath, "deleted_old", len(deleted))
+}
 
 // securityHeaders wraps a handler with security response headers
 // and request logging. Skips the /mcp path since MCP has its own

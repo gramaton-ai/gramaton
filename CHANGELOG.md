@@ -99,6 +99,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Search results now include created_at, access_count, importance,
   content_length, edge_count, and staleness fields.
 
+- **Backup/restore** -- `gramaton backup` creates compressed tar.gz
+  archives with ISO8601 timestamps in filenames. Includes all store
+  data (chunks, HEAD, refs) and sanitized config (API keys stripped).
+  `gramaton restore` with interactive confirmation. Auto-backup via
+  curation runner with configurable schedule and retention (default:
+  2 backups, daily). POST /v1/backup and gramaton_backup MCP tool.
+- **Export** -- query-driven export in JSON Lines, CSV, and Markdown
+  formats. Reuses search filter infrastructure. POST /v1/export
+  endpoint and `gramaton export` CLI command with --format and
+  --output flags.
+- **Import** -- JSON Lines import with property allowlist, new ULID
+  assignment, edge remapping within import batch. CSV import with
+  column mapping and aliases. Obsidian vault import with YAML
+  frontmatter parsing and [[wikilink]] to edge conversion. Security:
+  content sanitization, safe property allowlist, max 10K records per
+  import, no edges to pre-existing records.
+- **Search flag helpers** -- extracted addSearchFlags/buildSearchBody
+  from search_cmd.go for reuse by export command.
 - **Structured logging** -- JSON-formatted logs via `log/slog` with
   levels (debug/info/warn/error). File-based at `~/.gramaton/gramaton.log`
   with automatic rotation (50MB per file), gzip compression of old
