@@ -318,6 +318,63 @@ embedding:
 	}
 }
 
+func TestCreateWithStoreName(t *testing.T) {
+	dataDir := t.TempDir()
+	backupDir := t.TempDir()
+	writeFile(t, filepath.Join(dataDir, "HEAD"), "hash")
+
+	archivePath, err := Create(dataDir, "", backupDir, "work")
+	if err != nil {
+		t.Fatalf("Create with store name: %v", err)
+	}
+
+	base := filepath.Base(archivePath)
+	if !strings.HasPrefix(base, "gramaton-backup-work-") {
+		t.Fatalf("expected store name in filename, got: %s", base)
+	}
+	if !strings.HasSuffix(base, ".tar.gz") {
+		t.Fatalf("expected .tar.gz suffix, got: %s", base)
+	}
+}
+
+func TestCreateWithoutStoreName(t *testing.T) {
+	dataDir := t.TempDir()
+	backupDir := t.TempDir()
+	writeFile(t, filepath.Join(dataDir, "HEAD"), "hash")
+
+	archivePath, err := Create(dataDir, "", backupDir)
+	if err != nil {
+		t.Fatalf("Create without store name: %v", err)
+	}
+
+	base := filepath.Base(archivePath)
+	// Should NOT contain a store name segment.
+	parts := strings.SplitN(base, "-", 4)
+	// Format: gramaton-backup-<timestamp>.tar.gz
+	// With store name: gramaton-backup-<store>-<timestamp>.tar.gz
+	if !strings.HasPrefix(base, "gramaton-backup-2") {
+		t.Fatalf("expected timestamp after prefix, got: %s", base)
+	}
+	_ = parts
+}
+
+func TestCreateWithEmptyStoreName(t *testing.T) {
+	dataDir := t.TempDir()
+	backupDir := t.TempDir()
+	writeFile(t, filepath.Join(dataDir, "HEAD"), "hash")
+
+	// Empty store name should behave like no store name.
+	archivePath, err := Create(dataDir, "", backupDir, "")
+	if err != nil {
+		t.Fatalf("Create with empty store name: %v", err)
+	}
+
+	base := filepath.Base(archivePath)
+	if !strings.HasPrefix(base, "gramaton-backup-2") {
+		t.Fatalf("empty store name should not appear in filename, got: %s", base)
+	}
+}
+
 // --- Helpers ---
 
 func writeFile(t *testing.T, path, content string) {

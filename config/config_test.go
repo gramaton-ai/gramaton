@@ -240,6 +240,60 @@ curation:
 	}
 }
 
+func TestLoadWithFallbackUsesStoreConfig(t *testing.T) {
+	storeDir := t.TempDir()
+	globalDir := t.TempDir()
+
+	storePath := filepath.Join(storeDir, "config.yaml")
+	globalPath := filepath.Join(globalDir, "config.yaml")
+
+	os.WriteFile(storePath, []byte("scoring:\n  weight_similarity: 0.77\n"), 0o600)
+	os.WriteFile(globalPath, []byte("scoring:\n  weight_similarity: 0.33\n"), 0o600)
+
+	cfg, err := LoadWithFallback(storePath, globalPath)
+	if err != nil {
+		t.Fatalf("LoadWithFallback: %v", err)
+	}
+	// Should use store config when it exists.
+	if cfg.Scoring.WeightSimilarity != 0.77 {
+		t.Fatalf("expected 0.77 (store), got %f", cfg.Scoring.WeightSimilarity)
+	}
+}
+
+func TestLoadWithFallbackFallsToGlobal(t *testing.T) {
+	globalDir := t.TempDir()
+	globalPath := filepath.Join(globalDir, "config.yaml")
+
+	os.WriteFile(globalPath, []byte("scoring:\n  weight_similarity: 0.33\n"), 0o600)
+
+	// Store config doesn't exist.
+	storePath := filepath.Join(t.TempDir(), "config.yaml")
+
+	cfg, err := LoadWithFallback(storePath, globalPath)
+	if err != nil {
+		t.Fatalf("LoadWithFallback: %v", err)
+	}
+	// Should fall back to global.
+	if cfg.Scoring.WeightSimilarity != 0.33 {
+		t.Fatalf("expected 0.33 (global), got %f", cfg.Scoring.WeightSimilarity)
+	}
+}
+
+func TestLoadWithFallbackBothMissing(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "config.yaml")
+	globalPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	cfg, err := LoadWithFallback(storePath, globalPath)
+	if err != nil {
+		t.Fatalf("LoadWithFallback: %v", err)
+	}
+	// Should return defaults.
+	defaults := Defaults()
+	if cfg.Scoring.WeightSimilarity != defaults.Scoring.WeightSimilarity {
+		t.Fatal("both missing should return defaults")
+	}
+}
+
 func TestDefaultDir(t *testing.T) {
 	dir := DefaultDir()
 	if dir == "" {
