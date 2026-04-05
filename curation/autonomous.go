@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/brandonlattin/gramaton/config"
@@ -24,7 +24,7 @@ type AutonomousResult struct {
 
 // RunAutonomous performs LLM-powered curation tasks.
 // Caller must NOT hold any lock.
-func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *log.Logger) *AutonomousResult {
+func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
 	result := &AutonomousResult{}
 	maxCalls := cfg.LLMCuration.MaxCallsPerRun
 	if maxCalls <= 0 {
@@ -35,15 +35,20 @@ func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cf
 	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, logger)
 
 	if logger != nil && (result.Classified+result.SummariesGenerated+result.ConceptsCreated) > 0 {
-		logger.Printf("autonomous curation: %d classified, %d summaries, %d concepts, %d errors, %d LLM calls",
-			result.Classified, result.SummariesGenerated, result.ConceptsCreated, result.Errors, result.LLMCalls)
+		logger.Info("autonomous curation complete",
+			"component", "curation",
+			"classified", result.Classified,
+			"summaries", result.SummariesGenerated,
+			"concepts", result.ConceptsCreated,
+			"errors", result.Errors,
+			"llm_calls", result.LLMCalls)
 	}
 
 	return result
 }
 
 // classifyPending classifies records with processing_status="captured".
-func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *log.Logger) {
+func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger) {
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -98,7 +103,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Printf("classify %s: LLM error: %s", rec.id[:12], err)
+				logger.Warn("classify LLM error", "component", "curation", "record", rec.id[:12], "err", err)
 			}
 			continue
 		}
@@ -107,7 +112,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Printf("classify %s: parse error: %s", rec.id[:12], err)
+				logger.Warn("classify parse error", "component", "curation", "record", rec.id[:12], "err", err)
 			}
 			continue
 		}
@@ -121,7 +126,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		for _, r := range ready {
 			if _, ok := e.Graph().GetNode(r.id); !ok {
 				if logger != nil {
-					logger.Printf("classify %s: node no longer exists", r.id[:12])
+					logger.Debug("classify node gone", "component", "curation", "record", r.id[:12])
 				}
 				continue
 			}
@@ -154,7 +159,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 }
 
 // generateSummaries adds summary_short to records that lack one.
-func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *log.Logger) {
+func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger) {
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -215,7 +220,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		if err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Printf("summarize %s: LLM error: %s", rec.id[:12], err)
+				logger.Warn("summarize LLM error", "component", "curation", "record", rec.id[:12], "err", err)
 			}
 			continue
 		}
@@ -239,7 +244,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		for _, s := range readySummaries {
 			if _, ok := e.Graph().GetNode(s.id); !ok {
 				if logger != nil {
-					logger.Printf("summarize %s: node no longer exists", s.id[:12])
+					logger.Debug("summarize node gone", "component", "curation", "record", s.id[:12])
 				}
 				continue
 			}

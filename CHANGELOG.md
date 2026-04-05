@@ -99,6 +99,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Search results now include created_at, access_count, importance,
   content_length, edge_count, and staleness fields.
 
+- **Structured logging** -- JSON-formatted logs via `log/slog` with
+  levels (debug/info/warn/error). File-based at `~/.gramaton/gramaton.log`
+  with automatic rotation (50MB per file), gzip compression of old
+  files, and configurable disk budget (default 512MB). Foreground
+  mode also writes to stderr. Debug level logs every HTTP request
+  with method, path, duration, and remote address. Curation logs
+  include component tags for filtering.
+- **Log rotation** -- built-in rotating writer with gzip compression.
+  No external dependency (lumberjack). Enforces total disk budget by
+  deleting oldest compressed files first.
+- **Update endpoint extended** -- PATCH /v1/records/{id} and
+  gramaton_update MCP tool now support valid_until, keywords, and
+  summary_short in addition to existing metadata fields.
+
 ### Changed
 
 - **CLI tenet 10 refactor** -- CLI package now imports only config,

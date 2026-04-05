@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/brandonlattin/gramaton/core"
+	"github.com/brandonlattin/gramaton/logging"
 	"github.com/brandonlattin/gramaton/server"
 	"github.com/spf13/cobra"
 )
@@ -68,7 +69,13 @@ func startForeground() error {
 		cfg.IdleTimeout = engineCfg.Server.IdleTimeout
 	}
 
-	srv := server.New(eng, cfg)
+	logger, logWriter, err := logging.New(engineCfg.Logging, dir, true)
+	if err != nil {
+		return fmt.Errorf("setup logging: %w", err)
+	}
+	defer logWriter.Close()
+
+	srv := server.New(eng, cfg, logger)
 	return srv.Run()
 }
 

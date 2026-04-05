@@ -26,6 +26,7 @@ type Config struct {
 	Storage    StorageConfig    `yaml:"storage"`
 	Limits     LimitsConfig     `yaml:"limits"`
 	Merge      MergeConfig      `yaml:"merge"`
+	Logging    LoggingConfig    `yaml:"logging"`
 	Curation   CurationConfig   `yaml:"curation"`
 	LLM        LLMConfig        `yaml:"llm"`
 	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
@@ -147,6 +148,12 @@ type MergeConfig struct {
 	ConflictStrategy string `yaml:"conflict_strategy"`
 }
 
+type LoggingConfig struct {
+	Level       string `yaml:"level"`        // debug, info, warn, error
+	MaxSizeMB   int    `yaml:"max_size_mb"`  // total disk budget for all log files
+	RotateSizeMB int   `yaml:"rotate_size_mb"` // rotate when file reaches this size
+}
+
 type CurationConfig struct {
 	Enabled             bool          `yaml:"enabled"`
 	Interval            time.Duration `yaml:"interval"`
@@ -263,6 +270,12 @@ func Defaults() Config {
 
 		Merge: MergeConfig{
 			ConflictStrategy: "timestamp_wins",
+		},
+
+		Logging: LoggingConfig{
+			Level:        "info",
+			MaxSizeMB:    512,
+			RotateSizeMB: 50,
 		},
 
 		Curation: CurationConfig{

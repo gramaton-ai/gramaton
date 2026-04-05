@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/brandonlattin/gramaton/core"
+	"github.com/brandonlattin/gramaton/logging"
 	"github.com/brandonlattin/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -35,10 +36,18 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load engine: %w", err)
 	}
 
+	// MCP uses stdio -- log to file only, never stderr.
+	engineCfg := eng.Config()
+	logger, logWriter, err := logging.New(engineCfg.Logging, dir, false)
+	if err != nil {
+		return fmt.Errorf("setup logging: %w", err)
+	}
+	defer logWriter.Close()
+
 	cfg := server.DefaultConfig()
 	cfg.ConfigDir = dir
 
-	srv := server.New(eng, cfg)
+	srv := server.New(eng, cfg, logger)
 	mcpServer := srv.MCPServer()
 
 	ctx := context.Background()

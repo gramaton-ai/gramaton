@@ -4,7 +4,7 @@
 package curation
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/brandonlattin/gramaton/config"
@@ -45,7 +45,7 @@ type StoreManifest struct {
 // RunDeterministic performs all deterministic curation tasks.
 // It acquires and releases locks as needed -- caller must NOT hold
 // any lock.
-func RunDeterministic(e *core.Engine, cfg config.Config, logger *log.Logger) *DeterministicResult {
+func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *DeterministicResult {
 	result := &DeterministicResult{}
 
 	// All read-gather happens under RLock. We collect IDs and data,
@@ -265,8 +265,12 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *log.Logger) *De
 	result.Manifest = manifest
 
 	if logger != nil && mutations > 0 {
-		logger.Printf("deterministic curation: %d lifecycle, %d orphans linked, %d duplicates superseded, %d concept candidates",
-			result.LifecycleTransitions, result.OrphansLinked, result.DuplicatesSuperseded, len(candidates))
+		logger.Info("deterministic curation complete",
+			"component", "curation",
+			"lifecycle_transitions", result.LifecycleTransitions,
+			"orphans_linked", result.OrphansLinked,
+			"duplicates_superseded", result.DuplicatesSuperseded,
+			"concept_candidates", len(candidates))
 	}
 
 	return result

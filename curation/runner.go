@@ -2,7 +2,7 @@ package curation
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -18,7 +18,7 @@ type Runner struct {
 	llm    llm.Provider // may be nil
 	cfg    config.Config
 	state  *State
-	logger *log.Logger
+	logger *slog.Logger
 	stopCh chan struct{}
 	done   chan struct{}
 }
@@ -46,7 +46,7 @@ type EnhancedStatus struct {
 }
 
 // NewRunner creates a curation runner.
-func NewRunner(engine *core.Engine, llmProv llm.Provider, cfg config.Config, logger *log.Logger) *Runner {
+func NewRunner(engine *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *Runner {
 	return &Runner{
 		engine: engine,
 		llm:    llmProv,

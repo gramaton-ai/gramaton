@@ -8,7 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -44,7 +44,7 @@ type Server struct {
 	engine     *core.Engine
 	cfg        Config
 	httpServer *http.Server
-	logger     *log.Logger
+	log        *slog.Logger
 	runner     *curation.Runner
 
 	mu          sync.Mutex
@@ -52,11 +52,14 @@ type Server struct {
 }
 
 // New creates a new server wrapping the given engine.
-func New(engine *core.Engine, cfg Config) *Server {
+func New(engine *core.Engine, cfg Config, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Server{
 		engine:      engine,
 		cfg:         cfg,
-		logger:      log.New(os.Stderr, "[gramaton] ", log.LstdFlags),
+		log:         logger,
 		lastRequest: time.Now(),
 	}
 
@@ -96,8 +99,11 @@ func (s *Server) Run() error {
 		return fmt.Errorf("listen on %s: %w", s.httpServer.Addr, err)
 	}
 
-	s.logger.Printf("server started on %s (store: %s)", ln.Addr(), s.engine.Config().DataDir)
-	s.logger.Printf("nodes: %d, edges: %d", s.engine.NodeCount(), s.engine.EdgeCount())
+	s.log.Info("server started",
+		"addr", ln.Addr().String(),
+		"store", s.engine.Config().DataDir,
+		"nodes", s.engine.NodeCount(),
+		"edges", s.engine.EdgeCount())
 
 	// Signal handling.
 	sigCh := make(chan os.Signal, 1)
@@ -110,14 +116,14 @@ func (s *Server) Run() error {
 	// Start curation runner.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
-		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.logger)
+		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		defer curationCancel()
 		go s.runner.Start(curationCtx)
 		if s.engine.LLM() != nil {
-			s.logger.Printf("curation: deterministic + autonomous (LLM: %s)", s.engine.LLM().ModelID())
+			s.log.Info("curation started", "mode", "deterministic+autonomous", "llm", s.engine.LLM().ModelID())
 		} else {
-			s.logger.Println("curation: deterministic only (no LLM configured)")
+			s.log.Info("curation started", "mode", "deterministic")
 		}
 	}
 
@@ -133,9 +139,9 @@ func (s *Server) Run() error {
 	// Wait for shutdown trigger.
 	select {
 	case sig := <-sigCh:
-		s.logger.Printf("received signal %s, shutting down", sig)
+		s.log.Info("received signal, shutting down", "signal", sig.String())
 	case reason := <-shutdownCh:
-		s.logger.Printf("shutting down: %s", reason)
+		s.log.Info("shutting down", "reason", reason)
 	case err := <-errCh:
 		if err != nil {
 			return fmt.Errorf("server error: %w", err)
@@ -146,10 +152,10 @@ func (s *Server) Run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		s.logger.Printf("shutdown error: %s", err)
+		s.log.Error("shutdown error", "err", err)
 	}
 
-	s.logger.Println("server stopped")
+	s.log.Info("server stopped")
 	return nil
 }
 
@@ -241,11 +247,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/curation/trigger", s.handleCurationTrigger)
 }
 
-// securityHeaders wraps a handler with security response headers.
-// Skips the /mcp path since MCP has its own content types.
+// Log returns the server's structured logger.
+func (s *Server) Log() *slog.Logger { return s.log }
+
+// securityHeaders wraps a handler with security response headers
+// and request logging. Skips the /mcp path since MCP has its own
+// content types.
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.recordActivity()
+		start := time.Now()
 
 		// Don't set JSON content-type for MCP -- it uses SSE and
 		// has its own content negotiation.
@@ -256,6 +267,14 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(w, r)
+
+		// Request logging at debug level.
+		s.log.Debug("request",
+			"component", "http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr)
 	})
 }
 
