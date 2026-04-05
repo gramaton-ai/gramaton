@@ -158,6 +158,88 @@ func TestSaveCreatesDirectories(t *testing.T) {
 	}
 }
 
+func TestNewConfigDefaults(t *testing.T) {
+	cfg := Defaults()
+
+	// Curation.
+	if cfg.Curation.Interval != 5*time.Minute {
+		t.Fatalf("expected 5m curation interval, got %v", cfg.Curation.Interval)
+	}
+	if !cfg.Curation.Enabled {
+		t.Fatal("curation should be enabled by default")
+	}
+	if cfg.Curation.OrphanSimilarityMin != 0.6 {
+		t.Fatalf("expected 0.6, got %f", cfg.Curation.OrphanSimilarityMin)
+	}
+
+	// LLM.
+	if cfg.LLM.Model != "claude-sonnet-4-6" {
+		t.Fatalf("expected claude-sonnet-4-6, got %q", cfg.LLM.Model)
+	}
+
+	// LLM Curation.
+	if cfg.LLMCuration.BatchSize != 10 {
+		t.Fatalf("expected batch 10, got %d", cfg.LLMCuration.BatchSize)
+	}
+	if cfg.LLMCuration.MaxCallsPerRun != 20 {
+		t.Fatalf("expected 20 max calls, got %d", cfg.LLMCuration.MaxCallsPerRun)
+	}
+
+	// Backup.
+	if cfg.Backup.Enabled {
+		t.Fatal("backup should be disabled by default")
+	}
+	if cfg.Backup.Retain != 2 {
+		t.Fatalf("expected retain 2, got %d", cfg.Backup.Retain)
+	}
+	if cfg.Backup.Schedule != 24*time.Hour {
+		t.Fatalf("expected 24h schedule, got %v", cfg.Backup.Schedule)
+	}
+
+	// Logging.
+	if cfg.Logging.Level != "info" {
+		t.Fatalf("expected info, got %q", cfg.Logging.Level)
+	}
+	if cfg.Logging.MaxSizeMB != 512 {
+		t.Fatalf("expected 512MB, got %d", cfg.Logging.MaxSizeMB)
+	}
+	if cfg.Logging.RotateSizeMB != 50 {
+		t.Fatalf("expected 50MB, got %d", cfg.Logging.RotateSizeMB)
+	}
+}
+
+func TestLoadBoundsEnforcement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	os.WriteFile(path, []byte(`
+llm_curation:
+  max_calls_per_run: 999999
+  batch_size: 999
+curation:
+  max_orphans_per_run: 999
+  max_dedup_per_run: 999
+`), 0o600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.LLMCuration.MaxCallsPerRun > 1000 {
+		t.Fatalf("MaxCallsPerRun should be capped at 1000, got %d", cfg.LLMCuration.MaxCallsPerRun)
+	}
+	if cfg.LLMCuration.BatchSize > 100 {
+		t.Fatalf("BatchSize should be capped at 100, got %d", cfg.LLMCuration.BatchSize)
+	}
+	if cfg.Curation.MaxOrphansPerRun > 200 {
+		t.Fatalf("MaxOrphansPerRun should be capped, got %d", cfg.Curation.MaxOrphansPerRun)
+	}
+	if cfg.Curation.MaxDedupPerRun > 200 {
+		t.Fatalf("MaxDedupPerRun should be capped, got %d", cfg.Curation.MaxDedupPerRun)
+	}
+}
+
 func TestDefaultDir(t *testing.T) {
 	dir := DefaultDir()
 	if dir == "" {
