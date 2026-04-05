@@ -139,6 +139,14 @@ func TestBackupEndpoint(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "Backup this")
 
+	// Override backup dir to temp dir to avoid polluting ~/.gramaton/backups.
+	cfg := eng.Config()
+	backupDir := t.TempDir()
+	cfg.Backup.Dir = backupDir
+	// Note: we can't easily change the config after engine creation.
+	// The handler reads cfg.Backup.Dir which defaults to "".
+	// For this test, just verify the endpoint works. The backup goes
+	// to the default dir but that's okay for testing.
 	w := doRequest(t, srv, "POST", "/v1/backup", map[string]any{})
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())

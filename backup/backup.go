@@ -27,7 +27,8 @@ func Create(dataDir, cfgPath, outputDir string) (string, error) {
 	}
 
 	// ISO8601 timestamp with dashes instead of colons for filesystem safety.
-	ts := time.Now().UTC().Format("2006-01-02T15-04-05Z")
+	// Include fractional seconds to avoid collisions on rapid backups.
+	ts := time.Now().UTC().Format("2006-01-02T15-04-05.000Z")
 	filename := fmt.Sprintf("gramaton-backup-%s.tar.gz", ts)
 	archivePath := filepath.Join(outputDir, filename)
 
