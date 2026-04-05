@@ -17,8 +17,10 @@ import (
 )
 
 // Create creates a compressed tar.gz backup of the data directory.
-// Returns the path to the created archive.
-func Create(dataDir, cfgPath, outputDir string) (string, error) {
+// If storeName is provided and non-empty, it is included in the
+// backup filename for identification. Returns the path to the
+// created archive.
+func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, error) {
 	if outputDir == "" {
 		outputDir = DefaultBackupDir()
 	}
@@ -29,7 +31,12 @@ func Create(dataDir, cfgPath, outputDir string) (string, error) {
 	// ISO8601 timestamp with dashes instead of colons for filesystem safety.
 	// Include fractional seconds to avoid collisions on rapid backups.
 	ts := time.Now().UTC().Format("2006-01-02T15-04-05.000Z")
-	filename := fmt.Sprintf("gramaton-backup-%s.tar.gz", ts)
+	var filename string
+	if len(storeName) > 0 && storeName[0] != "" {
+		filename = fmt.Sprintf("gramaton-backup-%s-%s.tar.gz", storeName[0], ts)
+	} else {
+		filename = fmt.Sprintf("gramaton-backup-%s.tar.gz", ts)
+	}
 	archivePath := filepath.Join(outputDir, filename)
 
 	f, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)

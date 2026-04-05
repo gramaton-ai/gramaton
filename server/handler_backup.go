@@ -50,7 +50,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	dataDir := cfg.DataDir
 
 	s.engine.RLock()
-	archivePath, err := backup.Create(dataDir, cfgPath, backupDir)
+	archivePath, err := backup.Create(dataDir, cfgPath, backupDir, s.cfg.StoreName)
 	s.engine.RUnlock()
 
 	if err != nil {

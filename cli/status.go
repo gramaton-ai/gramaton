@@ -39,9 +39,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	return printJSON(map[string]any{
+	status := map[string]any{
 		"initialized": true,
 		"config_path": cfgPath,
 		"server":      "not running",
-	})
+	}
+	if name := activeStoreName(); name != "" {
+		status["store"] = name
+	}
+	return printJSON(status)
 }

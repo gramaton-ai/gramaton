@@ -21,8 +21,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"healthy":  s.engine.Embedder() != nil,
 	}
 
+	storeName := s.cfg.StoreName
+	if storeName == "" {
+		storeName = "(default)"
+	}
+
 	status := map[string]any{
 		"store": map[string]any{
+			"name":    storeName,
 			"nodes":   s.engine.Graph().NodeCount(),
 			"edges":   s.engine.Graph().EdgeCount(),
 			"commits": len(storeChunks),

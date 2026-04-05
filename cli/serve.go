@@ -52,13 +52,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 func startForeground() error {
 	dir := configDir()
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngine(dir, baseConfigDir())
 	if err != nil {
 		return fmt.Errorf("load engine: %w", err)
 	}
 
 	cfg := server.DefaultConfig()
 	cfg.ConfigDir = dir
+	cfg.StoreName = activeStoreName()
 
 	// Override from engine config if server settings exist.
 	engineCfg := eng.Config()
@@ -105,6 +106,9 @@ func startBackground() error {
 	cmdArgs := []string{"serve", "--fg"}
 	if cfgDir != "" {
 		cmdArgs = append(cmdArgs, "--config-dir", cfgDir)
+	}
+	if name := activeStoreName(); name != "" {
+		cmdArgs = append(cmdArgs, "--store", name)
 	}
 
 	child := exec.Command(executable, cmdArgs...)

@@ -130,6 +130,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Update endpoint extended** -- PATCH /v1/records/{id} and
   gramaton_update MCP tool now support valid_until, keywords, and
   summary_short in addition to existing metadata fields.
+- **Named stores** -- multiple isolated knowledge graphs under
+  `~/.gramaton/stores/<name>/`. Each store has its own data directory,
+  server process, and optional config override (inherits global config
+  if absent). Select via `--store <name>` flag or `GRAMATON_STORE`
+  env var. Management commands: `gramaton store list|create|delete|rename`.
+  Renaming supports the unnamed default store via the "default" alias.
+  Backup filenames include the store name for identification. Store
+  names validated: 1-64 alphanumeric/hyphen/underscore characters.
 
 ### Changed
 
@@ -201,6 +209,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Backup restore rejects symlinks, hardlinks, and other non-regular file
   types in tar archives (previously silently ignored)
 - Config directory created with 0o700 permissions (was 0o755)
+- Store name validated against allowlist regex before path resolution
+  (prevents path traversal via --store flag or GRAMATON_STORE env var)
 
 ## [0.1.0] - 2026-04-04
 

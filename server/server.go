@@ -30,6 +30,7 @@ type Config struct {
 	Bind        string        `yaml:"bind"`
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	ConfigDir   string        // runtime, not from YAML
+	StoreName   string        // runtime, empty = default unnamed store
 }
 
 // DefaultConfig returns server config with sensible defaults.
@@ -288,7 +289,7 @@ func (s *Server) runAutoBackup() {
 	cfgPath := filepath.Join(s.cfg.ConfigDir, "config.yaml")
 
 	s.engine.RLock()
-	archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir)
+	archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir, s.cfg.StoreName)
 	s.engine.RUnlock()
 
 	if err != nil {

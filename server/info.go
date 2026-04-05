@@ -18,6 +18,7 @@ type ServerInfo struct {
 	Bind      string    `json:"bind"`
 	StartedAt time.Time `json:"started_at"`
 	StoreDir  string    `json:"store_dir"`
+	StoreName string    `json:"store_name,omitempty"`
 	Version   string    `json:"version"`
 }
 
@@ -34,6 +35,7 @@ func (s *Server) writeServerInfo() error {
 		Bind:      s.cfg.Bind,
 		StartedAt: time.Now().UTC(),
 		StoreDir:  s.engine.Config().DataDir,
+		StoreName: s.cfg.StoreName,
 		Version:   "0.2.0",
 	}
 

@@ -323,6 +323,15 @@ func DefaultConfigPath() string {
 	return filepath.Join(DefaultDir(), "config.yaml")
 }
 
+// LoadWithFallback loads config from storeCfgPath. If it doesn't exist,
+// falls back to globalCfgPath. If neither exists, returns defaults.
+func LoadWithFallback(storeCfgPath, globalCfgPath string) (Config, error) {
+	if _, err := os.Stat(storeCfgPath); err == nil {
+		return Load(storeCfgPath)
+	}
+	return Load(globalCfgPath)
+}
+
 // Load reads a config from the given path. If the file does not exist,
 // returns defaults. Fields not specified in the file retain their defaults.
 func Load(path string) (Config, error) {

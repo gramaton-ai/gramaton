@@ -31,7 +31,7 @@ func init() {
 func runMCP(cmd *cobra.Command, args []string) error {
 	dir := configDir()
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngine(dir, baseConfigDir())
 	if err != nil {
 		return fmt.Errorf("load engine: %w", err)
 	}
@@ -46,6 +46,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	cfg := server.DefaultConfig()
 	cfg.ConfigDir = dir
+	cfg.StoreName = activeStoreName()
 
 	srv := server.New(eng, cfg, logger)
 	mcpServer := srv.MCPServer()

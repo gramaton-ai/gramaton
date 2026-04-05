@@ -41,10 +41,21 @@ type Engine struct {
 // The embedder may be nil if no embedding provider is configured.
 // Ollama auto-start is NOT performed -- the caller is responsible
 // for ensuring the embedding provider is reachable.
-func LoadEngine(cfgDir string) (*Engine, error) {
+//
+// If globalCfgDir is provided and differs from cfgDir, the config is
+// loaded with fallback: store-specific config first, then global.
+// This supports named stores that inherit the global config.
+func LoadEngine(cfgDir string, globalCfgDir ...string) (*Engine, error) {
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 
-	cfg, err := config.Load(cfgPath)
+	var cfg config.Config
+	var err error
+	if len(globalCfgDir) > 0 && globalCfgDir[0] != "" && globalCfgDir[0] != cfgDir {
+		globalCfgPath := filepath.Join(globalCfgDir[0], "config.yaml")
+		cfg, err = config.LoadWithFallback(cfgPath, globalCfgPath)
+	} else {
+		cfg, err = config.Load(cfgPath)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
