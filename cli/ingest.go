@@ -1,14 +1,11 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -40,12 +37,6 @@ func init() {
 	rootCmd.AddCommand(ingestCmd)
 }
 
-type ingestOutput struct {
-	FilesProcessed int      `json:"files_processed"`
-	RecordsCreated int      `json:"records_created"`
-	Warnings       []string `json:"warnings,omitempty"`
-}
-
 // Binary file extensions to reject.
 var binaryExts = map[string]bool{
 	".docx": true, ".doc": true, ".pdf": true, ".xlsx": true, ".xls": true,
@@ -60,28 +51,28 @@ var binaryExts = map[string]bool{
 
 func runIngest(cmd *cobra.Command, args []string) error {
 	// Expand file list.
-	var files []string
+	var paths []string
 	for _, arg := range args {
 		expanded, err := expandPath(arg, ingestRecursive)
 		if err != nil {
 			return fmt.Errorf("expand path %q: %w", arg, err)
 		}
-		files = append(files, expanded...)
+		paths = append(paths, expanded...)
 	}
 
-	if len(files) == 0 {
+	if len(paths) == 0 {
 		return writeError("no_files", "No files found to ingest", false)
 	}
 
-	eng, err := loadEngine()
-	if err != nil {
-		return writeError("engine_error", err.Error(), false)
+	// Read files and build the upload payload.
+	type ingestFile struct {
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
 	}
-
+	var files []ingestFile
 	var warnings []string
-	var created int
 
-	for _, path := range files {
+	for _, path := range paths {
 		ext := strings.ToLower(filepath.Ext(path))
 		if binaryExts[ext] {
 			warnings = append(warnings, fmt.Sprintf("skipped binary file: %s", path))
@@ -100,56 +91,26 @@ func runIngest(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Check content length limit.
-		if len(content) > eng.cfg.Limits.MaxContentLength {
-			warnings = append(warnings, fmt.Sprintf("skipped %s: exceeds max content length (%d bytes)", path, eng.cfg.Limits.MaxContentLength))
-			continue
-		}
-
 		absPath, _ := filepath.Abs(path)
-
-		props := graph.Properties{
-			"content_full":      graph.StringProperty(content),
-			"content_short":     graph.StringProperty(naiveSummary(content, 200)),
-			"source_ref":        graph.StringProperty(absPath),
-			"processing_status": graph.StringProperty("captured"),
-			"created_at":        graph.TimestampProperty(time.Now().UTC()),
-			"access_count":      graph.Int64Property(0),
-		}
-
-		n := eng.graph.AddNode(props)
-		for k, v := range n.Properties {
-			eng.propIdx.Add(n.ID, k, v)
-		}
-
-		if err := eng.generateEmbeddings(context.Background(), n.ID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("embedding failed for %s: %s", path, err))
-		}
-
-		if numChunks, err := eng.chunkIfNeeded(context.Background(), n.ID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("chunking failed for %s: %s", path, err))
-		} else if numChunks > 0 {
-			warnings = append(warnings, fmt.Sprintf("%s chunked into %d segments", filepath.Base(path), numChunks))
-		}
-
-		created++
+		files = append(files, ingestFile{
+			Filename: absPath,
+			Content:  content,
+		})
 	}
 
-	if created > 0 {
-		msg := ingestMessage
-		if msg == "" {
-			msg = fmt.Sprintf("ingest %d files", created)
-		}
-		if _, err := eng.save(msg); err != nil {
-			return writeError("save_error", err.Error(), false)
-		}
+	if len(files) == 0 {
+		return writeError("no_files", "No valid files to ingest", false)
 	}
 
-	return printJSON(ingestOutput{
-		FilesProcessed: len(files),
-		RecordsCreated: created,
-		Warnings:       warnings,
+	// Send to server via ingest API.
+	resp, err := serverPost("/v1/ingest", map[string]any{
+		"files": files,
 	})
+	if err != nil {
+		return fmt.Errorf("ingest: %w", err)
+	}
+
+	return printEnvelope(resp)
 }
 
 // isSymlink returns true if the path is a symbolic link.
@@ -191,7 +152,7 @@ func expandPath(path string, recursive bool) ([]string, error) {
 			if !e.IsDir() {
 				fp := filepath.Join(path, e.Name())
 				if isSymlink(fp) {
-					continue // skip symlinks
+					continue
 				}
 				files = append(files, fp)
 			}
@@ -217,16 +178,4 @@ func expandPath(path string, recursive bool) ([]string, error) {
 		return nil
 	})
 	return files, err
-}
-
-func naiveSummary(content string, maxLen int) string {
-	// Take first line or first maxLen characters, whichever is shorter.
-	s := content
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 && idx < maxLen {
-		s = s[:idx]
-	}
-	if len(s) > maxLen {
-		s = s[:maxLen]
-	}
-	return strings.TrimSpace(s)
 }

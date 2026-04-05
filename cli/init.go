@@ -8,7 +8,7 @@ import (
 	"runtime"
 
 	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/embed/ollama"
+	"github.com/brandonlattin/gramaton/embed"
 	"github.com/spf13/cobra"
 )
 
@@ -71,48 +71,18 @@ func setupEmbedding(cfg *config.Config, cfgPath string) bool {
 	fmt.Println("Checking for embedding providers...")
 	fmt.Println()
 
-	endpoint := cfg.Embedding.Endpoint
-	model := cfg.Embedding.Model
+	result := embed.SetupEmbedding(context.Background(), cfg)
+	for _, msg := range result.Messages {
+		fmt.Printf("  %s\n", msg)
+	}
 
-	// Check if Ollama binary exists.
-	bin := ollama.FindBinary()
-	if bin == "" {
+	if !result.Configured {
 		printNoOllama()
 		return false
 	}
 
-	fmt.Printf("  [found] Ollama binary: %s\n", bin)
-
-	// Ensure Ollama is running.
-	if !ollama.IsReachable(endpoint) {
-		fmt.Println("  [....] Starting Ollama...")
-		if err := ollama.EnsureRunning(endpoint); err != nil {
-			fmt.Printf("  [fail] Could not start Ollama: %s\n", err)
-			printManualSetup(cfgPath)
-			return false
-		}
-	}
-	fmt.Printf("  [ok]    Ollama responding at %s\n", endpoint)
-
-	// Check for embedding model.
-	if !ollama.HasModel(endpoint, model) {
-		fmt.Printf("  [....] Pulling %s...\n", model)
-		err := ollama.PullModel(context.Background(), endpoint, model, func(msg string) {
-			fmt.Printf("  [info] %s\n", msg)
-		})
-		if err != nil {
-			fmt.Printf("  [fail] Could not pull model: %s\n", err)
-			printManualSetup(cfgPath)
-			return false
-		}
-	}
-	fmt.Printf("  [ok]    Model %s available\n", model)
-
-	// Configure.
-	cfg.Embedding.Provider = "ollama"
 	fmt.Println()
-	fmt.Println("  Embedding configured: Ollama with " + model)
-
+	fmt.Printf("  Embedding configured: %s with %s\n", result.Provider, result.Model)
 	return true
 }
 

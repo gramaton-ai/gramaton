@@ -3,9 +3,6 @@ package cli
 import (
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -58,26 +55,6 @@ func init() {
 	branchCmd.AddCommand(branchDiscardCmd)
 	branchCmd.AddCommand(branchCheckoutCmd)
 	rootCmd.AddCommand(branchCmd)
-}
-
-// Branch ref helpers used by engine.go for save operations.
-
-func refsDir(dataDir string) string {
-	return filepath.Join(dataDir, "refs")
-}
-
-func activeBranch(dataDir string) string {
-	data, err := os.ReadFile(filepath.Join(dataDir, "BRANCH"))
-	if err != nil {
-		return "main"
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func writeRef(dataDir, name, hash string) error {
-	dir := refsDir(dataDir)
-	os.MkdirAll(dir, 0o755)
-	return atomicWriteFile(filepath.Join(dir, name), []byte(hash), 0o600)
 }
 
 // --- Command implementations ---

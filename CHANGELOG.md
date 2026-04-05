@@ -101,6 +101,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CLI tenet 10 refactor** -- CLI package now imports only config,
+  core, embed, and server (was 9 internal packages). Deleted duplicate
+  engine.go (300 lines), dead curation.go, dead atomic.go. Ingest
+  command rewritten to use server API instead of direct graph
+  manipulation. Ollama setup extracted to embed/setup.go. Dead branch
+  helpers removed.
 - Search pre-embeds query text outside the lock to avoid blocking
   the server during Ollama model load
 - Capture pre-embeds content outside the lock for the same reason
