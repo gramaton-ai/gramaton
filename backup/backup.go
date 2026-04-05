@@ -134,7 +134,7 @@ func Restore(archivePath, dataDir string) error {
 			return fmt.Errorf("read archive: %w", err)
 		}
 		headers = append(headers, *header)
-		if filepath.Base(header.Name) == "HEAD" {
+		if header.Name == "data/HEAD" || header.Name == "HEAD" {
 			hasHead = true
 		}
 	}
@@ -218,6 +218,9 @@ func Restore(archivePath, dataDir string) error {
 				return err
 			}
 			out.Close()
+		default:
+			// Reject symlinks, hardlinks, and other special file types.
+			return fmt.Errorf("unsupported file type in archive: %s (type flag %d)", header.Name, header.Typeflag)
 		}
 	}
 

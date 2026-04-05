@@ -234,7 +234,10 @@ func buildExportQuery(req exportRequest) search.Query {
 		Match:         req.Match,
 	}
 	if q.Top <= 0 {
-		q.Top = 10000 // export default is higher than search
+		q.Top = maxExportTop
+	}
+	if q.Top > maxExportTop {
+		q.Top = maxExportTop
 	}
 	return q
 }

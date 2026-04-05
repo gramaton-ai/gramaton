@@ -18,6 +18,9 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	if limit > maxLogLimit {
+		limit = maxLogLimit
+	}
 
 	s.engine.RLock()
 	defer s.engine.RUnlock()
@@ -102,6 +105,11 @@ func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, lim
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	topic := r.URL.Query().Get("topic")
+
+	if len(topic) > maxTopicLength {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "topic too long", true)
+		return
+	}
 
 	s.engine.RLock()
 	defer s.engine.RUnlock()

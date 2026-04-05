@@ -73,9 +73,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate array bounds.
-	if len(req.Keywords) > maxKeywords {
-		s.writeError(w, http.StatusBadRequest, "invalid_field",
-			fmt.Sprintf("maximum %d keywords allowed", maxKeywords), true)
+	if err := validateKeywords(req.Keywords); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", err.Error(), true)
 		return
 	}
 	if len(req.Missing) > maxMissingFields {

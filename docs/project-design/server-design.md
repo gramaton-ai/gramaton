@@ -585,6 +585,37 @@ they could point the CLI to a malicious server. Mitigations:
 size limits to prevent resource exhaustion. Defaults: 50MB per file,
 200MB per bulk request.
 
+**Ingest filename sanitization.** Uploaded filenames are stored in
+`source_ref`. Filenames must be sanitized via `filepath.Base()` to
+strip directory components and prevent path traversal patterns from
+entering stored metadata.
+
+**Backup archive validation.** During restore, the archive validation
+must check for HEAD at the root level (`data/HEAD` or `HEAD`), not
+match any nested file named HEAD. Symlinks, hardlinks, and other
+non-regular file types must be explicitly rejected during extraction
+to prevent zip-slip variants.
+
+**Per-field input validation.** All write endpoints (capture, update,
+classify) must enforce the same bounds as search:
+- Content length: MaxContentLength (default 1MB) on capture
+- Keywords: max 100 count, max 256 chars per keyword
+- String fields: summary_short (500), summary_abstract (5000),
+  source_ref (2048), context fields (2048)
+- Reembed batch: max 500
+- Log limit: max 500
+- Export top: max 10000
+
+**Pre-embed-outside-lock discipline.** All handlers that call external
+embedding providers must follow the gather-embed-apply pattern:
+1. Read lock to gather data
+2. Release lock, perform embedding I/O
+3. Write lock to apply results
+
+This applies to: capture, search, ingest, and reembed handlers.
+Holding the write lock during external I/O blocks all readers and
+writers, causing effective DoS.
+
 **Response security headers.** Every HTTP response must include:
 - `Content-Type: application/json` (prevents content-type sniffing)
 - `X-Content-Type-Options: nosniff` (prevents browsers from guessing)

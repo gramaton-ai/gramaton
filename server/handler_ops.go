@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/graph"
@@ -112,48 +114,115 @@ func (s *Server) handleReembed(w http.ResponseWriter, r *http.Request) {
 	if req.Batch <= 0 {
 		req.Batch = 50
 	}
+	if req.Batch > maxReembedBatch {
+		req.Batch = maxReembedBatch
+	}
 
-	s.engine.Lock()
-	defer s.engine.Unlock()
-
+	// Phase 1: Identify stale IDs and gather content under read lock.
+	s.engine.RLock()
 	if s.engine.Embedder() == nil {
+		s.engine.RUnlock()
 		s.writeError(w, http.StatusServiceUnavailable, "no_embedder",
 			"no embedding provider configured", false)
 		return
 	}
 
 	currentModel := s.engine.Embedder().ModelID()
-	var staleIDs []string
+
+	type reembedTarget struct {
+		nodeID string
+		texts  []string
+		keys   []string
+	}
+	var targets []reembedTarget
 
 	for _, id := range s.engine.Graph().AllNodeIDs() {
+		if len(targets) >= req.Batch {
+			break
+		}
 		n, ok := s.engine.Graph().GetNode(id)
 		if !ok {
 			continue
 		}
 		model, ok := n.Properties.GetString("embedding_model")
-		if !ok {
-			// No embedding at all -- needs embedding.
-			if _, hasContent := n.Properties.GetString("content_full"); hasContent {
-				staleIDs = append(staleIDs, id)
-			}
+		if ok && model == currentModel {
 			continue
 		}
-		if model != currentModel {
-			staleIDs = append(staleIDs, id)
+		if _, hasContent := n.Properties.GetString("content_full"); !hasContent {
+			continue
+		}
+
+		embedSources := []struct {
+			sourceKey string
+			embedKey  string
+		}{
+			{"content_keywords", "embedding_keywords"},
+			{"content_short", "embedding_short"},
+			{"content_abstract", "embedding_abstract"},
+			{"content_full", "embedding_full"},
+		}
+
+		var texts []string
+		var keys []string
+		for _, src := range embedSources {
+			var text string
+			if sl, ok := n.Properties.GetStringList(src.sourceKey); ok {
+				text = strings.Join(sl, " ")
+			} else if s, ok := n.Properties.GetString(src.sourceKey); ok {
+				text = s
+			}
+			if text != "" {
+				texts = append(texts, text)
+				keys = append(keys, src.embedKey)
+			}
+		}
+		if len(texts) > 0 {
+			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys})
 		}
 	}
+	s.engine.RUnlock()
 
-	if len(staleIDs) > req.Batch {
-		staleIDs = staleIDs[:req.Batch]
+	// Phase 2: Embed all texts outside the lock (no I/O under lock).
+	type reembedResult struct {
+		target  reembedTarget
+		vectors [][]float32
+		err     error
 	}
+	var results []reembedResult
+	for _, t := range targets {
+		vecs, err := s.engine.Embedder().Embed(context.Background(), t.texts)
+		results = append(results, reembedResult{target: t, vectors: vecs, err: err})
+	}
+
+	// Phase 3: Apply embeddings under write lock (fast, no I/O).
+	s.engine.Lock()
+	defer s.engine.Unlock()
 
 	reembedded := 0
 	errors := 0
-	for _, id := range staleIDs {
-		if err := s.engine.GenerateEmbeddings(context.Background(), id); err != nil {
+	for _, res := range results {
+		if res.err != nil {
 			errors++
 			continue
 		}
+		if _, ok := s.engine.Graph().GetNode(res.target.nodeID); !ok {
+			errors++ // node deleted between phases
+			continue
+		}
+
+		for i, vec := range res.vectors {
+			prop := graph.VectorProperty(vec)
+			s.engine.Graph().SetNodeProperty(res.target.nodeID, res.target.keys[i], prop)
+			s.engine.PropIdx().Add(res.target.nodeID, res.target.keys[i], prop)
+		}
+		if len(res.vectors) > 0 {
+			s.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
+		}
+
+		modelProp := graph.StringProperty(currentModel)
+		s.engine.Graph().SetNodeProperty(res.target.nodeID, "embedding_model", modelProp)
+		s.engine.PropIdx().Add(res.target.nodeID, "embedding_model", modelProp)
+
 		reembedded++
 	}
 
@@ -163,7 +232,7 @@ func (s *Server) handleReembed(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"reembedded": reembedded,
-		"skipped":    len(staleIDs) - reembedded - errors,
+		"skipped":    len(targets) - reembedded - errors,
 		"errors":     errors,
 	})
 }
@@ -214,6 +283,10 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 	var warnings []string
 
 	for _, f := range files {
+		// Sanitize filename: strip directory components to prevent
+		// path traversal in stored source_ref.
+		f.Filename = filepath.Base(f.Filename)
+
 		if f.Content == "" {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: empty content", f.Filename))
 			continue

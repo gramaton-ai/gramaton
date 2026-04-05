@@ -180,6 +180,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when content exceeds chunk threshold and Ollama is slow to respond.
 - Ingest pre-embeds all files outside the lock in one batch instead
   of embedding each file under the write lock sequentially
+- Reembed pre-embeds outside the lock using the same gather-embed-apply
+  pattern as capture. Previously held the write lock during all external
+  embedding calls, blocking the entire server for the batch duration.
+- Content length validated against MaxContentLength on capture endpoint
+  (previously only enforced on import)
+- Keyword count (100) and per-keyword length (256 chars) validated on
+  capture, update, and classify endpoints (previously only on search)
+- String field length limits enforced: summary_short (500), summary_abstract
+  (5000), source_ref (2048), all context fields (2048)
+- Reembed batch size capped at 500 (previously unbounded)
+- Log endpoint limit capped at 500 (previously unbounded)
+- Diff topic parameter validated against maxTopicLength before use
+- Export top parameter capped at 10000 (previously unbounded when
+  explicitly set)
+- Ingest filenames sanitized via filepath.Base to strip directory
+  components from stored source_ref
+- Backup archive validation tightened: HEAD file check requires root-level
+  entry (data/HEAD or HEAD), not any nested file named HEAD
+- Backup restore rejects symlinks, hardlinks, and other non-regular file
+  types in tar archives (previously silently ignored)
+- Config directory created with 0o700 permissions (was 0o755)
 
 ## [0.1.0] - 2026-04-04
 

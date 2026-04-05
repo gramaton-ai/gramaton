@@ -26,7 +26,31 @@ const (
 	maxLogLimit       = 500
 	maxLogTraversal   = 5000
 	maxTopicLength    = 1024
+	maxExportTop      = 10000
 )
+
+// Per-field length limits.
+const (
+	maxKeywordLength      = 256
+	maxReembedBatch       = 500
+	maxSummaryShortLen    = 500
+	maxSummaryAbstractLen = 5000
+	maxSourceRefLen       = 2048
+	maxContextFieldLen    = 2048
+)
+
+// validateKeywords checks keyword count and per-keyword length.
+func validateKeywords(keywords []string) error {
+	if len(keywords) > maxKeywords {
+		return fmt.Errorf("maximum %d keywords allowed", maxKeywords)
+	}
+	for _, kw := range keywords {
+		if len(kw) > maxKeywordLength {
+			return fmt.Errorf("keyword exceeds maximum length of %d characters", maxKeywordLength)
+		}
+	}
+	return nil
+}
 
 // parseJSON reads and validates a JSON request body into target.
 func parseJSON(r *http.Request, target any, maxSize int64) error {

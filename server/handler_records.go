@@ -75,6 +75,11 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Content) > s.engine.Config().Limits.MaxContentLength {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "content exceeds maximum length", true)
+		return
+	}
+
 	if err := validateCaptureRequest(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid_field", err.Error(), true)
 		return
@@ -582,6 +587,33 @@ func validateCaptureRequest(req *captureRequest) error {
 	if err := validateEnum("epistemic_status", req.EpistemicStatus, validEpistemicStatuses); err != nil {
 		return err
 	}
+	if err := validateKeywords(req.Keywords); err != nil {
+		return err
+	}
+	if len(req.SummaryShort) > maxSummaryShortLen {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	}
+	if len(req.SummaryAbstract) > maxSummaryAbstractLen {
+		return fmt.Errorf("summary_abstract exceeds maximum length of %d", maxSummaryAbstractLen)
+	}
+	if len(req.SourceRef) > maxSourceRefLen {
+		return fmt.Errorf("source_ref exceeds maximum length of %d", maxSourceRefLen)
+	}
+	if len(req.ContextAbout) > maxContextFieldLen {
+		return fmt.Errorf("context_about exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextWho) > maxContextFieldLen {
+		return fmt.Errorf("context_who exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextPrompted) > maxContextFieldLen {
+		return fmt.Errorf("context_prompted exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextFindable) > maxContextFieldLen {
+		return fmt.Errorf("context_findable_by exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextRelated) > maxContextFieldLen {
+		return fmt.Errorf("context_related exceeds maximum length of %d", maxContextFieldLen)
+	}
 	return nil
 }
 
@@ -601,6 +633,12 @@ func validateUpdateRequest(req *updateRequest) error {
 	if err := validateEnum("epistemic_status", req.EpistemicStatus, validEpistemicStatuses); err != nil {
 		return err
 	}
+	if err := validateKeywords(req.Keywords); err != nil {
+		return err
+	}
+	if len(req.SummaryShort) > maxSummaryShortLen {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	}
 	return nil
 }
 
@@ -619,6 +657,15 @@ func validateClassifyRequest(req *classifyRequest) error {
 	}
 	if err := validateEnum("epistemic_status", req.EpistemicStatus, validEpistemicStatuses); err != nil {
 		return err
+	}
+	if err := validateKeywords(req.Keywords); err != nil {
+		return err
+	}
+	if len(req.SummaryShort) > maxSummaryShortLen {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	}
+	if len(req.SummaryAbstract) > maxSummaryAbstractLen {
+		return fmt.Errorf("summary_abstract exceeds maximum length of %d", maxSummaryAbstractLen)
 	}
 	return nil
 }
