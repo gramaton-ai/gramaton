@@ -13,7 +13,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that auto-starts on first CLI invocation and shuts down after idle
   timeout (default 30 min). Graph stays in memory for fast access.
   `gramaton serve` for explicit control (`--fg`, `--stop`).
-- **REST API** -- 22 HTTP endpoints for all operations (records CRUD,
+- **Auto-supersession** -- when a new record is captured with high
+  embedding similarity (>= dedup threshold) to an existing record,
+  the server automatically sets `valid_until` on the old record and
+  creates a `supersedes` edge. No agent involvement required.
+- **MCP branch tool** -- all 5 branch operations (list, create,
+  checkout, merge, discard) now work via MCP. Previously a stub.
+- **MCP diff and log tools** -- both now fully implemented. Previously
+  stubs that returned error messages.
+- CLI commands `stats` and `duplicates` for the new endpoints.
+- **REST API** -- 24 HTTP endpoints for all operations (records CRUD,
   search, explore, branches, diff, log, revert, reembed, ingest,
   status). Standard response envelope with curation status and meta.
 - **MCP integration** -- 13 MCP tools via Streamable HTTP at `/mcp`.
@@ -35,6 +44,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Auto-cleanup of temp files after successful read, stale file sweep
   (1 hour) on each write command invocation
 - v0.2 server design document with all architecture decisions resolved
+
+- **Advanced search features** -- 15 new query capabilities:
+  - Filter-only queries (search without text, returns all matching records)
+  - Sort by created_at, last_accessed, access_count, confidence,
+    importance, content_length, edge_count, staleness (asc/desc)
+  - Importance range filter (importance_min/max)
+  - Negation on enum filters (prefix with `!`, e.g. `!ephemeral`)
+  - Missing field detection (`missing: ["temporality"]` finds unclassified)
+  - Keyword exact match (tag-based lookup, all specified must be present)
+  - Access-based queries (last_accessed_before/after, access_count_min/max)
+  - Validity window queries (valid_before/after, expires_before/after)
+  - Full-text substring search (`match` param, case-insensitive, distinct
+    from vector similarity)
+  - Record-to-record similarity (`similar_to` with record ID, uses stored
+    embedding)
+  - Random/sample mode (partial Fisher-Yates, optionally filtered)
+  - Faceted counts (per-field breakdowns alongside results)
+  - Orphan/connectedness queries (min_edges/max_edges filter, edge_count sort)
+  - Staleness detection (computed score from temporality + age + access)
+- **Aggregates endpoint** -- `GET /v1/stats` and `gramaton_stats` MCP tool.
+  Returns counts by temporality, knowledge_type, epistemic_status, and
+  confidence distribution across the store.
+- **Near-duplicate detection** -- `POST /v1/duplicates` and
+  `gramaton_duplicates` MCP tool. Pairwise embedding similarity scan,
+  configurable threshold and max pairs.
+- **Keyword index** -- PropertyIndex now indexes individual tokens from
+  StringList properties for exact tag lookup via `LookupKeyword`.
+- **NodesWithKey** -- PropertyIndex method returns all node IDs that have
+  a given property, enabling missing-field queries.
+- Search results now include created_at, access_count, importance,
+  content_length, edge_count, and staleness fields.
 
 ### Changed
 
@@ -60,6 +100,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no-store)
 - MCP endpoint excluded from REST security headers (own content
   negotiation)
+- Search input bounds: top capped at 1000, keywords at 100, missing
+  fields at 50, match string at 1024 bytes, explore depth at 10,
+  edge types at 50, duplicate pairs at 1000
+- Float64 range validation on all confidence/importance parameters (0-1)
+- Integer sign validation on access_count and edge count parameters
+- Duplicate threshold validated 0-1 with safe default
+- Error messages no longer echo raw user input (date, sort, order)
+- Random mode uses partial Fisher-Yates (O(k) not O(n)) to prevent
+  CPU exhaustion on large candidate sets
+- Vector search bounded to 3x top results instead of full candidate set
+- Log limit capped at 500, commit traversal depth at 5000
+- Diff topic parameter length capped at 1024
+- Branch name validation no longer echoes invalid characters
+- Chunking no longer embeds under the write lock. Pre-embed and
+  pre-chunk outside the lock, apply under lock (same fix applied
+  to capture, MCP capture, and ingest). Eliminates server deadlock
+  when content exceeds chunk threshold and Ollama is slow to respond.
+- Ingest pre-embeds all files outside the lock in one batch instead
+  of embedding each file under the write lock sequentially
 
 ## [0.1.0] - 2026-04-04
 

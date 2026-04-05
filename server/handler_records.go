@@ -77,9 +77,10 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-embed content outside the lock. Embedding can take seconds
-	// (Ollama model load) and would block the entire server under lock.
+	// Pre-embed content and pre-chunk outside the lock. Embedding can
+	// take seconds (Ollama model load) and would block the entire server.
 	preEmbedded := s.preEmbedContent(&req)
+	preChunked := s.engine.PreChunk(context.Background(), req.Content)
 
 	s.engine.Lock()
 	defer s.engine.Unlock()
@@ -110,22 +111,45 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
 	}
 
+	var superseded []map[string]any
 	if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
-		msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
 		cfg := s.engine.Config()
 		if cfg.Dedup.Action == "reject" {
+			msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
 			s.engine.PropIdx().RemoveNode(n.ID, n.Properties)
 			s.engine.VecIdx().Remove(n.ID)
 			s.engine.Graph().DeleteNode(n.ID)
 			s.writeError(w, http.StatusConflict, "duplicate", msg, false)
 			return
 		}
-		warnings = append(warnings, msg)
+
+		// Auto-supersede: set valid_until on the old record and
+		// create a supersedes edge from new to old. The old record
+		// is preserved for history but deprioritized in search.
+		now := time.Now().UTC()
+		oldNode, _ := s.engine.Graph().GetNode(dupID)
+		if oldNode != nil {
+			// Only supersede if the old record isn't already historical.
+			_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
+			if !alreadyHistorical {
+				s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+				if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+					summary := ""
+					if v, ok := oldNode.Properties.GetString("content_short"); ok {
+						summary = v
+					}
+					superseded = append(superseded, map[string]any{
+						"id":           dupID,
+						"summary":      summary,
+						"similarity":   sim,
+						"edge_id":      e.ID,
+					})
+				}
+			}
+		}
 	}
 
-	if numChunks, err := s.engine.ChunkIfNeeded(context.Background(), n.ID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("chunking failed: %s", err))
-	} else if numChunks > 0 {
+	if numChunks := s.engine.ApplyChunks(n.ID, preChunked); numChunks > 0 {
 		warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
 	}
 
@@ -134,10 +158,14 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSONLocked(w, http.StatusCreated, map[string]any{
+	resp := map[string]any{
 		"id":       n.ID,
 		"warnings": warnings,
-	})
+	}
+	if len(superseded) > 0 {
+		resp["superseded"] = superseded
+	}
+	s.writeJSONLocked(w, http.StatusCreated, resp)
 }
 
 // preEmbeddedVectors holds vectors computed outside the lock.

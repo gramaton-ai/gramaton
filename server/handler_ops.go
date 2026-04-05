@@ -204,10 +204,13 @@ func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest)
 }
 
 func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
-	s.engine.Lock()
-	defer s.engine.Unlock()
-
-	ingested := 0
+	// Pre-embed and pre-chunk all files outside the lock.
+	type precomputed struct {
+		file     ingestFile
+		embedded *preEmbeddedVectors
+		chunked  *core.PreChunkResult
+	}
+	var prepared []precomputed
 	var warnings []string
 
 	for _, f := range files {
@@ -215,10 +218,22 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: empty content", f.Filename))
 			continue
 		}
+		capReq := &captureRequest{Content: f.Content}
+		prepared = append(prepared, precomputed{
+			file:     f,
+			embedded: s.preEmbedContent(capReq),
+			chunked:  s.engine.PreChunk(context.Background(), f.Content),
+		})
+	}
 
+	s.engine.Lock()
+	defer s.engine.Unlock()
+
+	ingested := 0
+	for _, p := range prepared {
 		props := graph.Properties{
-			"content_full":      graph.StringProperty(f.Content),
-			"source_ref":        graph.StringProperty(f.Filename),
+			"content_full":      graph.StringProperty(p.file.Content),
+			"source_ref":        graph.StringProperty(p.file.Filename),
 			"processing_status": graph.StringProperty("captured"),
 			"access_count":      graph.Int64Property(0),
 		}
@@ -228,14 +243,12 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 			s.engine.PropIdx().Add(n.ID, k, v)
 		}
 
-		if err := s.engine.GenerateEmbeddings(context.Background(), n.ID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", f.Filename, err))
+		if err := s.applyPreEmbedded(n.ID, p.embedded); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
 		}
 
-		if numChunks, err := s.engine.ChunkIfNeeded(context.Background(), n.ID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: chunking failed: %s", f.Filename, err))
-		} else if numChunks > 0 {
-			warnings = append(warnings, fmt.Sprintf("%s: chunked into %d segments", f.Filename, numChunks))
+		if numChunks := s.engine.ApplyChunks(n.ID, p.chunked); numChunks > 0 {
+			warnings = append(warnings, fmt.Sprintf("%s: chunked into %d segments", p.file.Filename, numChunks))
 		}
 
 		ingested++

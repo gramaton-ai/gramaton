@@ -15,11 +15,30 @@ type searchRequest struct {
 	Top               int      `json:"top"`
 	ConfidenceMin     *float64 `json:"confidence_min,omitempty"`
 	ConfidenceMax     *float64 `json:"confidence_max,omitempty"`
+	ImportanceMin     *float64 `json:"importance_min,omitempty"`
+	ImportanceMax     *float64 `json:"importance_max,omitempty"`
 	Temporality       string   `json:"temporality,omitempty"`
 	KnowledgeType     string   `json:"knowledge_type,omitempty"`
 	EpistemicStatus   string   `json:"epistemic_status,omitempty"`
 	IncludeHistorical bool     `json:"include_historical,omitempty"`
 	Since             string   `json:"since,omitempty"`
+	Missing           []string `json:"missing,omitempty"`
+	Keywords            []string `json:"keywords,omitempty"`
+	AccessCountMin      *int64   `json:"access_count_min,omitempty"`
+	AccessCountMax      *int64   `json:"access_count_max,omitempty"`
+	LastAccessedAfter   string   `json:"last_accessed_after,omitempty"`
+	LastAccessedBefore  string   `json:"last_accessed_before,omitempty"`
+	ValidAfter          string   `json:"valid_after,omitempty"`
+	ValidBefore         string   `json:"valid_before,omitempty"`
+	ExpiresAfter        string   `json:"expires_after,omitempty"`
+	ExpiresBefore       string   `json:"expires_before,omitempty"`
+	Match               string   `json:"match,omitempty"`
+	SimilarTo           string   `json:"similar_to,omitempty"`
+	MinEdges            *int     `json:"min_edges,omitempty"`
+	MaxEdges            *int     `json:"max_edges,omitempty"`
+	Random              bool     `json:"random,omitempty"`
+	Sort                string   `json:"sort,omitempty"`
+	Order             string   `json:"order,omitempty"`
 }
 
 type exploreRequest struct {
@@ -39,6 +58,72 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.Top <= 0 {
 		req.Top = 10
 	}
+	if req.Top > maxSearchTop {
+		req.Top = maxSearchTop
+	}
+
+	// Validate sort and order.
+	if req.Sort != "" && !search.ValidSort(req.Sort) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "invalid sort field", true)
+		return
+	}
+	if req.Order != "" && req.Order != "asc" && req.Order != "desc" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "order must be asc or desc", true)
+		return
+	}
+
+	// Validate array bounds.
+	if len(req.Keywords) > maxKeywords {
+		s.writeError(w, http.StatusBadRequest, "invalid_field",
+			fmt.Sprintf("maximum %d keywords allowed", maxKeywords), true)
+		return
+	}
+	if len(req.Missing) > maxMissingFields {
+		s.writeError(w, http.StatusBadRequest, "invalid_field",
+			fmt.Sprintf("maximum %d missing fields allowed", maxMissingFields), true)
+		return
+	}
+
+	// Validate match string length.
+	if len(req.Match) > maxMatchLength {
+		s.writeError(w, http.StatusBadRequest, "invalid_field",
+			fmt.Sprintf("match string exceeds maximum length of %d", maxMatchLength), true)
+		return
+	}
+
+	// Validate float64 ranges.
+	for _, v := range []struct {
+		name string
+		val  *float64
+	}{
+		{"confidence_min", req.ConfidenceMin},
+		{"confidence_max", req.ConfidenceMax},
+		{"importance_min", req.ImportanceMin},
+		{"importance_max", req.ImportanceMax},
+	} {
+		if err := validateFloat64Range(v.name, v.val, 0, 1); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field", err.Error(), true)
+			return
+		}
+	}
+
+	// Validate integer ranges.
+	if req.AccessCountMin != nil && *req.AccessCountMin < 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "access_count_min must be >= 0", true)
+		return
+	}
+	if req.AccessCountMax != nil && *req.AccessCountMax < 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "access_count_max must be >= 0", true)
+		return
+	}
+	if req.MinEdges != nil && *req.MinEdges < 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "min_edges must be >= 0", true)
+		return
+	}
+	if req.MaxEdges != nil && *req.MaxEdges < 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "max_edges must be >= 0", true)
+		return
+	}
 
 	q := search.Query{
 		Text:              req.Text,
@@ -49,6 +134,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		IncludeHistorical: req.IncludeHistorical,
 		ConfidenceMin:     req.ConfidenceMin,
 		ConfidenceMax:     req.ConfidenceMax,
+		ImportanceMin:     req.ImportanceMin,
+		ImportanceMax:     req.ImportanceMax,
+		Missing:           req.Missing,
+		Keywords:          req.Keywords,
+		AccessCountMin:    req.AccessCountMin,
+		AccessCountMax:    req.AccessCountMax,
+		Match:             req.Match,
+		SimilarTo:         req.SimilarTo,
+		MinEdges:          req.MinEdges,
+		MaxEdges:          req.MaxEdges,
+		Random:            req.Random,
+		Sort:              req.Sort,
+		Order:             req.Order,
 	}
 
 	if req.Since != "" {
@@ -59,6 +157,44 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		q.Since = &t
+	}
+	if req.LastAccessedAfter != "" {
+		t, err := parseDateArg(req.LastAccessedAfter)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field",
+				fmt.Sprintf("invalid last_accessed_after date: %s", err), true)
+			return
+		}
+		q.LastAccessedAfter = &t
+	}
+	if req.LastAccessedBefore != "" {
+		t, err := parseDateArg(req.LastAccessedBefore)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field",
+				fmt.Sprintf("invalid last_accessed_before date: %s", err), true)
+			return
+		}
+		q.LastAccessedBefore = &t
+	}
+	for _, pair := range []struct {
+		raw  string
+		name string
+		dest **time.Time
+	}{
+		{req.ValidAfter, "valid_after", &q.ValidAfter},
+		{req.ValidBefore, "valid_before", &q.ValidBefore},
+		{req.ExpiresAfter, "expires_after", &q.ExpiresAfter},
+		{req.ExpiresBefore, "expires_before", &q.ExpiresBefore},
+	} {
+		if pair.raw != "" {
+			t, err := parseDateArg(pair.raw)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_field",
+					fmt.Sprintf("invalid %s date: %s", pair.name, err), true)
+				return
+			}
+			*pair.dest = &t
+		}
 	}
 
 	// Pre-embed the query text outside the lock. Embedding can take
@@ -102,7 +238,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = []search.Result{}
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{"results": results})
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
+		"results": results,
+		"facets":  search.ComputeFacets(results),
+	})
 }
 
 func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +257,14 @@ func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Depth <= 0 {
 		req.Depth = 2
+	}
+	if req.Depth > maxExploreDepth {
+		req.Depth = maxExploreDepth
+	}
+	if len(req.EdgeTypes) > maxEdgeTypes {
+		s.writeError(w, http.StatusBadRequest, "invalid_field",
+			fmt.Sprintf("maximum %d edge types allowed", maxEdgeTypes), true)
+		return
 	}
 
 	s.engine.RLock()
@@ -146,5 +293,5 @@ func parseDateArg(s string) (time.Time, error) {
 	if t, err := time.Parse("2006-01-02", s); err == nil {
 		return t, nil
 	}
-	return time.Time{}, fmt.Errorf("expected YYYY-MM-DD or RFC3339, got %q", s)
+	return time.Time{}, fmt.Errorf("expected YYYY-MM-DD or RFC3339")
 }

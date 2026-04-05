@@ -14,6 +14,20 @@ const maxJSONBodySize = 1 << 20 // 1MB
 // maxIngestBodySize is the max request body size for ingest uploads.
 const maxIngestBodySize = 200 << 20 // 200MB
 
+// Search input limits.
+const (
+	maxSearchTop      = 1000
+	maxKeywords       = 100
+	maxMissingFields  = 50
+	maxMatchLength    = 1024
+	maxExploreDepth   = 10
+	maxEdgeTypes      = 50
+	maxDuplicatePairs = 1000
+	maxLogLimit       = 500
+	maxLogTraversal   = 5000
+	maxTopicLength    = 1024
+)
+
 // parseJSON reads and validates a JSON request body into target.
 func parseJSON(r *http.Request, target any, maxSize int64) error {
 	body := http.MaxBytesReader(nil, r.Body, maxSize)

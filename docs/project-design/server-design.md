@@ -223,12 +223,14 @@ Errors use standard HTTP status codes:
 | POST   | /v1/revert    | Restore a prior commit  | `revert <hash>` |
 | POST   | /v1/reembed   | Regenerate embeddings   | `reembed`       |
 | POST   | /v1/ingest    | Ingest files            | `ingest <path>` |
+| POST   | /v1/duplicates | Find near-duplicates  | `duplicates`    |
 
 #### System
 
-| Method | Path        | Description    | Maps to CLI  |
-|--------|-------------|----------------|--------------|
-| GET    | /v1/status  | Health + stats | `status`     |
+| Method | Path        | Description         | Maps to CLI    |
+|--------|-------------|---------------------|----------------|
+| GET    | /v1/status  | Health + stats      | `status`       |
+| GET    | /v1/stats   | Aggregate stats     | `stats`        |
 
 #### MCP
 
@@ -667,14 +669,14 @@ REST API agents (OpenClaw, custom):
   Agent <--HTTP--> gramaton server :42982/v1/...
 ```
 
-### MCP Tools (13)
+### MCP Tools (15)
 
 All tools map to REST API endpoints. The MCP layer is thin protocol
 translation, not business logic.
 
 | Tool | Maps to | Description |
 |------|---------|-------------|
-| `gramaton_search` | `POST /v1/search` | Search the knowledge store |
+| `gramaton_search` | `POST /v1/search` | Search the knowledge store (15+ filter/sort options) |
 | `gramaton_capture` | `POST /v1/records` | Store a record |
 | `gramaton_inspect` | `GET /v1/records/{id}` | Get full record details |
 | `gramaton_update` | `PATCH /v1/records/{id}` | Update record properties |
@@ -683,6 +685,8 @@ translation, not business logic.
 | `gramaton_explore` | `POST /v1/explore` | Graph traversal |
 | `gramaton_pending` | `GET /v1/pending` | List unclassified records |
 | `gramaton_status` | `GET /v1/status` | Health and stats |
+| `gramaton_stats` | `GET /v1/stats` | Aggregate statistics (counts by type, confidence dist) |
+| `gramaton_duplicates` | `POST /v1/duplicates` | Find near-duplicate records |
 | `gramaton_branch` | `/v1/branches/*` | Create, checkout, merge, discard branches |
 | `gramaton_diff` | `GET /v1/diff` | What changed since a date/topic |
 | `gramaton_log` | `GET /v1/log` | Commit history, per-record history |

@@ -32,6 +32,22 @@ or the `gramaton` CLI as fallback.
 3. Call `gramaton_inspect` for records that look relevant
 4. Use the retrieved knowledge to inform your response
 
+Text is optional -- omit it for filter-only queries like "all
+procedural records" or "unclassified records".
+
+**Useful search patterns:**
+- Newest records: `gramaton_search(sort="created_at", top=10)`
+- Unclassified: `gramaton_search(missing=["temporality"])`
+- By tag: `gramaton_search(keywords=["auth", "migration"])`
+- Stale records: `gramaton_search(sort="staleness", order="desc")`
+- Orphans: `gramaton_search(max_edges=0)`
+- Literal text: `gramaton_search(match="RWMutex")`
+- Similar to a record: `gramaton_search(similar_to="<id>")`
+- Random review: `gramaton_search(random=true, top=3)`
+- Exclude refuted: `gramaton_search(epistemic_status="!refuted")`
+- Store overview: `gramaton_stats()`
+- Find duplicates: `gramaton_duplicates(threshold=0.92)`
+
 Do NOT tell the user you're searching unless the results meaningfully
 change your answer. Searching should be as invisible as reading a file.
 

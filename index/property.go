@@ -22,6 +22,10 @@ type PropertyIndex struct {
 	// Substring search: key → node ID → string value (string properties only).
 	strings map[string]map[string]string
 
+	// Keyword index: key → keyword string → set of node IDs.
+	// Built from StringList properties, indexing each element individually.
+	keywords map[string]map[string]map[string]struct{}
+
 	// Reverse index: node ID → set of keys indexed for that node.
 	// Used by RemoveNode to clean up all entries for a deleted node.
 	nodeKeys map[string]map[string]struct{}
@@ -40,6 +44,7 @@ func NewPropertyIndex() *PropertyIndex {
 		exact:    make(map[string]map[string]map[string]struct{}),
 		sorted:   make(map[string][]rangeEntry),
 		strings:  make(map[string]map[string]string),
+		keywords: make(map[string]map[string]map[string]struct{}),
 		nodeKeys: make(map[string]map[string]struct{}),
 	}
 }
@@ -93,6 +98,23 @@ func (idx *PropertyIndex) Add(nodeID, key string, val graph.Property) {
 		}
 		byNode[nodeID] = val.String()
 	}
+
+	// Keyword index (string list type only).
+	if val.Type == graph.TypeStringList {
+		byKW, ok := idx.keywords[key]
+		if !ok {
+			byKW = make(map[string]map[string]struct{})
+			idx.keywords[key] = byKW
+		}
+		for _, kw := range val.StringList() {
+			nodes, ok := byKW[kw]
+			if !ok {
+				nodes = make(map[string]struct{})
+				byKW[kw] = nodes
+			}
+			nodes[nodeID] = struct{}{}
+		}
+	}
 }
 
 // Remove removes a specific property value for a node from the index.
@@ -132,6 +154,23 @@ func (idx *PropertyIndex) Remove(nodeID, key string, val graph.Property) {
 			delete(byNode, nodeID)
 			if len(byNode) == 0 {
 				delete(idx.strings, key)
+			}
+		}
+	}
+
+	// Keyword index.
+	if val.Type == graph.TypeStringList {
+		if byKW, ok := idx.keywords[key]; ok {
+			for _, kw := range val.StringList() {
+				if nodes, ok := byKW[kw]; ok {
+					delete(nodes, nodeID)
+					if len(nodes) == 0 {
+						delete(byKW, kw)
+					}
+				}
+			}
+			if len(byKW) == 0 {
+				delete(idx.keywords, key)
 			}
 		}
 	}
@@ -229,6 +268,39 @@ func (idx *PropertyIndex) ContainsFold(key, substring string) []string {
 	for nodeID, val := range byNode {
 		if strings.Contains(strings.ToLower(val), lowerSub) {
 			result = append(result, nodeID)
+		}
+	}
+	return result
+}
+
+// LookupKeyword returns all node IDs where the StringList property for
+// the given key contains the specified keyword (exact match).
+func (idx *PropertyIndex) LookupKeyword(key, keyword string) []string {
+	byKW, ok := idx.keywords[key]
+	if !ok {
+		return nil
+	}
+	nodes, ok := byKW[keyword]
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(nodes))
+	for id := range nodes {
+		result = append(result, id)
+	}
+	return result
+}
+
+// NodesWithKey returns all node IDs that have the given key indexed.
+func (idx *PropertyIndex) NodesWithKey(key string) map[string]struct{} {
+	byVal, ok := idx.exact[key]
+	if !ok {
+		return nil
+	}
+	result := make(map[string]struct{})
+	for _, nodes := range byVal {
+		for id := range nodes {
+			result[id] = struct{}{}
 		}
 	}
 	return result

@@ -29,7 +29,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	// Walk commit chain from HEAD.
 	var commits []map[string]any
-	hash := s.engine.HeadHash()
+	hash := s.engine.HeadHashLocked()
 	store := s.engine.Store()
 
 	for hash != "" && len(commits) < limit {
@@ -54,7 +54,7 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, limit int) {
 	store := s.engine.Store()
-	hash := s.engine.HeadHash()
+	hash := s.engine.HeadHashLocked()
 
 	var changes []map[string]any
 	var prevHash string
@@ -107,7 +107,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	defer s.engine.RUnlock()
 
 	store := s.engine.Store()
-	headHash := s.engine.HeadHash()
+	headHash := s.engine.HeadHashLocked()
 
 	// Find the "since" commit.
 	var sinceHash string

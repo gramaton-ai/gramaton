@@ -98,7 +98,7 @@ func ValidBranchName(name string) error {
 	}
 	for _, c := range name {
 		if c == '/' || c == '\\' || c == '.' || c == '\x00' {
-			return fmt.Errorf("branch name contains invalid character %q", c)
+			return fmt.Errorf("branch name contains invalid character")
 		}
 	}
 	if name == "HEAD" || name == "BRANCH" {

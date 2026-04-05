@@ -3,6 +3,7 @@ package server
 import (
 	"net"
 	"net/http"
+	"runtime"
 )
 
 // handleStatus returns server health and store stats.
@@ -47,6 +48,19 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.RequestShutdown()
+}
+
+// handleDebugGoroutines dumps all goroutine stacks. Loopback only.
+// Does NOT acquire any locks -- safe to call during a deadlock.
+func (s *Server) handleDebugGoroutines(w http.ResponseWriter, r *http.Request) {
+	if !isLoopback(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	buf := make([]byte, 1<<20) // 1MB
+	n := runtime.Stack(buf, true)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write(buf[:n])
 }
 
 // isLoopback checks if the request originates from a loopback address.

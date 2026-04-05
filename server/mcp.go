@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/graph"
 	"github.com/brandonlattin/gramaton/search"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,23 +47,74 @@ func (s *Server) MCPServer() *mcp.Server {
 
 func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	type searchInput struct {
-		Text              string   `json:"text,omitempty" jsonschema:"search query text"`
+		Text              string   `json:"text,omitempty" jsonschema:"search query text (optional -- omit for filter-only queries)"`
 		Top               int      `json:"top,omitempty" jsonschema:"integer, number of results (default 10)"`
-		Temporality       string   `json:"temporality,omitempty" jsonschema:"filter: immutable|durable|temporal|ephemeral"`
-		KnowledgeType     string   `json:"knowledge_type,omitempty" jsonschema:"filter: episodic|semantic|procedural|conceptual|reference"`
-		EpistemicStatus   string   `json:"epistemic_status,omitempty" jsonschema:"filter: well_established|probable|speculative|contested|refuted"`
+		Temporality       string   `json:"temporality,omitempty" jsonschema:"filter: immutable|durable|temporal|ephemeral (prefix with ! to exclude, e.g. !ephemeral)"`
+		KnowledgeType     string   `json:"knowledge_type,omitempty" jsonschema:"filter: episodic|semantic|procedural|conceptual|reference (prefix with ! to exclude)"`
+		EpistemicStatus   string   `json:"epistemic_status,omitempty" jsonschema:"filter: well_established|probable|speculative|contested|refuted (prefix with ! to exclude)"`
 		ConfidenceMin     *float64 `json:"confidence_min,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		ConfidenceMax     *float64 `json:"confidence_max,omitempty" jsonschema:"number between 0.0 and 1.0"`
+		ImportanceMin     *float64 `json:"importance_min,omitempty" jsonschema:"number between 0.0 and 1.0"`
+		ImportanceMax     *float64 `json:"importance_max,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		IncludeHistorical bool     `json:"include_historical,omitempty" jsonschema:"include records past valid_until"`
 		Since             string   `json:"since,omitempty" jsonschema:"filter: created after date (YYYY-MM-DD or RFC3339)"`
+		Missing           []string `json:"missing,omitempty" jsonschema:"array of field names that must be unset (e.g. [\"temporality\", \"confidence\"])"`
+		Keywords            []string `json:"keywords,omitempty" jsonschema:"array of keywords that must all be present on the record (exact match)"`
+		AccessCountMin      *int64   `json:"access_count_min,omitempty" jsonschema:"integer, minimum access count"`
+		AccessCountMax      *int64   `json:"access_count_max,omitempty" jsonschema:"integer, maximum access count"`
+		LastAccessedAfter   string   `json:"last_accessed_after,omitempty" jsonschema:"filter: accessed after date (YYYY-MM-DD or RFC3339)"`
+		LastAccessedBefore  string   `json:"last_accessed_before,omitempty" jsonschema:"filter: accessed before date (YYYY-MM-DD or RFC3339)"`
+		ValidAfter          string   `json:"valid_after,omitempty" jsonschema:"filter: valid_from after date"`
+		ValidBefore         string   `json:"valid_before,omitempty" jsonschema:"filter: valid_from before date"`
+		ExpiresAfter        string   `json:"expires_after,omitempty" jsonschema:"filter: valid_until after date (find records expiring after X)"`
+		ExpiresBefore       string   `json:"expires_before,omitempty" jsonschema:"filter: valid_until before date (find records expiring before X)"`
+		Match               string   `json:"match,omitempty" jsonschema:"literal substring search across content fields (case-insensitive). Distinct from text (vector similarity)"`
+		SimilarTo           string   `json:"similar_to,omitempty" jsonschema:"record ID -- find records similar to this one using its stored embedding"`
+		MinEdges            *int     `json:"min_edges,omitempty" jsonschema:"integer, minimum total edge count (orphan detection: max_edges=0)"`
+		MaxEdges            *int     `json:"max_edges,omitempty" jsonschema:"integer, maximum total edge count"`
+		Random              bool     `json:"random,omitempty" jsonschema:"return random results (ignores sort/score). Useful for serendipitous discovery or review"`
+		Sort              string   `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
+		Order             string   `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
-		Description: "Search the knowledge store. Returns results ranked by a 6-factor score. Use gramaton_inspect for full content.",
+		Description: "Search the knowledge store. Text is optional -- omit it for filter-only queries (e.g. 'all procedural records'). Returns results ranked by 6-factor score or sorted by a specified field.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchInput) (*mcp.CallToolResult, any, error) {
 		top := args.Top
 		if top <= 0 {
 			top = 10
+		}
+		if top > maxSearchTop {
+			top = maxSearchTop
+		}
+
+		if args.Sort != "" && !search.ValidSort(args.Sort) {
+			return mcpErr("invalid sort field")
+		}
+		if args.Order != "" && args.Order != "asc" && args.Order != "desc" {
+			return mcpErr("order must be asc or desc")
+		}
+		if len(args.Keywords) > maxKeywords {
+			return mcpErr(fmt.Sprintf("maximum %d keywords allowed", maxKeywords))
+		}
+		if len(args.Missing) > maxMissingFields {
+			return mcpErr(fmt.Sprintf("maximum %d missing fields allowed", maxMissingFields))
+		}
+		if len(args.Match) > maxMatchLength {
+			return mcpErr(fmt.Sprintf("match string exceeds maximum length of %d", maxMatchLength))
+		}
+		for _, v := range []struct {
+			name string
+			val  *float64
+		}{
+			{"confidence_min", args.ConfidenceMin},
+			{"confidence_max", args.ConfidenceMax},
+			{"importance_min", args.ImportanceMin},
+			{"importance_max", args.ImportanceMax},
+		} {
+			if err := validateFloat64Range(v.name, v.val, 0, 1); err != nil {
+				return mcpErr(err.Error())
+			}
 		}
 
 		q := search.Query{
@@ -73,6 +126,19 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 			IncludeHistorical: args.IncludeHistorical,
 			ConfidenceMin:     args.ConfidenceMin,
 			ConfidenceMax:     args.ConfidenceMax,
+			ImportanceMin:     args.ImportanceMin,
+			ImportanceMax:     args.ImportanceMax,
+			Missing:           args.Missing,
+			Keywords:          args.Keywords,
+			AccessCountMin:    args.AccessCountMin,
+			AccessCountMax:    args.AccessCountMax,
+			Match:             args.Match,
+			SimilarTo:         args.SimilarTo,
+			MinEdges:          args.MinEdges,
+			MaxEdges:          args.MaxEdges,
+			Random:            args.Random,
+			Sort:              args.Sort,
+			Order:             args.Order,
 		}
 		if args.Since != "" {
 			t, err := parseDateArg(args.Since)
@@ -80,6 +146,38 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 				return mcpErr(fmt.Sprintf("invalid since date: %s", err))
 			}
 			q.Since = &t
+		}
+		if args.LastAccessedAfter != "" {
+			t, err := parseDateArg(args.LastAccessedAfter)
+			if err != nil {
+				return mcpErr(fmt.Sprintf("invalid last_accessed_after date: %s", err))
+			}
+			q.LastAccessedAfter = &t
+		}
+		if args.LastAccessedBefore != "" {
+			t, err := parseDateArg(args.LastAccessedBefore)
+			if err != nil {
+				return mcpErr(fmt.Sprintf("invalid last_accessed_before date: %s", err))
+			}
+			q.LastAccessedBefore = &t
+		}
+		for _, pair := range []struct {
+			raw  string
+			name string
+			dest **time.Time
+		}{
+			{args.ValidAfter, "valid_after", &q.ValidAfter},
+			{args.ValidBefore, "valid_before", &q.ValidBefore},
+			{args.ExpiresAfter, "expires_after", &q.ExpiresAfter},
+			{args.ExpiresBefore, "expires_before", &q.ExpiresBefore},
+		} {
+			if pair.raw != "" {
+				t, err := parseDateArg(pair.raw)
+				if err != nil {
+					return mcpErr(fmt.Sprintf("invalid %s date: %s", pair.name, err))
+				}
+				*pair.dest = &t
+			}
 		}
 
 		var queryVec []float32
@@ -117,7 +215,10 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 			results = []search.Result{}
 		}
 
-		return mcpJSONResult(map[string]any{"results": results})
+		return mcpJSONResult(map[string]any{
+			"results": results,
+			"facets":  search.ComputeFacets(results),
+		})
 	})
 
 	type captureInput struct {
@@ -171,6 +272,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 
 		preEmbedded := s.preEmbedContent(capReq)
+		preChunked := s.engine.PreChunk(ctx, args.Content)
 
 		s.engine.Lock()
 		defer s.engine.Unlock()
@@ -198,13 +300,50 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
 		}
 
-		if _, err := s.engine.ChunkIfNeeded(ctx, n.ID); err != nil {
-			warnings = append(warnings, fmt.Sprintf("chunking failed: %s", err))
+		// Auto-supersede near-duplicates.
+		var superseded []map[string]any
+		if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
+			cfg := s.engine.Config()
+			if cfg.Dedup.Action == "reject" {
+				s.engine.PropIdx().RemoveNode(n.ID, n.Properties)
+				s.engine.VecIdx().Remove(n.ID)
+				s.engine.Graph().DeleteNode(n.ID)
+				return mcpErr(fmt.Sprintf("duplicate of %s (similarity %.3f)", dupID, sim))
+			}
+
+			now := time.Now().UTC()
+			oldNode, _ := s.engine.Graph().GetNode(dupID)
+			if oldNode != nil {
+				_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
+				if !alreadyHistorical {
+					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+					if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+						summary := ""
+						if v, ok := oldNode.Properties.GetString("content_short"); ok {
+							summary = v
+						}
+						superseded = append(superseded, map[string]any{
+							"id":         dupID,
+							"summary":    summary,
+							"similarity": sim,
+							"edge_id":    e.ID,
+						})
+					}
+				}
+			}
+		}
+
+		if numChunks := s.engine.ApplyChunks(n.ID, preChunked); numChunks > 0 {
+			warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
 		}
 
 		s.engine.Save("capture")
 
-		return mcpJSONResult(map[string]any{"id": n.ID, "warnings": warnings})
+		resp := map[string]any{"id": n.ID, "warnings": warnings}
+		if len(superseded) > 0 {
+			resp["superseded"] = superseded
+		}
+		return mcpJSONResult(resp)
 	})
 
 	type inspectInput struct {
@@ -465,6 +604,72 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		})
 	})
 
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_stats",
+		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		s.engine.RLock()
+		defer s.engine.RUnlock()
+
+		g := s.engine.Graph()
+		temp := make(map[string]int)
+		kt := make(map[string]int)
+		es := make(map[string]int)
+		var total int
+		var confHigh, confMed, confMod, confLow, confUnset int
+
+		for _, id := range g.AllNodeIDs() {
+			n, ok := g.GetNode(id)
+			if !ok {
+				continue
+			}
+			if isChunkNode(g, id) {
+				continue
+			}
+			if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
+				continue
+			}
+			total++
+			if v, ok := n.Properties.GetString("temporality"); ok {
+				temp[v]++
+			}
+			if v, ok := n.Properties.GetString("knowledge_type"); ok {
+				kt[v]++
+			}
+			if v, ok := n.Properties.GetString("epistemic_status"); ok {
+				es[v]++
+			}
+			if c, ok := n.Properties.GetFloat64("confidence"); ok {
+				switch {
+				case c >= 0.9:
+					confHigh++
+				case c >= 0.7:
+					confMed++
+				case c >= 0.4:
+					confMod++
+				default:
+					confLow++
+				}
+			} else {
+				confUnset++
+			}
+		}
+
+		return mcpJSONResult(map[string]any{
+			"total_records":   total,
+			"temporality":     temp,
+			"knowledge_type":  kt,
+			"epistemic_status": es,
+			"confidence": map[string]int{
+				"high":     confHigh,
+				"medium":   confMed,
+				"moderate": confMod,
+				"low":      confLow,
+				"unset":    confUnset,
+			},
+		})
+	})
+
 	type branchInput struct {
 		Action string `json:"action" jsonschema:"create|list|checkout|merge|discard"`
 		Name   string `json:"name,omitempty" jsonschema:"branch name (required for create/checkout/merge/discard)"`
@@ -473,9 +678,136 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_branch",
 		Description: "Manage branches: create, list, checkout, merge, or discard.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args branchInput) (*mcp.CallToolResult, any, error) {
-		// Delegate to the HTTP handlers by building the equivalent request.
-		// This is a thin wrapper to avoid duplicating branch logic.
-		return mcpErr("branch operations via MCP: use action=list|create|checkout|merge|discard with name parameter")
+		switch args.Action {
+		case "list":
+			s.engine.RLock()
+			defer s.engine.RUnlock()
+
+			dataDir := s.engine.Config().DataDir
+			active := core.ActiveBranch(dataDir)
+			dir := core.RefsDir(dataDir)
+			entries, _ := os.ReadDir(dir)
+			var branches []map[string]any
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				hash, _ := core.ReadRef(dataDir, e.Name())
+				b := map[string]any{"name": e.Name(), "commit": core.TruncHash(hash)}
+				if e.Name() == active {
+					b["active"] = true
+				}
+				branches = append(branches, b)
+			}
+			if branches == nil {
+				branches = []map[string]any{}
+			}
+			return mcpJSONResult(map[string]any{"branches": branches, "current": active})
+
+		case "create":
+			if args.Name == "" {
+				return mcpErr("name is required for create")
+			}
+			if err := core.ValidBranchName(args.Name); err != nil {
+				return mcpErr(err.Error())
+			}
+
+			s.engine.Lock()
+			defer s.engine.Unlock()
+
+			dataDir := s.engine.Config().DataDir
+			if _, err := core.ReadRef(dataDir, args.Name); err == nil {
+				return mcpErr(fmt.Sprintf("branch %q already exists", args.Name))
+			}
+			headHash := s.engine.HeadHashLocked()
+			if err := core.WriteRef(dataDir, args.Name, headHash); err != nil {
+				return mcpErr("failed to create branch")
+			}
+			return mcpJSONResult(map[string]any{"name": args.Name, "commit": core.TruncHash(headHash), "created": true})
+
+		case "checkout":
+			if args.Name == "" {
+				return mcpErr("name is required for checkout")
+			}
+			if err := core.ValidBranchName(args.Name); err != nil {
+				return mcpErr(err.Error())
+			}
+
+			s.engine.Lock()
+			defer s.engine.Unlock()
+
+			dataDir := s.engine.Config().DataDir
+			hash, err := core.ReadRef(dataDir, args.Name)
+			if err != nil {
+				return mcpErr(fmt.Sprintf("branch %q not found", args.Name))
+			}
+			headPath := filepath.Join(dataDir, "HEAD")
+			if err := core.AtomicWriteFile(headPath, []byte(hash), 0o600); err != nil {
+				return mcpErr("failed to update HEAD")
+			}
+			if err := core.SetActiveBranch(dataDir, args.Name); err != nil {
+				return mcpErr("failed to set active branch")
+			}
+			s.engine.Graph().Load(s.engine.Store(), hash)
+			s.engine.RebuildAllIndexes()
+			return mcpJSONResult(map[string]any{"name": args.Name, "commit": core.TruncHash(hash), "checked_out": true})
+
+		case "merge":
+			if args.Name == "" {
+				return mcpErr("name is required for merge")
+			}
+			if args.Name == "main" {
+				return mcpErr("cannot merge main into itself")
+			}
+
+			s.engine.Lock()
+			defer s.engine.Unlock()
+
+			dataDir := s.engine.Config().DataDir
+			core.SetActiveBranch(dataDir, "main")
+			branchHash, err := core.ReadRef(dataDir, args.Name)
+			if err != nil {
+				return mcpErr(fmt.Sprintf("branch %q not found", args.Name))
+			}
+			s.engine.Graph().Load(s.engine.Store(), branchHash)
+			s.engine.RebuildAllIndexes()
+			commit, err := s.engine.Save(fmt.Sprintf("merge branch %q", args.Name))
+			if err != nil {
+				return mcpErr("failed to save merge")
+			}
+			core.WriteRef(dataDir, "main", commit.Hash)
+			core.DeleteRef(dataDir, args.Name)
+			return mcpJSONResult(map[string]any{"merged": args.Name, "new_commit": core.TruncHash(commit.Hash)})
+
+		case "discard":
+			if args.Name == "" {
+				return mcpErr("name is required for discard")
+			}
+			if args.Name == "main" {
+				return mcpErr("cannot discard main")
+			}
+
+			s.engine.Lock()
+			defer s.engine.Unlock()
+
+			dataDir := s.engine.Config().DataDir
+			if _, err := core.ReadRef(dataDir, args.Name); err != nil {
+				return mcpErr(fmt.Sprintf("branch %q not found", args.Name))
+			}
+			if core.ActiveBranch(dataDir) == args.Name {
+				mainHash, err := core.ReadRef(dataDir, "main")
+				if err == nil {
+					headPath := filepath.Join(dataDir, "HEAD")
+					core.AtomicWriteFile(headPath, []byte(mainHash), 0o600)
+				}
+				core.SetActiveBranch(dataDir, "main")
+			}
+			core.DeleteRef(dataDir, args.Name)
+			return mcpJSONResult(map[string]any{"discarded": args.Name})
+
+		default:
+			return mcpErr("action must be one of: create, list, checkout, merge, discard")
+		}
 	})
 
 	type diffInput struct {
@@ -486,20 +818,85 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_diff",
 		Description: "Show what changed in the knowledge store since a date, optionally filtered by topic.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args diffInput) (*mcp.CallToolResult, any, error) {
-		var params []string
-		if args.Since != "" {
-			params = append(params, "since="+args.Since)
-		}
-		if args.Topic != "" {
-			params = append(params, "topic="+args.Topic)
-		}
-		path := "/v1/diff"
-		if len(params) > 0 {
-			path += "?" + strings.Join(params, "&")
+		if len(args.Topic) > maxTopicLength {
+			return mcpErr(fmt.Sprintf("topic exceeds maximum length of %d", maxTopicLength))
 		}
 
-		// Use internal HTTP call via the handler directly.
-		return mcpErr("diff via MCP: use since and topic parameters")
+		s.engine.RLock()
+		defer s.engine.RUnlock()
+
+		store := s.engine.Store()
+		headHash := s.engine.HeadHashLocked()
+
+		var sinceHash string
+		if args.Since != "" {
+			sinceTime, err := parseDateArg(args.Since)
+			if err != nil {
+				return mcpErr("invalid since date")
+			}
+			hash := headHash
+			for hash != "" {
+				commit, err := loadCommit(store, hash)
+				if err != nil {
+					break
+				}
+				if commit.Timestamp.Before(sinceTime) {
+					sinceHash = hash
+					break
+				}
+				hash = commit.Parent
+			}
+		}
+
+		if sinceHash == "" && args.Since != "" {
+			return mcpJSONResult(map[string]any{"added": []any{}, "removed": []any{}})
+		}
+
+		headCommit, err := loadCommit(store, headHash)
+		if err != nil {
+			return mcpErr("failed to load HEAD")
+		}
+
+		var sinceCommit *graph.Commit
+		if sinceHash != "" {
+			c, err := loadCommit(store, sinceHash)
+			if err != nil {
+				return mcpErr("failed to load since commit")
+			}
+			sinceCommit = c
+		}
+
+		diff, err := graph.DiffCommits(store, sinceCommit, headCommit)
+		if err != nil {
+			return mcpErr("failed to compute diff")
+		}
+
+		var added, removed []map[string]any
+		for _, entry := range diff.Added {
+			if args.Topic != "" && !matchesTopic(s, entry.Key, args.Topic) {
+				continue
+			}
+			rec := map[string]any{"id": entry.Key}
+			if n, ok := s.engine.Graph().GetNode(entry.Key); ok {
+				if v, ok := n.Properties.GetString("content_short"); ok {
+					rec["summary_short"] = v
+				}
+			}
+			added = append(added, rec)
+		}
+		for _, entry := range diff.Removed {
+			if args.Topic != "" && !matchesTopic(s, entry.Key, args.Topic) {
+				continue
+			}
+			removed = append(removed, map[string]any{"id": entry.Key})
+		}
+		if added == nil {
+			added = []map[string]any{}
+		}
+		if removed == nil {
+			removed = []map[string]any{}
+		}
+		return mcpJSONResult(map[string]any{"added": added, "removed": removed})
 	})
 
 	type logInput struct {
@@ -510,7 +907,77 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_log",
 		Description: "View commit history or per-record change history.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args logInput) (*mcp.CallToolResult, any, error) {
-		return mcpErr("log via MCP: use limit and record parameters")
+		limit := args.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		if limit > maxLogLimit {
+			limit = maxLogLimit
+		}
+
+		s.engine.RLock()
+		defer s.engine.RUnlock()
+
+		if args.Record != "" {
+			// Per-record history.
+			store := s.engine.Store()
+			hash := s.engine.HeadHashLocked()
+			var changes []map[string]any
+			var prevHash string
+			depth := 0
+
+			for hash != "" && len(changes) < limit && depth < maxLogTraversal {
+				depth++
+				commit, err := loadCommit(store, hash)
+				if err != nil {
+					break
+				}
+				nodeHash, found, _ := graph.NodeHashInCommit(store, hash, args.Record)
+				if found {
+					if prevHash != "" && nodeHash != prevHash {
+						changes = append(changes, map[string]any{
+							"commit":    hash[:12],
+							"timestamp": commit.Timestamp.Format("2006-01-02T15:04:05Z"),
+							"action":    commit.Message,
+						})
+					} else if prevHash == "" {
+						changes = append(changes, map[string]any{
+							"commit":    hash[:12],
+							"timestamp": commit.Timestamp.Format("2006-01-02T15:04:05Z"),
+							"action":    commit.Message,
+						})
+					}
+					prevHash = nodeHash
+				}
+				hash = commit.Parent
+			}
+			if changes == nil {
+				changes = []map[string]any{}
+			}
+			return mcpJSONResult(map[string]any{"id": args.Record, "changes": changes})
+		}
+
+		// Commit history.
+		var commits []map[string]any
+		hash := s.engine.HeadHashLocked()
+		store := s.engine.Store()
+
+		for hash != "" && len(commits) < limit {
+			commit, err := loadCommit(store, hash)
+			if err != nil {
+				break
+			}
+			commits = append(commits, map[string]any{
+				"hash":      hash[:12],
+				"timestamp": commit.Timestamp.Format("2006-01-02T15:04:05Z"),
+				"action":    commit.Message,
+			})
+			hash = commit.Parent
+		}
+		if commits == nil {
+			commits = []map[string]any{}
+		}
+		return mcpJSONResult(map[string]any{"commits": commits})
 	})
 
 	type reembedInput struct {
@@ -566,6 +1033,41 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 
 		return mcpJSONResult(map[string]any{"reembedded": reembedded, "total_stale": len(staleIDs)})
+	})
+
+	type duplicatesInput struct {
+		Threshold float64 `json:"threshold,omitempty" jsonschema:"number between 0.0 and 1.0, minimum similarity to consider a duplicate (default 0.92)"`
+		MaxPairs  int     `json:"max_pairs,omitempty" jsonschema:"integer, maximum number of pairs to return (default 50)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_duplicates",
+		Description: "Find near-duplicate records by comparing stored embeddings. Returns pairs above the similarity threshold.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args duplicatesInput) (*mcp.CallToolResult, any, error) {
+		threshold := args.Threshold
+		if threshold <= 0 || threshold > 1.0 {
+			threshold = 0.92
+		}
+		maxPairs := args.MaxPairs
+		if maxPairs <= 0 {
+			maxPairs = 50
+		}
+		if maxPairs > maxDuplicatePairs {
+			maxPairs = maxDuplicatePairs
+		}
+
+		s.engine.RLock()
+		pairs := search.FindDuplicates(s.engine.Graph(), s.engine.VecIdx(), threshold, maxPairs)
+		s.engine.RUnlock()
+
+		if pairs == nil {
+			pairs = []search.DuplicatePair{}
+		}
+
+		return mcpJSONResult(map[string]any{
+			"pairs":     pairs,
+			"threshold": threshold,
+			"count":     len(pairs),
+		})
 	})
 }
 

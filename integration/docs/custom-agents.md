@@ -9,7 +9,7 @@ store. Choose based on your framework's capabilities:
 
 ### 1. MCP (Recommended)
 
-The fastest path. Gramaton exposes 13 MCP tools via Streamable HTTP.
+The fastest path. Gramaton exposes 15 MCP tools via Streamable HTTP.
 Agents call typed tools with structured parameters -- no shell, no
 escaping, no permission prompts.
 
@@ -34,6 +34,8 @@ escaping, no permission prompts.
 | `gramaton_diff` | What changed since a date |
 | `gramaton_log` | Commit and record history |
 | `gramaton_reembed` | Regenerate stale embeddings |
+| `gramaton_stats` | Aggregate statistics |
+| `gramaton_duplicates` | Find near-duplicate records |
 
 ### 2. REST API
 
@@ -58,6 +60,8 @@ POST   /v1/branches             Create a branch
 GET    /v1/log                  Commit history
 GET    /v1/diff                 Compare commits
 GET    /v1/status               Health and stats
+GET    /v1/stats                Aggregate statistics
+POST   /v1/duplicates           Find near-duplicates
 ```
 
 All responses use a standard envelope:
@@ -157,6 +161,42 @@ All operations return structured JSON. Search results include:
   "metadata_summary": "Current. Durable, confidence 0.90, well-established",
   "confidence": 0.9,
   "temporality": "durable",
-  "effective_score": 0.78
+  "effective_score": 0.78,
+  "created_at": "2026-03-15T10:30:00Z",
+  "access_count": 5,
+  "edge_count": 3,
+  "staleness": 0.12,
+  "content_length": 256
 }
 ```
+
+Search responses also include faceted counts:
+```json
+{
+  "results": [...],
+  "facets": {
+    "temporality": {"durable": 8, "temporal": 3},
+    "knowledge_type": {"episodic": 6, "semantic": 5},
+    "epistemic_status": {"well_established": 9, "probable": 2}
+  }
+}
+```
+
+## Search Patterns
+
+Text is optional -- omit it for filter-only queries. Useful patterns:
+
+| Pattern | Query |
+|---------|-------|
+| Newest records | `sort="created_at", top=10` |
+| Unclassified | `missing=["temporality"]` |
+| By tag | `keywords=["auth"]` |
+| Most stale | `sort="staleness", order="desc"` |
+| Orphans (no edges) | `max_edges=0` |
+| Literal text match | `match="RWMutex"` |
+| Similar to a record | `similar_to="<id>"` |
+| Random sample | `random=true, top=3` |
+| Exclude refuted | `epistemic_status="!refuted"` |
+| Most accessed | `sort="access_count", order="desc"` |
+| Expiring soon | `expires_before="2026-04-15"` |
+| Never accessed | `access_count_max=0` |

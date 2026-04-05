@@ -77,7 +77,7 @@ func (s *Server) handleCreateBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	headHash := s.engine.HeadHash()
+	headHash := s.engine.HeadHashLocked()
 	if err := core.WriteRef(dataDir, req.Name, headHash); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "write_error", "failed to create branch", false)
 		return

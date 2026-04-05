@@ -99,9 +99,16 @@ func (e *Engine) Config() config.Config {
 }
 
 // HeadHash returns the current HEAD commit hash.
+// Acquires a read lock -- do NOT call while holding the write lock.
 func (e *Engine) HeadHash() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	return e.headHash
+}
+
+// HeadHashLocked returns the current HEAD commit hash.
+// Caller must already hold at least a read lock.
+func (e *Engine) HeadHashLocked() string {
 	return e.headHash
 }
 
@@ -271,8 +278,79 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	return "", 0
 }
 
+// PreChunkResult holds chunk texts and their pre-computed embeddings,
+// ready to be applied under the write lock without I/O.
+type PreChunkResult struct {
+	Texts   []string
+	Vectors [][]float32 // one embedding per chunk text, may be nil
+	Model   string
+}
+
+// PreChunk determines if content needs chunking and pre-embeds the
+// chunks outside the lock. Call this BEFORE acquiring the write lock.
+// Returns nil if no chunking is needed.
+func (e *Engine) PreChunk(ctx context.Context, content string) *PreChunkResult {
+	chunks := graph.ChunkText(
+		content,
+		e.cfg.Chunking.Threshold,
+		e.cfg.Chunking.ChunkSize,
+		e.cfg.Chunking.Overlap,
+	)
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	result := &PreChunkResult{Texts: chunks}
+
+	if e.embedder != nil {
+		vecs, err := e.embedder.Embed(ctx, chunks)
+		if err == nil {
+			result.Vectors = vecs
+			result.Model = e.embedder.ModelID()
+		}
+	}
+
+	return result
+}
+
+// ApplyChunks creates chunk nodes from a PreChunkResult. Caller must
+// hold the write lock. This is fast (no I/O, no embedding calls).
+func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult) int {
+	if pre == nil {
+		return 0
+	}
+
+	for i, chunkText := range pre.Texts {
+		chunkNode := e.graph.AddNode(graph.Properties{
+			"content_full": graph.StringProperty(chunkText),
+		})
+		e.graph.AddEdge(chunkNode.ID, parentID, "chunk_of", 1.0, nil)
+		for k, v := range chunkNode.Properties {
+			e.propIdx.Add(chunkNode.ID, k, v)
+		}
+
+		// Apply pre-computed embedding if available.
+		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
+			vec := pre.Vectors[i]
+			prop := graph.VectorProperty(vec)
+			e.graph.SetNodeProperty(chunkNode.ID, "embedding_full", prop)
+			e.propIdx.Add(chunkNode.ID, "embedding_full", prop)
+			e.vecIdx.Add(chunkNode.ID, vec)
+
+			if pre.Model != "" {
+				modelProp := graph.StringProperty(pre.Model)
+				e.graph.SetNodeProperty(chunkNode.ID, "embedding_model", modelProp)
+				e.propIdx.Add(chunkNode.ID, "embedding_model", modelProp)
+			}
+		}
+	}
+
+	return len(pre.Texts)
+}
+
 // ChunkIfNeeded splits a node's content into chunk child nodes if
 // it exceeds the configured threshold. Caller must hold the write lock.
+// DEPRECATED: Use PreChunk + ApplyChunks to avoid embedding under lock.
 func (e *Engine) ChunkIfNeeded(ctx context.Context, nodeID string) (int, error) {
 	n, ok := e.graph.GetNode(nodeID)
 	if !ok {
@@ -283,32 +361,9 @@ func (e *Engine) ChunkIfNeeded(ctx context.Context, nodeID string) (int, error) 
 	if !ok {
 		return 0, nil
 	}
-	content := contentProp.String()
 
-	chunks := graph.ChunkText(
-		content,
-		e.cfg.Chunking.Threshold,
-		e.cfg.Chunking.ChunkSize,
-		e.cfg.Chunking.Overlap,
-	)
-	if len(chunks) == 0 {
-		return 0, nil
-	}
-
-	for _, chunkText := range chunks {
-		chunkNode := e.graph.AddNode(graph.Properties{
-			"content_full": graph.StringProperty(chunkText),
-		})
-		e.graph.AddEdge(chunkNode.ID, nodeID, "chunk_of", 1.0, nil)
-		for k, v := range chunkNode.Properties {
-			e.propIdx.Add(chunkNode.ID, k, v)
-		}
-		if err := e.GenerateEmbeddings(ctx, chunkNode.ID); err != nil {
-			continue
-		}
-	}
-
-	return len(chunks), nil
+	pre := e.PreChunk(ctx, contentProp.String())
+	return e.ApplyChunks(nodeID, pre), nil
 }
 
 // SetProp sets a property on a node and updates the property index.

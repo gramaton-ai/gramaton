@@ -255,15 +255,477 @@ func TestSearchDefaultTop(t *testing.T) {
 
 func TestSearchResultsDescendingScore(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
+	emb := &mockEmbedder{
+		vectors: map[string][]float32{
+			"event pipeline": {0.8, 0.2, 0.0},
+		},
+	}
+	tool := New(g, propIdx, vecIdx, emb, defaultCfg())
+
+	// With text, results should be sorted by effective_score descending.
+	results, err := tool.Execute(context.Background(), Query{Text: "event pipeline", Top: 10})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].EffectiveScore > results[i-1].EffectiveScore {
+			t.Fatalf("results not in descending score order at index %d", i)
+		}
+	}
+}
+
+func TestSearchNoTextDefaultsToCreatedAtDesc(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// No text: should default to created_at descending (newest first).
+	results, err := tool.Execute(context.Background(), Query{Top: 10})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatal("need at least 2 results")
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].CreatedAt > results[i-1].CreatedAt {
+			t.Fatalf("results not in descending created_at order at index %d: %s > %s",
+				i, results[i].CreatedAt, results[i-1].CreatedAt)
+		}
+	}
+}
+
+func TestSearchSortByAccessCountAsc(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Top:   10,
+		Sort:  SortAccessCount,
+		Order: "asc",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatal("need at least 2 results")
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].AccessCount < results[i-1].AccessCount {
+			t.Fatalf("results not in ascending access_count order at index %d", i)
+		}
+	}
+}
+
+func TestSearchSortByConfidenceDesc(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Top:  10,
+		Sort: SortConfidence,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatal("need at least 2 results")
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].Confidence > results[i-1].Confidence {
+			t.Fatalf("results not in descending confidence order at index %d", i)
+		}
+	}
+}
+
+func TestSearchFilterOnlyByKnowledgeType(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// No text, just filter -- should work and return filtered results.
+	results, err := tool.Execute(context.Background(), Query{
+		KnowledgeType: "episodic",
+		Top:           10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// n1, n2, n4 are episodic
+	if len(results) != 3 {
+		t.Fatalf("expected 3 episodic results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.KnowledgeType != "episodic" {
+			t.Fatalf("expected episodic, got %q", r.KnowledgeType)
+		}
+	}
+}
+
+func TestSearchSortByContentLength(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Top:   10,
+		Sort:  SortContentLength,
+		Order: "desc",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatal("need at least 2 results")
+	}
+	for i := 1; i < len(results); i++ {
+		if results[i].ContentLength > results[i-1].ContentLength {
+			t.Fatalf("results not in descending content_length order at index %d", i)
+		}
+	}
+}
+
+func TestSearchNegateTemporality(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// Exclude durable records (n1 and n4 are durable).
+	results, err := tool.Execute(context.Background(), Query{
+		Temporality: "!durable",
+		Top:         10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// n2 (temporal) and n3 (immutable) remain.
+	if len(results) != 2 {
+		t.Fatalf("expected 2 non-durable results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Temporality == "durable" {
+			t.Fatalf("got durable record despite exclusion")
+		}
+	}
+}
+
+func TestSearchMissingField(t *testing.T) {
+	g := graph.New()
+	propIdx := index.NewPropertyIndex()
+	vecIdx := index.NewFlatIndex()
+
+	// n1 has temporality set.
+	n1 := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("Classified record"),
+		"content_short": graph.StringProperty("Classified"),
+		"temporality":   graph.StringProperty("durable"),
+		"confidence":    graph.Float64Property(0.9),
+		"created_at":    graph.TimestampProperty(time.Now().UTC()),
+	})
+	// n2 does NOT have temporality.
+	n2 := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("Unclassified record"),
+		"content_short": graph.StringProperty("Unclassified"),
+		"confidence":    graph.Float64Property(0.5),
+		"created_at":    graph.TimestampProperty(time.Now().UTC()),
+	})
+	for _, n := range []*graph.Node{n1, n2} {
+		for k, v := range n.Properties {
+			propIdx.Add(n.ID, k, v)
+		}
+	}
+
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+	results, err := tool.Execute(context.Background(), Query{
+		Missing: []string{"temporality"},
+		Top:     10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result missing temporality, got %d", len(results))
+	}
+	if results[0].Temporality != "" {
+		t.Fatalf("expected empty temporality, got %q", results[0].Temporality)
+	}
+}
+
+func TestSearchKeywordExactMatch(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// "kafka" is a keyword on n1 only.
+	results, err := tool.Execute(context.Background(), Query{
+		Keywords: []string{"kafka"},
+		Top:      10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result with keyword 'kafka', got %d", len(results))
+	}
+	if results[0].SummaryShort != "Chose Kafka for event pipeline" {
+		t.Fatalf("expected Kafka record, got %q", results[0].SummaryShort)
+	}
+}
+
+func TestSearchKeywordMultiple(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// "event-pipeline" is on n1 and n2. Adding "kafka" narrows to n1 only.
+	results, err := tool.Execute(context.Background(), Query{
+		Keywords: []string{"event-pipeline", "kafka"},
+		Top:      10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result with both keywords, got %d", len(results))
+	}
+}
+
+func TestSearchKeywordNoMatch(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Keywords: []string{"nonexistent-keyword"},
+		Top:      10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+}
+
+func TestSearchFilterByImportanceMin(t *testing.T) {
+	g := graph.New()
+	propIdx := index.NewPropertyIndex()
+	vecIdx := index.NewFlatIndex()
+
+	n1 := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("High importance record"),
+		"content_short": graph.StringProperty("High importance"),
+		"importance":    graph.Float64Property(0.9),
+		"confidence":    graph.Float64Property(0.8),
+		"created_at":    graph.TimestampProperty(time.Now().UTC()),
+	})
+	n2 := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("Low importance record"),
+		"content_short": graph.StringProperty("Low importance"),
+		"importance":    graph.Float64Property(0.2),
+		"confidence":    graph.Float64Property(0.8),
+		"created_at":    graph.TimestampProperty(time.Now().UTC()),
+	})
+	for _, n := range []*graph.Node{n1, n2} {
+		for k, v := range n.Properties {
+			propIdx.Add(n.ID, k, v)
+		}
+	}
+
+	min := 0.5
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+	results, err := tool.Execute(context.Background(), Query{
+		ImportanceMin: &min,
+		Top:           10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result with importance >= 0.5, got %d", len(results))
+	}
+	if results[0].Importance < 0.5 {
+		t.Fatalf("importance %f below minimum", results[0].Importance)
+	}
+}
+
+func TestSearchMatch(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// "RabbitMQ" appears only in n1's content.
+	results, err := tool.Execute(context.Background(), Query{
+		Match: "rabbitmq",
+		Top:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result matching 'rabbitmq', got %d", len(results))
+	}
+	if results[0].SummaryShort != "Chose Kafka for event pipeline" {
+		t.Fatalf("expected Kafka record, got %q", results[0].SummaryShort)
+	}
+}
+
+func TestSearchMatchCaseInsensitive(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// "HTTP" in content_full is uppercase; search lowercase.
+	results, err := tool.Execute(context.Background(), Query{
+		Match: "http 200",
+		Top:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+}
+
+func TestSearchSimilarTo(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+
+	// Get n1's ID (the Kafka record).
+	var kafkaID string
+	for _, id := range g.AllNodeIDs() {
+		n, _ := g.GetNode(id)
+		if s, ok := n.Properties.GetString("content_short"); ok && s == "Chose Kafka for event pipeline" {
+			kafkaID = id
+			break
+		}
+	}
+	if kafkaID == "" {
+		t.Fatal("could not find Kafka record")
+	}
+
+	// Add embedding to n1 so similar_to can use it.
+	g.SetNodeProperty(kafkaID, "embedding_full", graph.VectorProperty([]float32{0.9, 0.1, 0.0}))
+
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+	results, err := tool.Execute(context.Background(), Query{
+		SimilarTo: kafkaID,
+		Top:       10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Should not include the source record itself.
+	for _, r := range results {
+		if r.ID == kafkaID {
+			t.Fatal("similar_to should exclude the source record")
+		}
+	}
+
+	// n2 (0.7, 0.3, 0.0) should be most similar to n1 (0.9, 0.1, 0.0).
+	if len(results) > 0 {
+		if results[0].SummaryShort != "Consider Pulsar as alternative" {
+			t.Logf("top result: %q (expected Pulsar due to similar vector)", results[0].SummaryShort)
+		}
+	}
+}
+
+func TestSearchMatchNoHit(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Match: "zzznonexistent",
+		Top:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+}
+
+func TestSearchRandom(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Random: true,
+		Top:    2,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 random results, got %d", len(results))
+	}
+	// Scores should be 0 since scoring is skipped.
+	for _, r := range results {
+		if r.EffectiveScore != 0 {
+			t.Fatalf("expected score 0 for random results, got %f", r.EffectiveScore)
+		}
+	}
+}
+
+func TestSearchRandomWithFilter(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	results, err := tool.Execute(context.Background(), Query{
+		Random:      true,
+		Temporality: "durable",
+		Top:         10,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// Only n1 and n4 are durable.
+	if len(results) != 2 {
+		t.Fatalf("expected 2 durable random results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Temporality != "durable" {
+			t.Fatalf("expected durable, got %q", r.Temporality)
+		}
+	}
+}
+
+func TestComputeFacets(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
 	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	for i := 1; i < len(results); i++ {
-		if results[i].EffectiveScore > results[i-1].EffectiveScore {
-			t.Fatalf("results not in descending order at index %d", i)
+
+	facets := ComputeFacets(results)
+
+	// We have: durable(2), temporal(1), immutable(1)
+	if facets.Temporality["durable"] != 2 {
+		t.Fatalf("expected 2 durable, got %d", facets.Temporality["durable"])
+	}
+	if facets.Temporality["temporal"] != 1 {
+		t.Fatalf("expected 1 temporal, got %d", facets.Temporality["temporal"])
+	}
+	if facets.Temporality["immutable"] != 1 {
+		t.Fatalf("expected 1 immutable, got %d", facets.Temporality["immutable"])
+	}
+
+	// Knowledge types: episodic(3), reference(1)
+	if facets.KnowledgeType["episodic"] != 3 {
+		t.Fatalf("expected 3 episodic, got %d", facets.KnowledgeType["episodic"])
+	}
+	if facets.KnowledgeType["reference"] != 1 {
+		t.Fatalf("expected 1 reference, got %d", facets.KnowledgeType["reference"])
+	}
+}
+
+func TestValidSort(t *testing.T) {
+	valid := []string{"", "created_at", "last_accessed", "access_count",
+		"confidence", "importance", "content_length"}
+	for _, s := range valid {
+		if !ValidSort(s) {
+			t.Fatalf("ValidSort(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{"foo", "score", "id", "name"}
+	for _, s := range invalid {
+		if ValidSort(s) {
+			t.Fatalf("ValidSort(%q) = true, want false", s)
 		}
 	}
 }

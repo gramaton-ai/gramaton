@@ -212,10 +212,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/revert", s.handleRevert)
 	mux.HandleFunc("POST /v1/reembed", s.handleReembed)
 	mux.HandleFunc("POST /v1/ingest", s.handleIngest)
+	mux.HandleFunc("POST /v1/duplicates", s.handleDuplicates)
 
 	// System
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
+	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
+	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
 }
 
 // securityHeaders wraps a handler with security response headers.
