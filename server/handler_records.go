@@ -353,6 +353,9 @@ func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	out["related"] = related
 
+	// Track inspected ID for observe feedback loop detection.
+	s.retrieval.Track(id)
+
 	s.writeJSONLocked(w, http.StatusOK, out)
 }
 

@@ -9,7 +9,7 @@ store. Choose based on your framework's capabilities:
 
 ### 1. MCP (Recommended)
 
-The fastest path. Gramaton exposes 17 MCP tools via Streamable HTTP.
+The fastest path. Gramaton exposes 18 MCP tools via Streamable HTTP.
 Agents call typed tools with structured parameters -- no shell, no
 escaping, no permission prompts.
 

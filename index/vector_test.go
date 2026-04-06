@@ -9,7 +9,7 @@ import (
 
 func TestCosineSimilarityIdentical(t *testing.T) {
 	v := []float32{1.0, 0.0, 0.0}
-	sim := cosineSimilarity(v, v)
+	sim := CosineSimilarity(v, v)
 	if !approxEqual(sim, 1.0) {
 		t.Fatalf("identical vectors: expected ~1.0, got %f", sim)
 	}
@@ -18,7 +18,7 @@ func TestCosineSimilarityIdentical(t *testing.T) {
 func TestCosineSimilarityOrthogonal(t *testing.T) {
 	a := []float32{1.0, 0.0, 0.0}
 	b := []float32{0.0, 1.0, 0.0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if !approxEqual(sim, 0.0) {
 		t.Fatalf("orthogonal vectors: expected ~0.0, got %f", sim)
 	}
@@ -27,7 +27,7 @@ func TestCosineSimilarityOrthogonal(t *testing.T) {
 func TestCosineSimilarityOpposite(t *testing.T) {
 	a := []float32{1.0, 0.0}
 	b := []float32{-1.0, 0.0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if !approxEqual(sim, -1.0) {
 		t.Fatalf("opposite vectors: expected ~-1.0, got %f", sim)
 	}
@@ -36,7 +36,7 @@ func TestCosineSimilarityOpposite(t *testing.T) {
 func TestCosineSimilarityZeroVector(t *testing.T) {
 	a := []float32{1.0, 2.0}
 	b := []float32{0.0, 0.0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim != 0.0 {
 		t.Fatalf("zero vector: expected 0.0, got %f", sim)
 	}
@@ -45,7 +45,7 @@ func TestCosineSimilarityZeroVector(t *testing.T) {
 func TestCosineSimilarityDifferentLengths(t *testing.T) {
 	a := []float32{1.0, 2.0}
 	b := []float32{1.0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim != 0.0 {
 		t.Fatalf("different lengths: expected 0.0, got %f", sim)
 	}
@@ -54,7 +54,7 @@ func TestCosineSimilarityDifferentLengths(t *testing.T) {
 func TestCosineSimilarityScaleInvariant(t *testing.T) {
 	a := []float32{1.0, 2.0, 3.0}
 	b := []float32{2.0, 4.0, 6.0} // Same direction, different magnitude.
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if !approxEqual(sim, 1.0) {
 		t.Fatalf("scaled vectors: expected ~1.0, got %f", sim)
 	}

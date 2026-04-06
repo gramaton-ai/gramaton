@@ -19,6 +19,8 @@ type DeterministicResult struct {
 	LifecycleTransitions int
 	OrphansLinked        int
 	DuplicatesSuperseded int
+	GCCollected          int
+	GCDryRun             bool
 	ConceptCandidates    []ConceptCandidate
 	Manifest             *StoreManifest
 }
@@ -286,6 +288,14 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// Compute evidence_count and last_evidence_at for concept nodes.
 	enrichConcepts(e, logger)
 
+	// --- Garbage collection phase ---
+	// Hard delete records that meet ALL junk criteria.
+	if cfg.GC.Enabled {
+		gcCollected := collectGarbage(e, cfg, logger)
+		result.GCCollected = gcCollected
+		result.GCDryRun = cfg.GC.DryRun
+	}
+
 	result.ConceptCandidates = candidates
 	result.Manifest = manifest
 
@@ -295,10 +305,123 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"lifecycle_transitions", result.LifecycleTransitions,
 			"orphans_linked", result.OrphansLinked,
 			"duplicates_superseded", result.DuplicatesSuperseded,
+			"gc_collected", result.GCCollected,
 			"concept_candidates", len(candidates))
 	}
 
 	return result
+}
+
+// collectGarbage hard-deletes records that meet ALL junk criteria:
+// - processing_status still "captured" (never classified)
+// - age > MinAgeDays (had time to be noticed)
+// - access_count = 0 (never retrieved)
+// - confidence < 0.3 (low/default confidence)
+// - importance = 0 (no assigned importance)
+// - no edges (nothing links to it)
+// - temporality = "ephemeral" (short-lived by classification)
+//
+// In dry-run mode, returns the count that WOULD be deleted without deleting.
+func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
+	minAge := cfg.GC.MinAgeDays
+	if minAge <= 0 {
+		minAge = 30
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -minAge)
+
+	// Read phase: identify GC candidates.
+	var gcIDs []string
+
+	e.RLock()
+	for _, id := range e.Graph().AllNodeIDs() {
+		n, ok := e.Graph().GetNode(id)
+		if !ok {
+			continue
+		}
+
+		// Must be "captured" (never classified).
+		ps, ok := n.Properties.GetString("processing_status")
+		if !ok || ps != "captured" {
+			continue
+		}
+
+		// Must be old enough.
+		ca, ok := n.Properties.GetTimestamp("created_at")
+		if !ok || ca.After(cutoff) {
+			continue
+		}
+
+		// Must have zero access.
+		ac, _ := n.Properties.GetInt64("access_count")
+		if ac > 0 {
+			continue
+		}
+
+		// Must be low confidence.
+		conf, _ := n.Properties.GetFloat64("confidence")
+		if conf >= 0.3 {
+			continue
+		}
+
+		// Must have zero importance.
+		imp, _ := n.Properties.GetFloat64("importance")
+		if imp > 0 {
+			continue
+		}
+
+		// Must be ephemeral.
+		temp, _ := n.Properties.GetString("temporality")
+		if temp != "ephemeral" {
+			continue
+		}
+
+		// Must have no edges.
+		if nonChunkEdgeCount(e.Graph(), id) > 0 {
+			continue
+		}
+
+		gcIDs = append(gcIDs, id)
+	}
+	e.RUnlock()
+
+	if len(gcIDs) == 0 {
+		return 0
+	}
+
+	if cfg.GC.DryRun {
+		if logger != nil {
+			logger.Info("GC dry-run: would delete records",
+				"component", "curation",
+				"count", len(gcIDs))
+		}
+		return len(gcIDs)
+	}
+
+	// Write phase: hard delete.
+	e.Lock()
+	deleted := 0
+	for _, id := range gcIDs {
+		n, ok := e.Graph().GetNode(id)
+		if !ok {
+			continue
+		}
+		e.PropIdx().RemoveNode(id, n.Properties)
+		e.VecIdx().Remove(id)
+		e.Graph().DeleteNode(id)
+		deleted++
+	}
+	if deleted > 0 {
+		e.Save("curation: garbage collection")
+	}
+	e.Unlock()
+
+	if logger != nil && deleted > 0 {
+		logger.Info("GC: deleted debris records",
+			"component", "curation",
+			"deleted", deleted)
+	}
+
+	return deleted
 }
 
 // isChunkNode checks if a node has an outbound chunk_of edge.

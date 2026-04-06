@@ -30,6 +30,8 @@ type Config struct {
 	Curation   CurationConfig   `yaml:"curation"`
 	LLM        LLMConfig        `yaml:"llm"`
 	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
+	Observe     ObserveConfig     `yaml:"observe"`
+	GC          GCConfig          `yaml:"gc"`
 	Backup      BackupConfig      `yaml:"backup"`
 }
 
@@ -182,6 +184,24 @@ type LLMCurationConfig struct {
 	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
 }
 
+type GCConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	DryRun     bool `yaml:"dry_run"`
+	MinAgeDays int  `yaml:"min_age_days"`
+}
+
+type ObserveConfig struct {
+	Enabled                bool    `yaml:"enabled"`
+	MaxFactsPerCall        int     `yaml:"max_facts_per_call"`
+	DefaultConfidence      float64 `yaml:"default_confidence"`
+	DefaultTemporality     string  `yaml:"default_temporality"`
+	SubstanceMinLength     int     `yaml:"substance_min_length"`
+	FeedbackLoopHours      int     `yaml:"feedback_loop_hours"`
+	FeedbackLoopSimilarity float64 `yaml:"feedback_loop_similarity"`
+	RetrievalTracking      bool    `yaml:"retrieval_tracking"`
+	RetrievalSimilarity    float64 `yaml:"retrieval_similarity"`
+}
+
 type BackupConfig struct {
 	Enabled  bool          `yaml:"enabled"`
 	Dir      string        `yaml:"dir"`
@@ -309,6 +329,24 @@ func Defaults() Config {
 			MaxContradictionChecks: 5,
 			ContradictionMinSim:    0.5,
 			ContradictionMaxSim:    0.85,
+		},
+
+		Observe: ObserveConfig{
+			Enabled:                true,
+			MaxFactsPerCall:        20,
+			DefaultConfidence:      0.3,
+			DefaultTemporality:     "ephemeral",
+			SubstanceMinLength:     20,
+			FeedbackLoopHours:      4,
+			FeedbackLoopSimilarity: 0.85,
+			RetrievalTracking:      true,
+			RetrievalSimilarity:    0.7,
+		},
+
+		GC: GCConfig{
+			Enabled:    false,
+			DryRun:     true,
+			MinAgeDays: 30,
 		},
 
 		Backup: BackupConfig{

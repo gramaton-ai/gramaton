@@ -154,6 +154,24 @@ integration/claude-code/subagent-capture.md"
 Do NOT block the conversation for capture. Spawn the subagent and
 continue immediately.
 
+### Observe (Auto-Extraction)
+
+At natural breakpoints (end of task, topic change, session wind-down),
+call `gramaton_observe` with recent conversation messages. The server
+extracts facts, runs quality gates, and stores survivors as deferred
+captures. Fire-and-forget -- returns immediately.
+
+```
+gramaton_observe(messages=[{role: "user", content: "..."}, ...])
+```
+
+Without server LLM: send pre-extracted facts instead:
+```
+gramaton_observe(facts=["Decided to use JWT", "API v2 replaces v1"])
+```
+
+Do NOT announce observing. Do NOT call every turn.
+
 ### Curation
 
 The server runs background curation automatically every 5 minutes:

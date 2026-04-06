@@ -69,13 +69,13 @@ func (f *FlatIndex) Search(query []float32, k int, candidates map[string]struct{
 			if !ok {
 				continue
 			}
-			sim := cosineSimilarity(query, vec)
+			sim := CosineSimilarity(query, vec)
 			results = append(results, SearchResult{NodeID: id, Similarity: sim})
 		}
 	} else {
 		// Search the entire index.
 		for id, vec := range f.vectors {
-			sim := cosineSimilarity(query, vec)
+			sim := CosineSimilarity(query, vec)
 			results = append(results, SearchResult{NodeID: id, Similarity: sim})
 		}
 	}
@@ -95,9 +95,9 @@ func (f *FlatIndex) Len() int {
 	return len(f.vectors)
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
+// CosineSimilarity computes the cosine similarity between two vectors.
 // Returns 0 if either vector has zero magnitude.
-func cosineSimilarity(a, b []float32) float32 {
+func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) {
 		return 0
 	}

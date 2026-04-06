@@ -216,6 +216,15 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 			results = []search.Result{}
 		}
 
+		// Track retrieved IDs for observe feedback loop detection.
+		if len(results) > 0 {
+			ids := make([]string, len(results))
+			for i, r := range results {
+				ids[i] = r.ID
+			}
+			s.retrieval.Track(ids...)
+		}
+
 		return mcpJSONResult(map[string]any{
 			"results": results,
 			"facets":  search.ComputeFacets(results),
@@ -401,6 +410,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			}
 			related = append(related, rel)
 		}
+
+		// Track inspected ID for observe feedback loop detection.
+		s.retrieval.Track(args.ID)
 
 		return mcpJSONResult(map[string]any{
 			"id": n.ID, "properties": props,
@@ -595,7 +607,46 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		sub := s.engine.Graph().Traverse(args.NodeID, graph.TraverseOptions{
 			MaxDepth: depth, EdgeTypes: args.EdgeTypes, MinEdgeWeight: args.MinWeight,
 		})
+
+		// Track explored IDs for observe feedback loop detection.
+		ids := make([]string, 0, len(sub.Nodes)+1)
+		ids = append(ids, args.NodeID)
+		for _, n := range sub.Nodes {
+			ids = append(ids, n.ID)
+		}
+		s.retrieval.Track(ids...)
+
 		return mcpJSONResult(sub)
+	})
+
+	type observeInput struct {
+		Messages []observeMessage `json:"messages,omitempty" jsonschema:"conversation turns [{role, content}]. Server extracts facts (requires LLM)."`
+		Facts    []string         `json:"facts,omitempty" jsonschema:"pre-extracted facts. Server runs quality gates only (no LLM needed)."`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name: "gramaton_observe",
+		Description: `Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
+
+Send EITHER messages (server extracts facts, requires LLM) OR facts (server runs quality gates only).
+Call at natural breakpoints: end of task, topic change, session wind-down. Not every turn.`,
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args observeInput) (*mcp.CallToolResult, any, error) {
+		cfg := s.engine.Config()
+		if !cfg.Observe.Enabled {
+			return mcpErr("observe pipeline is not enabled")
+		}
+		if len(args.Messages) == 0 && len(args.Facts) == 0 {
+			return mcpErr("messages or facts is required")
+		}
+		if len(args.Messages) > 0 && s.engine.LLM() == nil {
+			return mcpErr("messages mode requires a configured LLM provider. Send facts instead.")
+		}
+
+		go s.processObservation(observeRequest{
+			Messages: args.Messages,
+			Facts:    args.Facts,
+		})
+
+		return mcpJSONResult(map[string]any{"accepted": true})
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{

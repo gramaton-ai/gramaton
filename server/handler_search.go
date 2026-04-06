@@ -237,6 +237,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		results = []search.Result{}
 	}
 
+	// Track retrieved IDs for observe feedback loop detection.
+	if len(results) > 0 {
+		ids := make([]string, len(results))
+		for i, r := range results {
+			ids[i] = r.ID
+		}
+		s.retrieval.Track(ids...)
+	}
+
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"results": results,
 		"facets":  search.ComputeFacets(results),
@@ -281,6 +290,15 @@ func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := s.engine.Graph().Traverse(req.NodeID, opts)
+
+	// Track explored IDs for observe feedback loop detection.
+	ids := make([]string, 0, len(sub.Nodes)+1)
+	ids = append(ids, req.NodeID)
+	for _, n := range sub.Nodes {
+		ids = append(ids, n.ID)
+	}
+	s.retrieval.Track(ids...)
+
 	s.writeJSONLocked(w, http.StatusOK, sub)
 }
 

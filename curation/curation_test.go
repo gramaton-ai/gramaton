@@ -241,6 +241,144 @@ func TestConceptEnrichment(t *testing.T) {
 	}
 }
 
+func TestGarbageCollectionDryRun(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.GC.Enabled = true
+	cfg.GC.DryRun = true
+	cfg.GC.MinAgeDays = 1 // 1 day, records are 48h old
+
+	// Create a record that meets ALL GC criteria.
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Observed junk"),
+		"processing_status": graph.StringProperty("captured"),
+		"temporality":       graph.StringProperty("ephemeral"),
+		"confidence":        graph.Float64Property(0.2),
+		"importance":        graph.Float64Property(0),
+		"created_at":        graph.TimestampProperty(time.Now().UTC().Add(-48 * time.Hour)),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range n.Properties {
+		eng.PropIdx().Add(n.ID, k, v)
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.GCCollected != 1 {
+		t.Fatalf("expected 1 GC candidate in dry-run, got %d", result.GCCollected)
+	}
+	if !result.GCDryRun {
+		t.Fatal("expected GCDryRun to be true")
+	}
+
+	// Verify record still exists (dry-run doesn't delete).
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(n.ID); !ok {
+		t.Fatal("record should still exist in dry-run mode")
+	}
+}
+
+func TestGarbageCollectionActive(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.GC.Enabled = true
+	cfg.GC.DryRun = false
+	cfg.GC.MinAgeDays = 1
+
+	// GC-eligible record.
+	eng.Lock()
+	junk := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Junk to delete"),
+		"processing_status": graph.StringProperty("captured"),
+		"temporality":       graph.StringProperty("ephemeral"),
+		"confidence":        graph.Float64Property(0.1),
+		"importance":        graph.Float64Property(0),
+		"created_at":        graph.TimestampProperty(time.Now().UTC().Add(-48 * time.Hour)),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range junk.Properties {
+		eng.PropIdx().Add(junk.ID, k, v)
+	}
+
+	// Non-eligible record (classified as processed).
+	keeper := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Important knowledge"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"importance":        graph.Float64Property(0.5),
+		"created_at":        graph.TimestampProperty(time.Now().UTC().Add(-48 * time.Hour)),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range keeper.Properties {
+		eng.PropIdx().Add(keeper.ID, k, v)
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.GCCollected != 1 {
+		t.Fatalf("expected 1 GC deletion, got %d", result.GCCollected)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(junk.ID); ok {
+		t.Fatal("junk record should have been deleted")
+	}
+	if _, ok := eng.Graph().GetNode(keeper.ID); !ok {
+		t.Fatal("keeper record should still exist")
+	}
+}
+
+func TestGarbageCollectionSkipsAccessedRecords(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.GC.Enabled = true
+	cfg.GC.DryRun = false
+	cfg.GC.MinAgeDays = 1
+
+	// Record with access_count > 0 should survive.
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Accessed once"),
+		"processing_status": graph.StringProperty("captured"),
+		"temporality":       graph.StringProperty("ephemeral"),
+		"confidence":        graph.Float64Property(0.2),
+		"importance":        graph.Float64Property(0),
+		"created_at":        graph.TimestampProperty(time.Now().UTC().Add(-48 * time.Hour)),
+		"access_count":      graph.Int64Property(1), // accessed once
+	})
+	for k, v := range n.Properties {
+		eng.PropIdx().Add(n.ID, k, v)
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.GCCollected != 0 {
+		t.Fatalf("expected 0 GC deletions (record was accessed), got %d", result.GCCollected)
+	}
+}
+
+func TestGarbageCollectionDisabled(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.GC.Enabled = false // disabled
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.GCCollected != 0 {
+		t.Fatalf("GC should not run when disabled, got %d", result.GCCollected)
+	}
+}
+
 func TestParseClassification(t *testing.T) {
 	input := `{
 		"temporality": "durable",
