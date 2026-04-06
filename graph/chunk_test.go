@@ -106,6 +106,215 @@ func TestChunkTextOverlap(t *testing.T) {
 	}
 }
 
+// --- SplitSections tests ---
+
+func TestSplitSectionsNil(t *testing.T) {
+	// Short text returns nil.
+	sections := SplitSections("hello world", 500, 5000)
+	if sections != nil {
+		t.Fatal("short text should return nil")
+	}
+}
+
+func TestSplitSectionsMarkdown(t *testing.T) {
+	text := `# Introduction
+
+This is the introduction to the document. It covers the basic concepts
+and provides context for what follows.
+
+## First Topic
+
+The first topic discusses important ideas. These ideas have been widely
+studied and documented across multiple fields. We examine the evidence
+and draw conclusions based on the available data.
+
+## Second Topic
+
+The second topic builds on the first. It introduces new concepts that
+extend the previous analysis. Several key findings are presented.
+
+## Conclusion
+
+In conclusion, both topics contribute to our understanding. Future work
+should explore additional dimensions of this problem.`
+
+	sections := SplitSections(text, 100, 5000)
+	if sections == nil {
+		t.Fatal("expected sections for markdown doc")
+	}
+	if len(sections) < 3 {
+		t.Fatalf("expected at least 3 sections, got %d", len(sections))
+	}
+
+	// Check that headings were extracted.
+	foundFirst := false
+	foundSecond := false
+	for _, s := range sections {
+		if strings.Contains(s.Heading, "First Topic") {
+			foundFirst = true
+		}
+		if strings.Contains(s.Heading, "Second Topic") {
+			foundSecond = true
+		}
+	}
+	if !foundFirst || !foundSecond {
+		t.Fatal("expected headings to be extracted")
+	}
+}
+
+func TestSplitSectionsNumbered(t *testing.T) {
+	text := `Preamble text goes here with some context.
+
+1. The First Section
+
+Content for the first numbered section that explains the initial concept
+in detail with supporting evidence and examples.
+
+2. The Second Section
+
+Content for the second numbered section building on the previous one
+with additional analysis and new findings.
+
+3. The Third Section
+
+Final section wrapping up with conclusions and recommendations
+for future investigation.`
+
+	sections := SplitSections(text, 100, 5000)
+	if sections == nil {
+		t.Fatal("expected sections for numbered doc")
+	}
+	if len(sections) < 3 {
+		t.Fatalf("expected at least 3 sections, got %d", len(sections))
+	}
+}
+
+func TestSplitSectionsHTML(t *testing.T) {
+	text := `<h2>Introduction</h2>
+<p>This is an HTML document with proper heading structure. The introduction
+sets up the main arguments and provides necessary background context.</p>
+
+<h2>Main Argument</h2>
+<p>The main argument presents evidence for the central claim. Multiple sources
+are cited and the methodology is explained in detail for reproducibility.</p>
+
+<h2>Counterarguments</h2>
+<p>Several counterarguments are considered and addressed. The strongest
+objection is examined in detail and shown to be insufficient.</p>`
+
+	sections := SplitSections(text, 100, 5000)
+	if sections == nil {
+		t.Fatal("expected sections for HTML doc")
+	}
+	if len(sections) < 3 {
+		t.Fatalf("expected at least 3 sections, got %d", len(sections))
+	}
+}
+
+func TestSplitSectionsParagraphs(t *testing.T) {
+	// No headings -- falls back to paragraph splitting.
+	var sb strings.Builder
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&sb, "This is paragraph %d. It contains enough text to be meaningful on its own. "+
+			"Each paragraph discusses a different aspect of the topic with sufficient detail.\n\n", i)
+	}
+
+	sections := SplitSections(sb.String(), 100, 5000)
+	if sections == nil {
+		t.Fatal("expected sections from paragraphs")
+	}
+	if len(sections) < 2 {
+		t.Fatalf("expected at least 2 sections, got %d", len(sections))
+	}
+}
+
+func TestSplitSectionsMergeShort(t *testing.T) {
+	text := `## A
+
+Short section A.
+
+## B
+
+Also short section B.
+
+## C
+
+This section is long enough to stand on its own. It contains multiple sentences
+with meaningful content that discusses the topic in sufficient detail to be
+independently useful as a search result. Further elaboration follows with
+supporting points and examples drawn from the relevant literature.
+
+## D
+
+Another substantial section that stands on its own with enough content
+to justify being a separate unit. This section covers additional material
+that extends the analysis from section C with new perspectives and data.`
+
+	sections := SplitSections(text, 200, 5000)
+	if sections == nil {
+		t.Fatal("expected sections")
+	}
+	// A and B should be merged since they're below minChars.
+	if len(sections) > 3 {
+		t.Fatalf("expected A+B merged, got %d sections", len(sections))
+	}
+}
+
+func TestSplitSectionsSubSplit(t *testing.T) {
+	// Single heading with very long content should get sub-split.
+	var sb strings.Builder
+	sb.WriteString("## Very Long Section\n\n")
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&sb, "Paragraph %d discusses topic %d in detail. This is substantial content. ", i, i)
+		sb.WriteString("Additional analysis follows with supporting evidence.\n\n")
+	}
+
+	sections := SplitSections(sb.String(), 500, 2000)
+	if sections == nil {
+		t.Fatal("expected sections")
+	}
+	for _, s := range sections {
+		if len(s.Text) > 2500 { // some tolerance
+			t.Fatalf("section exceeds maxChars: %d", len(s.Text))
+		}
+	}
+}
+
+func TestSplitSectionsNoStructure(t *testing.T) {
+	// Continuous text with no paragraph breaks and no headings.
+	text := strings.Repeat("word ", 2000)
+	sections := SplitSections(text, 500, 5000)
+	// Should return nil (no structure found, caller falls back to ChunkText).
+	if sections != nil {
+		t.Fatalf("expected nil for unstructured text, got %d sections", len(sections))
+	}
+}
+
+func TestSplitSectionsCleanHeading(t *testing.T) {
+	text := `## 1. First Topic Here
+
+Content for the first section with enough material to stand alone.
+Multiple sentences discussing the topic in detail.
+
+## 2. Second Topic Here
+
+Content for the second section with different material and analysis.
+Further discussion follows with conclusions.`
+
+	sections := SplitSections(text, 100, 5000)
+	if sections == nil {
+		t.Fatal("expected sections")
+	}
+	for _, s := range sections {
+		if strings.HasPrefix(s.Heading, "#") {
+			t.Fatalf("heading should not start with #: %q", s.Heading)
+		}
+		if strings.HasPrefix(s.Heading, "1.") || strings.HasPrefix(s.Heading, "2.") {
+			t.Fatalf("heading should not start with number prefix: %q", s.Heading)
+		}
+	}
+}
+
 func TestChunkTextWordBoundary(t *testing.T) {
 	// The Neuromancer text has natural word boundaries. Chunks should
 	// prefer breaking at spaces rather than mid-word.

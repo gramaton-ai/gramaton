@@ -39,7 +39,43 @@ type importRequest struct {
 	Records []backup.ExportRecord `json:"records"`
 }
 
+func (s *Server) handleBackupStatus(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.engine.Config()
+	backupDir := cfg.Backup.Dir
+	if backupDir == "" {
+		backupDir = backup.DefaultBackupDir()
+	}
+
+	files, _ := filepath.Glob(filepath.Join(backupDir, "gramaton-backup-*.tar.gz"))
+	var backups []map[string]any
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		backups = append(backups, map[string]any{
+			"path":       f,
+			"size_bytes": info.Size(),
+			"created":    info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	if backups == nil {
+		backups = []map[string]any{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"backup_dir": backupDir,
+		"backups":    backups,
+		"count":      len(backups),
+	})
+}
+
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if !isLoopback(r) {
+		s.writeError(w, http.StatusForbidden, "forbidden",
+			"backup is restricted to loopback connections", false)
+		return
+	}
+
 	cfg := s.engine.Config()
 	backupDir := cfg.Backup.Dir
 	if backupDir == "" {

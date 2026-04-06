@@ -92,6 +92,11 @@ var validEpistemicStatuses = map[string]bool{
 	"well_established": true, "probable": true, "speculative": true, "contested": true, "refuted": true,
 }
 
+// validResolutions is the set of valid resolution values.
+var validResolutions = map[string]bool{
+	"completed": true, "superseded": true, "abandoned": true, "obsolete": true,
+}
+
 // validateFloat64Range checks that a float64 pointer is in [min, max].
 func validateFloat64Range(name string, val *float64, min, max float64) error {
 	if val == nil {

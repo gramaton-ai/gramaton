@@ -81,6 +81,7 @@ type Query struct {
 	Temporality     string // exact match, or "!value" for negation
 	KnowledgeType   string // exact match, or "!value" for negation
 	EpistemicStatus string // exact match, or "!value" for negation
+	Resolution      string // exact match, "!value" for negation, or "unresolved" (no resolution set)
 	Missing         []string // field names that must not be set
 	Keywords          []string   // exact keyword match (all must be present)
 	AccessCountMin    *int64     // minimum access count
@@ -108,6 +109,7 @@ type Facets struct {
 	Temporality     map[string]int `json:"temporality,omitempty"`
 	KnowledgeType   map[string]int `json:"knowledge_type,omitempty"`
 	EpistemicStatus map[string]int `json:"epistemic_status,omitempty"`
+	Resolution      map[string]int `json:"resolution,omitempty"`
 }
 
 // ComputeFacets counts the distribution of enum fields across results.
@@ -116,6 +118,7 @@ func ComputeFacets(results []Result) Facets {
 		Temporality:     make(map[string]int),
 		KnowledgeType:   make(map[string]int),
 		EpistemicStatus: make(map[string]int),
+		Resolution:      make(map[string]int),
 	}
 	for _, r := range results {
 		if r.Temporality != "" {
@@ -126,6 +129,9 @@ func ComputeFacets(results []Result) Facets {
 		}
 		if r.EpistemicStatus != "" {
 			f.EpistemicStatus[r.EpistemicStatus]++
+		}
+		if r.Resolution != "" {
+			f.Resolution[r.Resolution]++
 		}
 	}
 	return f
@@ -141,6 +147,7 @@ type Result struct {
 	Temporality     string  `json:"temporality"`
 	KnowledgeType   string  `json:"knowledge_type,omitempty"`
 	EpistemicStatus string  `json:"epistemic_status,omitempty"`
+	Resolution      string  `json:"resolution,omitempty"`
 	ValidFrom       string  `json:"valid_from,omitempty"`
 	ValidUntil      string  `json:"valid_until,omitempty"`
 	AssertedAsOf    string  `json:"asserted_as_of,omitempty"`
@@ -391,6 +398,23 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	enumFilter("knowledge_type", q.KnowledgeType)
 	enumFilter("epistemic_status", q.EpistemicStatus)
 
+	// Resolution filter: "unresolved" is special -- means no resolution
+	// property set. Other values use the standard enum filter.
+	if q.Resolution == "unresolved" {
+		// Nodes that do NOT have a resolution property.
+		have := t.propIdx.NodesWithKey("resolution")
+		allIDs := t.graph.AllNodeIDs()
+		result := make(map[string]struct{})
+		for _, id := range allIDs {
+			if _, has := have[id]; !has {
+				result[id] = struct{}{}
+			}
+		}
+		sets = append(sets, result)
+	} else {
+		enumFilter("resolution", q.Resolution)
+	}
+
 	// Missing filter: exclude nodes that have the specified properties.
 	for _, field := range q.Missing {
 		have := t.propIdx.NodesWithKey(field)
@@ -441,7 +465,8 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 			continue
 		}
 
-		// Exclude chunk nodes -- they surface their parent instead.
+		// Exclude legacy chunk nodes (dumb fragments). Section nodes
+		// (structural splits with metadata) are included in results.
 		if isChunkNode(t.graph, id) {
 			continue
 		}
@@ -617,6 +642,9 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 	if v, ok := n.Properties.GetString("epistemic_status"); ok {
 		r.EpistemicStatus = v
 	}
+	if v, ok := n.Properties.GetString("resolution"); ok {
+		r.Resolution = v
+	}
 	if v, ok := n.Properties.GetTimestamp("valid_from"); ok {
 		r.ValidFrom = v.Format(time.RFC3339)
 	}
@@ -719,6 +747,11 @@ func buildMetadataSummary(props graph.Properties) string {
 		}
 	}
 
+	// Resolution status.
+	if v, ok := props.GetString("resolution"); ok {
+		result += fmt.Sprintf(". Resolved: %s", v)
+	}
+
 	// Last accessed.
 	if la, ok := props.GetTimestamp("last_accessed"); ok {
 		days := int(now.Sub(la).Hours() / 24)
@@ -769,16 +802,16 @@ func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) floa
 }
 
 // edgeCount returns the total number of edges (in + out) for a node,
-// excluding chunk_of edges.
+// excluding chunk_of and section_of edges (structural, not semantic).
 func edgeCount(g nodeReader, id string) int {
 	count := 0
 	for _, e := range g.EdgesFrom(id) {
-		if e.Type != "chunk_of" {
+		if e.Type != "chunk_of" && e.Type != "section_of" {
 			count++
 		}
 	}
 	for _, e := range g.EdgesTo(id) {
-		if e.Type != "chunk_of" {
+		if e.Type != "chunk_of" && e.Type != "section_of" {
 			count++
 		}
 	}

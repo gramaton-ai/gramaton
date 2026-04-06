@@ -295,7 +295,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		prepared = append(prepared, precomputed{
 			file:     f,
 			embedded: s.preEmbedContent(capReq),
-			chunked:  s.engine.PreChunk(context.Background(), f.Content),
+			chunked:  s.engine.PreChunk(context.Background(), f.Content, ""),
 		})
 	}
 
@@ -320,7 +320,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
 		}
 
-		if numChunks := s.engine.ApplyChunks(n.ID, p.chunked); numChunks > 0 {
+		if numChunks := s.engine.ApplyChunks(n.ID, p.chunked, n.Properties); numChunks > 0 {
 			warnings = append(warnings, fmt.Sprintf("%s: chunked into %d segments", p.file.Filename, numChunks))
 		}
 

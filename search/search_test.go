@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -869,5 +870,171 @@ func TestSearchEmptyGraph(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results from empty graph, got %d", len(results))
+	}
+}
+
+func TestSearchFilterByResolution(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	now := time.Now().UTC()
+
+	// Add a resolved record.
+	resolved := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("TODO: build feature X"),
+		"content_short":     graph.StringProperty("Build feature X"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"resolution":        graph.StringProperty("completed"),
+		"resolved_at":       graph.TimestampProperty(now),
+	})
+	for k, v := range resolved.Properties {
+		propIdx.Add(resolved.ID, k, v)
+	}
+
+	// Add an unresolved record.
+	unresolved := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("TODO: build feature Y"),
+		"content_short":     graph.StringProperty("Build feature Y"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range unresolved.Properties {
+		propIdx.Add(unresolved.ID, k, v)
+	}
+
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// Filter for completed records.
+	results, err := tool.Execute(context.Background(), Query{
+		Resolution: "completed",
+		Top:        100,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	found := false
+	for _, r := range results {
+		if r.ID == resolved.ID {
+			found = true
+			if r.Resolution != "completed" {
+				t.Fatalf("expected resolution 'completed', got %q", r.Resolution)
+			}
+		}
+		if r.ID == unresolved.ID {
+			t.Fatal("unresolved record should not appear when filtering for completed")
+		}
+	}
+	if !found {
+		t.Fatal("resolved record should appear in results")
+	}
+
+	// Filter for unresolved records.
+	results, err = tool.Execute(context.Background(), Query{
+		Resolution: "unresolved",
+		Top:        100,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	foundUnresolved := false
+	for _, r := range results {
+		if r.ID == unresolved.ID {
+			foundUnresolved = true
+		}
+		if r.ID == resolved.ID {
+			t.Fatal("resolved record should not appear when filtering for unresolved")
+		}
+	}
+	if !foundUnresolved {
+		t.Fatal("unresolved record should appear in results")
+	}
+}
+
+func TestSearchFilterByResolutionNegation(t *testing.T) {
+	g, propIdx, vecIdx := setupTestGraph()
+	now := time.Now().UTC()
+
+	completed := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Done task"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"resolution":        graph.StringProperty("completed"),
+	})
+	for k, v := range completed.Properties {
+		propIdx.Add(completed.ID, k, v)
+	}
+
+	abandoned := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Dropped task"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"resolution":        graph.StringProperty("abandoned"),
+	})
+	for k, v := range abandoned.Properties {
+		propIdx.Add(abandoned.ID, k, v)
+	}
+
+	tool := New(g, propIdx, vecIdx, nil, defaultCfg())
+
+	// Exclude completed -- should still find abandoned.
+	results, err := tool.Execute(context.Background(), Query{
+		Resolution: "!completed",
+		Top:        100,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	foundAbandoned := false
+	for _, r := range results {
+		if r.ID == completed.ID {
+			t.Fatal("completed record should be excluded by !completed filter")
+		}
+		if r.ID == abandoned.ID {
+			foundAbandoned = true
+		}
+	}
+	if !foundAbandoned {
+		t.Fatal("abandoned record should appear in !completed results")
+	}
+}
+
+func TestSearchResolutionInFacets(t *testing.T) {
+	results := []Result{
+		{ID: "1", Resolution: "completed"},
+		{ID: "2", Resolution: "completed"},
+		{ID: "3", Resolution: "abandoned"},
+		{ID: "4"},
+	}
+	facets := ComputeFacets(results)
+	if facets.Resolution["completed"] != 2 {
+		t.Fatalf("expected 2 completed, got %d", facets.Resolution["completed"])
+	}
+	if facets.Resolution["abandoned"] != 1 {
+		t.Fatalf("expected 1 abandoned, got %d", facets.Resolution["abandoned"])
+	}
+}
+
+func TestMetadataSummaryResolution(t *testing.T) {
+	props := graph.Properties{
+		"temporality": graph.StringProperty("durable"),
+		"confidence":  graph.Float64Property(0.85),
+		"resolution":  graph.StringProperty("completed"),
+	}
+	summary := buildMetadataSummary(props)
+
+	if !strings.Contains(summary, "Resolved: completed") {
+		t.Fatalf("summary should contain resolution, got %q", summary)
 	}
 }

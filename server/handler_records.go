@@ -57,6 +57,11 @@ type classifyRequest struct {
 	SummaryAbstract string   `json:"summary_abstract,omitempty"`
 }
 
+type resolveRequest struct {
+	Resolution     string `json:"resolution"`
+	ResolutionNote string `json:"resolution_note,omitempty"`
+}
+
 type edgeRequest struct {
 	TargetID   string   `json:"target_id"`
 	EdgeType   string   `json:"edge_type"`
@@ -90,7 +95,7 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 	// Pre-embed content and pre-chunk outside the lock. Embedding can
 	// take seconds (Ollama model load) and would block the entire server.
 	preEmbedded := s.preEmbedContent(&req)
-	preChunked := s.engine.PreChunk(context.Background(), req.Content)
+	preChunked := s.engine.PreChunk(context.Background(), req.Content, req.SummaryShort)
 
 	s.engine.Lock()
 	defer s.engine.Unlock()
@@ -143,6 +148,8 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 			_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
 			if !alreadyHistorical {
 				s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+				s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+				s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
 				if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
 					summary := ""
 					if v, ok := oldNode.Properties.GetString("content_short"); ok {
@@ -159,7 +166,7 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if numChunks := s.engine.ApplyChunks(n.ID, preChunked); numChunks > 0 {
+	if numChunks := s.engine.ApplyChunks(n.ID, preChunked, n.Properties); numChunks > 0 {
 		warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
 	}
 
@@ -580,6 +587,59 @@ func (s *Server) handleClassifyRecord(w http.ResponseWriter, r *http.Request) {
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{"id": id, "updated": true})
 }
 
+func (s *Server) handleResolveRecord(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req resolveRequest
+	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+		return
+	}
+
+	if req.Resolution == "" {
+		s.writeError(w, http.StatusBadRequest, "missing_field", "resolution is required", true)
+		return
+	}
+	if err := validateEnum("resolution", req.Resolution, validResolutions); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", err.Error(), true)
+		return
+	}
+	if len(req.ResolutionNote) > maxContextFieldLen {
+		s.writeError(w, http.StatusBadRequest, "invalid_field",
+			fmt.Sprintf("resolution_note exceeds maximum length of %d", maxContextFieldLen), true)
+		return
+	}
+
+	s.engine.Lock()
+	defer s.engine.Unlock()
+
+	if _, ok := s.engine.Graph().GetNode(id); !ok {
+		s.writeError(w, http.StatusNotFound, "not_found", "record not found", false)
+		return
+	}
+
+	now := time.Now().UTC()
+	s.engine.SetProp(id, "resolution", graph.StringProperty(req.Resolution))
+	s.engine.SetProp(id, "resolved_at", graph.TimestampProperty(now))
+	if req.ResolutionNote != "" {
+		s.engine.SetProp(id, "resolution_note", graph.StringProperty(req.ResolutionNote))
+	}
+
+	// Auto-set valid_until if not already set, so resolved records
+	// naturally deprioritize in search results.
+	n, _ := s.engine.Graph().GetNode(id)
+	if _, hasVU := n.Properties.GetTimestamp("valid_until"); !hasVU {
+		s.engine.SetProp(id, "valid_until", graph.TimestampProperty(now))
+	}
+
+	if _, err := s.engine.Save("resolve"); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
+		return
+	}
+
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{"id": id, "resolved": true})
+}
+
 // --- Helpers ---
 
 func validateCaptureRequest(req *captureRequest) error {
@@ -790,6 +850,9 @@ func inspectMetadataSummary(props graph.Properties) string {
 			s = "well-established"
 		}
 		parts = append(parts, s)
+	}
+	if v, ok := props.GetString("resolution"); ok {
+		parts = append(parts, fmt.Sprintf("resolved: %s", v))
 	}
 
 	result := ""

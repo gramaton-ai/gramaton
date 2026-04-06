@@ -364,6 +364,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/records/{id}", s.handleDeleteRecord)
 	mux.HandleFunc("POST /v1/records/{id}/edges", s.handleCreateEdge)
 	mux.HandleFunc("POST /v1/records/{id}/classify", s.handleClassifyRecord)
+	mux.HandleFunc("POST /v1/records/{id}/resolve", s.handleResolveRecord)
 	mux.HandleFunc("GET /v1/records/{id}/history", func(w http.ResponseWriter, r *http.Request) {
 		// Redirect to log endpoint with record query param.
 		id := r.PathValue("id")
@@ -402,6 +403,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
 
 	// Backup/Export/Import
+	mux.HandleFunc("GET /v1/backup", s.handleBackupStatus)
 	mux.HandleFunc("POST /v1/backup", s.handleBackup)
 	mux.HandleFunc("POST /v1/restore", s.handleRestore)
 	mux.HandleFunc("POST /v1/export", s.handleExport)

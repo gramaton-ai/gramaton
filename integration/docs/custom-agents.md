@@ -38,6 +38,7 @@ escaping, no permission prompts.
 | `gramaton_duplicates` | Find near-duplicate records |
 | `gramaton_curation` | View curation status, trigger, or dry-run |
 | `gramaton_observe` | Send conversation for knowledge extraction |
+| `gramaton_resolve` | Mark a record as resolved (completed/abandoned/obsolete) |
 | `gramaton_backup` | Create a backup or check status |
 
 ### 2. REST API
@@ -55,6 +56,7 @@ PATCH  /v1/records/{id}         Update properties
 DELETE /v1/records/{id}         Soft delete
 POST   /v1/records/{id}/edges   Create an edge
 POST   /v1/records/{id}/classify  Classify a record
+POST   /v1/records/{id}/resolve  Mark as resolved
 POST   /v1/search               Search the store
 POST   /v1/explore              Graph traversal
 GET    /v1/pending              List unclassified records
@@ -68,6 +70,7 @@ POST   /v1/duplicates           Find near-duplicates
 GET    /v1/curation             Curation status and candidates
 POST   /v1/curation/trigger     Trigger a curation cycle
 POST   /v1/observe              Send conversation for extraction
+GET    /v1/backup               List existing backups
 POST   /v1/backup               Create a backup
 ```
 

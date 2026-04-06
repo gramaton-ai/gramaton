@@ -226,43 +226,43 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 		longContent += "word "
 	}
 
-	pre := eng.PreChunk(context.Background(), longContent)
+	pre := eng.PreChunk(context.Background(), longContent, "")
 	if pre == nil {
 		t.Fatal("PreChunk should return result for long content")
 	}
-	if len(pre.Texts) == 0 {
-		t.Fatal("PreChunk should produce chunks")
+	if len(pre.Texts) == 0 && len(pre.Sections) == 0 {
+		t.Fatal("PreChunk should produce chunks or sections")
 	}
 
 	eng.Lock()
 	n := eng.Graph().AddNode(graph.Properties{
 		"content_full": graph.StringProperty(longContent),
 	})
-	numChunks := eng.ApplyChunks(n.ID, pre)
+	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
 	eng.Unlock()
 
 	if numChunks == 0 {
-		t.Fatal("ApplyChunks should create chunk nodes")
+		t.Fatal("ApplyChunks should create child nodes")
 	}
 
-	// Verify chunk nodes have chunk_of edges.
+	// Verify child nodes have chunk_of or section_of edges.
 	eng.RLock()
 	defer eng.RUnlock()
 	edges := eng.Graph().EdgesTo(n.ID)
-	chunkEdges := 0
+	childEdges := 0
 	for _, e := range edges {
-		if e.Type == "chunk_of" {
-			chunkEdges++
+		if e.Type == "chunk_of" || e.Type == "section_of" {
+			childEdges++
 		}
 	}
-	if chunkEdges != numChunks {
-		t.Fatalf("expected %d chunk_of edges, got %d", numChunks, chunkEdges)
+	if childEdges != numChunks {
+		t.Fatalf("expected %d child edges, got %d", numChunks, childEdges)
 	}
 }
 
 func TestPreChunkShortContent(t *testing.T) {
 	eng := setupTestEngine(t)
-	pre := eng.PreChunk(context.Background(), "short content")
+	pre := eng.PreChunk(context.Background(), "short content", "")
 	if pre != nil {
 		t.Fatal("PreChunk should return nil for short content")
 	}
@@ -297,8 +297,8 @@ func TestConfig(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()
 
-	if cfg.Scoring.WeightSimilarity != 0.35 {
-		t.Fatalf("expected default weight_similarity 0.35, got %f", cfg.Scoring.WeightSimilarity)
+	if cfg.Scoring.WeightSimilarity != 0.50 {
+		t.Fatalf("expected default weight_similarity 0.50, got %f", cfg.Scoring.WeightSimilarity)
 	}
 	if cfg.Dedup.SimilarityThreshold != 0.92 {
 		t.Fatalf("expected default dedup threshold 0.92, got %f", cfg.Dedup.SimilarityThreshold)

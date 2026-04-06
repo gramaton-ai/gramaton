@@ -99,9 +99,11 @@ type ActivationConfig struct {
 }
 
 type ChunkingConfig struct {
-	Threshold int `yaml:"threshold"`
-	ChunkSize int `yaml:"chunk_size"`
-	Overlap   int `yaml:"overlap"`
+	Threshold  int `yaml:"threshold"`
+	ChunkSize  int `yaml:"chunk_size"`
+	Overlap    int `yaml:"overlap"`
+	SectionMin int `yaml:"section_min"` // min section size in chars (default 500)
+	SectionMax int `yaml:"section_max"` // max section size in chars (default 5000)
 }
 
 type ConceptsConfig struct {
@@ -227,12 +229,12 @@ func Defaults() Config {
 		},
 
 		Scoring: ScoringConfig{
-			WeightSimilarity:    0.35,
-			WeightRecency:       0.15,
-			WeightFreshness:     0.15,
-			WeightFrequency:     0.1,
-			WeightActivation:    0.05,
-			WeightConfidence:    0.2,
+			WeightSimilarity:    0.50,
+			WeightRecency:       0.10,
+			WeightFreshness:     0.10,
+			WeightFrequency:     0.05,
+			WeightActivation:    0.10,
+			WeightConfidence:    0.15,
 			ImportanceThreshold: 0.7,
 			ImportanceFloor:     0.5,
 			HistoricalPenalty:   0.5,
@@ -264,9 +266,11 @@ func Defaults() Config {
 		},
 
 		Chunking: ChunkingConfig{
-			Threshold: 512,
-			ChunkSize: 512,
-			Overlap:   128,
+			Threshold:  512,
+			ChunkSize:  512,
+			Overlap:    128,
+			SectionMin: 500,
+			SectionMax: 5000,
 		},
 
 		Concepts: ConceptsConfig{

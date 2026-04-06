@@ -77,10 +77,11 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSONLocked(w, http.StatusOK, resp)
 }
 
-// isChunkNode checks if a node is a chunk (has an outbound chunk_of edge).
+// isChunkNode checks if a node is a chunk or section (has an outbound
+// chunk_of or section_of edge).
 func isChunkNode(g *graph.Graph, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
-		if e.Type == "chunk_of" {
+		if e.Type == "chunk_of" || e.Type == "section_of" {
 			return true
 		}
 	}

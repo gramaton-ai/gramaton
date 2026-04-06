@@ -53,6 +53,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 		Temporality       string   `json:"temporality,omitempty" jsonschema:"filter: immutable|durable|temporal|ephemeral (prefix with ! to exclude, e.g. !ephemeral)"`
 		KnowledgeType     string   `json:"knowledge_type,omitempty" jsonschema:"filter: episodic|semantic|procedural|conceptual|reference (prefix with ! to exclude)"`
 		EpistemicStatus   string   `json:"epistemic_status,omitempty" jsonschema:"filter: well_established|probable|speculative|contested|refuted (prefix with ! to exclude)"`
+		Resolution        string   `json:"resolution,omitempty" jsonschema:"filter: completed|superseded|abandoned|obsolete|unresolved (unresolved = no resolution set)"`
 		ConfidenceMin     *float64 `json:"confidence_min,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		ConfidenceMax     *float64 `json:"confidence_max,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		ImportanceMin     *float64 `json:"importance_min,omitempty" jsonschema:"number between 0.0 and 1.0"`
@@ -124,6 +125,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 			Temporality:       args.Temporality,
 			KnowledgeType:     args.KnowledgeType,
 			EpistemicStatus:   args.EpistemicStatus,
+			Resolution:        args.Resolution,
 			IncludeHistorical: args.IncludeHistorical,
 			ConfidenceMin:     args.ConfidenceMin,
 			ConfidenceMax:     args.ConfidenceMax,
@@ -284,7 +286,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 
 		preEmbedded := s.preEmbedContent(capReq)
-		preChunked := s.engine.PreChunk(ctx, args.Content)
+		preChunked := s.engine.PreChunk(ctx, args.Content, args.SummaryShort)
 
 		s.engine.Lock()
 		defer s.engine.Unlock()
@@ -345,7 +347,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			}
 		}
 
-		if numChunks := s.engine.ApplyChunks(n.ID, preChunked); numChunks > 0 {
+		if numChunks := s.engine.ApplyChunks(n.ID, preChunked, n.Properties); numChunks > 0 {
 			warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
 		}
 
@@ -511,6 +513,53 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 
 		return mcpJSONResult(map[string]any{"id": args.ID, "updated": updated})
+	})
+
+	type resolveInput struct {
+		ID             string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution     string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote string `json:"resolution_note,omitempty" jsonschema:"brief explanation of why (optional)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_resolve",
+		Description: "Mark a record as resolved. Sets resolution status, resolved_at timestamp, and auto-sets valid_until to deprioritize in search. Use for TODOs, questions, decisions, or any record with a lifecycle.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args resolveInput) (*mcp.CallToolResult, any, error) {
+		if args.ID == "" {
+			return mcpErr("id is required")
+		}
+		if args.Resolution == "" {
+			return mcpErr("resolution is required (completed, superseded, abandoned, obsolete)")
+		}
+		if err := validateEnum("resolution", args.Resolution, validResolutions); err != nil {
+			return mcpErr(err.Error())
+		}
+		if len(args.ResolutionNote) > maxContextFieldLen {
+			return mcpErr(fmt.Sprintf("resolution_note exceeds maximum length of %d", maxContextFieldLen))
+		}
+
+		s.engine.Lock()
+		defer s.engine.Unlock()
+
+		n, ok := s.engine.Graph().GetNode(args.ID)
+		if !ok {
+			return mcpErr("record not found")
+		}
+
+		now := time.Now().UTC()
+		s.engine.SetProp(args.ID, "resolution", graph.StringProperty(args.Resolution))
+		s.engine.SetProp(args.ID, "resolved_at", graph.TimestampProperty(now))
+		if args.ResolutionNote != "" {
+			s.engine.SetProp(args.ID, "resolution_note", graph.StringProperty(args.ResolutionNote))
+		}
+
+		// Auto-set valid_until if not already set.
+		if _, hasVU := n.Properties.GetTimestamp("valid_until"); !hasVU {
+			s.engine.SetProp(args.ID, "valid_until", graph.TimestampProperty(now))
+		}
+
+		s.engine.Save("resolve")
+
+		return mcpJSONResult(map[string]any{"id": args.ID, "resolved": true})
 	})
 
 	type linkInput struct {

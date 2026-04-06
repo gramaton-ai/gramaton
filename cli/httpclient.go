@@ -10,6 +10,12 @@ var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 }
 
+// healthClient has a short timeout for server discovery health checks.
+// Prevents long hangs when connecting to stale/dead server info.
+var healthClient = &http.Client{
+	Timeout: 3 * time.Second,
+}
+
 // httpGet sends a GET request.
 func httpGet(url string) (*http.Response, error) {
 	return httpClient.Get(url)

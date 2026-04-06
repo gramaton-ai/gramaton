@@ -339,48 +339,175 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	return "", 0
 }
 
-// PreChunkResult holds chunk texts and their pre-computed embeddings,
-// ready to be applied under the write lock without I/O.
+// PreChunkResult holds section/chunk data and their pre-computed
+// embeddings, ready to be applied under the write lock without I/O.
 type PreChunkResult struct {
-	Texts   []string
-	Vectors [][]float32 // one embedding per chunk text, may be nil
-	Model   string
+	Sections  []graph.Section // structural sections (preferred)
+	Texts     []string        // fallback: dumb chunk texts
+	Vectors   [][]float32     // one embedding per section/chunk, may be nil
+	Model     string
+	ParentVec []float32 // fallback embedding for parent (truncated content)
 }
 
-// PreChunk determines if content needs chunking and pre-embeds the
-// chunks outside the lock. Call this BEFORE acquiring the write lock.
-// Returns nil if no chunking is needed.
-func (e *Engine) PreChunk(ctx context.Context, content string) *PreChunkResult {
-	chunks := graph.ChunkText(
-		content,
-		e.cfg.Chunking.Threshold,
-		e.cfg.Chunking.ChunkSize,
-		e.cfg.Chunking.Overlap,
-	)
-	if len(chunks) == 0 {
+// maxEmbedChars is the maximum content length sent to the embedder.
+// nomic-embed-text has ~8192 token context; 4000 chars is safe.
+const maxEmbedChars = 4000
+
+// PreChunk determines if content needs sectioning/chunking and pre-embeds
+// outside the lock. Uses structural splitting first (SplitSections),
+// falls back to dumb chunking (ChunkText) if no structure is detected.
+// Also computes a fallback embedding for the parent from truncated content.
+// Call this BEFORE acquiring the write lock. Returns nil if no splitting needed.
+func (e *Engine) PreChunk(ctx context.Context, content string, summary string) *PreChunkResult {
+	cfg := e.cfg.Chunking
+
+	// Check if content exceeds the threshold.
+	thresholdChars := cfg.Threshold * 4
+	if len(content) <= thresholdChars {
 		return nil
 	}
 
-	result := &PreChunkResult{Texts: chunks}
+	result := &PreChunkResult{}
 
-	if e.embedder != nil {
-		vecs, err := e.embedder.Embed(ctx, chunks)
-		if err == nil {
-			result.Vectors = vecs
-			result.Model = e.embedder.ModelID()
+	// Try structural splitting first.
+	sections := graph.SplitSections(content, cfg.SectionMin, cfg.SectionMax)
+	if sections != nil {
+		result.Sections = sections
+	} else {
+		// Fallback to dumb chunking.
+		chunks := graph.ChunkText(content, cfg.Threshold, cfg.ChunkSize, cfg.Overlap)
+		if len(chunks) == 0 {
+			return nil
+		}
+		result.Texts = chunks
+	}
+
+	if e.embedder == nil {
+		return result
+	}
+
+	// Pre-embed sections or chunks.
+	var texts []string
+	if len(result.Sections) > 0 {
+		for _, s := range result.Sections {
+			t := s.Text
+			if len(t) > maxEmbedChars {
+				t = t[:maxEmbedChars]
+			}
+			texts = append(texts, t)
+		}
+	} else {
+		for _, t := range result.Texts {
+			if len(t) > maxEmbedChars {
+				t = t[:maxEmbedChars]
+			}
+			texts = append(texts, t)
+		}
+	}
+
+	vecs, err := e.embedder.Embed(ctx, texts)
+	if err == nil {
+		result.Vectors = vecs
+		result.Model = e.embedder.ModelID()
+	}
+
+	// Pre-embed a fallback for the parent record.
+	parentText := summary
+	if parentText == "" && len(content) > maxEmbedChars {
+		parentText = content[:maxEmbedChars]
+	}
+	if parentText != "" {
+		pvecs, err := e.embedder.Embed(ctx, []string{parentText})
+		if err == nil && len(pvecs) > 0 {
+			result.ParentVec = pvecs[0]
 		}
 	}
 
 	return result
 }
 
-// ApplyChunks creates chunk nodes from a PreChunkResult. Caller must
-// hold the write lock. This is fast (no I/O, no embedding calls).
-func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult) int {
+// ApplyChunks creates section/chunk nodes from a PreChunkResult. Caller
+// must hold the write lock. parentProps provides metadata to inherit for
+// section nodes. This is fast (no I/O, no embedding calls).
+func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps graph.Properties) int {
 	if pre == nil {
 		return 0
 	}
 
+	// Apply parent fallback embedding if the parent doesn't already have one.
+	if pre.ParentVec != nil {
+		if _, hasEmbed := parentProps.GetVector("embedding_full"); !hasEmbed {
+			prop := graph.VectorProperty(pre.ParentVec)
+			e.graph.SetNodeProperty(parentID, "embedding_full", prop)
+			e.propIdx.Add(parentID, "embedding_full", prop)
+			e.vecIdx.Add(parentID, pre.ParentVec)
+			if pre.Model != "" {
+				modelProp := graph.StringProperty(pre.Model)
+				e.graph.SetNodeProperty(parentID, "embedding_model", modelProp)
+				e.propIdx.Add(parentID, "embedding_model", modelProp)
+			}
+		}
+	}
+
+	if len(pre.Sections) > 0 {
+		return e.applySections(parentID, pre, parentProps)
+	}
+	return e.applyLegacyChunks(parentID, pre)
+}
+
+// applySections creates section_of nodes with inherited metadata.
+func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps graph.Properties) int {
+	// Metadata keys to inherit from parent.
+	inheritKeys := []string{
+		"temporality", "confidence", "knowledge_type", "epistemic_status",
+		"content_keywords", "source_ref", "processing_status",
+	}
+
+	for i, sec := range pre.Sections {
+		props := graph.Properties{
+			"content_full": graph.StringProperty(sec.Text),
+		}
+
+		// Set section heading as content_short.
+		if sec.Heading != "" {
+			props["content_short"] = graph.StringProperty(sec.Heading)
+		} else if len(sec.Text) > 200 {
+			props["content_short"] = graph.StringProperty(sec.Text[:200])
+		}
+
+		// Inherit parent metadata.
+		for _, key := range inheritKeys {
+			if v, ok := parentProps[key]; ok {
+				props[key] = v
+			}
+		}
+
+		node := e.graph.AddNode(props)
+		e.graph.AddEdge(node.ID, parentID, "section_of", 1.0, nil)
+		for k, v := range node.Properties {
+			e.propIdx.Add(node.ID, k, v)
+		}
+
+		// Apply pre-computed embedding.
+		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
+			vec := pre.Vectors[i]
+			prop := graph.VectorProperty(vec)
+			e.graph.SetNodeProperty(node.ID, "embedding_full", prop)
+			e.propIdx.Add(node.ID, "embedding_full", prop)
+			e.vecIdx.Add(node.ID, vec)
+			if pre.Model != "" {
+				modelProp := graph.StringProperty(pre.Model)
+				e.graph.SetNodeProperty(node.ID, "embedding_model", modelProp)
+				e.propIdx.Add(node.ID, "embedding_model", modelProp)
+			}
+		}
+	}
+
+	return len(pre.Sections)
+}
+
+// applyLegacyChunks creates chunk_of nodes (backward-compatible dumb chunks).
+func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
 	for i, chunkText := range pre.Texts {
 		chunkNode := e.graph.AddNode(graph.Properties{
 			"content_full": graph.StringProperty(chunkText),
@@ -390,14 +517,12 @@ func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult) int {
 			e.propIdx.Add(chunkNode.ID, k, v)
 		}
 
-		// Apply pre-computed embedding if available.
 		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
 			vec := pre.Vectors[i]
 			prop := graph.VectorProperty(vec)
 			e.graph.SetNodeProperty(chunkNode.ID, "embedding_full", prop)
 			e.propIdx.Add(chunkNode.ID, "embedding_full", prop)
 			e.vecIdx.Add(chunkNode.ID, vec)
-
 			if pre.Model != "" {
 				modelProp := graph.StringProperty(pre.Model)
 				e.graph.SetNodeProperty(chunkNode.ID, "embedding_model", modelProp)
@@ -423,8 +548,8 @@ func (e *Engine) ChunkIfNeeded(ctx context.Context, nodeID string) (int, error) 
 		return 0, nil
 	}
 
-	pre := e.PreChunk(ctx, contentProp.String())
-	return e.ApplyChunks(nodeID, pre), nil
+	pre := e.PreChunk(ctx, contentProp.String(), "")
+	return e.ApplyChunks(nodeID, pre, n.Properties), nil
 }
 
 // SetProp sets a property on a node and updates the property index.

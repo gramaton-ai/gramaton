@@ -636,8 +636,11 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 		case "supersedes":
 			// B supersedes A: A is older, B is the replacement.
+			now := time.Now().UTC()
 			e.Graph().AddEdge(f.idB, f.idA, "supersedes", f.confidence, nil)
-			e.SetProp(f.idA, "valid_until", graph.TimestampProperty(time.Now().UTC()))
+			e.SetProp(f.idA, "valid_until", graph.TimestampProperty(now))
+			e.SetProp(f.idA, "resolution", graph.StringProperty("superseded"))
+			e.SetProp(f.idA, "resolved_at", graph.TimestampProperty(now))
 			result.ContradictionsDetected++
 		}
 	}

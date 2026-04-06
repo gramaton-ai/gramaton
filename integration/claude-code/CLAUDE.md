@@ -172,6 +172,28 @@ gramaton_observe(facts=["Decided to use JWT", "API v2 replaces v1"])
 
 Do NOT announce observing. Do NOT call every turn.
 
+### Resolving Records
+
+When a TODO is done, a question is answered, a decision is made, or
+any record reaches its natural end-of-life, resolve it:
+
+```
+gramaton_resolve(id="<id>", resolution="completed", resolution_note="shipped in v0.4")
+```
+
+Valid resolution values:
+- **completed** -- task done, question answered, goal achieved
+- **superseded** -- replaced by newer knowledge (auto-set by supersession)
+- **abandoned** -- deliberately dropped, no longer pursuing
+- **obsolete** -- no longer relevant due to external change
+
+This sets `resolution`, `resolved_at`, and auto-sets `valid_until`
+to deprioritize the record in search. If `valid_until` is already
+set, it's preserved.
+
+To find open items: `gramaton_search(resolution="unresolved")`
+To find completed items: `gramaton_search(resolution="completed")`
+
 ### Curation
 
 The server runs background curation automatically every 5 minutes:

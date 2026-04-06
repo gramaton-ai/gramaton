@@ -44,8 +44,9 @@ func serverURL() (string, error) {
 }
 
 // verifyServer checks that a URL responds to the gramaton health check.
+// Uses the short-timeout healthClient to avoid long hangs on dead servers.
 func verifyServer(baseURL string) bool {
-	resp, err := httpGet(baseURL + "/v1/status")
+	resp, err := healthClient.Get(baseURL + "/v1/status")
 	if err != nil {
 		return false
 	}

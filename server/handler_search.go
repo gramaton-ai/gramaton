@@ -20,6 +20,7 @@ type searchRequest struct {
 	Temporality       string   `json:"temporality,omitempty"`
 	KnowledgeType     string   `json:"knowledge_type,omitempty"`
 	EpistemicStatus   string   `json:"epistemic_status,omitempty"`
+	Resolution        string   `json:"resolution,omitempty"`
 	IncludeHistorical bool     `json:"include_historical,omitempty"`
 	Since             string   `json:"since,omitempty"`
 	Missing           []string `json:"missing,omitempty"`
@@ -130,6 +131,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Temporality:       req.Temporality,
 		KnowledgeType:     req.KnowledgeType,
 		EpistemicStatus:   req.EpistemicStatus,
+		Resolution:        req.Resolution,
 		IncludeHistorical: req.IncludeHistorical,
 		ConfidenceMin:     req.ConfidenceMin,
 		ConfidenceMax:     req.ConfidenceMax,

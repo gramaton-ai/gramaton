@@ -50,6 +50,8 @@ var safeProperties = map[string]bool{
 	"testimony_hops":      true,
 	"source_credibility":  true,
 	"asserted_as_of":      true,
+	"resolution":          true,
+	"resolution_note":     true,
 }
 
 // ImportJSON reads JSON Lines (one ExportRecord per line) and creates
@@ -439,7 +441,8 @@ func buildSafeProps(raw map[string]any) graph.Properties {
 		case "content_full", "content_short", "content_abstract",
 			"source_ref", "temporality", "knowledge_type",
 			"epistemic_status", "context_about", "context_who",
-			"context_prompted", "context_findable_by", "context_related":
+			"context_prompted", "context_findable_by", "context_related",
+			"resolution", "resolution_note":
 			if s, ok := v.(string); ok {
 				props[k] = graph.StringProperty(s)
 			}

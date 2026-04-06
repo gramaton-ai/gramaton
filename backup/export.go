@@ -66,7 +66,7 @@ func gatherRecords(e *core.Engine) []ExportRecord {
 
 		// Collect edges.
 		for _, e := range g.EdgesFrom(id) {
-			if e.Type == "chunk_of" {
+			if e.Type == "chunk_of" || e.Type == "section_of" {
 				continue
 			}
 			rec.Edges = append(rec.Edges, ExportEdge{
@@ -78,7 +78,7 @@ func gatherRecords(e *core.Engine) []ExportRecord {
 			})
 		}
 		for _, e := range g.EdgesTo(id) {
-			if e.Type == "chunk_of" {
+			if e.Type == "chunk_of" || e.Type == "section_of" {
 				continue
 			}
 			rec.Edges = append(rec.Edges, ExportEdge{
@@ -238,7 +238,7 @@ func formatKeywords(props map[string]any) string {
 
 func isChunkNode(g *graph.Graph, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
-		if e.Type == "chunk_of" {
+		if e.Type == "chunk_of" || e.Type == "section_of" {
 			return true
 		}
 	}
