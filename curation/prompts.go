@@ -29,3 +29,36 @@ Content:
 %s
 
 Summary:`
+
+const manifestSummaryPrompt = `Summarize the strengths and gaps of this knowledge store in 2-3 sentences. Be specific about what domains and topics are well-covered and what is missing or weak. No preamble, no quotes.
+
+Store stats:
+- Total records: %d
+- Knowledge types: %s
+- Top keywords: %s
+- Temporal range: %s to %s
+
+Summary:`
+
+const contradictionPrompt = `Compare these two knowledge records and determine their relationship. Respond with JSON only, no other text.
+
+Record A:
+%s
+
+Record B:
+%s
+
+Respond with this exact JSON structure:
+{
+  "relationship": "contradicts|supersedes|related|none",
+  "confidence": 0.0-1.0,
+  "explanation": "brief explanation of why"
+}
+
+Guide:
+- contradicts: The records make incompatible claims about the same topic. Both cannot be true simultaneously.
+- supersedes: Record B is a newer/updated version of the same knowledge as Record A. A should be marked historical.
+- related: The records discuss similar topics but do not conflict. No action needed.
+- none: The records are not meaningfully related despite surface similarity. No action needed.
+
+Only use "contradicts" or "supersedes" when you are confident. When in doubt, use "related" or "none".`

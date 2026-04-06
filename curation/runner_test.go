@@ -122,6 +122,68 @@ func TestRunnerPostCycleHook(t *testing.T) {
 	}
 }
 
+func TestRunnerTriggerDryRun(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	now := time.Now().UTC()
+	// Create a pending node directly (addNode sets processing_status=processed).
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Pending record for dry-run"),
+		"processing_status": graph.StringProperty("captured"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range n.Properties {
+		eng.PropIdx().Add(n.ID, k, v)
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	llm := &mockLLM{
+		responses: []string{`{"temporality":"durable","confidence":0.8,"summary_short":"Test"}`},
+	}
+
+	runner := NewRunner(eng, llm, cfg, nil)
+	result := runner.TriggerDryRun(context.Background())
+
+	if result == nil {
+		t.Fatal("TriggerDryRun should return a result")
+	}
+	if !result.DryRun {
+		t.Fatal("result should have DryRun=true")
+	}
+
+	// Verify no mutation: record should still be "captured".
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, id := range eng.Graph().AllNodeIDs() {
+		n, _ := eng.Graph().GetNode(id)
+		if ps, ok := n.Properties.GetString("processing_status"); ok && ps != "captured" {
+			t.Fatalf("dry-run should not change processing_status, got %q", ps)
+		}
+	}
+}
+
+func TestRunnerTriggerDryRunNoLLM(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	runner := NewRunner(eng, nil, cfg, nil)
+	result := runner.TriggerDryRun(context.Background())
+
+	if result == nil {
+		t.Fatal("should return result even without LLM")
+	}
+	if !result.DryRun {
+		t.Fatal("should be dry-run")
+	}
+	if len(result.PlannedChanges) != 0 {
+		t.Fatal("should have no planned changes without LLM")
+	}
+}
+
 func TestDeterministicOrphanLinking(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

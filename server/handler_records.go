@@ -31,6 +31,7 @@ type captureRequest struct {
 	ContextRelated    string   `json:"context_related,omitempty"`
 	ValidFrom         string   `json:"valid_from,omitempty"`
 	ValidUntil        string   `json:"valid_until,omitempty"`
+	AssertedAsOf      string   `json:"asserted_as_of,omitempty"`
 }
 
 type updateRequest struct {
@@ -42,6 +43,7 @@ type updateRequest struct {
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string   `json:"summary_short,omitempty"`
 	ValidUntil      string   `json:"valid_until,omitempty"`
+	AssertedAsOf    string   `json:"asserted_as_of,omitempty"`
 }
 
 type classifyRequest struct {
@@ -414,6 +416,15 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		s.engine.SetProp(id, "valid_until", graph.TimestampProperty(t))
 		updated = true
 	}
+	if req.AssertedAsOf != "" {
+		t, err := parseDateArg(req.AssertedAsOf)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_field", "invalid asserted_as_of date", true)
+			return
+		}
+		s.engine.SetProp(id, "asserted_as_of", graph.TimestampProperty(t))
+		updated = true
+	}
 
 	if updated {
 		if _, err := s.engine.Save("update"); err != nil {
@@ -729,6 +740,11 @@ func setOptionalProps(props graph.Properties, req *captureRequest) {
 			props["valid_until"] = graph.TimestampProperty(t)
 		}
 	}
+	if req.AssertedAsOf != "" {
+		if t, err := time.Parse(time.RFC3339, req.AssertedAsOf); err == nil {
+			props["asserted_as_of"] = graph.TimestampProperty(t)
+		}
+	}
 }
 
 // inspectMetadataSummary generates a human-readable metadata summary.
@@ -738,9 +754,23 @@ func inspectMetadataSummary(props graph.Properties) string {
 
 	if vu, ok := props.GetTimestamp("valid_until"); ok {
 		if vu.Before(now) {
-			parts = append(parts, "Historical.")
+			days := int(now.Sub(vu).Hours() / 24)
+			if days == 0 {
+				parts = append(parts, "Historical (expired today).")
+			} else if days == 1 {
+				parts = append(parts, "Historical (expired yesterday).")
+			} else {
+				parts = append(parts, fmt.Sprintf("Historical (expired %d days ago).", days))
+			}
 		} else {
-			parts = append(parts, "Current.")
+			days := int(vu.Sub(now).Hours() / 24)
+			if days == 0 {
+				parts = append(parts, "Current (expires today).")
+			} else if days == 1 {
+				parts = append(parts, "Current (expires tomorrow).")
+			} else {
+				parts = append(parts, fmt.Sprintf("Current (expires in %d days).", days))
+			}
 		}
 	} else {
 		parts = append(parts, "Current.")

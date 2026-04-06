@@ -36,6 +36,24 @@ func (s *Server) handleCurationTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for dry_run parameter.
+	var body struct {
+		DryRun bool `json:"dry_run"`
+	}
+	// Ignore parse errors -- body is optional for trigger.
+	_ = parseJSON(r, &body, maxJSONBodySize)
+
+	if body.DryRun {
+		result := s.runner.TriggerDryRun(context.Background())
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"triggered": true,
+			"dry_run":   true,
+			"result":    result,
+			"status":    s.runner.Status(),
+		})
+		return
+	}
+
 	if !s.runner.Trigger(context.Background()) {
 		s.writeJSON(w, http.StatusOK, map[string]any{
 			"triggered": false,

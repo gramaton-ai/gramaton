@@ -163,6 +163,84 @@ func TestDeterministicManifest(t *testing.T) {
 	}
 }
 
+func TestConceptEnrichment(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	now := time.Now().UTC()
+
+	// Create a concept node.
+	eng.Lock()
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Authentication concept"),
+		"processing_status": graph.StringProperty("processed"),
+		"knowledge_type":    graph.StringProperty("conceptual"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+
+	// Create two records that link to the concept.
+	r1 := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("JWT token implementation"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now.Add(-48 * time.Hour)),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range r1.Properties {
+		eng.PropIdx().Add(r1.ID, k, v)
+	}
+
+	r2 := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("OAuth 2.0 flow design"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now.Add(-24 * time.Hour)),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range r2.Properties {
+		eng.PropIdx().Add(r2.ID, k, v)
+	}
+
+	// Link records to concept.
+	eng.Graph().AddEdge(r1.ID, concept.ID, "related_to", 0.8, nil)
+	eng.Graph().AddEdge(r2.ID, concept.ID, "related_to", 0.7, nil)
+
+	eng.Save("test")
+	eng.Unlock()
+
+	// Run deterministic curation (includes concept enrichment).
+	RunDeterministic(eng, cfg, nil)
+
+	// Verify concept was enriched.
+	eng.RLock()
+	defer eng.RUnlock()
+	n, ok := eng.Graph().GetNode(concept.ID)
+	if !ok {
+		t.Fatal("concept node should exist")
+	}
+	ec, ok := n.Properties.GetInt64("evidence_count")
+	if !ok {
+		t.Fatal("evidence_count should be set")
+	}
+	if ec != 2 {
+		t.Fatalf("expected evidence_count 2, got %d", ec)
+	}
+	le, ok := n.Properties.GetTimestamp("last_evidence_at")
+	if !ok {
+		t.Fatal("last_evidence_at should be set")
+	}
+	// The most recent evidence is r2, created 24h ago.
+	expectedLE := now.Add(-24 * time.Hour)
+	if le.Sub(expectedLE).Abs() > time.Second {
+		t.Fatalf("last_evidence_at should be ~%v, got %v", expectedLE, le)
+	}
+}
+
 func TestParseClassification(t *testing.T) {
 	input := `{
 		"temporality": "durable",

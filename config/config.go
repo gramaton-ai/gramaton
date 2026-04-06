@@ -175,8 +175,11 @@ type LLMConfig struct {
 }
 
 type LLMCurationConfig struct {
-	BatchSize      int `yaml:"batch_size"`
-	MaxCallsPerRun int `yaml:"max_calls_per_run"`
+	BatchSize              int     `yaml:"batch_size"`
+	MaxCallsPerRun         int     `yaml:"max_calls_per_run"`
+	MaxContradictionChecks int     `yaml:"max_contradiction_checks"`
+	ContradictionMinSim    float64 `yaml:"contradiction_min_similarity"`
+	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
 }
 
 type BackupConfig struct {
@@ -301,8 +304,11 @@ func Defaults() Config {
 		},
 
 		LLMCuration: LLMCurationConfig{
-			BatchSize:      10,
-			MaxCallsPerRun: 20,
+			BatchSize:              10,
+			MaxCallsPerRun:         20,
+			MaxContradictionChecks: 5,
+			ContradictionMinSim:    0.5,
+			ContradictionMaxSim:    0.85,
 		},
 
 		Backup: BackupConfig{

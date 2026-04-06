@@ -168,6 +168,21 @@ func (r *Runner) Trigger(ctx context.Context) bool {
 	return true
 }
 
+// TriggerDryRun runs the autonomous curation pipeline without applying
+// changes. Returns the planned changes that would be made. Deterministic
+// curation still runs normally (it's already safe). Only autonomous
+// (LLM-driven) changes are dry-run.
+func (r *Runner) TriggerDryRun(ctx context.Context) *AutonomousResult {
+	if r.llm == nil {
+		return &AutonomousResult{DryRun: true}
+	}
+
+	cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	return RunAutonomousDryRun(cycleCtx, r.engine, r.llm, r.cfg, r.logger)
+}
+
 func (r *Runner) runIfIdle(ctx context.Context) {
 	r.state.mu.Lock()
 	if r.state.inProgress {
@@ -204,7 +219,8 @@ func (r *Runner) cycle(ctx context.Context) {
 	if r.llm != nil {
 		hasPending := result.Manifest != nil && result.Manifest.PendingCount > 0
 		hasCandidates := len(result.ConceptCandidates) > 0
-		if hasPending || hasCandidates {
+		needsSummary := result.Manifest != nil && result.Manifest.QualitativeSummary == ""
+		if hasPending || hasCandidates || needsSummary {
 			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger)
 			r.state.mu.Lock()
 			r.state.LastAutonomous = aResult
@@ -215,6 +231,10 @@ func (r *Runner) cycle(ctx context.Context) {
 					graph.StringProperty("captured"))
 				r.state.LastDeterministic.Manifest.PendingCount = len(captured)
 				r.engine.RUnlock()
+			}
+			// Apply manifest qualitative summary.
+			if aResult.ManifestSummary != "" && r.state.LastDeterministic != nil && r.state.LastDeterministic.Manifest != nil {
+				r.state.LastDeterministic.Manifest.QualitativeSummary = aResult.ManifestSummary
 			}
 			r.state.mu.Unlock()
 		}

@@ -143,6 +143,7 @@ type Result struct {
 	EpistemicStatus string  `json:"epistemic_status,omitempty"`
 	ValidFrom       string  `json:"valid_from,omitempty"`
 	ValidUntil      string  `json:"valid_until,omitempty"`
+	AssertedAsOf    string  `json:"asserted_as_of,omitempty"`
 	EffectiveScore  float64 `json:"effective_score"`
 	LastAccessed    string  `json:"last_accessed,omitempty"`
 	CreatedAt       string  `json:"created_at,omitempty"`
@@ -622,6 +623,9 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 	if v, ok := n.Properties.GetTimestamp("valid_until"); ok {
 		r.ValidUntil = v.Format(time.RFC3339)
 	}
+	if v, ok := n.Properties.GetTimestamp("asserted_as_of"); ok {
+		r.AssertedAsOf = v.Format(time.RFC3339)
+	}
 	if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
 		r.LastAccessed = v.Format(time.RFC3339)
 	}
@@ -651,12 +655,26 @@ func buildMetadataSummary(props graph.Properties) string {
 	now := time.Now().UTC()
 	var parts []string
 
-	// Validity status.
+	// Validity status with expiration proximity.
 	if vu, ok := props.GetTimestamp("valid_until"); ok {
 		if vu.Before(now) {
-			parts = append(parts, "Historical.")
+			days := int(now.Sub(vu).Hours() / 24)
+			if days == 0 {
+				parts = append(parts, "Historical (expired today).")
+			} else if days == 1 {
+				parts = append(parts, "Historical (expired yesterday).")
+			} else {
+				parts = append(parts, fmt.Sprintf("Historical (expired %d days ago).", days))
+			}
 		} else {
-			parts = append(parts, "Current.")
+			days := int(vu.Sub(now).Hours() / 24)
+			if days == 0 {
+				parts = append(parts, "Current (expires today).")
+			} else if days == 1 {
+				parts = append(parts, "Current (expires tomorrow).")
+			} else {
+				parts = append(parts, fmt.Sprintf("Current (expires in %d days).", days))
+			}
 		}
 	} else {
 		parts = append(parts, "Current.")

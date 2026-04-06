@@ -125,6 +125,32 @@ func TestSetOptionalPropsValidDates(t *testing.T) {
 	}
 }
 
+func TestSetOptionalPropsAssertedAsOf(t *testing.T) {
+	req := &captureRequest{
+		Content:      "Historical claim",
+		AssertedAsOf: "2025-06-15T10:00:00Z",
+	}
+	props := graph.Properties{}
+	setOptionalProps(props, req)
+
+	if _, ok := props["asserted_as_of"]; !ok {
+		t.Fatal("asserted_as_of should be set for valid RFC3339")
+	}
+}
+
+func TestSetOptionalPropsAssertedAsOfInvalid(t *testing.T) {
+	req := &captureRequest{
+		Content:      "Bad date",
+		AssertedAsOf: "not-a-date",
+	}
+	props := graph.Properties{}
+	setOptionalProps(props, req)
+
+	if _, ok := props["asserted_as_of"]; ok {
+		t.Fatal("asserted_as_of should not be set for invalid date")
+	}
+}
+
 func TestValidateCaptureRequest(t *testing.T) {
 	tests := []struct {
 		name    string

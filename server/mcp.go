@@ -237,6 +237,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 		ContextAbout      string   `json:"context_about,omitempty" jsonschema:"topic/domain"`
 		ContextWho        string   `json:"context_who,omitempty" jsonschema:"entities involved"`
 		ContextFindable   string   `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
+		AssertedAsOf      string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_capture",
@@ -266,6 +267,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			ContextAbout:    args.ContextAbout,
 			ContextWho:      args.ContextWho,
 			ContextFindable: args.ContextFindable,
+			AssertedAsOf:    args.AssertedAsOf,
 		}
 
 		if err := validateCaptureRequest(capReq); err != nil {
@@ -417,6 +419,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
 		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
 		ValidUntil      string   `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical"`
+		AssertedAsOf    string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
@@ -468,6 +471,14 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 				return mcpErr("invalid valid_until date")
 			}
 			s.engine.SetProp(args.ID, "valid_until", graph.TimestampProperty(t))
+			updated = true
+		}
+		if args.AssertedAsOf != "" {
+			t, err := parseDateArg(args.AssertedAsOf)
+			if err != nil {
+				return mcpErr("invalid asserted_as_of date")
+			}
+			s.engine.SetProp(args.ID, "asserted_as_of", graph.TimestampProperty(t))
 			updated = true
 		}
 		if updated {
@@ -691,11 +702,11 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	})
 
 	type curationInput struct {
-		Action string `json:"action" jsonschema:"status|trigger"`
+		Action string `json:"action" jsonschema:"status|trigger|dry_run"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_curation",
-		Description: "View curation status (concept candidates, stale/orphan counts, manifest) or trigger a curation cycle.",
+		Description: "View curation status, trigger a curation cycle, or dry-run to see what autonomous curation would change without applying.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args curationInput) (*mcp.CallToolResult, any, error) {
 		if s.runner == nil {
 			return mcpErr("curation is not enabled")
@@ -707,6 +718,16 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			return mcpJSONResult(map[string]any{
 				"triggered": true,
 				"status":    s.runner.Status(),
+			})
+		case "dry_run":
+			result := s.runner.TriggerDryRun(ctx)
+			return mcpJSONResult(map[string]any{
+				"dry_run":         true,
+				"planned_changes": result.PlannedChanges,
+				"classified":     result.Classified,
+				"summaries":      result.SummariesGenerated,
+				"llm_calls":      result.LLMCalls,
+				"errors":         result.Errors,
 			})
 		default: // "status" or empty
 			return mcpJSONResult(map[string]any{

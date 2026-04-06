@@ -767,6 +767,79 @@ func TestSearchMetadataSummary(t *testing.T) {
 	}
 }
 
+func TestMetadataSummaryExpirationVisibility(t *testing.T) {
+	now := time.Now().UTC()
+
+	tests := []struct {
+		name     string
+		validUntil time.Time
+		wantContains string
+	}{
+		{
+			name:         "expired yesterday",
+			validUntil:   now.Add(-36 * time.Hour),
+			wantContains: "Historical (expired",
+		},
+		{
+			name:         "expires tomorrow",
+			validUntil:   now.Add(36 * time.Hour),
+			wantContains: "expires",
+		},
+		{
+			name:         "expires in multiple days",
+			validUntil:   now.Add(10*24*time.Hour + 12*time.Hour),
+			wantContains: "expires in 10 days",
+		},
+		{
+			name:         "expired multiple days ago",
+			validUntil:   now.Add(-5*24*time.Hour - 12*time.Hour),
+			wantContains: "expired 5 days ago",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			props := graph.Properties{
+				"temporality": graph.StringProperty("temporal"),
+				"confidence":  graph.Float64Property(0.8),
+				"valid_until": graph.TimestampProperty(tt.validUntil),
+			}
+			summary := buildMetadataSummary(props)
+			if !containsSubstring(summary, tt.wantContains) {
+				t.Fatalf("summary %q should contain %q", summary, tt.wantContains)
+			}
+		})
+	}
+}
+
+func TestMetadataSummaryNoExpiration(t *testing.T) {
+	props := graph.Properties{
+		"temporality": graph.StringProperty("durable"),
+		"confidence":  graph.Float64Property(0.95),
+	}
+	summary := buildMetadataSummary(props)
+	if !containsSubstring(summary, "Current.") {
+		t.Fatalf("summary %q should contain 'Current.'", summary)
+	}
+	if containsSubstring(summary, "expires") || containsSubstring(summary, "expired") {
+		t.Fatalf("summary %q should not contain expiration info when no valid_until", summary)
+	}
+}
+
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		findSubstring(s, substr))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSearchNoEmbedder(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
 	tool := New(g, propIdx, vecIdx, nil, defaultCfg()) // nil embedder

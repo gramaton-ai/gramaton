@@ -5,6 +5,7 @@ package curation
 
 import (
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/brandonlattin/gramaton/config"
@@ -32,14 +33,16 @@ type ConceptCandidate struct {
 
 // StoreManifest is a lightweight summary of what the store contains.
 type StoreManifest struct {
-	TotalRecords  int            `json:"total_records"`
-	TotalEdges    int            `json:"total_edges"`
-	PendingCount  int            `json:"pending_count"`
-	OrphanCount   int            `json:"orphan_count"`
-	StaleCount    int            `json:"stale_count"`
-	RecordsByType map[string]int `json:"records_by_type"`
-	EarliestRecord time.Time    `json:"earliest_record,omitempty"`
-	LatestRecord   time.Time    `json:"latest_record,omitempty"`
+	TotalRecords       int            `json:"total_records"`
+	TotalEdges         int            `json:"total_edges"`
+	PendingCount       int            `json:"pending_count"`
+	OrphanCount        int            `json:"orphan_count"`
+	StaleCount         int            `json:"stale_count"`
+	RecordsByType      map[string]int `json:"records_by_type"`
+	TopKeywords        []string       `json:"top_keywords,omitempty"`
+	EarliestRecord     time.Time      `json:"earliest_record,omitempty"`
+	LatestRecord       time.Time      `json:"latest_record,omitempty"`
+	QualitativeSummary string         `json:"qualitative_summary,omitempty"`
 }
 
 // RunDeterministic performs all deterministic curation tasks.
@@ -157,6 +160,24 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 	}
 
+	// Top keywords for manifest (sorted by count, top 20).
+	type kwEntry struct {
+		keyword string
+		count   int
+	}
+	var kwList []kwEntry
+	for kw, count := range kwCounts {
+		kwList = append(kwList, kwEntry{kw, count})
+	}
+	sort.Slice(kwList, func(i, j int) bool { return kwList[i].count > kwList[j].count })
+	topN := 20
+	if len(kwList) < topN {
+		topN = len(kwList)
+	}
+	for i := 0; i < topN; i++ {
+		manifest.TopKeywords = append(manifest.TopKeywords, kwList[i].keyword)
+	}
+
 	// Duplicate detection.
 	dedupThreshold := cfg.Dedup.SimilarityThreshold
 	maxDedup := cfg.Curation.MaxDedupPerRun
@@ -261,6 +282,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		e.Unlock()
 	}
 
+	// --- Concept enrichment phase ---
+	// Compute evidence_count and last_evidence_at for concept nodes.
+	enrichConcepts(e, logger)
+
 	result.ConceptCandidates = candidates
 	result.Manifest = manifest
 
@@ -284,6 +309,88 @@ func isChunkNode(g *graph.Graph, id string) bool {
 		}
 	}
 	return false
+}
+
+// enrichConcepts updates evidence_count and last_evidence_at on concept
+// nodes based on their inbound edges.
+func enrichConcepts(e *core.Engine, logger *slog.Logger) {
+	// Read phase: find concept nodes and compute their evidence.
+	type conceptUpdate struct {
+		id             string
+		evidenceCount  int
+		lastEvidenceAt time.Time
+	}
+	var updates []conceptUpdate
+
+	e.RLock()
+	conceptIDs := e.PropIdx().Lookup("knowledge_type", graph.StringProperty("conceptual"))
+	for _, id := range conceptIDs {
+		n, ok := e.Graph().GetNode(id)
+		if !ok {
+			continue
+		}
+		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
+			continue
+		}
+
+		// Count inbound edges (evidence pointing to this concept).
+		inbound := e.Graph().EdgesTo(id)
+		count := 0
+		var latestEvidence time.Time
+		for _, edge := range inbound {
+			if edge.Type == "chunk_of" {
+				continue
+			}
+			count++
+			// Check the source node's created_at for last_evidence_at.
+			if src, ok := e.Graph().GetNode(edge.SourceID); ok {
+				if ca, ok := src.Properties.GetTimestamp("created_at"); ok {
+					if ca.After(latestEvidence) {
+						latestEvidence = ca
+					}
+				}
+			}
+		}
+
+		// Check if update is needed.
+		existingCount, _ := n.Properties.GetInt64("evidence_count")
+		if int64(count) != existingCount || count > 0 {
+			updates = append(updates, conceptUpdate{
+				id:             id,
+				evidenceCount:  count,
+				lastEvidenceAt: latestEvidence,
+			})
+		}
+	}
+	e.RUnlock()
+
+	if len(updates) == 0 {
+		return
+	}
+
+	// Write phase.
+	e.Lock()
+	changed := false
+	for _, u := range updates {
+		if _, ok := e.Graph().GetNode(u.id); !ok {
+			continue
+		}
+		e.SetProp(u.id, "evidence_count", graph.Int64Property(int64(u.evidenceCount)))
+		if !u.lastEvidenceAt.IsZero() {
+			e.SetProp(u.id, "last_evidence_at", graph.TimestampProperty(u.lastEvidenceAt))
+		}
+		changed = true
+	}
+	if changed {
+		e.Save("curation: concept enrichment")
+	}
+	e.Unlock()
+
+	if logger != nil && len(updates) > 0 {
+		logger.Info("concept enrichment complete",
+			"component", "curation",
+			"concepts_updated", len(updates))
+	}
 }
 
 // nonChunkEdgeCount returns the total edge count excluding chunk_of edges.

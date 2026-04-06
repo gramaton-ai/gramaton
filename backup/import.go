@@ -49,6 +49,7 @@ var safeProperties = map[string]bool{
 	"importance":          true,
 	"testimony_hops":      true,
 	"source_credibility":  true,
+	"asserted_as_of":      true,
 }
 
 // ImportJSON reads JSON Lines (one ExportRecord per line) and creates
@@ -484,7 +485,7 @@ func buildSafeProps(raw map[string]any) graph.Properties {
 					props[k] = graph.StringListProperty(kw)
 				}
 			}
-		case "created_at", "valid_from", "valid_until":
+		case "created_at", "valid_from", "valid_until", "asserted_as_of":
 			if s, ok := v.(string); ok {
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
 					props[k] = graph.TimestampProperty(t)

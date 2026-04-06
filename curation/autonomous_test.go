@@ -92,7 +92,7 @@ func TestClassifyPendingHappyPath(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -139,7 +139,7 @@ func TestClassifyPendingLLMError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.Classified != 0 {
 		t.Fatalf("expected 0 classified, got %d", result.Classified)
@@ -163,7 +163,7 @@ func TestClassifyPendingParseError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.Classified != 0 {
 		t.Fatalf("expected 0 classified, got %d", result.Classified)
@@ -189,7 +189,7 @@ func TestClassifyPendingMaxCallsLimit(t *testing.T) {
 
 	result := &AutonomousResult{}
 	// Limit to 3 calls.
-	classifyPending(context.Background(), eng, llm, cfg, result, 3, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 3, nil, false)
 
 	if result.LLMCalls != 3 {
 		t.Fatalf("expected 3 LLM calls (max), got %d", result.LLMCalls)
@@ -214,7 +214,7 @@ func TestClassifyPendingBatchSize(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	// Should only process batch_size=2 even though 5 exist.
 	if result.Classified != 2 {
@@ -238,7 +238,7 @@ func TestClassifyPendingContextCancelled(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(ctx, eng, llm, cfg, result, 20, nil)
+	classifyPending(ctx, eng, llm, cfg, result, 20, nil, false)
 
 	// Should stop immediately.
 	if result.LLMCalls != 0 {
@@ -268,7 +268,7 @@ func TestClassifyPendingSkipsEmptyContent(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (empty content), got %d", result.LLMCalls)
@@ -288,7 +288,7 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary, got %d", result.SummariesGenerated)
@@ -314,7 +314,7 @@ func TestGenerateSummariesLLMError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.SummariesGenerated != 0 {
 		t.Fatalf("expected 0 summaries, got %d", result.SummariesGenerated)
@@ -335,7 +335,7 @@ func TestGenerateSummariesEmptyResponse(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.SummariesGenerated != 0 {
 		t.Fatalf("expected 0 (empty summary), got %d", result.SummariesGenerated)
@@ -361,7 +361,7 @@ func TestGenerateSummariesTruncation(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary, got %d", result.SummariesGenerated)
@@ -408,7 +408,7 @@ func TestGenerateSummariesSkipsChunks(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	// Chunk should be skipped, parent already has summary.
 	if result.LLMCalls != 0 {
@@ -437,7 +437,7 @@ func TestGenerateSummariesSkipsDeleted(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (deleted skipped), got %d", result.LLMCalls)
@@ -466,7 +466,7 @@ func TestGenerateSummariesSkipsExistingSummary(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (already has summary), got %d", result.LLMCalls)
@@ -488,7 +488,7 @@ func TestGenerateSummariesMaxCalls(t *testing.T) {
 
 	result := &AutonomousResult{}
 	// Limit to 2 calls.
-	generateSummaries(context.Background(), eng, llm, cfg, result, 2, nil)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 2, nil, false)
 
 	if result.LLMCalls != 2 {
 		t.Fatalf("expected 2 LLM calls (max), got %d", result.LLMCalls)
@@ -529,6 +529,436 @@ func TestRunAutonomousIntegration(t *testing.T) {
 	}
 	if result.LLMCalls != 2 {
 		t.Fatalf("expected 2 total LLM calls, got %d", result.LLMCalls)
+	}
+}
+
+// --- Dry-run tests ---
+
+func TestClassifyPendingDryRun(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+
+	addPendingNode(t, eng, "Kafka event streaming for microservices")
+
+	llm := &mockLLM{
+		responses: []string{`{"temporality":"durable","confidence":0.9,"knowledge_type":"semantic","keywords":["kafka"],"summary_short":"Kafka streaming"}`},
+	}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, true)
+
+	if result.Classified != 1 {
+		t.Fatalf("expected 1 classified in dry-run, got %d", result.Classified)
+	}
+	if len(result.PlannedChanges) != 1 {
+		t.Fatalf("expected 1 planned change, got %d", len(result.PlannedChanges))
+	}
+	if result.PlannedChanges[0].Action != "classify" {
+		t.Fatalf("expected action 'classify', got %q", result.PlannedChanges[0].Action)
+	}
+
+	// Verify no mutation: record should still be "captured".
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, id := range eng.Graph().AllNodeIDs() {
+		n, _ := eng.Graph().GetNode(id)
+		if ps, ok := n.Properties.GetString("processing_status"); ok && ps != "captured" {
+			t.Fatalf("dry-run should not change processing_status, got %q", ps)
+		}
+	}
+}
+
+func TestGenerateSummariesDryRun(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+
+	addProcessedNodeNoSummary(t, eng, "OAuth implementation guide")
+
+	llm := &mockLLM{
+		responses: []string{"OAuth guide for service auth"},
+	}
+
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, true)
+
+	if result.SummariesGenerated != 1 {
+		t.Fatalf("expected 1 summary in dry-run, got %d", result.SummariesGenerated)
+	}
+	if len(result.PlannedChanges) != 1 {
+		t.Fatalf("expected 1 planned change, got %d", len(result.PlannedChanges))
+	}
+	if result.PlannedChanges[0].Action != "summarize" {
+		t.Fatalf("expected action 'summarize', got %q", result.PlannedChanges[0].Action)
+	}
+
+	// Verify no mutation: record should still lack content_short.
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, id := range eng.Graph().AllNodeIDs() {
+		n, _ := eng.Graph().GetNode(id)
+		if _, ok := n.Properties.GetString("content_short"); ok {
+			t.Fatal("dry-run should not add content_short")
+		}
+	}
+}
+
+func TestRunAutonomousDryRunIntegration(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+	cfg.LLMCuration.MaxCallsPerRun = 20
+
+	addPendingNode(t, eng, "Pending: Kafka streaming")
+	addProcessedNodeNoSummary(t, eng, "No summary: OAuth guide")
+
+	llm := &mockLLM{
+		responses: []string{
+			// 1: classify the pending node
+			`{"temporality":"durable","confidence":0.9,"knowledge_type":"semantic","keywords":["kafka"],"summary_short":"Kafka streaming"}`,
+			// 2: summarize the pending node (still lacks content_short since dry-run didn't apply classify)
+			"Kafka event streaming overview",
+			// 3: summarize the processed node
+			"OAuth guide for services",
+		},
+	}
+
+	result := RunAutonomousDryRun(context.Background(), eng, llm, cfg, nil)
+
+	if !result.DryRun {
+		t.Fatal("expected DryRun=true")
+	}
+	if result.Classified != 1 {
+		t.Fatalf("expected 1 classified, got %d", result.Classified)
+	}
+	// Both nodes lack content_short (dry-run classify didn't apply the summary_short).
+	if result.SummariesGenerated != 2 {
+		t.Fatalf("expected 2 summaries, got %d", result.SummariesGenerated)
+	}
+	// 1 classify + 2 summarize = 3 planned changes.
+	if len(result.PlannedChanges) != 3 {
+		t.Fatalf("expected 3 planned changes, got %d", len(result.PlannedChanges))
+	}
+	if result.LLMCalls != 3 {
+		t.Fatalf("expected 3 LLM calls, got %d", result.LLMCalls)
+	}
+}
+
+// --- Contradiction detection tests ---
+
+func addProcessedNodeWithEmbedding(t *testing.T, eng *core.Engine, content string, embedding []float32) string {
+	t.Helper()
+	eng.Lock()
+	defer eng.Unlock()
+
+	now := time.Now().UTC()
+	props := graph.Properties{
+		"content_full":      graph.StringProperty(content),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"embedding_full":    graph.VectorProperty(embedding),
+	}
+	n := eng.Graph().AddNode(props)
+	for k, v := range n.Properties {
+		eng.PropIdx().Add(n.ID, k, v)
+	}
+	eng.VecIdx().Add(n.ID, embedding)
+	eng.Save("test")
+	return n.ID
+}
+
+func TestDetectContradictions(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+
+	// Two records with embeddings in the contradiction similarity range (~0.7 cosine).
+	addProcessedNodeWithEmbedding(t, eng, "We use JWT tokens for auth", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "We switched to session cookies for auth", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"contradicts","confidence":0.8,"explanation":"JWT vs session cookies are incompatible auth approaches"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("expected 1 contradiction detected, got %d", result.ContradictionsDetected)
+	}
+
+	// Verify edge was created.
+	eng.RLock()
+	defer eng.RUnlock()
+	foundEdge := false
+	for _, id := range eng.Graph().AllNodeIDs() {
+		for _, e := range eng.Graph().EdgesFrom(id) {
+			if e.Type == "contradicts" {
+				foundEdge = true
+			}
+		}
+	}
+	if !foundEdge {
+		t.Fatal("expected contradicts edge to be created")
+	}
+}
+
+func TestDetectContradictionsDryRun(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+
+	addProcessedNodeWithEmbedding(t, eng, "We use PostgreSQL", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "We migrated to MySQL", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"supersedes","confidence":0.85,"explanation":"MySQL migration replaces PostgreSQL"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, true)
+
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("expected 1 contradiction in dry-run, got %d", result.ContradictionsDetected)
+	}
+	if len(result.PlannedChanges) != 1 {
+		t.Fatalf("expected 1 planned change, got %d", len(result.PlannedChanges))
+	}
+	if result.PlannedChanges[0].Action != "supersedes" {
+		t.Fatalf("expected action 'supersedes', got %q", result.PlannedChanges[0].Action)
+	}
+
+	// Verify no mutation.
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, id := range eng.Graph().AllNodeIDs() {
+		if _, ok := eng.Graph().GetNode(id); ok {
+			if len(eng.Graph().EdgesFrom(id)) > 0 {
+				t.Fatal("dry-run should not create edges")
+			}
+		}
+	}
+}
+
+func TestDetectContradictionsNoMatch(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+
+	// Records with very different embeddings (below min similarity).
+	addProcessedNodeWithEmbedding(t, eng, "Auth tokens", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "Database schema", []float32{0.0, 0.0, 1.0})
+
+	llm := &mockLLM{responses: []string{}}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	// No LLM calls should be made since records are too dissimilar.
+	if result.LLMCalls != 0 {
+		t.Fatalf("expected 0 LLM calls for dissimilar records, got %d", result.LLMCalls)
+	}
+	if result.ContradictionsDetected != 0 {
+		t.Fatalf("expected 0 contradictions, got %d", result.ContradictionsDetected)
+	}
+}
+
+// --- Manifest summary tests ---
+
+func TestGenerateManifestSummary(t *testing.T) {
+	eng := setupEngine(t)
+
+	// Add enough records for the summary threshold (>=5).
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth tokens", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	llm := &mockLLM{
+		responses: []string{
+			"Strong coverage of authentication and token management. No coverage of database design or infrastructure topics.",
+		},
+	}
+
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, result, nil)
+
+	if result.ManifestSummary == "" {
+		t.Fatal("expected manifest summary to be generated")
+	}
+	if result.LLMCalls != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", result.LLMCalls)
+	}
+}
+
+func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
+	eng := setupEngine(t)
+
+	// Only 2 records -- below the threshold of 5.
+	addProcessedNodeWithEmbedding(t, eng, "Record one", []float32{0.5, 0.5, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "Record two", []float32{0.3, 0.7, 0.0})
+
+	llm := &mockLLM{responses: []string{"Should not be called"}}
+
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, result, nil)
+
+	if result.ManifestSummary != "" {
+		t.Fatal("should not generate summary with too few records")
+	}
+	if result.LLMCalls != 0 {
+		t.Fatalf("expected 0 LLM calls, got %d", result.LLMCalls)
+	}
+}
+
+func TestParseContradictionResult(t *testing.T) {
+	input := `{"relationship":"contradicts","confidence":0.8,"explanation":"Direct conflict"}`
+	r, err := parseContradictionResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionResult: %v", err)
+	}
+	if r.Relationship != "contradicts" {
+		t.Fatalf("expected contradicts, got %q", r.Relationship)
+	}
+	if r.Confidence != 0.8 {
+		t.Fatalf("expected 0.8, got %f", r.Confidence)
+	}
+}
+
+func TestParseContradictionResultWithCodeFences(t *testing.T) {
+	input := "```json\n" + `{"relationship":"supersedes","confidence":0.9,"explanation":"Updated version"}` + "\n```"
+	r, err := parseContradictionResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionResult: %v", err)
+	}
+	if r.Relationship != "supersedes" {
+		t.Fatalf("expected supersedes, got %q", r.Relationship)
+	}
+}
+
+func TestParseContradictionResultConfidenceClamp(t *testing.T) {
+	input := `{"relationship":"contradicts","confidence":5.0}`
+	r, err := parseContradictionResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionResult: %v", err)
+	}
+	if r.Confidence != 0.5 {
+		t.Fatalf("out-of-range confidence should clamp to 0.5, got %f", r.Confidence)
+	}
+}
+
+func TestDetectContradictionsSupersedes(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Original API v1 design", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "Updated API v2 design", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"supersedes","confidence":0.85,"explanation":"v2 replaces v1"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("expected 1 supersession, got %d", result.ContradictionsDetected)
+	}
+
+	// Verify the older record got valid_until set.
+	eng.RLock()
+	defer eng.RUnlock()
+	n, ok := eng.Graph().GetNode(idA)
+	if !ok {
+		t.Fatal("node A should exist")
+	}
+	if _, ok := n.Properties.GetTimestamp("valid_until"); !ok {
+		t.Fatal("superseded record should have valid_until set")
+	}
+
+	// Verify supersedes edge exists.
+	foundEdge := false
+	for _, id := range eng.Graph().AllNodeIDs() {
+		for _, e := range eng.Graph().EdgesFrom(id) {
+			if e.Type == "supersedes" {
+				foundEdge = true
+			}
+		}
+	}
+	if !foundEdge {
+		t.Fatal("expected supersedes edge")
+	}
+}
+
+func TestDetectContradictionsLLMError(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+
+	addProcessedNodeWithEmbedding(t, eng, "Record about auth", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "Another auth record", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("LLM unavailable")}}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.Errors != 1 {
+		t.Fatalf("expected 1 error, got %d", result.Errors)
+	}
+	if result.ContradictionsDetected != 0 {
+		t.Fatalf("expected 0 contradictions on error, got %d", result.ContradictionsDetected)
+	}
+}
+
+func TestGenerateManifestSummaryLLMError(t *testing.T) {
+	eng := setupEngine(t)
+
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("LLM error")}}
+
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, result, nil)
+
+	if result.ManifestSummary != "" {
+		t.Fatal("should not have summary on LLM error")
+	}
+	if result.Errors != 1 {
+		t.Fatalf("expected 1 error, got %d", result.Errors)
+	}
+}
+
+func TestParseContradictionResultInvalidRelationship(t *testing.T) {
+	input := `{"relationship":"invalid","confidence":0.5}`
+	r, err := parseContradictionResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionResult: %v", err)
+	}
+	if r.Relationship != "none" {
+		t.Fatalf("invalid relationship should default to 'none', got %q", r.Relationship)
 	}
 }
 
