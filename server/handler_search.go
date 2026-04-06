@@ -246,7 +246,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.retrieval.Track(ids...)
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"results": results,
 		"facets":  search.ComputeFacets(results),
 	})

@@ -432,9 +432,10 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	}
 
 	summary := strings.TrimSpace(resp)
-	// Limit to 500 chars.
-	if len(summary) > 500 {
-		summary = summary[:500]
+	// Rune-safe truncation to 500 characters.
+	runes := []rune(summary)
+	if len(runes) > 500 {
+		summary = string(runes[:500])
 	}
 	result.ManifestSummary = summary
 }

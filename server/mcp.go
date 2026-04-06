@@ -449,6 +449,19 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		}
 
 		updated := false
+		// Validate inputs using the same rules as the HTTP handler.
+		if err := validateUpdateRequest(&updateRequest{
+			Confidence:      args.Confidence,
+			Importance:      args.Importance,
+			Temporality:     args.Temporality,
+			KnowledgeType:   args.KnowledgeType,
+			EpistemicStatus: args.EpistemicStatus,
+			Keywords:        args.Keywords,
+			SummaryShort:    args.SummaryShort,
+		}); err != nil {
+			return mcpErr(err.Error())
+		}
+
 		if args.Confidence != nil {
 			s.engine.SetProp(args.ID, "confidence", graph.Float64Property(*args.Confidence))
 			updated = true
@@ -513,6 +526,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		if args.ID == "" || args.TargetID == "" || args.EdgeType == "" {
 			return mcpErr("id, target_id, and edge_type are required")
 		}
+		if err := validateFloat64Range("edge_weight", args.EdgeWeight, 0.0, 1.0); err != nil {
+			return mcpErr(err.Error())
+		}
 
 		s.engine.Lock()
 		defer s.engine.Unlock()
@@ -555,6 +571,18 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			return mcpErr("record not found")
 		}
 
+		// Validate inputs using the same rules as the HTTP handler.
+		if err := validateClassifyRequest(&classifyRequest{
+			Temporality:     args.Temporality,
+			Confidence:      args.Confidence,
+			KnowledgeType:   args.KnowledgeType,
+			EpistemicStatus: args.EpistemicStatus,
+			Keywords:        args.Keywords,
+			SummaryShort:    args.SummaryShort,
+		}); err != nil {
+			return mcpErr(err.Error())
+		}
+
 		if args.Temporality != "" {
 			s.engine.SetProp(args.ID, "temporality", graph.StringProperty(args.Temporality))
 		}
@@ -592,9 +620,15 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		if args.NodeID == "" {
 			return mcpErr("node_id is required")
 		}
+		if len(args.EdgeTypes) > maxEdgeTypes {
+			return mcpErr(fmt.Sprintf("maximum %d edge types allowed", maxEdgeTypes))
+		}
 		depth := args.Depth
 		if depth <= 0 {
 			depth = 2
+		}
+		if depth > maxExploreDepth {
+			depth = maxExploreDepth
 		}
 
 		s.engine.RLock()
@@ -641,12 +675,19 @@ Call at natural breakpoints: end of task, topic change, session wind-down. Not e
 			return mcpErr("messages mode requires a configured LLM provider. Send facts instead.")
 		}
 
-		go s.processObservation(observeRequest{
-			Messages: args.Messages,
-			Facts:    args.Facts,
-		})
-
-		return mcpJSONResult(map[string]any{"accepted": true})
+		select {
+		case s.observeSem <- struct{}{}:
+			go func() {
+				defer func() { <-s.observeSem }()
+				s.processObservation(observeRequest{
+					Messages: args.Messages,
+					Facts:    args.Facts,
+				})
+			}()
+			return mcpJSONResult(map[string]any{"accepted": true})
+		default:
+			return mcpErr("too many concurrent observe operations, try again later")
+		}
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{

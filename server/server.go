@@ -55,7 +55,8 @@ type Server struct {
 	lastBackup     time.Time
 	curationCancel context.CancelFunc
 
-	retrieval *retrievalTracker
+	retrieval  *retrievalTracker
+	observeSem chan struct{} // bounded semaphore for observe goroutines
 }
 
 // retrievalTracker records which node IDs were served to agents via
@@ -147,6 +148,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) *Server {
 		log:         logger,
 		lastRequest: time.Now(),
 		retrieval:   newRetrievalTracker(),
+		observeSem:  make(chan struct{}, 3), // max 3 concurrent observe goroutines
 	}
 
 	mux := http.NewServeMux()
