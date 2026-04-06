@@ -37,6 +37,28 @@ type Engine struct {
 	headHash string
 }
 
+// EngineOption configures an engine at construction time. Options are
+// applied after default initialization, overriding config-derived values.
+// This is the only supported way to inject dependencies -- the engine
+// is immutable after construction.
+type EngineOption func(*Engine)
+
+// WithEmbedder overrides the embedding provider. Use in tests to inject
+// a mock embedder without requiring a real Ollama/API endpoint.
+func WithEmbedder(p embed.Provider) EngineOption {
+	return func(e *Engine) {
+		e.embedder = p
+		// Rebuild searcher with the new embedder.
+		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, p, e.cfg)
+	}
+}
+
+// WithLLM overrides the LLM provider. Use in tests to inject a mock
+// LLM without requiring a real API key.
+func WithLLM(p llm.Provider) EngineOption {
+	return func(e *Engine) { e.llmProv = p }
+}
+
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
 // The embedder may be nil if no embedding provider is configured.
 // Ollama auto-start is NOT performed -- the caller is responsible
@@ -46,12 +68,19 @@ type Engine struct {
 // loaded with fallback: store-specific config first, then global.
 // This supports named stores that inherit the global config.
 func LoadEngine(cfgDir string, globalCfgDir ...string) (*Engine, error) {
+	return LoadEngineWithOptions(cfgDir, globalCfgDir, nil)
+}
+
+// LoadEngineWithOptions is like LoadEngine but accepts functional options
+// for dependency injection. Options are applied after all default
+// initialization is complete.
+func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineOption) (*Engine, error) {
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 
 	var cfg config.Config
 	var err error
-	if len(globalCfgDir) > 0 && globalCfgDir[0] != "" && globalCfgDir[0] != cfgDir {
-		globalCfgPath := filepath.Join(globalCfgDir[0], "config.yaml")
+	if len(globalCfgDirs) > 0 && globalCfgDirs[0] != "" && globalCfgDirs[0] != cfgDir {
+		globalCfgPath := filepath.Join(globalCfgDirs[0], "config.yaml")
 		cfg, err = config.LoadWithFallback(cfgPath, globalCfgPath)
 	} else {
 		cfg, err = config.Load(cfgPath)
@@ -100,7 +129,7 @@ func LoadEngine(cfgDir string, globalCfgDir ...string) (*Engine, error) {
 		llmProv = nil
 	}
 
-	return &Engine{
+	e := &Engine{
 		cfg:      cfg,
 		store:    s,
 		graph:    g,
@@ -110,7 +139,16 @@ func LoadEngine(cfgDir string, globalCfgDir ...string) (*Engine, error) {
 		llmProv:  llmProv,
 		searcher: searcher,
 		headHash: headHash,
-	}, nil
+	}
+
+	// Apply options after all default initialization.
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+
+	return e, nil
 }
 
 // Config returns the engine's config. Safe for concurrent read.
