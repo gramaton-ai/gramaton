@@ -49,6 +49,12 @@ no relevant context for that field -- skip them.
 - If the content has an inherent date, set valid_from to that date.
 - If the content was replaced by something newer, set valid_until.
 
+**asserted_as_of** -- When did the source make this claim?
+- Only set when the source's claim date is different from now.
+- Example: capturing a decision from a meeting last week --
+  asserted_as_of is the meeting date, not the capture date.
+- Omit when the knowledge is current (created_at covers it).
+
 ## Instructions
 
 1. Classify the content using the schema above.
@@ -75,7 +81,8 @@ no relevant context for that field -- skip them.
      summary_short="[max 200 chars]",
      context_about="[from envelope]",
      context_who="[from envelope]",
-     context_findable_by="[from envelope]"
+     context_findable_by="[from envelope]",
+     asserted_as_of="[only if source claim date differs from now]"
    )
    ```
 

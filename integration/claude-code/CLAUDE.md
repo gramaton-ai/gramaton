@@ -146,6 +146,7 @@ Context:
   What prompted this: [why this knowledge emerged right now]
   What should this be findable by: [terms, names for future retrieval]
   What else in the store relates to this: [known related topics]
+  When was this claimed: [only if source assertion date differs from now]
 
 Follow the capture subagent instructions in
 integration/claude-code/subagent-capture.md"
@@ -155,14 +156,26 @@ continue immediately.
 
 ### Curation
 
-When any Gramaton response includes `"curation": {"overdue": true}`,
-spawn a subagent to run background curation. Do this once per session.
+The server runs background curation automatically every 5 minutes:
+- **Deterministic** (always): lifecycle transitions, orphan linking,
+  duplicate consolidation, concept enrichment (evidence_count,
+  last_evidence_at), store manifest computation.
+- **Autonomous** (when LLM configured): classifies pending records,
+  generates missing summaries, detects semantic contradictions,
+  generates qualitative store manifest summary.
 
-The curation subagent should:
+Check status: `gramaton_curation(action="status")`
+Trigger manually: `gramaton_curation(action="trigger")`
+Preview without applying: `gramaton_curation(action="dry_run")`
+
+**Piggyback curation (agent fallback):** When any response includes
+`"curation": {"overdue": true, "autonomous": false}`, spawn a
+subagent once per session to classify pending records:
+
 1. Call `gramaton_pending` to get unclassified records
-2. Process them in order (most recent first), classifying each one
-   via `gramaton_classify`
+2. Process them in order, classifying each via `gramaton_classify`
 3. Search for related records and link them via `gramaton_link`
-4. Check for keywords that appear across 3+ records without a concept
-   node -- create concept nodes and link all related records
+
+When `autonomous: true`, the server handles classification. Do not
+duplicate its work.
 5. Do not interrupt the user. Run entirely in the background.

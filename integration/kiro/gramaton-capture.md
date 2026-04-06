@@ -28,7 +28,8 @@ Capture knowledge into the Gramaton store.
      confidence=[float],
      knowledge_type="[value]",
      keywords=["k1", "k2"],
-     summary_short="[brief summary]"
+     summary_short="[brief summary]",
+     asserted_as_of="[only if source claim date differs from now]"
    )
    ```
 

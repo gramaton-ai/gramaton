@@ -4,9 +4,20 @@ Run knowledge store maintenance tasks.
 
 ## When to Use
 
-- When any Gramaton response shows `"overdue": true` in curation
-- Periodically during longer sessions
+- When any Gramaton response shows `"overdue": true` AND
+  `"autonomous": false` (no server-side LLM configured)
 - When the user explicitly asks for curation
+- When `autonomous: true`, the server handles classification
+  automatically -- do not duplicate its work
+
+## Preview Changes
+
+Before running curation, you can preview what would change:
+```
+gramaton_curation(action="dry_run")
+```
+This runs the full LLM pipeline but returns planned changes
+without applying them.
 
 ## Steps
 
