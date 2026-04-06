@@ -18,9 +18,10 @@ var mcpCmd = &cobra.Command{
 This is used by MCP clients like Claude Code that spawn the server
 as a child process.
 
-The MCP server loads the knowledge graph directly (no HTTP daemon
-needed for stdio mode). For Streamable HTTP transport, use
-'gramaton serve' instead -- the daemon serves MCP at /mcp.`,
+The MCP process also starts the HTTP server in the background so
+that curation, observe, and auto-backup all function. The HTTP
+server shares the same engine instance (single process, single
+graph). It shuts down automatically when the MCP transport closes.`,
 	RunE: runMCP,
 }
 
@@ -49,6 +50,20 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	cfg.StoreName = activeStoreName()
 
 	srv := server.New(eng, cfg, logger)
+
+	// Start HTTP server + curation runner in background goroutines.
+	// This ensures curation, observe, auto-backup, and CLI commands
+	// all work while the MCP stdio transport is active. Same engine
+	// instance -- no dual-process coordination needed.
+	if err := srv.StartHTTP(); err != nil {
+		// Non-fatal: log and continue with MCP-only mode.
+		// The port might be in use by another gramaton process.
+		logger.Warn("HTTP server failed to start (MCP will work without it)",
+			"err", err)
+	} else {
+		defer srv.Shutdown()
+	}
+
 	mcpServer := srv.MCPServer()
 
 	ctx := context.Background()

@@ -50,9 +50,10 @@ type Server struct {
 	log        *slog.Logger
 	runner     *curation.Runner
 
-	mu          sync.Mutex
-	lastRequest time.Time
-	lastBackup  time.Time
+	mu             sync.Mutex
+	lastRequest    time.Time
+	lastBackup     time.Time
+	curationCancel context.CancelFunc
 
 	retrieval *retrievalTracker
 }
@@ -247,6 +248,72 @@ func (s *Server) Run() error {
 
 	s.log.Info("server stopped")
 	return nil
+}
+
+// StartHTTP starts the HTTP server and curation runner in background
+// goroutines without blocking. Use Shutdown to stop. Designed for the
+// MCP stdio process which needs the HTTP server running alongside the
+// stdio transport.
+func (s *Server) StartHTTP() error {
+	// Write server info for CLI discovery.
+	if err := s.writeServerInfo(); err != nil {
+		return fmt.Errorf("write server info: %w", err)
+	}
+
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", s.httpServer.Addr, err)
+	}
+
+	s.log.Info("HTTP server started (MCP companion)",
+		"addr", ln.Addr().String(),
+		"store", s.engine.Config().DataDir)
+
+	// Start curation runner.
+	engineCfg := s.engine.Config()
+	if engineCfg.Curation.Enabled {
+		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
+		curationCtx, curationCancel := context.WithCancel(context.Background())
+		go s.runner.Start(curationCtx)
+
+		// Store cancel for shutdown.
+		s.mu.Lock()
+		s.curationCancel = curationCancel
+		s.mu.Unlock()
+
+		if engineCfg.Backup.Enabled {
+			s.runner.SetPostCycleHook(func() {
+				s.runAutoBackup()
+			})
+		}
+	}
+
+	// Serve HTTP in background.
+	go func() {
+		if err := s.httpServer.Serve(ln); err != http.ErrServerClosed {
+			s.log.Error("HTTP server error", "err", err)
+		}
+	}()
+
+	return nil
+}
+
+// Shutdown gracefully stops the HTTP server and curation runner.
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	cancel := s.curationCancel
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ctxCancel()
+	s.httpServer.Shutdown(ctx)
+	s.removeServerInfo()
+
+	s.log.Info("HTTP server stopped (MCP companion)")
 }
 
 // RequestShutdown triggers a graceful shutdown from an API call.
