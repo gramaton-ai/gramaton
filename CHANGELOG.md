@@ -33,9 +33,48 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **LLM provider interface** -- `llm.Provider` with `Complete` and
   `ModelID`. Anthropic Messages API client as first implementation.
   Config supports env var name or direct API key.
+- **Observe pipeline** -- `gramaton_observe` MCP tool and
+  `POST /v1/observe` endpoint. Dual-mode: send raw conversation
+  messages (server extracts via LLM) or pre-extracted facts (no LLM
+  needed). Fire-and-forget with async processing. Three-layer feedback
+  loop detection (dedup, recency, retrieval tracking). Quality gates
+  filter noise before storage. Survivors stored as deferred captures
+  (ephemeral, low confidence) for curation to promote or decay.
+- **Retrieval tracker** -- server automatically tracks which records
+  were served to agents via search, inspect, and explore. Used by
+  observe quality gates to prevent feedback loops (re-extracting
+  knowledge that was just retrieved). Thread-safe, time-bounded,
+  zero API changes.
+- **Garbage collection** -- deterministic curation phase that hard-
+  deletes records meeting ALL criteria: unclassified 30+ days, zero
+  access, zero edges, ephemeral, low confidence. Off by default,
+  dry-run by default when enabled. Implements "never delete knowledge,
+  forget noise" principle.
+- **Curation dry-run** -- `gramaton_curation(action="dry_run")` runs
+  the full autonomous LLM pipeline but returns planned changes instead
+  of applying them. Preview what curation would do.
+- **Contradiction detection** -- autonomous curation detects semantic
+  contradictions between records with 0.5-0.85 cosine similarity.
+  LLM evaluates pairs and creates `contradicts` or `supersedes` edges.
+  Configurable thresholds and batch limits.
+- **Store manifest qualitative summary** -- LLM-generated 2-3 sentence
+  assessment of store strengths and gaps. Included in manifest alongside
+  auto-generated stats. Top 20 keywords tracked for domain analysis.
+- **Concept node enrichment** -- deterministic curation computes
+  `evidence_count` and `last_evidence_at` on concept nodes from
+  inbound edges each cycle.
+- **Expiration visibility** -- metadata_summary now shows "expires in
+  3 days" or "expired 5 days ago" instead of just "Current/Historical".
+- **asserted_as_of field** -- new timestamp property for when the source
+  made a claim (distinct from created_at when captured). Supported on
+  capture, update, classify, search results, MCP tools, and import.
+- **Engine functional options** -- `LoadEngineWithOptions` supports
+  dependency injection via `WithEmbedder` and `WithLLM` at construction.
+  Dependencies immutable after init (no runtime setters).
 - **Curation endpoints** -- `GET /v1/curation` (status, concept
   candidates, manifest) and `POST /v1/curation/trigger` (manual
-  cycle). `gramaton_curation` MCP tool with status/trigger actions.
+  cycle, dry-run). `gramaton_curation` MCP tool with status/trigger/
+  dry_run actions.
 - **Enhanced curation status** -- response envelope now includes
   concept_candidates, stale_count, orphan_count, last_curated,
   and autonomous flag alongside pending_count and overdue.

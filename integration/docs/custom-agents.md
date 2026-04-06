@@ -9,7 +9,7 @@ store. Choose based on your framework's capabilities:
 
 ### 1. MCP (Recommended)
 
-The fastest path. Gramaton exposes 18 MCP tools via Streamable HTTP.
+The fastest path. Gramaton exposes 19 MCP tools via Streamable HTTP.
 Agents call typed tools with structured parameters -- no shell, no
 escaping, no permission prompts.
 
@@ -36,7 +36,9 @@ escaping, no permission prompts.
 | `gramaton_reembed` | Regenerate stale embeddings |
 | `gramaton_stats` | Aggregate statistics |
 | `gramaton_duplicates` | Find near-duplicate records |
-| `gramaton_curation` | View curation status or trigger a cycle |
+| `gramaton_curation` | View curation status, trigger, or dry-run |
+| `gramaton_observe` | Send conversation for knowledge extraction |
+| `gramaton_backup` | Create a backup or check status |
 
 ### 2. REST API
 
@@ -65,6 +67,8 @@ GET    /v1/stats                Aggregate statistics
 POST   /v1/duplicates           Find near-duplicates
 GET    /v1/curation             Curation status and candidates
 POST   /v1/curation/trigger     Trigger a curation cycle
+POST   /v1/observe              Send conversation for extraction
+POST   /v1/backup               Create a backup
 ```
 
 All responses use a standard envelope:
@@ -132,6 +136,30 @@ The standard capture workflow is three operations:
 
 This creates a connected knowledge graph, not just a list of facts.
 
+### When to Observe
+
+At natural breakpoints (end of task, topic change, session wind-down),
+call `gramaton_observe` with recent conversation messages. The server
+extracts facts, runs quality gates (dedup, feedback loop detection,
+substance filter), and stores survivors as deferred captures for
+curation to classify.
+
+```
+gramaton_observe(messages=[{role: "user", content: "..."}, ...])
+```
+
+Without a server LLM, send pre-extracted facts instead:
+```
+gramaton_observe(facts=["Decided to use JWT", "API v2 replaces v1"])
+```
+
+Observe is fire-and-forget -- it returns immediately. Do not announce
+it to the user. Do not call it every turn.
+
+Observe is a safety net for knowledge the agent didn't explicitly
+capture. Explicit `gramaton_capture` remains the primary, high-quality
+capture path.
+
 ### Interpreting Metadata
 
 Results include `metadata_summary` -- a one-line LLM-readable trust
@@ -145,12 +173,21 @@ raw fields (confidence, temporality, epistemic_status) directly.
 
 Responses include a `curation` field:
 ```json
-{"pending_count": 14, "overdue": true}
+{"pending_count": 14, "overdue": true, "autonomous": false}
 ```
 
-When `overdue` is true, spawn background curation to classify
-pending records. This keeps the store healthy without user
-intervention.
+When `autonomous: true`, the server handles classification, summary
+generation, contradiction detection, and store maintenance
+automatically. Do not duplicate its work.
+
+When `overdue: true` AND `autonomous: false`, spawn background
+curation to classify pending records. This keeps the store healthy
+without user intervention.
+
+Preview curation changes before applying:
+```
+gramaton_curation(action="dry_run")
+```
 
 ## Output Format
 
