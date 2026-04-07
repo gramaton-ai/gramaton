@@ -458,8 +458,8 @@ Agent: [searches Gramaton, finds auth architecture decisions and security polici
 User: "Makes sense. Let's also add rate limiting at the gateway level,
        100 req/sec per client."
 
-Agent: [spawns subagent to capture: rate limiting decision, links to
-        microservice project, auth service concept, gateway concept]
+Agent: [captures: rate limiting decision, links to microservice
+        project, auth service concept, gateway concept]
        "Good call. I'll set up the rate limiter config in the gateway.
         For the 100 req/sec limit, we should also add a burst allowance..."
 

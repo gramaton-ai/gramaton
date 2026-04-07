@@ -126,12 +126,23 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		if !ok {
 			continue
 		}
-		model, ok := n.Properties.GetString("embedding_model")
-		if ok && model == currentModel {
-			continue
-		}
 		if _, hasContent := n.Properties.GetString("content_full"); !hasContent {
 			continue
+		}
+		model, ok := n.Properties.GetString("embedding_model")
+		if ok && model == currentModel {
+			// Model matches, but check for missing embedding layers.
+			// A record might have embedding_full but not embedding_short
+			// (e.g., concept nodes after summary repair).
+			hasGap := false
+			if _, has := n.Properties.GetString("content_short"); has {
+				if _, has := n.Properties["embedding_short"]; !has {
+					hasGap = true
+				}
+			}
+			if !hasGap {
+				continue
+			}
 		}
 
 		embedSources := []struct {
