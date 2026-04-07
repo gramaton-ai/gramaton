@@ -120,8 +120,9 @@ type proxySearchInput struct {
 	MinEdges           *int     `json:"min_edges,omitempty" jsonschema:"integer, minimum total edge count (orphan detection: max_edges=0)"`
 	MaxEdges           *int     `json:"max_edges,omitempty" jsonschema:"integer, maximum total edge count"`
 	Random             bool     `json:"random,omitempty" jsonschema:"return random results (ignores sort/score). Useful for serendipitous discovery or review"`
-	Sort               string   `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
-	Order              string   `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
+	Sort               string            `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
+	Order              string            `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
+	Meta               map[string]string `json:"meta,omitempty" jsonschema:"filter by structured metadata (e.g. {assignee: Sarah Chen, status: in_progress})"`
 }
 
 func registerSearchProxy(s *mcp.Server) {
@@ -149,8 +150,9 @@ type proxyCaptureInput struct {
 	SourceCredibility *float64 `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
 	ContextAbout      string   `json:"context_about,omitempty" jsonschema:"topic/domain"`
 	ContextWho        string   `json:"context_who,omitempty" jsonschema:"entities involved"`
-	ContextFindable   string   `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
-	AssertedAsOf      string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+	ContextFindable   string         `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
+	AssertedAsOf      string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+	Meta              map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems (e.g. {assignee: Sarah, priority: P1})"`
 }
 
 func registerCaptureProxy(s *mcp.Server) {
@@ -195,8 +197,9 @@ type proxyUpdateInput struct {
 	Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 	Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
 	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
-	ValidUntil      string   `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical"`
-	AssertedAsOf    string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
+	ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical"`
+	AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
+	Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata (e.g. {assignee: Sarah, status: done})"`
 }
 
 func registerUpdateProxy(s *mcp.Server) {

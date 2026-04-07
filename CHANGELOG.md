@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Structured metadata** -- records accept a `meta` map at capture
+  and update time. Values (string, number, bool, string array) are
+  stored as typed `meta.*` properties, validated at write time, and
+  indexed in BM25 for keyword search. Search accepts a `meta` filter
+  for exact-match pre-filtering on any meta field.
+- **Faceted suggestions** -- when search results score below a
+  configurable threshold (default 0.75), the response includes
+  `suggestions.available_filters` showing meta field values found
+  across results. Agents can use these to refine with explicit
+  meta filters. Config: `search.suggestion_threshold`.
+
 ### Changed
 
 - **Server service layer extraction** -- extracted 14 service methods from
