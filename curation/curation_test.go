@@ -645,3 +645,105 @@ func TestParseClassificationSummaryTruncation(t *testing.T) {
 		t.Fatalf("summary should be truncated to 200 runes, got %d", len([]rune(result.SummaryShort)))
 	}
 }
+
+func TestQualityAuditConceptSummary(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	// Create a concept node with label-as-summary (the bug).
+	eng.Lock()
+	synthesis := "Kafka is a distributed event streaming platform used across microservices. It provides pub-sub messaging with durable log semantics."
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty(synthesis),
+		"content_short":     graph.StringProperty("kafka"), // label, not summary
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("kafka"),
+		"knowledge_type":    graph.StringProperty("conceptual"),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+		"access_count":      graph.Int64Property(0),
+	})
+	eng.IndexNode(n.ID, synthesis, nil)
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.QualityRepairs != 1 {
+		t.Fatalf("expected 1 quality repair, got %d", result.QualityRepairs)
+	}
+
+	// Verify content_short was updated.
+	eng.RLock()
+	defer eng.RUnlock()
+	updated, _ := eng.Graph().GetNode(n.ID)
+	cs, _ := updated.Properties.GetString("content_short")
+	if cs == "kafka" {
+		t.Fatal("content_short should have been repaired from 'kafka' to a summary")
+	}
+	if len(cs) < 20 {
+		t.Fatalf("repaired content_short too short: %q", cs)
+	}
+}
+
+func TestQualityAuditShortSummary(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	// Create a record with a suspiciously short content_short.
+	eng.Lock()
+	fullContent := "This is a comprehensive document about Go error handling patterns including wrapping, sentinel errors, and custom error types with stack traces."
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty(fullContent),
+		"content_short":     graph.StringProperty("Go"), // too short
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+		"access_count":      graph.Int64Property(0),
+	})
+	eng.IndexNode(n.ID, fullContent, nil)
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.QualityRepairs != 1 {
+		t.Fatalf("expected 1 quality repair, got %d", result.QualityRepairs)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	updated, _ := eng.Graph().GetNode(n.ID)
+	cs, _ := updated.Properties.GetString("content_short")
+	if cs == "Go" {
+		t.Fatal("content_short should have been repaired")
+	}
+	if len(cs) < 20 {
+		t.Fatalf("repaired content_short too short: %q", cs)
+	}
+}
+
+func TestQualityAuditNoFalsePositive(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	// Create a record with a proper summary -- should NOT be flagged.
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Detailed content about authentication patterns."),
+		"content_short":     graph.StringProperty("Overview of authentication patterns including OAuth2, JWT, and session-based auth."),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+		"access_count":      graph.Int64Property(0),
+	})
+	eng.IndexNode(n.ID, "auth patterns", nil)
+	eng.Save("test")
+	eng.Unlock()
+
+	_ = n // used above
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.QualityRepairs != 0 {
+		t.Fatalf("expected 0 quality repairs (no issues), got %d", result.QualityRepairs)
+	}
+}

@@ -1188,6 +1188,14 @@ func TestCreateConceptNodes(t *testing.T) {
 				if content, ok := n.Properties.GetString("content_full"); !ok || content == "" {
 					t.Fatal("concept node should have content_full")
 				}
+				// content_short should be a proper summary, not the keyword.
+				if cs, ok := n.Properties.GetString("content_short"); !ok || cs == "" {
+					t.Fatal("concept node should have content_short")
+				} else if cs == "kafka" {
+					t.Fatalf("content_short should be a summary, not the keyword; got %q", cs)
+				} else if len(cs) < 10 {
+					t.Fatalf("content_short too short to be a summary: %q", cs)
+				}
 			}
 		}
 	}
@@ -1237,5 +1245,55 @@ func TestCreateConceptNodesIdempotent(t *testing.T) {
 	createConceptNodes(context.Background(), eng, llm, cfg, result2, 20, nil, false, candidates)
 	if result2.ConceptsCreated != 0 {
 		t.Fatalf("second run: expected 0 concepts (already exists), got %d", result2.ConceptsCreated)
+	}
+}
+
+func TestConceptShortSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxLen   int
+		wantMin  int // minimum length
+		wantSelf bool // expect full input returned
+	}{
+		{
+			name:     "first sentence within limit",
+			input:    "Kafka is a distributed event streaming platform. Records cover streaming and partitioning.",
+			maxLen:   200,
+			wantMin:  20,
+			wantSelf: false,
+		},
+		{
+			name:     "short input returned as-is",
+			input:    "Short summary.",
+			maxLen:   200,
+			wantMin:  5,
+			wantSelf: true,
+		},
+		{
+			name:     "long input without periods truncates at word boundary",
+			input:    "This is a very long text without any sentence boundaries that goes on and on and on repeating itself many times over",
+			maxLen:   50,
+			wantMin:  20,
+			wantSelf: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := conceptShortSummary(tt.input, tt.maxLen)
+			if len(got) < tt.wantMin {
+				t.Errorf("too short: %q (len=%d, wantMin=%d)", got, len(got), tt.wantMin)
+			}
+			if len(got) > tt.maxLen {
+				t.Errorf("exceeds maxLen: len=%d, maxLen=%d", len(got), tt.maxLen)
+			}
+			if tt.wantSelf && got != tt.input {
+				t.Errorf("expected full input, got %q", got)
+			}
+			if !tt.wantSelf && got == tt.input {
+				t.Errorf("expected truncation, got full input")
+			}
+		})
 	}
 }

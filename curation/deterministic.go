@@ -23,6 +23,8 @@ type DeterministicResult struct {
 	SectionsLinked       int
 	GCCollected          int
 	GCDryRun             bool
+	QualityRepairs       int // deterministic quality fixes applied
+	QualityFlags         int // records flagged for autonomous repair
 	ConceptCandidates    []ConceptCandidate
 	Manifest             *StoreManifest
 }
@@ -223,10 +225,66 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 	}
 
+	// Quality audit: find records with metadata gaps that hurt retrieval.
+	type qualityIssue struct {
+		nodeID string
+		fix    string // "concept_summary" | "extract_short" | "flag_embed"
+		short  string // new content_short for deterministic fixes
+	}
+	var qualityIssues []qualityIssue
+
+	for _, id := range allIDs {
+		n, ok := g.GetNode(id)
+		if !ok {
+			continue
+		}
+		if isChunkNode(g, id) {
+			continue
+		}
+		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
+			continue
+		}
+
+		contentFull, hasFullContent := n.Properties.GetString("content_full")
+		contentShort, hasShort := n.Properties.GetString("content_short")
+		_, hasEmbedShort := n.Properties["embedding_short"]
+
+		// Rule 1: Concept node with label-as-summary.
+		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
+			if kw, ok := n.Properties.GetString("concept_keyword"); ok && contentShort == kw && hasFullContent {
+				qualityIssues = append(qualityIssues, qualityIssue{
+					nodeID: id,
+					fix:    "concept_summary",
+					short:  conceptShortSummary(contentFull, 200),
+				})
+				continue
+			}
+		}
+
+		// Rule 2: content_short too short relative to content_full.
+		if hasShort && hasFullContent && len(contentShort) < 20 && len(contentFull) > 100 {
+			// Short is suspiciously brief. Extract first sentence from full.
+			qualityIssues = append(qualityIssues, qualityIssue{
+				nodeID: id,
+				fix:    "extract_short",
+				short:  conceptShortSummary(contentFull, 200),
+			})
+			continue
+		}
+
+		// Rule 3: content_short exists but embedding_short is missing.
+		if hasShort && len(contentShort) > 10 && !hasEmbedShort {
+			qualityIssues = append(qualityIssues, qualityIssue{
+				nodeID: id,
+				fix:    "flag_embed",
+			})
+		}
+	}
+
 	e.RUnlock()
 
 	// --- Write phase ---
-	mutations := len(staleIDs) + len(orphanLinks) + len(pairs)
+	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues)
 	if mutations > 0 {
 		e.Lock()
 
@@ -288,7 +346,25 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			result.DuplicatesSuperseded++
 		}
 
-		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded > 0 {
+		// Quality repairs: fix deterministic issues, flag others.
+		for _, qi := range qualityIssues {
+			if _, ok := e.Graph().GetNode(qi.nodeID); !ok {
+				continue
+			}
+			switch qi.fix {
+			case "concept_summary", "extract_short":
+				// Deterministic fix: update content_short.
+				e.SetContentProp(qi.nodeID, "content_short", qi.short)
+				result.QualityRepairs++
+			case "flag_embed":
+				// Can't fix deterministically (needs embedder).
+				// Stale count in manifest already captures this;
+				// reembed pipeline will handle it.
+				result.QualityFlags++
+			}
+		}
+
+		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded+result.QualityRepairs > 0 {
 			e.Save("curation: deterministic")
 		}
 
@@ -321,6 +397,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"lifecycle_transitions", result.LifecycleTransitions,
 			"orphans_linked", result.OrphansLinked,
 			"duplicates_superseded", result.DuplicatesSuperseded,
+			"quality_repairs", result.QualityRepairs,
+			"quality_flags", result.QualityFlags,
 			"gc_collected", result.GCCollected,
 			"concept_candidates", len(candidates))
 	}

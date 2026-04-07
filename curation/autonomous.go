@@ -608,14 +608,27 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 			continue
 		}
 
+		// Build content_short from synthesis: first sentence, capped
+		// at 200 chars. The keyword is preserved in concept_keyword.
+		shortSummary := conceptShortSummary(synthesis, 200)
+
 		// Pre-embed outside the lock (I/O can be slow).
-		var conceptVec []float32
+		// Embed both content_full (synthesis) and content_short
+		// to populate embedding_full and embedding_short.
+		var conceptVecFull, conceptVecShort []float32
 		var conceptModel string
 		if e.Embedder() != nil {
-			vecs, err := e.Embedder().Embed(ctx, []string{synthesis})
+			texts := []string{synthesis}
+			if shortSummary != synthesis {
+				texts = append(texts, shortSummary)
+			}
+			vecs, err := e.Embedder().Embed(ctx, texts)
 			if err == nil && len(vecs) > 0 {
-				conceptVec = vecs[0]
+				conceptVecFull = vecs[0]
 				conceptModel = e.Embedder().ModelID()
+				if len(vecs) > 1 {
+					conceptVecShort = vecs[1]
+				}
 			}
 		}
 
@@ -624,7 +637,7 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 
 		props := graph.Properties{
 			"content_full":      graph.StringProperty(synthesis),
-			"content_short":     graph.StringProperty(candidate.Keyword),
+			"content_short":     graph.StringProperty(shortSummary),
 			"node_type":         graph.StringProperty("concept"),
 			"concept_keyword":   graph.StringProperty(candidate.Keyword),
 			"knowledge_type":    graph.StringProperty("conceptual"),
@@ -638,10 +651,16 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 		}
 
 		node := e.Graph().AddNode(props)
-		e.IndexNode(node.ID, synthesis, conceptVec)
+		e.IndexNode(node.ID, synthesis, conceptVecFull)
+
+		// Apply embedding_short if we generated it.
+		if conceptVecShort != nil {
+			e.Graph().SetNodeProperty(node.ID, "embedding_short", graph.VectorProperty(conceptVecShort))
+			e.PropIdx().Add(node.ID, "embedding_short", graph.VectorProperty(conceptVecShort))
+		}
 
 		// Set embedding model property if we embedded.
-		if conceptVec != nil && conceptModel != "" {
+		if conceptVecFull != nil && conceptModel != "" {
 			e.SetProp(node.ID, "embedding_model", graph.StringProperty(conceptModel))
 		}
 
@@ -665,6 +684,30 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 				"node_id", node.ID)
 		}
 	}
+}
+
+// conceptShortSummary extracts a short summary from a synthesis text.
+// Takes the first sentence, capped at maxLen characters.
+func conceptShortSummary(synthesis string, maxLen int) string {
+	// Find first sentence boundary.
+	for i, r := range synthesis {
+		if r == '.' && i > 20 && i < maxLen {
+			return synthesis[:i+1]
+		}
+	}
+	// No sentence boundary found within limit; truncate at word boundary.
+	if len(synthesis) <= maxLen {
+		return synthesis
+	}
+	// Find last space before maxLen.
+	cut := maxLen
+	for cut > 0 && synthesis[cut] != ' ' {
+		cut--
+	}
+	if cut == 0 {
+		cut = maxLen
+	}
+	return synthesis[:cut]
 }
 
 // detectContradictions finds records with moderate similarity and uses the
