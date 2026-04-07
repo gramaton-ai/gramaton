@@ -115,6 +115,56 @@ type Facets struct {
 	Resolution      map[string]int `json:"resolution,omitempty"`
 }
 
+// Suggestions holds refinement hints returned when search results
+// may benefit from additional filtering. Available filters lists
+// meta.* field values found across results so agents can narrow
+// their query.
+type Suggestions struct {
+	Reason           string                       `json:"reason"`
+	AvailableFilters map[string]map[string]int    `json:"available_filters,omitempty"`
+}
+
+// ComputeSuggestions builds refinement suggestions from search results.
+// Returns nil if results are high quality (top score above threshold).
+// The nodeReader is used to read meta.* properties from result nodes.
+func ComputeSuggestions(results []Result, reader nodeReader, threshold float64) *Suggestions {
+	if len(results) == 0 {
+		return nil
+	}
+
+	// Check quality: if top result scores well, no suggestions needed.
+	if results[0].EffectiveScore >= threshold {
+		return nil
+	}
+
+	// Collect meta.* property values across all results.
+	metaFacets := make(map[string]map[string]int)
+	for _, r := range results {
+		n, ok := reader.GetNode(r.ID)
+		if !ok {
+			continue
+		}
+		for k, v := range n.Properties {
+			if len(k) > 5 && k[:5] == "meta." {
+				field := k[5:]
+				if metaFacets[field] == nil {
+					metaFacets[field] = make(map[string]int)
+				}
+				metaFacets[field][v.FormatValue()]++
+			}
+		}
+	}
+
+	if len(metaFacets) == 0 {
+		return nil
+	}
+
+	return &Suggestions{
+		Reason:           "low_confidence",
+		AvailableFilters: metaFacets,
+	}
+}
+
 // ComputeFacets counts the distribution of enum fields across results.
 func ComputeFacets(results []Result) Facets {
 	f := Facets{

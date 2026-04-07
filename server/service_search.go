@@ -175,10 +175,24 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		s.retrieval.Track(ids...)
 	}
 
-	return map[string]any{
+	resp := map[string]any{
 		"results": results,
 		"facets":  search.ComputeFacets(results),
-	}, nil
+	}
+
+	// Add refinement suggestions when result quality is low.
+	s.engine.RLock()
+	threshold := s.engine.Config().Search.SuggestionThreshold
+	if threshold <= 0 {
+		threshold = 0.75
+	}
+	suggestions := search.ComputeSuggestions(results, s.engine.Graph(), threshold)
+	s.engine.RUnlock()
+	if suggestions != nil {
+		resp["suggestions"] = suggestions
+	}
+
+	return resp, nil
 }
 
 // serviceExplore traverses the knowledge graph from a starting node.

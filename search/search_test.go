@@ -1142,3 +1142,191 @@ func TestHybridSearchRRF(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchMetaFilter(t *testing.T) {
+	g := graph.New()
+	propIdx := index.NewPropertyIndex()
+	vecIdx := index.NewFlatIndex()
+	bm25 := index.NewBM25Index(1.2, 0.75)
+	now := time.Now().UTC()
+
+	// Two tickets: one assigned to Sarah, one to Marcus.
+	sarah := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("PLAT-142: rate limiting"),
+		"temporality":       graph.StringProperty("temporal"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"meta.assignee":     graph.StringProperty("Sarah Chen"),
+		"meta.priority":     graph.StringProperty("P1"),
+	})
+	marcus := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("PLAT-089: JWT claims"),
+		"temporality":       graph.StringProperty("temporal"),
+		"confidence":        graph.Float64Property(0.9),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+		"meta.assignee":     graph.StringProperty("Marcus Webb"),
+		"meta.priority":     graph.StringProperty("P1"),
+	})
+
+	for _, n := range []*graph.Node{sarah, marcus} {
+		for k, v := range n.Properties {
+			propIdx.Add(n.ID, k, v)
+		}
+		bm25.Add(n.ID, n.Properties["content_full"].String())
+	}
+
+	cfg := defaultCfg()
+	s := New(g, propIdx, vecIdx, bm25, nil, cfg)
+
+	// Filter by assignee: should return only Sarah's ticket.
+	results, err := s.ExecuteWithVector(context.Background(), Query{
+		Top:  10,
+		Meta: map[string]string{"assignee": "Sarah Chen"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for assignee=Sarah, got %d", len(results))
+	}
+	if results[0].ID != sarah.ID {
+		t.Errorf("expected Sarah's ticket, got %s", results[0].ID)
+	}
+
+	// Filter by priority: should return both.
+	results, err = s.ExecuteWithVector(context.Background(), Query{
+		Top:  10,
+		Meta: map[string]string{"priority": "P1"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for priority=P1, got %d", len(results))
+	}
+
+	// Filter by nonexistent value: should return nothing.
+	results, err = s.ExecuteWithVector(context.Background(), Query{
+		Top:  10,
+		Meta: map[string]string{"assignee": "Nobody"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results for assignee=Nobody, got %d", len(results))
+	}
+}
+
+func TestComputeSuggestions(t *testing.T) {
+	g := graph.New()
+	now := time.Now().UTC()
+
+	// Create nodes with meta properties.
+	n1 := g.AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("ticket one"),
+		"created_at":    graph.TimestampProperty(now),
+		"meta.assignee": graph.StringProperty("Sarah"),
+		"meta.status":   graph.StringProperty("open"),
+	})
+	n2 := g.AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("ticket two"),
+		"created_at":    graph.TimestampProperty(now),
+		"meta.assignee": graph.StringProperty("Marcus"),
+		"meta.status":   graph.StringProperty("open"),
+	})
+	n3 := g.AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("ticket three"),
+		"created_at":    graph.TimestampProperty(now),
+		"meta.assignee": graph.StringProperty("Sarah"),
+		"meta.status":   graph.StringProperty("done"),
+	})
+
+	// Build results with low scores.
+	results := []Result{
+		{ID: n1.ID, EffectiveScore: 0.5},
+		{ID: n2.ID, EffectiveScore: 0.45},
+		{ID: n3.ID, EffectiveScore: 0.4},
+	}
+
+	// Should produce suggestions (top score 0.5 < threshold 0.75).
+	suggestions := ComputeSuggestions(results, g, 0.75)
+	if suggestions == nil {
+		t.Fatal("expected suggestions for low-scoring results")
+	}
+	if suggestions.Reason != "low_confidence" {
+		t.Errorf("expected reason=low_confidence, got %q", suggestions.Reason)
+	}
+	if suggestions.AvailableFilters == nil {
+		t.Fatal("expected available_filters")
+	}
+
+	// Check assignee facets.
+	assignee, ok := suggestions.AvailableFilters["assignee"]
+	if !ok {
+		t.Fatal("expected assignee in available_filters")
+	}
+	if assignee["Sarah"] != 2 {
+		t.Errorf("expected Sarah=2, got %d", assignee["Sarah"])
+	}
+	if assignee["Marcus"] != 1 {
+		t.Errorf("expected Marcus=1, got %d", assignee["Marcus"])
+	}
+
+	// Check status facets.
+	status, ok := suggestions.AvailableFilters["status"]
+	if !ok {
+		t.Fatal("expected status in available_filters")
+	}
+	if status["open"] != 2 {
+		t.Errorf("expected open=2, got %d", status["open"])
+	}
+	if status["done"] != 1 {
+		t.Errorf("expected done=1, got %d", status["done"])
+	}
+}
+
+func TestComputeSuggestionsHighScore(t *testing.T) {
+	g := graph.New()
+	now := time.Now().UTC()
+
+	n1 := g.AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("good result"),
+		"created_at":    graph.TimestampProperty(now),
+		"meta.assignee": graph.StringProperty("Sarah"),
+	})
+
+	results := []Result{
+		{ID: n1.ID, EffectiveScore: 0.9},
+	}
+
+	// Should NOT produce suggestions (high score).
+	suggestions := ComputeSuggestions(results, g, 0.75)
+	if suggestions != nil {
+		t.Error("expected no suggestions for high-scoring results")
+	}
+}
+
+func TestComputeSuggestionsNoMeta(t *testing.T) {
+	g := graph.New()
+	now := time.Now().UTC()
+
+	n1 := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("no meta here"),
+		"created_at":   graph.TimestampProperty(now),
+	})
+
+	results := []Result{
+		{ID: n1.ID, EffectiveScore: 0.3},
+	}
+
+	// Should NOT produce suggestions (no meta fields to suggest).
+	suggestions := ComputeSuggestions(results, g, 0.75)
+	if suggestions != nil {
+		t.Error("expected no suggestions when no meta.* properties exist")
+	}
+}

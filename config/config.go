@@ -118,9 +118,10 @@ type DedupConfig struct {
 }
 
 type SearchConfig struct {
-	BM25K1 float64 `yaml:"bm25_k1"` // term frequency saturation (default 1.2)
-	BM25B  float64 `yaml:"bm25_b"`  // length normalization (default 0.75)
-	RRFK   int     `yaml:"rrf_k"`   // RRF rank constant (default 60)
+	BM25K1              float64 `yaml:"bm25_k1"`              // term frequency saturation (default 1.2)
+	BM25B               float64 `yaml:"bm25_b"`               // length normalization (default 0.75)
+	RRFK                int     `yaml:"rrf_k"`                // RRF rank constant (default 60)
+	SuggestionThreshold float64 `yaml:"suggestion_threshold"` // top-result score below which suggestions are returned (default 0.75)
 }
 
 type GraphConfig struct {
@@ -298,9 +299,10 @@ func Defaults() Config {
 		},
 
 		Search: SearchConfig{
-			BM25K1: 1.2,
-			BM25B:  0.75,
-			RRFK:   60,
+			BM25K1:              1.2,
+			BM25B:               0.75,
+			RRFK:                60,
+			SuggestionThreshold: 0.75,
 		},
 
 		Storage: StorageConfig{
