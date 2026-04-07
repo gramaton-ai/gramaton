@@ -220,9 +220,12 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		batchSize = 10
 	}
 
-	// Read phase: find records with content but no summary.
+	// Read phase: find records needing summaries.
+	// Priority 1: records with content but no summary at all.
+	// Priority 2: section nodes with truncated summaries (no heading).
 	e.RLock()
-	allIDs := e.Graph().AllNodeIDs()
+	g := e.Graph()
+	allIDs := g.AllNodeIDs()
 	type needsSummary struct {
 		id      string
 		content string
@@ -232,20 +235,54 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		if len(batch) >= batchSize {
 			break
 		}
-		n, ok := e.Graph().GetNode(id)
+		n, ok := g.GetNode(id)
 		if !ok {
 			continue
 		}
-		if isChunkNode(e.Graph(), id) {
+		if isChunkNode(g, id) {
 			continue
 		}
 		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
 			continue
 		}
-		// Only process records that have content but no summary.
 		content, hasContent := n.Properties.GetString("content_full")
 		_, hasSummary := n.Properties.GetString("content_short")
 		if hasContent && !hasSummary && content != "" {
+			batch = append(batch, needsSummary{id: id, content: content})
+		}
+	}
+
+	// Priority 2: section nodes with truncated summaries.
+	// A truncated summary is one that equals the first 200 chars of content
+	// (set by the section splitter when no heading was detected).
+	for _, id := range allIDs {
+		if len(batch) >= batchSize {
+			break
+		}
+		n, ok := g.GetNode(id)
+		if !ok {
+			continue
+		}
+		// Only section nodes.
+		isSection := false
+		for _, edge := range g.EdgesFrom(id) {
+			if edge.Type == "section_of" {
+				isSection = true
+				break
+			}
+		}
+		if !isSection {
+			continue
+		}
+
+		content, hasContent := n.Properties.GetString("content_full")
+		summary, hasSummary := n.Properties.GetString("content_short")
+		if !hasContent || !hasSummary || content == "" {
+			continue
+		}
+
+		// Check if summary looks truncated: it's the first 200 chars of content.
+		if len(summary) >= 150 && len(content) > len(summary) && strings.HasPrefix(content, summary) {
 			batch = append(batch, needsSummary{id: id, content: content})
 		}
 	}

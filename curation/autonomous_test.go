@@ -1070,6 +1070,61 @@ func TestValidateEnum(t *testing.T) {
 	}
 }
 
+func TestGenerateSummariesForTruncatedSections(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+
+	// Create a section node with a truncated summary (first 200 chars of content).
+	longContent := "On a theory of this sort, what makes some neural process an instance " +
+		"of memory trace decay is a matter of how it functions, or the role it plays, " +
+		"in a cognitive system; its neural or chemical properties are relevant only " +
+		"insofar as they enable that process to do what trace decay is hypothesized to do. " +
+		"And similarly for all mental states and processes invoked by cognitive psychological theories."
+	truncatedSummary := longContent[:200]
+
+	eng.Lock()
+	parent := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Article about functionalism"),
+		"content_short":     graph.StringProperty("Functionalism article"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	section := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty(longContent),
+		"content_short":     graph.StringProperty(truncatedSummary),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	eng.Graph().AddEdge(section.ID, parent.ID, "section_of", 1.0, nil)
+	for k, v := range section.Properties {
+		eng.PropIdx().Add(section.ID, k, v)
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	llm := &mockLLM{
+		responses: []string{"Memory trace decay defined by functional role in cognition"},
+	}
+
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.SummariesGenerated != 1 {
+		t.Fatalf("expected 1 summary generated for truncated section, got %d", result.SummariesGenerated)
+	}
+
+	// Verify the summary was updated.
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(section.ID)
+	newSummary, _ := n.Properties.GetString("content_short")
+	if newSummary == truncatedSummary {
+		t.Fatal("summary should have been replaced by LLM-generated one")
+	}
+	if newSummary != "Memory trace decay defined by functional role in cognition" {
+		t.Fatalf("unexpected summary: %q", newSummary)
+	}
+}
+
 func TestCreateConceptNodes(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
