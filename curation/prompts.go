@@ -62,3 +62,15 @@ Guide:
 - none: The records are not meaningfully related despite surface similarity. No action needed.
 
 Only use "contradicts" or "supersedes" when you are confident. When in doubt, use "related" or "none".`
+
+const conceptSynthesisPrompt = `Synthesize the following related knowledge records into a concept summary. This concept node will serve as a retrieval hub connecting related knowledge.
+
+Keyword: %s
+Number of records: %d
+
+Record summaries:
+%s
+
+Write a concise synthesis (2-4 sentences) that captures the essence of what these records collectively establish about this concept. Focus on what they have in common, key themes, and the most important insights. No preamble, no quotes.
+
+Synthesis:`

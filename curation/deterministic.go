@@ -20,6 +20,7 @@ type DeterministicResult struct {
 	LifecycleTransitions int
 	OrphansLinked        int
 	DuplicatesSuperseded int
+	SectionsLinked       int
 	GCCollected          int
 	GCDryRun             bool
 	ConceptCandidates    []ConceptCandidate
@@ -298,6 +299,11 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// Compute evidence_count and last_evidence_at for concept nodes.
 	enrichConcepts(e, logger)
 
+	// --- Cross-section linking phase ---
+	// Find similar sections across different parent articles and create
+	// related_to edges. This connects knowledge that spans documents.
+	result.SectionsLinked = linkSections(e, cfg, logger)
+
 	// --- Garbage collection phase ---
 	// Hard delete records that meet ALL junk criteria.
 	if cfg.GC.Enabled {
@@ -561,6 +567,169 @@ func curationNodeText(n *graph.Node) string {
 		return s
 	}
 	return ""
+}
+
+// linkSections finds semantically similar sections across different parent
+// documents and creates related_to edges. This is the Mem0-inspired
+// entity resolution pattern: embedding comparison scoped to sections,
+// with sibling exclusion to avoid linking sections from the same article.
+func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
+	minSim := cfg.Curation.SectionLinkMin
+	if minSim <= 0 {
+		minSim = 0.75
+	}
+	maxLinks := cfg.Curation.MaxSectionLinksPerRun
+	if maxLinks <= 0 {
+		maxLinks = 30
+	}
+
+	// --- Read phase: collect section nodes and their parents ---
+	e.RLock()
+	g := e.Graph()
+
+	type sectionInfo struct {
+		id       string
+		parentID string
+	}
+	var sections []sectionInfo
+
+	for _, id := range g.AllNodeIDs() {
+		for _, edge := range g.EdgesFrom(id) {
+			if edge.Type == "section_of" {
+				sections = append(sections, sectionInfo{
+					id:       id,
+					parentID: edge.TargetID,
+				})
+				break
+			}
+		}
+	}
+
+	if len(sections) < 2 {
+		e.RUnlock()
+		return 0
+	}
+
+	// Build parent lookup and existing-edge lookup for fast checks.
+	parentOf := make(map[string]string, len(sections))
+	for _, s := range sections {
+		parentOf[s.id] = s.parentID
+	}
+
+	// Track existing related_to edges between sections to avoid duplicates.
+	type pairKey struct{ a, b string }
+	existingEdges := make(map[pairKey]struct{})
+	for _, s := range sections {
+		for _, edge := range g.EdgesFrom(s.id) {
+			if edge.Type == "related_to" {
+				a, b := s.id, edge.TargetID
+				if a > b {
+					a, b = b, a
+				}
+				existingEdges[pairKey{a, b}] = struct{}{}
+			}
+		}
+	}
+
+	// Find candidate links: similar sections from different parents.
+	type linkCandidate struct {
+		sourceID   string
+		targetID   string
+		similarity float64
+	}
+	var candidates []linkCandidate
+	seen := make(map[pairKey]struct{})
+
+	for _, s := range sections {
+		if len(candidates) >= maxLinks {
+			break
+		}
+
+		n, ok := g.GetNode(s.id)
+		if !ok {
+			continue
+		}
+		vec, ok := n.Properties.GetVector("embedding_full")
+		if !ok {
+			continue
+		}
+
+		results := e.VecIdx().Search(vec, 6, nil)
+		for _, r := range results {
+			if r.NodeID == s.id {
+				continue
+			}
+			if float64(r.Similarity) < minSim {
+				continue
+			}
+
+			// Skip if not a section node.
+			targetParent, isSection := parentOf[r.NodeID]
+			if !isSection {
+				continue
+			}
+
+			// Skip siblings (same parent).
+			if targetParent == s.parentID {
+				continue
+			}
+
+			// Skip already-linked pairs.
+			a, b := s.id, r.NodeID
+			if a > b {
+				a, b = b, a
+			}
+			pk := pairKey{a, b}
+			if _, ok := existingEdges[pk]; ok {
+				continue
+			}
+			if _, ok := seen[pk]; ok {
+				continue
+			}
+			seen[pk] = struct{}{}
+
+			candidates = append(candidates, linkCandidate{
+				sourceID:   s.id,
+				targetID:   r.NodeID,
+				similarity: float64(r.Similarity),
+			})
+		}
+	}
+
+	e.RUnlock()
+
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	// --- Write phase ---
+	e.Lock()
+	defer e.Unlock()
+
+	linked := 0
+	for _, c := range candidates {
+		if _, ok := e.Graph().GetNode(c.sourceID); !ok {
+			continue
+		}
+		if _, ok := e.Graph().GetNode(c.targetID); !ok {
+			continue
+		}
+		_, err := e.Graph().AddEdge(c.sourceID, c.targetID, "related_to", c.similarity, nil)
+		if err == nil {
+			linked++
+		}
+	}
+
+	if linked > 0 {
+		e.Save("curation: section linking")
+		if logger != nil {
+			logger.Info("cross-section linking complete",
+				"component", "curation",
+				"sections_linked", linked)
+		}
+	}
+
+	return linked
 }
 
 // nonChunkEdgeCount returns the total edge count excluding structural edges.

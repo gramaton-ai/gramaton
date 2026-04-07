@@ -221,7 +221,7 @@ func (r *Runner) cycle(ctx context.Context) {
 		hasCandidates := len(result.ConceptCandidates) > 0
 		needsSummary := result.Manifest != nil && result.Manifest.QualitativeSummary == ""
 		if hasPending || hasCandidates || needsSummary {
-			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger)
+			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger, result.ConceptCandidates)
 			r.state.mu.Lock()
 			r.state.LastAutonomous = aResult
 			// Refresh pending count after autonomous classification.

@@ -174,6 +174,8 @@ type CurationConfig struct {
 	StaleTemporalScore  float64       `yaml:"stale_temporal_score"`
 	MaxOrphansPerRun    int           `yaml:"max_orphans_per_run"`
 	MaxDedupPerRun      int           `yaml:"max_dedup_per_run"`
+	SectionLinkMin      float64       `yaml:"section_link_min"`      // min similarity for cross-section linking (default 0.75)
+	MaxSectionLinksPerRun int         `yaml:"max_section_links_per_run"` // cap per cycle (default 30)
 }
 
 type LLMConfig struct {
@@ -191,6 +193,7 @@ type LLMCurationConfig struct {
 	MaxContradictionChecks int     `yaml:"max_contradiction_checks"`
 	ContradictionMinSim    float64 `yaml:"contradiction_min_similarity"`
 	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
+	MaxConceptsPerRun      int     `yaml:"max_concepts_per_run"`
 }
 
 type GCConfig struct {
@@ -332,8 +335,10 @@ func Defaults() Config {
 			OrphanSimilarityMin: 0.6,
 			StaleEphemeralScore: 0.95,
 			StaleTemporalScore:  0.99,
-			MaxOrphansPerRun:    20,
-			MaxDedupPerRun:      20,
+			MaxOrphansPerRun:      20,
+			MaxDedupPerRun:        20,
+			SectionLinkMin:        0.75,
+			MaxSectionLinksPerRun: 30,
 		},
 
 		LLM: LLMConfig{
@@ -346,6 +351,7 @@ func Defaults() Config {
 			MaxContradictionChecks: 5,
 			ContradictionMinSim:    0.5,
 			ContradictionMaxSim:    0.85,
+			MaxConceptsPerRun:      5,
 		},
 
 		Observe: ObserveConfig{

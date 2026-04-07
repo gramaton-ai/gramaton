@@ -379,6 +379,162 @@ func TestGarbageCollectionDisabled(t *testing.T) {
 	}
 }
 
+func TestCrossSectionLinking(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Curation.SectionLinkMin = 0.5 // low threshold for test
+
+	// Same embedding vector for all sections -- simulates high cosine similarity.
+	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+	eng.Lock()
+
+	// Create two parent articles.
+	parentA := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Article about consciousness"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	for k, v := range parentA.Properties {
+		eng.PropIdx().Add(parentA.ID, k, v)
+	}
+
+	parentB := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Article about functionalism"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	for k, v := range parentB.Properties {
+		eng.PropIdx().Add(parentB.ID, k, v)
+	}
+
+	// Section from article A about memory.
+	secA := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("memory plays a role in consciousness"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.Graph().AddEdge(secA.ID, parentA.ID, "section_of", 1.0, nil)
+	for k, v := range secA.Properties {
+		eng.PropIdx().Add(secA.ID, k, v)
+	}
+	eng.VecIdx().Add(secA.ID, vec)
+
+	// Section from article B about memory (similar topic, different parent).
+	secB := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("memory trace decay in cognitive systems"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.Graph().AddEdge(secB.ID, parentB.ID, "section_of", 1.0, nil)
+	for k, v := range secB.Properties {
+		eng.PropIdx().Add(secB.ID, k, v)
+	}
+	eng.VecIdx().Add(secB.ID, vec)
+
+	// Sibling section from article A (should NOT be linked to secA).
+	secA2 := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("qualia and phenomenal experience"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.Graph().AddEdge(secA2.ID, parentA.ID, "section_of", 1.0, nil)
+	for k, v := range secA2.Properties {
+		eng.PropIdx().Add(secA2.ID, k, v)
+	}
+	eng.VecIdx().Add(secA2.ID, vec)
+
+	eng.Save("test")
+	eng.Unlock()
+
+	// Run curation.
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.SectionsLinked == 0 {
+		t.Fatal("expected cross-section links to be created")
+	}
+
+	// Verify that secA and secB are linked (different parents).
+	eng.RLock()
+	defer eng.RUnlock()
+
+	linked := false
+	for _, e := range eng.Graph().EdgesFrom(secA.ID) {
+		if e.Type == "related_to" && e.TargetID == secB.ID {
+			linked = true
+			break
+		}
+	}
+	// Check reverse direction too.
+	if !linked {
+		for _, e := range eng.Graph().EdgesFrom(secB.ID) {
+			if e.Type == "related_to" && e.TargetID == secA.ID {
+				linked = true
+				break
+			}
+		}
+	}
+	if !linked {
+		t.Fatal("secA and secB should be linked (different parents, similar content)")
+	}
+
+	// Verify that secA and secA2 are NOT linked (same parent).
+	for _, e := range eng.Graph().EdgesFrom(secA.ID) {
+		if e.Type == "related_to" && e.TargetID == secA2.ID {
+			t.Fatal("secA and secA2 should NOT be linked (same parent)")
+		}
+	}
+	for _, e := range eng.Graph().EdgesFrom(secA2.ID) {
+		if e.Type == "related_to" && e.TargetID == secA.ID {
+			t.Fatal("secA2 and secA should NOT be linked (same parent)")
+		}
+	}
+}
+
+func TestCrossSectionLinkingIdempotent(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Curation.SectionLinkMin = 0.5
+
+	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+	eng.Lock()
+	parentA := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Article A"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	parentB := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Article B"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+
+	secA := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("shared topic section"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.Graph().AddEdge(secA.ID, parentA.ID, "section_of", 1.0, nil)
+	eng.PropIdx().Add(secA.ID, "content_full", secA.Properties["content_full"])
+	eng.VecIdx().Add(secA.ID, vec)
+
+	secB := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("shared topic section"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.Graph().AddEdge(secB.ID, parentB.ID, "section_of", 1.0, nil)
+	eng.PropIdx().Add(secB.ID, "content_full", secB.Properties["content_full"])
+	eng.VecIdx().Add(secB.ID, vec)
+
+	eng.Save("test")
+	eng.Unlock()
+
+	// First run creates links.
+	r1 := RunDeterministic(eng, cfg, nil)
+	if r1.SectionsLinked == 0 {
+		t.Fatal("first run should create links")
+	}
+
+	// Second run should not create duplicate links.
+	r2 := RunDeterministic(eng, cfg, nil)
+	if r2.SectionsLinked != 0 {
+		t.Fatalf("second run should not create duplicate links, got %d", r2.SectionsLinked)
+	}
+}
+
 func TestParseClassification(t *testing.T) {
 	input := `{
 		"temporality": "durable",

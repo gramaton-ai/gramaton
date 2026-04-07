@@ -39,17 +39,18 @@ type PlannedChange struct {
 // RunAutonomous performs LLM-powered curation tasks.
 // Caller must NOT hold any lock. When dryRun is true, LLM calls are
 // made and results returned in PlannedChanges but no mutations are applied.
-func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, false)
+// conceptCandidates from the deterministic layer are used to create concept nodes.
+func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, conceptCandidates []ConceptCandidate) *AutonomousResult {
+	return runAutonomousInner(ctx, e, llmProv, cfg, logger, false, conceptCandidates)
 }
 
 // RunAutonomousDryRun is like RunAutonomous but does not apply changes.
 // The LLM is still called so you can see what would be classified.
 func RunAutonomousDryRun(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, true)
+	return runAutonomousInner(ctx, e, llmProv, cfg, logger, true, nil)
 }
 
-func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool) *AutonomousResult {
+func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool, conceptCandidates []ConceptCandidate) *AutonomousResult {
 	result := &AutonomousResult{DryRun: dryRun}
 	maxCalls := cfg.LLMCuration.MaxCallsPerRun
 	if maxCalls <= 0 {
@@ -58,6 +59,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 
 	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	createConceptNodes(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun, conceptCandidates)
 	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 
 	// Generate manifest qualitative summary if we have a manifest from
@@ -438,6 +440,184 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		summary = string(runes[:500])
 	}
 	result.ManifestSummary = summary
+}
+
+// createConceptNodes converts concept candidates into searchable concept
+// nodes with LLM-generated summaries. Each concept node links to its
+// constituent records, acting as a retrieval hub (RAPTOR-inspired).
+func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool, candidates []ConceptCandidate) {
+	if len(candidates) == 0 || result.LLMCalls >= maxCalls {
+		return
+	}
+
+	maxConcepts := cfg.LLMCuration.MaxConceptsPerRun
+	if maxConcepts <= 0 {
+		maxConcepts = 5
+	}
+
+	// Filter out candidates that already have a concept node.
+	e.RLock()
+	g := e.Graph()
+
+	// Find existing concept nodes by checking node_type.
+	existingConcepts := make(map[string]struct{})
+	for _, id := range g.AllNodeIDs() {
+		n, ok := g.GetNode(id)
+		if !ok {
+			continue
+		}
+		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
+			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
+				existingConcepts[kw] = struct{}{}
+			}
+		}
+	}
+
+	// Filter and sort candidates by count (most connected first).
+	var eligible []ConceptCandidate
+	for _, c := range candidates {
+		if _, exists := existingConcepts[c.Keyword]; exists {
+			continue
+		}
+		eligible = append(eligible, c)
+	}
+	e.RUnlock()
+
+	if len(eligible) == 0 {
+		return
+	}
+	if len(eligible) > maxConcepts {
+		eligible = eligible[:maxConcepts]
+	}
+
+	for _, candidate := range eligible {
+		if result.LLMCalls >= maxCalls {
+			break
+		}
+
+		// Gather summaries from member records.
+		e.RLock()
+		var memberSummaries []string
+		for _, id := range candidate.NodeIDs {
+			n, ok := g.GetNode(id)
+			if !ok {
+				continue
+			}
+			if s, ok := n.Properties.GetString("content_short"); ok && s != "" {
+				memberSummaries = append(memberSummaries, "- "+s)
+			} else if s, ok := n.Properties.GetString("content_full"); ok && len(s) > 200 {
+				memberSummaries = append(memberSummaries, "- "+s[:200])
+			} else if s, ok := n.Properties.GetString("content_full"); ok {
+				memberSummaries = append(memberSummaries, "- "+s)
+			}
+		}
+		e.RUnlock()
+
+		if len(memberSummaries) == 0 {
+			continue
+		}
+
+		// Cap member summaries to avoid exceeding context.
+		if len(memberSummaries) > 20 {
+			memberSummaries = memberSummaries[:20]
+		}
+
+		summaryText := ""
+		for _, s := range memberSummaries {
+			summaryText += s + "\n"
+		}
+
+		// LLM call to synthesize.
+		prompt := fmt.Sprintf(conceptSynthesisPrompt,
+			candidate.Keyword, candidate.Count, summaryText)
+
+		synthesis, err := llmProv.Complete(ctx, prompt)
+		result.LLMCalls++
+		if err != nil {
+			result.Errors++
+			if logger != nil {
+				logger.Warn("concept synthesis failed",
+					"component", "curation",
+					"keyword", candidate.Keyword,
+					"err", err)
+			}
+			continue
+		}
+
+		// Truncate synthesis.
+		runes := []rune(synthesis)
+		if len(runes) > 500 {
+			synthesis = string(runes[:500])
+		}
+
+		if dryRun {
+			result.PlannedChanges = append(result.PlannedChanges, PlannedChange{
+				Action:      "create_concept",
+				ContentSnip: candidate.Keyword,
+				Details:     synthesis,
+			})
+			result.ConceptsCreated++
+			continue
+		}
+
+		// Create concept node.
+		e.Lock()
+
+		props := graph.Properties{
+			"content_full":      graph.StringProperty(synthesis),
+			"content_short":     graph.StringProperty(candidate.Keyword),
+			"node_type":         graph.StringProperty("concept"),
+			"concept_keyword":   graph.StringProperty(candidate.Keyword),
+			"knowledge_type":    graph.StringProperty("conceptual"),
+			"temporality":       graph.StringProperty("durable"),
+			"confidence":        graph.Float64Property(0.7),
+			"epistemic_status":  graph.StringProperty("probable"),
+			"processing_status": graph.StringProperty("processed"),
+			"created_at":        graph.TimestampProperty(time.Now().UTC()),
+			"access_count":      graph.Int64Property(0),
+			"evidence_count":    graph.Int64Property(int64(candidate.Count)),
+		}
+
+		node := e.Graph().AddNode(props)
+		for k, v := range node.Properties {
+			e.PropIdx().Add(node.ID, k, v)
+		}
+		e.BM25Idx().Add(node.ID, synthesis)
+
+		// Embed the concept node's synthesis text.
+		if e.Embedder() != nil {
+			vecs, err := e.Embedder().Embed(ctx, []string{synthesis})
+			if err == nil && len(vecs) > 0 {
+				prop := graph.VectorProperty(vecs[0])
+				e.Graph().SetNodeProperty(node.ID, "embedding_full", prop)
+				e.PropIdx().Add(node.ID, "embedding_full", prop)
+				e.VecIdx().Add(node.ID, vecs[0])
+				modelProp := graph.StringProperty(e.Embedder().ModelID())
+				e.Graph().SetNodeProperty(node.ID, "embedding_model", modelProp)
+				e.PropIdx().Add(node.ID, "embedding_model", modelProp)
+			}
+		}
+
+		// Create instance_of edges from member records to concept node.
+		for _, memberID := range candidate.NodeIDs {
+			if _, ok := e.Graph().GetNode(memberID); ok {
+				e.Graph().AddEdge(memberID, node.ID, "instance_of", 0.8, nil)
+			}
+		}
+
+		e.Save("curation: concept node")
+		e.Unlock()
+
+		result.ConceptsCreated++
+
+		if logger != nil {
+			logger.Info("concept node created",
+				"component", "curation",
+				"keyword", candidate.Keyword,
+				"members", candidate.Count,
+				"node_id", node.ID)
+		}
+	}
 }
 
 // detectContradictions finds records with moderate similarity and uses the

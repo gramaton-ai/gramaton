@@ -519,7 +519,7 @@ func TestRunAutonomousIntegration(t *testing.T) {
 		},
 	}
 
-	result := RunAutonomous(context.Background(), eng, llm, cfg, nil)
+	result := RunAutonomous(context.Background(), eng, llm, cfg, nil, nil)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -1067,5 +1067,120 @@ func TestValidateEnum(t *testing.T) {
 	}
 	if v := validateEnum("", allowed); v != "" {
 		t.Fatalf("expected empty for empty, got %q", v)
+	}
+}
+
+func TestCreateConceptNodes(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+
+	now := time.Now().UTC()
+
+	// Create some records with a shared keyword.
+	id1 := addNode(t, eng, "Kafka event streaming for microservices", "durable", 0.9,
+		[]string{"kafka", "streaming"}, now)
+	id2 := addNode(t, eng, "Kafka consumer group rebalancing", "durable", 0.85,
+		[]string{"kafka", "consumers"}, now)
+	id3 := addNode(t, eng, "Kafka partitioning strategies", "durable", 0.8,
+		[]string{"kafka", "partitioning"}, now)
+
+	candidates := []ConceptCandidate{
+		{
+			Keyword: "kafka",
+			Count:   3,
+			NodeIDs: []string{id1, id2, id3},
+		},
+	}
+
+	llm := &mockLLM{
+		responses: []string{
+			"Kafka is a distributed event streaming platform used for microservices communication. " +
+				"Records cover event streaming, consumer group management, and partitioning strategies.",
+		},
+	}
+
+	result := &AutonomousResult{}
+	createConceptNodes(context.Background(), eng, llm, cfg, result, 20, nil, false, candidates)
+
+	if result.ConceptsCreated != 1 {
+		t.Fatalf("expected 1 concept created, got %d", result.ConceptsCreated)
+	}
+	if result.LLMCalls != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", result.LLMCalls)
+	}
+
+	// Verify the concept node exists.
+	eng.RLock()
+	defer eng.RUnlock()
+
+	g := eng.Graph()
+	conceptFound := false
+	var conceptID string
+	for _, id := range g.AllNodeIDs() {
+		n, ok := g.GetNode(id)
+		if !ok {
+			continue
+		}
+		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
+			if kw, ok := n.Properties.GetString("concept_keyword"); ok && kw == "kafka" {
+				conceptFound = true
+				conceptID = id
+				// Check properties.
+				if kt, ok := n.Properties.GetString("knowledge_type"); !ok || kt != "conceptual" {
+					t.Fatalf("expected knowledge_type=conceptual, got %q", kt)
+				}
+				if content, ok := n.Properties.GetString("content_full"); !ok || content == "" {
+					t.Fatal("concept node should have content_full")
+				}
+			}
+		}
+	}
+	if !conceptFound {
+		t.Fatal("concept node not found")
+	}
+
+	// Verify instance_of edges from members to concept.
+	edgeCount := 0
+	for _, memberID := range []string{id1, id2, id3} {
+		for _, e := range g.EdgesFrom(memberID) {
+			if e.Type == "instance_of" && e.TargetID == conceptID {
+				edgeCount++
+			}
+		}
+	}
+	if edgeCount != 3 {
+		t.Fatalf("expected 3 instance_of edges, got %d", edgeCount)
+	}
+}
+
+func TestCreateConceptNodesIdempotent(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	now := time.Now().UTC()
+	id1 := addNode(t, eng, "Redis caching strategies", "durable", 0.9,
+		[]string{"redis"}, now)
+
+	candidates := []ConceptCandidate{
+		{Keyword: "redis", Count: 1, NodeIDs: []string{id1}},
+	}
+
+	llm := &mockLLM{
+		responses: []string{"Redis is an in-memory data store used for caching."},
+	}
+
+	// First run creates the concept.
+	result1 := &AutonomousResult{}
+	createConceptNodes(context.Background(), eng, llm, cfg, result1, 20, nil, false, candidates)
+	if result1.ConceptsCreated != 1 {
+		t.Fatalf("first run: expected 1 concept, got %d", result1.ConceptsCreated)
+	}
+
+	// Second run should skip (concept already exists).
+	result2 := &AutonomousResult{}
+	createConceptNodes(context.Background(), eng, llm, cfg, result2, 20, nil, false, candidates)
+	if result2.ConceptsCreated != 0 {
+		t.Fatalf("second run: expected 0 concepts (already exists), got %d", result2.ConceptsCreated)
 	}
 }
