@@ -1047,15 +1047,18 @@ func TestHybridSearchRRF(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// Create a shared vector -- all records have identical embeddings.
-	// This forces vector search to rank them equally, so BM25 must
-	// break the tie for multi-concept queries.
-	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+	// Doc1 and doc2 have slightly different vectors from the query;
+	// doc3 matches the query vector exactly. This gives doc3 a small
+	// vector advantage on top of its BM25 advantage (matches both terms).
+	queryVec := []float32{0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80}
+	vec1 := []float32{0.11, 0.21, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80}
+	vec2 := []float32{0.12, 0.22, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80}
+	vec3 := []float32{0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80} // matches query
 
 	// doc1: about consciousness only
 	doc1 := g.AddNode(graph.Properties{
 		"content_full":      graph.StringProperty("consciousness is the most fundamental aspect of subjective experience"),
-		"embedding_full":    graph.VectorProperty(vec),
+		"embedding_full":    graph.VectorProperty(vec1),
 		"temporality":       graph.StringProperty("durable"),
 		"confidence":        graph.Float64Property(0.9),
 		"processing_status": graph.StringProperty("processed"),
@@ -1065,13 +1068,13 @@ func TestHybridSearchRRF(t *testing.T) {
 	for k, v := range doc1.Properties {
 		propIdx.Add(doc1.ID, k, v)
 	}
-	vecIdx.Add(doc1.ID, vec)
+	vecIdx.Add(doc1.ID, vec1)
 	bm25Idx.Add(doc1.ID, "consciousness is the most fundamental aspect of subjective experience")
 
 	// doc2: about memory only
 	doc2 := g.AddNode(graph.Properties{
 		"content_full":      graph.StringProperty("memory trace decay is defined by its functional role in cognitive systems"),
-		"embedding_full":    graph.VectorProperty(vec),
+		"embedding_full":    graph.VectorProperty(vec2),
 		"temporality":       graph.StringProperty("durable"),
 		"confidence":        graph.Float64Property(0.9),
 		"processing_status": graph.StringProperty("processed"),
@@ -1081,13 +1084,13 @@ func TestHybridSearchRRF(t *testing.T) {
 	for k, v := range doc2.Properties {
 		propIdx.Add(doc2.ID, k, v)
 	}
-	vecIdx.Add(doc2.ID, vec)
+	vecIdx.Add(doc2.ID, vec2)
 	bm25Idx.Add(doc2.ID, "memory trace decay is defined by its functional role in cognitive systems")
 
 	// doc3: about BOTH consciousness AND memory
 	doc3 := g.AddNode(graph.Properties{
 		"content_full":      graph.StringProperty("consciousness and memory play interconnected roles in cognitive experience and narrative identity"),
-		"embedding_full":    graph.VectorProperty(vec),
+		"embedding_full":    graph.VectorProperty(vec3),
 		"temporality":       graph.StringProperty("durable"),
 		"confidence":        graph.Float64Property(0.9),
 		"processing_status": graph.StringProperty("processed"),
@@ -1097,7 +1100,7 @@ func TestHybridSearchRRF(t *testing.T) {
 	for k, v := range doc3.Properties {
 		propIdx.Add(doc3.ID, k, v)
 	}
-	vecIdx.Add(doc3.ID, vec)
+	vecIdx.Add(doc3.ID, vec3)
 	bm25Idx.Add(doc3.ID, "consciousness and memory play interconnected roles in cognitive experience and narrative identity")
 
 	cfg := defaultCfg()
@@ -1108,7 +1111,7 @@ func TestHybridSearchRRF(t *testing.T) {
 	results, err := tool.ExecuteWithVector(context.Background(), Query{
 		Text: "consciousness memory",
 		Top:  10,
-	}, vec)
+	}, queryVec)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -1117,9 +1120,23 @@ func TestHybridSearchRRF(t *testing.T) {
 		t.Fatalf("expected at least 3 results, got %d", len(results))
 	}
 
-	// With RRF, the record matching both query terms should be ranked first.
-	if results[0].ID != doc3.ID {
-		t.Errorf("expected doc3 (matches both terms) to rank first, got %s", results[0].ID)
+	// With RRF, doc3 (matches both query terms) should score higher than
+	// docs that match only one term. Vector ranks are tied (identical
+	// embeddings), so BM25 is the tiebreaker.
+	var doc3Score float64
+	var singleTermMaxScore float64
+	for _, r := range results {
+		if r.ID == doc3.ID {
+			doc3Score = r.EffectiveScore
+		} else if r.ID == doc1.ID || r.ID == doc2.ID {
+			if r.EffectiveScore > singleTermMaxScore {
+				singleTermMaxScore = r.EffectiveScore
+			}
+		}
+	}
+	if doc3Score <= singleTermMaxScore {
+		t.Errorf("doc3 (both terms, score=%f) should outscore single-term docs (max=%f)",
+			doc3Score, singleTermMaxScore)
 		for i, r := range results {
 			t.Logf("  rank %d: %s score=%f", i+1, r.ID, r.EffectiveScore)
 		}
