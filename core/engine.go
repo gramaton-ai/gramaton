@@ -31,6 +31,7 @@ type Engine struct {
 	graph    *graph.Graph
 	propIdx  *index.PropertyIndex
 	vecIdx   *index.FlatIndex
+	bm25Idx  *index.BM25Index
 	embedder embed.Provider
 	llmProv  llm.Provider
 	searcher *search.Tool
@@ -49,7 +50,7 @@ func WithEmbedder(p embed.Provider) EngineOption {
 	return func(e *Engine) {
 		e.embedder = p
 		// Rebuild searcher with the new embedder.
-		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, p, e.cfg)
+		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, p, e.cfg)
 	}
 }
 
@@ -101,6 +102,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	vecIdx := index.NewFlatIndex()
+	bm25Idx := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
 
 	// Load HEAD commit if it exists.
 	var headHash string
@@ -114,14 +116,14 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}
 
-	rebuildIndexes(g, propIdx, vecIdx)
+	rebuildIndexes(g, propIdx, vecIdx, bm25Idx)
 
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	searcher := search.New(g, propIdx, vecIdx, emb, cfg)
+	searcher := search.New(g, propIdx, vecIdx, bm25Idx, emb, cfg)
 
 	llmProv, err := llm.New(cfg.LLM)
 	if err != nil {
@@ -135,6 +137,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		graph:    g,
 		propIdx:  propIdx,
 		vecIdx:   vecIdx,
+		bm25Idx:  bm25Idx,
 		embedder: emb,
 		llmProv:  llmProv,
 		searcher: searcher,
@@ -236,9 +239,13 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 func (e *Engine) RebuildAllIndexes() {
 	e.propIdx = index.NewPropertyIndex()
 	e.vecIdx = index.NewFlatIndex()
-	rebuildIndexes(e.graph, e.propIdx, e.vecIdx)
-	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.embedder, e.cfg)
+	e.bm25Idx = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
+	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx)
+	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, e.embedder, e.cfg)
 }
+
+// BM25Idx returns the BM25 index.
+func (e *Engine) BM25Idx() *index.BM25Index { return e.bm25Idx }
 
 // GenerateEmbeddings creates embeddings for a node's content properties.
 // Caller must hold the write lock.
@@ -305,7 +312,9 @@ func (e *Engine) GenerateEmbeddings(ctx context.Context, nodeID string) error {
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing
-// records. Caller must hold at least a read lock.
+// records. A Jaccard verification step prevents false positives on
+// long documents with similar structure but different content.
+// Caller must hold at least a read lock.
 func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	if e.vecIdx.Len() < 2 {
 		return "", 0
@@ -333,10 +342,57 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 			continue
 		}
 		if float64(r.Similarity) >= e.cfg.Dedup.SimilarityThreshold {
+			if !e.verifyJaccard(n, r.NodeID) {
+				continue
+			}
 			return r.NodeID, float64(r.Similarity)
 		}
 	}
 	return "", 0
+}
+
+// verifyJaccard confirms a cosine-similarity duplicate match by
+// checking word-level Jaccard similarity on actual content. Returns
+// false (reject) if the texts are too dissimilar, preventing false
+// positives on structurally similar but semantically different docs.
+func (e *Engine) verifyJaccard(node *graph.Node, candidateID string) bool {
+	candidate, ok := e.graph.GetNode(candidateID)
+	if !ok {
+		return false
+	}
+
+	textA := nodeContentText(node)
+	textB := nodeContentText(candidate)
+
+	// Skip Jaccard check for very short content where cosine alone
+	// is reliable. The false positive problem is specific to long docs.
+	if len(textA) < 200 && len(textB) < 200 {
+		return true
+	}
+
+	tokA := index.Tokenize(textA)
+	tokB := index.Tokenize(textB)
+	return index.JaccardSimilarity(tokA, tokB) >= dedupJaccardMin
+}
+
+// dedupJaccardMin is the minimum Jaccard similarity required to
+// confirm a cosine-based duplicate match. Set conservatively low --
+// true duplicates easily exceed this even with minor edits.
+const dedupJaccardMin = 0.3
+
+// nodeContentText returns the best available text content for a node,
+// preferring content_full over content_short.
+func nodeContentText(n *graph.Node) string {
+	if n == nil {
+		return ""
+	}
+	if s, ok := n.Properties.GetString("content_full"); ok {
+		return s
+	}
+	if s, ok := n.Properties.GetString("content_short"); ok {
+		return s
+	}
+	return ""
 }
 
 // PreChunkResult holds section/chunk data and their pre-computed
@@ -487,6 +543,7 @@ func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps
 		for k, v := range node.Properties {
 			e.propIdx.Add(node.ID, k, v)
 		}
+		e.bm25Idx.Add(node.ID, sec.Text)
 
 		// Apply pre-computed embedding.
 		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
@@ -516,6 +573,7 @@ func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
 		for k, v := range chunkNode.Properties {
 			e.propIdx.Add(chunkNode.ID, k, v)
 		}
+		e.bm25Idx.Add(chunkNode.ID, chunkText)
 
 		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
 			vec := pre.Vectors[i]
@@ -581,7 +639,7 @@ func (e *Engine) EdgeCount() int {
 }
 
 // rebuildIndexes populates indexes from graph state.
-func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex) {
+func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex, bm25Idx *index.BM25Index) {
 	for _, id := range g.AllNodeIDs() {
 		n, _ := g.GetNode(id)
 		for k, v := range n.Properties {
@@ -592,6 +650,12 @@ func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.
 				vecIdx.Add(id, v)
 				break
 			}
+		}
+		// BM25: index content text.
+		if text, ok := n.Properties.GetString("content_full"); ok {
+			bm25Idx.Add(id, text)
+		} else if text, ok := n.Properties.GetString("content_short"); ok {
+			bm25Idx.Add(id, text)
 		}
 	}
 }

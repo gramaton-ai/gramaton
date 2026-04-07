@@ -363,6 +363,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/records/{id}", s.handleUpdateRecord)
 	mux.HandleFunc("DELETE /v1/records/{id}", s.handleDeleteRecord)
 	mux.HandleFunc("POST /v1/records/{id}/edges", s.handleCreateEdge)
+	mux.HandleFunc("DELETE /v1/edges/{edge_id}", s.handleDeleteEdge)
 	mux.HandleFunc("POST /v1/records/{id}/classify", s.handleClassifyRecord)
 	mux.HandleFunc("POST /v1/records/{id}/resolve", s.handleResolveRecord)
 	mux.HandleFunc("GET /v1/records/{id}/history", func(w http.ResponseWriter, r *http.Request) {

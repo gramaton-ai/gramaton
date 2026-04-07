@@ -119,6 +119,7 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 	for k, v := range n.Properties {
 		s.engine.PropIdx().Add(n.ID, k, v)
 	}
+	s.engine.BM25Idx().Add(n.ID, req.Content)
 
 	// Apply pre-computed embeddings under the lock (fast, no I/O).
 	var warnings []string
@@ -334,7 +335,8 @@ func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	for _, e := range s.engine.Graph().EdgesFrom(id) {
 		rel := map[string]any{
 			"id": e.TargetID, "edge_type": e.Type,
-			"edge_weight": e.Weight, "direction": "outbound",
+			"edge_id": e.ID, "edge_weight": e.Weight,
+			"direction": "outbound",
 		}
 		if target, ok := s.engine.Graph().GetNode(e.TargetID); ok {
 			if v, ok := target.Properties.GetString("content_short"); ok {
@@ -346,7 +348,8 @@ func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	for _, e := range s.engine.Graph().EdgesTo(id) {
 		rel := map[string]any{
 			"id": e.SourceID, "edge_type": e.Type,
-			"edge_weight": e.Weight, "direction": "inbound",
+			"edge_id": e.ID, "edge_weight": e.Weight,
+			"direction": "inbound",
 		}
 		if source, ok := s.engine.Graph().GetNode(e.SourceID); ok {
 			if v, ok := source.Properties.GetString("content_short"); ok {
@@ -418,13 +421,24 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		updated = true
 	}
 	if req.ValidUntil != "" {
-		t, err := parseDateArg(req.ValidUntil)
-		if err != nil {
-			s.writeError(w, http.StatusBadRequest, "invalid_field", "invalid valid_until date", true)
-			return
+		if req.ValidUntil == "clear" {
+			n, _ := s.engine.Graph().GetNode(id)
+			for _, key := range []string{"valid_until", "resolution", "resolved_at"} {
+				if old, has := n.Properties[key]; has {
+					s.engine.PropIdx().Remove(id, key, old)
+					s.engine.Graph().RemoveNodeProperty(id, key)
+				}
+			}
+			updated = true
+		} else {
+			t, err := parseDateArg(req.ValidUntil)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_field", "invalid valid_until date", true)
+				return
+			}
+			s.engine.SetProp(id, "valid_until", graph.TimestampProperty(t))
+			updated = true
 		}
-		s.engine.SetProp(id, "valid_until", graph.TimestampProperty(t))
-		updated = true
 	}
 	if req.AssertedAsOf != "" {
 		t, err := parseDateArg(req.AssertedAsOf)
@@ -527,6 +541,28 @@ func (s *Server) handleCreateEdge(w http.ResponseWriter, r *http.Request) {
 		"id":      sourceID,
 		"edge_id": e.ID,
 		"updated": true,
+	})
+}
+
+func (s *Server) handleDeleteEdge(w http.ResponseWriter, r *http.Request) {
+	edgeID := r.PathValue("edge_id")
+
+	s.engine.Lock()
+	defer s.engine.Unlock()
+
+	if err := s.engine.Graph().DeleteEdge(edgeID); err != nil {
+		s.writeError(w, http.StatusNotFound, "not_found", "edge not found", false)
+		return
+	}
+
+	if _, err := s.engine.Save("unlink"); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
+		return
+	}
+
+	s.writeJSONLocked(w, http.StatusOK, map[string]any{
+		"edge_id": edgeID,
+		"deleted": true,
 	})
 }
 

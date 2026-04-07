@@ -33,6 +33,7 @@ type Config struct {
 	Observe     ObserveConfig     `yaml:"observe"`
 	GC          GCConfig          `yaml:"gc"`
 	Backup      BackupConfig      `yaml:"backup"`
+	Search      SearchConfig      `yaml:"search"`
 }
 
 type ServerConfig struct {
@@ -114,6 +115,12 @@ type ConceptsConfig struct {
 type DedupConfig struct {
 	SimilarityThreshold float64 `yaml:"similarity_threshold"`
 	Action              string  `yaml:"action"`
+}
+
+type SearchConfig struct {
+	BM25K1 float64 `yaml:"bm25_k1"` // term frequency saturation (default 1.2)
+	BM25B  float64 `yaml:"bm25_b"`  // length normalization (default 0.75)
+	RRFK   int     `yaml:"rrf_k"`   // RRF rank constant (default 60)
 }
 
 type GraphConfig struct {
@@ -285,6 +292,12 @@ func Defaults() Config {
 
 		Graph: GraphConfig{
 			EdgeWeightTraversalThreshold: 0.3,
+		},
+
+		Search: SearchConfig{
+			BM25K1: 1.2,
+			BM25B:  0.75,
+			RRFK:   60,
 		},
 
 		Storage: StorageConfig{

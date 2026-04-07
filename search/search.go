@@ -18,6 +18,7 @@ type Tool struct {
 	graph    nodeReader
 	propIdx  *index.PropertyIndex
 	vecIdx   index.VectorIndex
+	bm25Idx  *index.BM25Index
 	embedder embedder
 	cfg      config.Config
 }
@@ -36,12 +37,13 @@ type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// New creates a search tool. embedder may be nil (no vector search).
-func New(g nodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, emb embedder, cfg config.Config) *Tool {
+// New creates a search tool. embedder and bm25Idx may be nil.
+func New(g nodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, emb embedder, cfg config.Config) *Tool {
 	return &Tool{
 		graph:    g,
 		propIdx:  propIdx,
 		vecIdx:   vecIdx,
+		bm25Idx:  bm25Idx,
 		embedder: emb,
 		cfg:      cfg,
 	}
@@ -244,22 +246,93 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		return results, nil
 	}
 
-	// Step 2: Compute vector similarity using the pre-embedded vector.
+	// Step 2: Compute similarity via hybrid search (vector + BM25 with RRF).
 	similarities := make(map[string]float64)
-	if queryVec != nil && t.vecIdx != nil {
-		candidateSet := make(map[string]struct{}, len(candidates))
-		for _, id := range candidates {
-			candidateSet[id] = struct{}{}
+	candidateSet := make(map[string]struct{}, len(candidates))
+	for _, id := range candidates {
+		candidateSet[id] = struct{}{}
+	}
+
+	hasVec := queryVec != nil && t.vecIdx != nil
+	hasBM25 := t.bm25Idx != nil && q.Text != ""
+
+	if hasVec || hasBM25 {
+		rrfK := t.cfg.Search.RRFK
+		if rrfK <= 0 {
+			rrfK = 60
 		}
-		// Request more than Top to allow scoring to reorder, but don't
-		// ask for the entire candidate set.
-		vecK := len(candidates)
-		if vecK > q.Top*3 {
-			vecK = q.Top * 3
+
+		// Vector search results, ranked.
+		var vecRanked []string
+		if hasVec {
+			vecK := len(candidates)
+			if vecK > q.Top*3 {
+				vecK = q.Top * 3
+			}
+			results := t.vecIdx.Search(queryVec, vecK, candidateSet)
+			for _, r := range results {
+				vecRanked = append(vecRanked, r.NodeID)
+			}
 		}
-		results := t.vecIdx.Search(queryVec, vecK, candidateSet)
-		for _, r := range results {
-			similarities[r.NodeID] = float64(r.Similarity)
+
+		// BM25 search results, ranked.
+		var bm25Ranked []string
+		if hasBM25 {
+			queryTokens := index.Tokenize(q.Text)
+			bm25K := len(candidates)
+			if bm25K > q.Top*3 {
+				bm25K = q.Top * 3
+			}
+			results := t.bm25Idx.Search(queryTokens, bm25K, candidateSet)
+			for _, r := range results {
+				bm25Ranked = append(bm25Ranked, r.NodeID)
+			}
+		}
+
+		// Reciprocal Rank Fusion.
+		if hasVec && hasBM25 {
+			// RRF: score(d) = 1/(k+rank_vec) + 1/(k+rank_bm25)
+			rrfScores := make(map[string]float64)
+			for rank, id := range vecRanked {
+				rrfScores[id] += 1.0 / float64(rrfK+rank+1)
+			}
+			for rank, id := range bm25Ranked {
+				rrfScores[id] += 1.0 / float64(rrfK+rank+1)
+			}
+			// Normalize to [0, 1] for compatibility with scoring model.
+			maxRRF := 0.0
+			for _, s := range rrfScores {
+				if s > maxRRF {
+					maxRRF = s
+				}
+			}
+			if maxRRF > 0 {
+				for id, s := range rrfScores {
+					similarities[id] = s / maxRRF
+				}
+			}
+		} else if hasVec {
+			// Vector only (no BM25 data).
+			results := t.vecIdx.Search(queryVec, len(vecRanked), candidateSet)
+			for _, r := range results {
+				similarities[r.NodeID] = float64(r.Similarity)
+			}
+		} else {
+			// BM25 only (no vector).
+			maxBM25 := 0.0
+			bm25Scores := make(map[string]float64)
+			queryTokens := index.Tokenize(q.Text)
+			for _, r := range t.bm25Idx.Search(queryTokens, len(candidates), candidateSet) {
+				bm25Scores[r.NodeID] = float64(r.Similarity)
+				if float64(r.Similarity) > maxBM25 {
+					maxBM25 = float64(r.Similarity)
+				}
+			}
+			if maxBM25 > 0 {
+				for id, s := range bm25Scores {
+					similarities[id] = s / maxBM25
+				}
+			}
 		}
 	}
 

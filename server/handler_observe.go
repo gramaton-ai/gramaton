@@ -354,6 +354,7 @@ func (s *Server) storeDeferredCapture(fact string, cfg config.Config) {
 	for k, v := range n.Properties {
 		s.engine.PropIdx().Add(n.ID, k, v)
 	}
+	s.engine.BM25Idx().Add(n.ID, fact)
 	s.engine.Save("observe")
 }
 
@@ -391,6 +392,7 @@ func (s *Server) storeDeferredCaptureWithEmbedding(fact string, vec []float32, c
 		s.engine.PropIdx().Add(n.ID, k, v)
 	}
 	s.engine.VecIdx().Add(n.ID, vec)
+	s.engine.BM25Idx().Add(n.ID, fact)
 	s.engine.Save("observe")
 }
 

@@ -305,6 +305,111 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestCheckDedupJaccardGuard(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	// Create a fake 8-dim embedding. We'll reuse the same vector to
+	// guarantee cosine >= threshold, isolating the Jaccard guard.
+	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+	eng.Lock()
+
+	// Record A: article about functionalism.
+	nA := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(
+			"Functionalism is a theory about the nature of mental states. " +
+				"According to functionalism, mental states are identified by what they do " +
+				"rather than by what they are made of. Memory trace decay is defined " +
+				"by its functional role in cognitive systems. The identity theory " +
+				"argues that mental states are identical to brain states."),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.PropIdx().Add(nA.ID, "content_full", nA.Properties["content_full"])
+	eng.VecIdx().Add(nA.ID, vec)
+
+	// Record B: completely different article about time, but same embedding
+	// (simulates the false positive scenario).
+	nB := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(
+			"Time is one of the most fundamental concepts in physics and " +
+				"philosophy. The nature of time has been debated for millennia. " +
+				"Some philosophers argue that time is an illusion, while others " +
+				"maintain it is a fundamental feature of the universe. Temporal " +
+				"experience shapes our understanding of causation and change."),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.PropIdx().Add(nB.ID, "content_full", nB.Properties["content_full"])
+	eng.VecIdx().Add(nB.ID, vec)
+
+	eng.Unlock()
+
+	// CheckDedup for B should NOT return A as a duplicate because
+	// Jaccard similarity between the two articles is low.
+	eng.RLock()
+	dupID, _ := eng.CheckDedup(nB.ID)
+	eng.RUnlock()
+
+	if dupID != "" {
+		t.Fatalf("Jaccard guard should reject false positive, but got dupID=%s", dupID)
+	}
+
+	// Now add a genuine duplicate with slightly different wording.
+	eng.Lock()
+	nC := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(
+			"Functionalism is a theory about the nature of mental states. " +
+				"According to functionalism, mental states are identified by what they do " +
+				"rather than by what they are made of. Memory trace decay is defined " +
+				"by its functional role in cognitive systems. The identity theory " +
+				"claims that mental states are identical to brain states."),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.PropIdx().Add(nC.ID, "content_full", nC.Properties["content_full"])
+	eng.VecIdx().Add(nC.ID, vec)
+	eng.Unlock()
+
+	// CheckDedup for C should find a match (A or C's content are near-identical).
+	eng.RLock()
+	dupID2, _ := eng.CheckDedup(nC.ID)
+	eng.RUnlock()
+
+	if dupID2 == "" {
+		t.Fatal("Jaccard guard should allow genuine duplicate, but got no match")
+	}
+}
+
+func TestCheckDedupShortContentSkipsJaccard(t *testing.T) {
+	eng := setupTestEngine(t)
+	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+	eng.Lock()
+	// Two short records with same embedding but different content.
+	// Jaccard check should be skipped for short content.
+	nA := eng.Graph().AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("user prefers dark mode"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.PropIdx().Add(nA.ID, "content_full", nA.Properties["content_full"])
+	eng.VecIdx().Add(nA.ID, vec)
+
+	nB := eng.Graph().AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("user likes light theme"),
+		"embedding_full": graph.VectorProperty(vec),
+	})
+	eng.PropIdx().Add(nB.ID, "content_full", nB.Properties["content_full"])
+	eng.VecIdx().Add(nB.ID, vec)
+	eng.Unlock()
+
+	// Short content skips Jaccard, so cosine alone determines match.
+	eng.RLock()
+	dupID, _ := eng.CheckDedup(nB.ID)
+	eng.RUnlock()
+
+	if dupID == "" {
+		t.Fatal("short content should skip Jaccard guard and match on cosine alone")
+	}
+}
+
 func TestNodeAndEdgeCount(t *testing.T) {
 	eng := setupTestEngine(t)
 

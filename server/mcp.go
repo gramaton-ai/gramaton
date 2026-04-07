@@ -308,6 +308,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		for k, v := range n.Properties {
 			s.engine.PropIdx().Add(n.ID, k, v)
 		}
+		s.engine.BM25Idx().Add(n.ID, args.Content)
 
 		var warnings []string
 		if err := s.applyPreEmbedded(n.ID, preEmbedded); err != nil {

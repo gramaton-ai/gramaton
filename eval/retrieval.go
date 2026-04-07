@@ -128,7 +128,7 @@ func EvalRetrieval(t *testing.T, eng *core.Engine, nameToID map[string]string, q
 	if cfgOverride != nil {
 		cfg.Scoring = *cfgOverride
 	}
-	searcher := search.New(eng.Graph(), eng.PropIdx(), eng.VecIdx(), nil, cfg)
+	searcher := search.New(eng.Graph(), eng.PropIdx(), eng.VecIdx(), eng.BM25Idx(), nil, cfg)
 
 	now := time.Now().UTC()
 	var report RetrievalReport

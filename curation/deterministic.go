@@ -11,6 +11,7 @@ import (
 	"github.com/brandonlattin/gramaton/config"
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/graph"
+	"github.com/brandonlattin/gramaton/index"
 	"github.com/brandonlattin/gramaton/search"
 )
 
@@ -250,20 +251,29 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			}
 		}
 
-		// Duplicate consolidation.
+		// Duplicate consolidation with Jaccard verification to prevent
+		// false positives on structurally similar long documents.
 		for _, pair := range pairs {
+			na, okA := e.Graph().GetNode(pair.IDA)
+			nb, okB := e.Graph().GetNode(pair.IDB)
+			if !okA || !okB {
+				continue
+			}
+
+			// Jaccard guard: verify content similarity, not just embedding.
+			if !verifyDedupJaccard(na, nb) {
+				continue
+			}
+
 			olderID := pair.IDA
 			newerID := pair.IDB
 			// Determine which is older by created_at.
-			if na, ok := e.Graph().GetNode(pair.IDA); ok {
-				if nb, ok := e.Graph().GetNode(pair.IDB); ok {
-					caA, _ := na.Properties.GetTimestamp("created_at")
-					caB, _ := nb.Properties.GetTimestamp("created_at")
-					if caB.Before(caA) {
-						olderID, newerID = newerID, olderID
-					}
-				}
+			caA, _ := na.Properties.GetTimestamp("created_at")
+			caB, _ := nb.Properties.GetTimestamp("created_at")
+			if caB.Before(caA) {
+				olderID, newerID = newerID, olderID
 			}
+
 			older, ok := e.Graph().GetNode(olderID)
 			if !ok {
 				continue
@@ -514,6 +524,43 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 			"component", "curation",
 			"concepts_updated", len(updates))
 	}
+}
+
+// dedupJaccardMin is the minimum word-level Jaccard similarity required
+// to confirm a cosine-based duplicate match. True duplicates (even with
+// minor edits) easily exceed this; structurally similar but semantically
+// different documents fall well below.
+const dedupJaccardMin = 0.3
+
+// verifyDedupJaccard checks whether two nodes are genuine duplicates by
+// comparing word-level Jaccard similarity on their content. Returns false
+// for long documents with high cosine similarity but different content.
+func verifyDedupJaccard(a, b *graph.Node) bool {
+	textA := curationNodeText(a)
+	textB := curationNodeText(b)
+
+	// Skip check for short content where cosine alone is reliable.
+	if len(textA) < 200 && len(textB) < 200 {
+		return true
+	}
+
+	tokA := index.Tokenize(textA)
+	tokB := index.Tokenize(textB)
+	return index.JaccardSimilarity(tokA, tokB) >= dedupJaccardMin
+}
+
+// curationNodeText returns the best content text for Jaccard comparison.
+func curationNodeText(n *graph.Node) string {
+	if n == nil {
+		return ""
+	}
+	if s, ok := n.Properties.GetString("content_full"); ok {
+		return s
+	}
+	if s, ok := n.Properties.GetString("content_short"); ok {
+		return s
+	}
+	return ""
 }
 
 // nonChunkEdgeCount returns the total edge count excluding structural edges.

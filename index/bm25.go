@@ -1,0 +1,189 @@
+package index
+
+import (
+	"math"
+	"sort"
+)
+
+// BM25Index provides term-frequency / inverse-document-frequency based
+// scoring using the Okapi BM25 algorithm. It runs alongside the vector
+// index to enable hybrid search (vector + keyword).
+//
+// Not thread-safe -- the server layer handles serialization.
+type BM25Index struct {
+	// Term frequency: nodeID -> token -> count.
+	tf map[string]map[string]int
+
+	// Document lengths: nodeID -> total token count.
+	docLen map[string]int
+
+	// Inverted index: token -> set of nodeIDs containing it.
+	inverted map[string]map[string]struct{}
+
+	// Total number of documents.
+	numDocs int
+
+	// Average document length (maintained incrementally).
+	avgDL float64
+
+	// BM25 parameters.
+	k1 float64 // term frequency saturation (default 1.2)
+	b  float64 // length normalization (default 0.75)
+}
+
+// NewBM25Index creates a new empty BM25 index with the given parameters.
+// Use k1=0 and b=0 for defaults (1.2 and 0.75 respectively).
+func NewBM25Index(k1, b float64) *BM25Index {
+	if k1 == 0 {
+		k1 = 1.2
+	}
+	if b == 0 {
+		b = 0.75
+	}
+	return &BM25Index{
+		tf:       make(map[string]map[string]int),
+		docLen:   make(map[string]int),
+		inverted: make(map[string]map[string]struct{}),
+		k1:       k1,
+		b:        b,
+	}
+}
+
+// Add indexes a document's content. Tokenizes the text and stores term
+// frequencies. If the nodeID already exists, it is replaced.
+func (idx *BM25Index) Add(nodeID, text string) {
+	// Remove old entry if exists.
+	if _, exists := idx.tf[nodeID]; exists {
+		idx.removeInternal(nodeID)
+	}
+
+	tokens := Tokenize(text)
+	if len(tokens) == 0 {
+		return
+	}
+
+	tf := make(map[string]int, len(tokens)/2)
+	for _, t := range tokens {
+		tf[t]++
+	}
+
+	idx.tf[nodeID] = tf
+	idx.docLen[nodeID] = len(tokens)
+
+	for token := range tf {
+		if idx.inverted[token] == nil {
+			idx.inverted[token] = make(map[string]struct{})
+		}
+		idx.inverted[token][nodeID] = struct{}{}
+	}
+
+	idx.numDocs++
+	idx.recomputeAvgDL()
+}
+
+// Remove deletes a document from the index.
+func (idx *BM25Index) Remove(nodeID string) {
+	if _, exists := idx.tf[nodeID]; !exists {
+		return
+	}
+	idx.removeInternal(nodeID)
+	idx.recomputeAvgDL()
+}
+
+func (idx *BM25Index) removeInternal(nodeID string) {
+	for token := range idx.tf[nodeID] {
+		if set, ok := idx.inverted[token]; ok {
+			delete(set, nodeID)
+			if len(set) == 0 {
+				delete(idx.inverted, token)
+			}
+		}
+	}
+	delete(idx.tf, nodeID)
+	delete(idx.docLen, nodeID)
+	idx.numDocs--
+}
+
+func (idx *BM25Index) recomputeAvgDL() {
+	if idx.numDocs == 0 {
+		idx.avgDL = 0
+		return
+	}
+	total := 0
+	for _, dl := range idx.docLen {
+		total += dl
+	}
+	idx.avgDL = float64(total) / float64(idx.numDocs)
+}
+
+// Search scores all documents in the optional candidate set against
+// the query tokens using BM25. Returns the top-k results sorted by
+// descending score. If candidates is nil, all documents are scored.
+func (idx *BM25Index) Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult {
+	if len(queryTokens) == 0 || idx.numDocs == 0 {
+		return nil
+	}
+
+	// Deduplicate query tokens.
+	querySet := make(map[string]struct{}, len(queryTokens))
+	for _, t := range queryTokens {
+		querySet[t] = struct{}{}
+	}
+
+	scores := make(map[string]float64)
+
+	for token := range querySet {
+		docSet, ok := idx.inverted[token]
+		if !ok {
+			continue
+		}
+
+		// IDF: log((N - n + 0.5) / (n + 0.5) + 1)
+		n := float64(len(docSet))
+		idf := math.Log((float64(idx.numDocs)-n+0.5)/(n+0.5) + 1)
+
+		for nodeID := range docSet {
+			if candidates != nil {
+				if _, ok := candidates[nodeID]; !ok {
+					continue
+				}
+			}
+
+			tf := float64(idx.tf[nodeID][token])
+			dl := float64(idx.docLen[nodeID])
+
+			// BM25: idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl/avgdl))
+			denom := tf + idx.k1*(1-idx.b+idx.b*dl/idx.avgDL)
+			score := idf * (tf * (idx.k1 + 1)) / denom
+
+			scores[nodeID] += score
+		}
+	}
+
+	if len(scores) == 0 {
+		return nil
+	}
+
+	results := make([]SearchResult, 0, len(scores))
+	for id, score := range scores {
+		results = append(results, SearchResult{
+			NodeID:     id,
+			Similarity: float32(score),
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+
+	if k > 0 && k < len(results) {
+		results = results[:k]
+	}
+
+	return results
+}
+
+// Len returns the number of indexed documents.
+func (idx *BM25Index) Len() int {
+	return idx.numDocs
+}
