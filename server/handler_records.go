@@ -12,38 +12,40 @@ import (
 // --- Request types ---
 
 type captureRequest struct {
-	Content           string   `json:"content"`
-	Temporality       string   `json:"temporality,omitempty"`
-	Confidence        *float64 `json:"confidence,omitempty"`
-	KnowledgeType     string   `json:"knowledge_type,omitempty"`
-	EpistemicStatus   string   `json:"epistemic_status,omitempty"`
-	Importance        *float64 `json:"importance,omitempty"`
-	Keywords          []string `json:"keywords,omitempty"`
-	SummaryShort      string   `json:"summary_short,omitempty"`
-	SummaryAbstract   string   `json:"summary_abstract,omitempty"`
-	SourceRef         string   `json:"source_ref,omitempty"`
-	SourceCredibility *float64 `json:"source_credibility,omitempty"`
-	TestimonyHops     *int64   `json:"testimony_hops,omitempty"`
-	ContextAbout      string   `json:"context_about,omitempty"`
-	ContextWho        string   `json:"context_who,omitempty"`
-	ContextPrompted   string   `json:"context_prompted,omitempty"`
-	ContextFindable   string   `json:"context_findable_by,omitempty"`
-	ContextRelated    string   `json:"context_related,omitempty"`
-	ValidFrom         string   `json:"valid_from,omitempty"`
-	ValidUntil        string   `json:"valid_until,omitempty"`
-	AssertedAsOf      string   `json:"asserted_as_of,omitempty"`
+	Content           string         `json:"content"`
+	Temporality       string         `json:"temporality,omitempty"`
+	Confidence        *float64       `json:"confidence,omitempty"`
+	KnowledgeType     string         `json:"knowledge_type,omitempty"`
+	EpistemicStatus   string         `json:"epistemic_status,omitempty"`
+	Importance        *float64       `json:"importance,omitempty"`
+	Keywords          []string       `json:"keywords,omitempty"`
+	SummaryShort      string         `json:"summary_short,omitempty"`
+	SummaryAbstract   string         `json:"summary_abstract,omitempty"`
+	SourceRef         string         `json:"source_ref,omitempty"`
+	SourceCredibility *float64       `json:"source_credibility,omitempty"`
+	TestimonyHops     *int64         `json:"testimony_hops,omitempty"`
+	ContextAbout      string         `json:"context_about,omitempty"`
+	ContextWho        string         `json:"context_who,omitempty"`
+	ContextPrompted   string         `json:"context_prompted,omitempty"`
+	ContextFindable   string         `json:"context_findable_by,omitempty"`
+	ContextRelated    string         `json:"context_related,omitempty"`
+	ValidFrom         string         `json:"valid_from,omitempty"`
+	ValidUntil        string         `json:"valid_until,omitempty"`
+	AssertedAsOf      string         `json:"asserted_as_of,omitempty"`
+	Meta              map[string]any `json:"meta,omitempty"`
 }
 
 type updateRequest struct {
-	Confidence      *float64 `json:"confidence,omitempty"`
-	Temporality     string   `json:"temporality,omitempty"`
-	KnowledgeType   string   `json:"knowledge_type,omitempty"`
-	EpistemicStatus string   `json:"epistemic_status,omitempty"`
-	Importance      *float64 `json:"importance,omitempty"`
-	Keywords        []string `json:"keywords,omitempty"`
-	SummaryShort    string   `json:"summary_short,omitempty"`
-	ValidUntil      string   `json:"valid_until,omitempty"`
-	AssertedAsOf    string   `json:"asserted_as_of,omitempty"`
+	Confidence      *float64       `json:"confidence,omitempty"`
+	Temporality     string         `json:"temporality,omitempty"`
+	KnowledgeType   string         `json:"knowledge_type,omitempty"`
+	EpistemicStatus string         `json:"epistemic_status,omitempty"`
+	Importance      *float64       `json:"importance,omitempty"`
+	Keywords        []string       `json:"keywords,omitempty"`
+	SummaryShort    string         `json:"summary_short,omitempty"`
+	ValidUntil      string         `json:"valid_until,omitempty"`
+	AssertedAsOf    string         `json:"asserted_as_of,omitempty"`
+	Meta            map[string]any `json:"meta,omitempty"`
 }
 
 type classifyRequest struct {

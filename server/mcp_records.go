@@ -21,8 +21,9 @@ func (s *Server) registerMCPRecordTools(mcpServer *mcp.Server) {
 		SourceCredibility *float64 `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
 		ContextAbout      string   `json:"context_about,omitempty" jsonschema:"topic/domain"`
 		ContextWho        string   `json:"context_who,omitempty" jsonschema:"entities involved"`
-		ContextFindable   string   `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
-		AssertedAsOf      string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+		ContextFindable   string         `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
+		AssertedAsOf      string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+		Meta              map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems (e.g. {assignee: Sarah, priority: P1, sprint: 23}). Stored as meta.* properties, indexed for keyword search."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_capture",
@@ -48,6 +49,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			ContextWho:        args.ContextWho,
 			ContextFindable:   args.ContextFindable,
 			AssertedAsOf:      args.AssertedAsOf,
+			Meta:              args.Meta,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -81,8 +83,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
 		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
-		ValidUntil      string   `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical. Use 'clear' to remove."`
-		AssertedAsOf    string   `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
+		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical. Use 'clear' to remove."`
+		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
+		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata (e.g. {assignee: Sarah, status: done})"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
@@ -101,6 +104,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 			SummaryShort:    args.SummaryShort,
 			ValidUntil:      args.ValidUntil,
 			AssertedAsOf:    args.AssertedAsOf,
+			Meta:            args.Meta,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)

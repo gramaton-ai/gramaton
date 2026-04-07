@@ -108,6 +108,54 @@ func validateFloat64Range(name string, val *float64, min, max float64) error {
 	return nil
 }
 
+// Meta field limits.
+const (
+	maxMetaKeys     = 50
+	maxMetaKeyLen   = 64
+	maxMetaValueLen = 1024
+)
+
+// validateMeta checks that meta keys and values are within limits and
+// that values are supported types (string, float64, bool, []string).
+// Returns an error describing the first invalid entry found.
+func validateMeta(meta map[string]any) error {
+	if len(meta) > maxMetaKeys {
+		return fmt.Errorf("meta exceeds maximum of %d keys", maxMetaKeys)
+	}
+	for k, v := range meta {
+		if len(k) > maxMetaKeyLen {
+			return fmt.Errorf("meta key %q exceeds maximum length of %d", k, maxMetaKeyLen)
+		}
+		if k == "" {
+			return fmt.Errorf("meta key must not be empty")
+		}
+		switch val := v.(type) {
+		case string:
+			if len(val) > maxMetaValueLen {
+				return fmt.Errorf("meta.%s value exceeds maximum length of %d", k, maxMetaValueLen)
+			}
+		case float64: // JSON numbers decode as float64
+			// ok
+		case bool:
+			// ok
+		case []any:
+			// JSON arrays -- verify all elements are strings.
+			for i, elem := range val {
+				s, ok := elem.(string)
+				if !ok {
+					return fmt.Errorf("meta.%s[%d] must be a string, got %T", k, i, elem)
+				}
+				if len(s) > maxMetaValueLen {
+					return fmt.Errorf("meta.%s[%d] exceeds maximum length of %d", k, i, maxMetaValueLen)
+				}
+			}
+		default:
+			return fmt.Errorf("meta.%s has unsupported type %T (allowed: string, number, bool, string array)", k, v)
+		}
+	}
+	return nil
+}
+
 // validateEnum checks that a string is in the allowed set.
 func validateEnum(name, val string, allowed map[string]bool) error {
 	if val == "" {

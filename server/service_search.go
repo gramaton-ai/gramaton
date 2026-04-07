@@ -84,6 +84,7 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		Random:            req.Random,
 		Sort:              req.Sort,
 		Order:             req.Order,
+		Meta:              req.Meta,
 	}
 
 	// Parse date filters.

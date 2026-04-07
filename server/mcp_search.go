@@ -35,8 +35,9 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		MinEdges            *int     `json:"min_edges,omitempty" jsonschema:"integer, minimum total edge count (orphan detection: max_edges=0)"`
 		MaxEdges            *int     `json:"max_edges,omitempty" jsonschema:"integer, maximum total edge count"`
 		Random              bool     `json:"random,omitempty" jsonschema:"return random results (ignores sort/score). Useful for serendipitous discovery or review"`
-		Sort              string   `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
-		Order             string   `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
+		Sort              string            `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
+		Order             string            `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
+		Meta              map[string]string `json:"meta,omitempty" jsonschema:"filter by structured metadata (e.g. {assignee: Sarah Chen, status: in_progress}). Keys match meta.* properties set at capture."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
@@ -72,6 +73,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 			Random:             args.Random,
 			Sort:               args.Sort,
 			Order:              args.Order,
+			Meta:               args.Meta,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)

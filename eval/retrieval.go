@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -95,12 +96,48 @@ func BuildEvalEngine(t *testing.T, records []EvalRecord) (*core.Engine, map[stri
 			props["resolved_at"] = graph.TimestampProperty(now.Add(-time.Duration(rec.ValidUntilDaysAgo) * 24 * time.Hour))
 		}
 
+		// Store meta.* properties.
+		for k, v := range rec.Meta {
+			propKey := "meta." + k
+			switch val := v.(type) {
+			case string:
+				props[propKey] = graph.StringProperty(val)
+			case float64:
+				props[propKey] = graph.Float64Property(val)
+			case bool:
+				props[propKey] = graph.BoolProperty(val)
+			case []any:
+				ss := make([]string, 0, len(val))
+				for _, elem := range val {
+					if s, ok := elem.(string); ok {
+						ss = append(ss, s)
+					}
+				}
+				if len(ss) > 0 {
+					props[propKey] = graph.StringListProperty(ss)
+				}
+			}
+		}
+
 		n := eng.Graph().AddNode(props)
 		var vec []float32
 		if len(rec.Embedding) > 0 {
 			vec = rec.Embedding
 		}
-		eng.IndexNode(n.ID, rec.Content, vec)
+
+		// Include meta values in BM25 text.
+		bm25Text := rec.Content
+		if len(rec.Meta) > 0 {
+			for k, v := range rec.Meta {
+				switch val := v.(type) {
+				case string:
+					bm25Text += " " + k + ":" + val
+				case float64:
+					bm25Text += fmt.Sprintf(" %s:%g", k, val)
+				}
+			}
+		}
+		eng.IndexNode(n.ID, bm25Text, vec)
 
 		nameToID[rec.Name] = n.ID
 	}
@@ -145,6 +182,7 @@ func EvalRetrieval(t *testing.T, eng *core.Engine, nameToID map[string]string, q
 			Temporality:     q.Temporality,
 			Resolution:      q.Resolution,
 			ConfidenceMin:   q.ConfidenceMin,
+			Meta:            q.Meta,
 		}
 		if q.SinceDaysAgo > 0 {
 			since := now.Add(-time.Duration(q.SinceDaysAgo) * 24 * time.Hour)

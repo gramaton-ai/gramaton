@@ -101,9 +101,10 @@ type Query struct {
 	Top             int
 	MinEdges        *int   // minimum total edge count (in + out)
 	MaxEdges        *int   // maximum total edge count
-	Sort            string // field to sort by (default: effective_score)
-	Order           string // "asc" or "desc" (default: "desc")
-	Random          bool   // return random results (ignores sort/score)
+	Sort            string            // field to sort by (default: effective_score)
+	Order           string            // "asc" or "desc" (default: "desc")
+	Random          bool              // return random results (ignores sort/score)
+	Meta            map[string]string // meta.* property filters (key -> value, exact match)
 }
 
 // Facets holds per-field value counts across a result set.
@@ -501,6 +502,13 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Keyword exact match: all specified keywords must be present.
 	for _, kw := range q.Keywords {
 		ids := t.propIdx.LookupKeyword("content_keywords", kw)
+		sets = append(sets, toSet(ids))
+	}
+
+	// Meta property filters: exact match on meta.* properties.
+	for k, v := range q.Meta {
+		propKey := "meta." + k
+		ids := t.propIdx.Lookup(propKey, graph.StringProperty(v))
 		sets = append(sets, toSet(ids))
 	}
 

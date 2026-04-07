@@ -33,9 +33,10 @@ type searchRequest struct {
 	SimilarTo           string   `json:"similar_to,omitempty"`
 	MinEdges            *int     `json:"min_edges,omitempty"`
 	MaxEdges            *int     `json:"max_edges,omitempty"`
-	Random              bool     `json:"random,omitempty"`
-	Sort                string   `json:"sort,omitempty"`
-	Order             string   `json:"order,omitempty"`
+	Random              bool              `json:"random,omitempty"`
+	Sort                string            `json:"sort,omitempty"`
+	Order               string            `json:"order,omitempty"`
+	Meta                map[string]string `json:"meta,omitempty"`
 }
 
 type exploreRequest struct {

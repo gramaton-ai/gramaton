@@ -8,9 +8,68 @@ import (
 	"github.com/brandonlattin/gramaton/graph"
 )
 
+// setMetaProps stores meta.* properties on a node from a meta map.
+// Values are converted to typed graph properties. Caller must hold
+// the write lock.
+func (s *Server) setMetaProps(nodeID string, meta map[string]any) {
+	for k, v := range meta {
+		propKey := "meta." + k
+		switch val := v.(type) {
+		case string:
+			s.engine.SetProp(nodeID, propKey, graph.StringProperty(val))
+		case float64:
+			s.engine.SetProp(nodeID, propKey, graph.Float64Property(val))
+		case bool:
+			s.engine.SetProp(nodeID, propKey, graph.BoolProperty(val))
+		case []any:
+			ss := make([]string, len(val))
+			for i, elem := range val {
+				ss[i] = elem.(string) // validated by validateMeta
+			}
+			s.engine.SetProp(nodeID, propKey, graph.StringListProperty(ss))
+		}
+	}
+}
+
+// metaBM25Text builds a string from meta values for BM25 indexing.
+// Format: "key:value key:value ..." so keyword search matches meta fields.
+func metaBM25Text(meta map[string]any) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	var parts []string
+	for k, v := range meta {
+		switch val := v.(type) {
+		case string:
+			parts = append(parts, k+":"+val)
+		case float64:
+			parts = append(parts, fmt.Sprintf("%s:%g", k, val))
+		case bool:
+			if val {
+				parts = append(parts, k+":true")
+			} else {
+				parts = append(parts, k+":false")
+			}
+		case []any:
+			for _, elem := range val {
+				if s, ok := elem.(string); ok {
+					parts = append(parts, k+":"+s)
+				}
+			}
+		}
+	}
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += " "
+		}
+		result += p
+	}
+	return result
+}
+
 // serviceCapture creates a new knowledge record. Handles pre-embedding,
-// deduplication, supersession, and chunking. Fixes Bug 1: sets resolution
-// and resolved_at on superseded records (MCP previously omitted these).
+// deduplication, supersession, and chunking.
 func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[string]any, *serviceError) {
 	if req.Content == "" {
 		return nil, errMissing("content is required")
@@ -19,6 +78,9 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 		return nil, errInvalid("content exceeds maximum length")
 	}
 	if err := validateCaptureRequest(req); err != nil {
+		return nil, errInvalid(err.Error())
+	}
+	if err := validateMeta(req.Meta); err != nil {
 		return nil, errInvalid(err.Error())
 	}
 
@@ -45,7 +107,19 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 	setOptionalProps(props, req)
 
 	n := s.engine.Graph().AddNode(props)
-	s.engine.IndexNode(n.ID, req.Content, nil)
+
+	// Index content for BM25. Append meta values so keyword search
+	// matches structured metadata fields.
+	bm25Text := req.Content
+	if metaText := metaBM25Text(req.Meta); metaText != "" {
+		bm25Text += " " + metaText
+	}
+	s.engine.IndexNode(n.ID, bm25Text, nil)
+
+	// Store meta.* properties after node creation.
+	if len(req.Meta) > 0 {
+		s.setMetaProps(n.ID, req.Meta)
+	}
 
 	var warnings []string
 	if err := s.applyPreEmbedded(n.ID, preEmbedded); err != nil {
@@ -244,6 +318,13 @@ func (s *Server) serviceUpdate(id string, req *updateRequest) (map[string]any, *
 			return nil, errInvalid("invalid asserted_as_of date")
 		}
 		s.engine.SetProp(id, "asserted_as_of", graph.TimestampProperty(t))
+		updated = true
+	}
+	if len(req.Meta) > 0 {
+		if err := validateMeta(req.Meta); err != nil {
+			return nil, errInvalid(err.Error())
+		}
+		s.setMetaProps(id, req.Meta)
 		updated = true
 	}
 

@@ -38,9 +38,10 @@ type EvalRecord struct {
 	AccessCount     int64     `json:"access_count,omitempty"`
 	AccessedDaysAgo int       `json:"accessed_days_ago,omitempty"`
 	ValidUntilDaysAgo int    `json:"valid_until_days_ago,omitempty"` // negative = future
-	Resolution      string    `json:"resolution,omitempty"`
-	Pending         bool      `json:"pending,omitempty"`
-	Embedding       []float32 `json:"embedding,omitempty"`
+	Resolution      string         `json:"resolution,omitempty"`
+	Pending         bool           `json:"pending,omitempty"`
+	Embedding       []float32      `json:"embedding,omitempty"`
+	Meta            map[string]any `json:"meta,omitempty"`
 }
 
 // EvalQuery is a retrieval evaluation query with relevance judgments.
@@ -54,8 +55,9 @@ type EvalQuery struct {
 	EpistemicStatus string   `json:"epistemic_status,omitempty"`
 	Temporality     string   `json:"temporality,omitempty"`
 	Resolution      string   `json:"resolution,omitempty"`
-	ConfidenceMin   *float64 `json:"confidence_min,omitempty"`
-	SinceDaysAgo    int      `json:"since_days_ago,omitempty"`
+	ConfidenceMin   *float64          `json:"confidence_min,omitempty"`
+	SinceDaysAgo    int               `json:"since_days_ago,omitempty"`
+	Meta            map[string]string `json:"meta,omitempty"`
 }
 
 // EvalDataset is the complete eval dataset loaded from disk.

@@ -297,6 +297,95 @@ func TestServiceDeleteEdge(t *testing.T) {
 	}
 }
 
+func TestServiceCaptureWithMeta(t *testing.T) {
+	srv, eng := setupTestServer(t)
+
+	result, svcErr := srv.serviceCapture(context.Background(), &captureRequest{
+		Content:     "PLAT-142: Add rate limiting to API gateway",
+		Temporality: "temporal",
+		Meta: map[string]any{
+			"assignee": "Sarah Chen",
+			"priority": "P1",
+			"sprint":   float64(23),
+			"status":   "in_progress",
+			"labels":   []any{"gateway", "security"},
+		},
+	})
+	if svcErr != nil {
+		t.Fatalf("serviceCapture with meta: %v", svcErr)
+	}
+
+	id := result["id"].(string)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+
+	// Verify meta.* properties stored with correct types.
+	if v, ok := n.Properties.GetString("meta.assignee"); !ok || v != "Sarah Chen" {
+		t.Errorf("expected meta.assignee=Sarah Chen, got %q", v)
+	}
+	if v, ok := n.Properties.GetString("meta.priority"); !ok || v != "P1" {
+		t.Errorf("expected meta.priority=P1, got %q", v)
+	}
+	if v, ok := n.Properties.GetFloat64("meta.sprint"); !ok || v != 23 {
+		t.Errorf("expected meta.sprint=23, got %v", v)
+	}
+	if v, ok := n.Properties.GetString("meta.status"); !ok || v != "in_progress" {
+		t.Errorf("expected meta.status=in_progress, got %q", v)
+	}
+	if v, ok := n.Properties.GetStringList("meta.labels"); !ok || len(v) != 2 {
+		t.Errorf("expected meta.labels=[gateway security], got %v", v)
+	}
+}
+
+func TestServiceCaptureMetaValidation(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// Unsupported type.
+	_, svcErr := srv.serviceCapture(context.Background(), &captureRequest{
+		Content: "test",
+		Meta:    map[string]any{"nested": map[string]any{"bad": true}},
+	})
+	if svcErr == nil {
+		t.Fatal("expected error for nested map in meta")
+	}
+
+	// Empty key.
+	_, svcErr = srv.serviceCapture(context.Background(), &captureRequest{
+		Content: "test",
+		Meta:    map[string]any{"": "value"},
+	})
+	if svcErr == nil {
+		t.Fatal("expected error for empty meta key")
+	}
+}
+
+func TestServiceUpdateWithMeta(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	id := addRecord(t, eng, "updatable with meta")
+
+	result, svcErr := srv.serviceUpdate(id, &updateRequest{
+		Meta: map[string]any{
+			"status": "done",
+			"sprint": float64(24),
+		},
+	})
+	if svcErr != nil {
+		t.Fatalf("serviceUpdate with meta: %v", svcErr)
+	}
+	if result["updated"] != true {
+		t.Error("expected updated=true")
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	if v, ok := n.Properties.GetString("meta.status"); !ok || v != "done" {
+		t.Errorf("expected meta.status=done, got %q", v)
+	}
+}
+
 func TestServiceDeleteRecord(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	id := addRecord(t, eng, "deletable")
