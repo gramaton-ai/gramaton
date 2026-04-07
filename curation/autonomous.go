@@ -112,7 +112,22 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 	e.RUnlock()
 
-	// Process each record: LLM calls outside lock, then batch write.
+	// Process records: parallel LLM calls outside lock, then batch write.
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	// Cap batch to remaining LLM budget.
+	remaining := maxCalls - result.LLMCalls
+	if remaining <= 0 {
+		return
+	}
+	if len(batch) > remaining {
+		batch = batch[:remaining]
+	}
+
 	type classified struct {
 		id      string
 		content string
@@ -120,39 +135,33 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 	var ready []classified
 
-	for _, rec := range batch {
-		if result.LLMCalls >= maxCalls {
-			break
-		}
+	work := make([]llmWork, len(batch))
+	for i, rec := range batch {
+		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(classifyPrompt, rec.content)}
+	}
 
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	llmResults := parallelLLM(ctx, llmProv, work, 4)
+	result.LLMCalls += len(llmResults)
 
-		prompt := fmt.Sprintf(classifyPrompt, rec.content)
-		resp, err := llmProv.Complete(ctx, prompt)
-		result.LLMCalls++
-
-		if err != nil {
+	for i, lr := range llmResults {
+		if lr.err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Warn("classify LLM error", "component", "curation", "record", rec.id[:12], "err", err)
+				logger.Warn("classify LLM error", "component", "curation", "record", batch[i].id[:12], "err", lr.err)
 			}
 			continue
 		}
 
-		classification, err := parseClassification(resp)
+		classification, err := parseClassification(lr.response)
 		if err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Warn("classify parse error", "component", "curation", "record", rec.id[:12], "err", err)
+				logger.Warn("classify parse error", "component", "curation", "record", batch[i].id[:12], "err", err)
 			}
 			continue
 		}
 
-		ready = append(ready, classified{id: rec.id, content: rec.content, data: classification})
+		ready = append(ready, classified{id: batch[i].id, content: batch[i].content, data: classification})
 	}
 
 	if len(ready) == 0 {
@@ -288,6 +297,15 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 	e.RUnlock()
 
+	// Cap batch to remaining LLM budget.
+	remaining := maxCalls - result.LLMCalls
+	if remaining <= 0 {
+		return
+	}
+	if len(batch) > remaining {
+		batch = batch[:remaining]
+	}
+
 	type summarized struct {
 		id      string
 		content string
@@ -295,31 +313,24 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 	var readySummaries []summarized
 
-	for _, rec := range batch {
-		if result.LLMCalls >= maxCalls {
-			break
-		}
+	work := make([]llmWork, len(batch))
+	for i, rec := range batch {
+		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(summarizePrompt, rec.content)}
+	}
 
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	llmResults := parallelLLM(ctx, llmProv, work, 4)
+	result.LLMCalls += len(llmResults)
 
-		prompt := fmt.Sprintf(summarizePrompt, rec.content)
-		resp, err := llmProv.Complete(ctx, prompt)
-		result.LLMCalls++
-
-		if err != nil {
+	for i, lr := range llmResults {
+		if lr.err != nil {
 			result.Errors++
 			if logger != nil {
-				logger.Warn("summarize LLM error", "component", "curation", "record", rec.id[:12], "err", err)
+				logger.Warn("summarize LLM error", "component", "curation", "record", batch[i].id[:12], "err", lr.err)
 			}
 			continue
 		}
 
-		summary := strings.TrimSpace(resp)
-		// Rune-safe truncation.
+		summary := strings.TrimSpace(lr.response)
 		runes := []rune(summary)
 		if len(runes) > 200 {
 			summary = string(runes[:200])
@@ -329,7 +340,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			continue
 		}
 
-		readySummaries = append(readySummaries, summarized{id: rec.id, content: rec.content, summary: summary})
+		readySummaries = append(readySummaries, summarized{id: batch[i].id, content: batch[i].content, summary: summary})
 	}
 
 	if len(readySummaries) == 0 {
@@ -597,7 +608,18 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 			continue
 		}
 
-		// Create concept node.
+		// Pre-embed outside the lock (I/O can be slow).
+		var conceptVec []float32
+		var conceptModel string
+		if e.Embedder() != nil {
+			vecs, err := e.Embedder().Embed(ctx, []string{synthesis})
+			if err == nil && len(vecs) > 0 {
+				conceptVec = vecs[0]
+				conceptModel = e.Embedder().ModelID()
+			}
+		}
+
+		// Create concept node under write lock.
 		e.Lock()
 
 		props := graph.Properties{
@@ -621,15 +643,14 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 		}
 		e.BM25Idx().Add(node.ID, synthesis)
 
-		// Embed the concept node's synthesis text.
-		if e.Embedder() != nil {
-			vecs, err := e.Embedder().Embed(ctx, []string{synthesis})
-			if err == nil && len(vecs) > 0 {
-				prop := graph.VectorProperty(vecs[0])
-				e.Graph().SetNodeProperty(node.ID, "embedding_full", prop)
-				e.PropIdx().Add(node.ID, "embedding_full", prop)
-				e.VecIdx().Add(node.ID, vecs[0])
-				modelProp := graph.StringProperty(e.Embedder().ModelID())
+		// Apply pre-computed embedding (fast, no I/O).
+		if conceptVec != nil {
+			prop := graph.VectorProperty(conceptVec)
+			e.Graph().SetNodeProperty(node.ID, "embedding_full", prop)
+			e.PropIdx().Add(node.ID, "embedding_full", prop)
+			e.VecIdx().Add(node.ID, conceptVec)
+			if conceptModel != "" {
+				modelProp := graph.StringProperty(conceptModel)
 				e.Graph().SetNodeProperty(node.ID, "embedding_model", modelProp)
 				e.PropIdx().Add(node.ID, "embedding_model", modelProp)
 			}
