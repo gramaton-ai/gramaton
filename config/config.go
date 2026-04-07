@@ -233,7 +233,7 @@ func Defaults() Config {
 		Embedding: EmbeddingConfig{
 			Provider: "",
 			Endpoint: "http://localhost:11434",
-			Model:    "nomic-embed-text",
+			Model:    "mxbai-embed-large",
 		},
 
 		Scoring: ScoringConfig{

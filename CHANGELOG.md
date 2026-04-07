@@ -29,6 +29,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Frequency signal removed (eval showed it was actively harmful).
   Default weights: similarity=0.55, activation=0.20, confidence=0.15,
   freshness=0.10.
+- **Default embedding model changed** -- switched from `nomic-embed-text`
+  (137M params, 768d) to `mxbai-embed-large` (335M params, 1024d).
+  Eval showed +14% NDCG@5 and +12% MAP. Run `gramaton reembed` after
+  upgrading to re-embed existing records.
 
 ### Changed
 
