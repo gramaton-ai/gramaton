@@ -476,15 +476,17 @@ The export archive contains a subset of content-addressed chunks (nodes, edges, 
 
 This is the single authoritative definition of how retrieval scoring works. All scoring is computed at query time — no scoring values are stored.
 
-### Two Time Signals
+### Four Signals
 
-Retrieval scoring uses two independent time signals with different curves:
+The scoring model uses four signals, each answering a different question:
 
-**Access recency** — "How long since someone found this useful?" Exponential decay. Fast. Each access resets the clock. This handles the day-to-day signal: frequently used knowledge stays accessible.
+**Similarity** — "Does this record match what the user is looking for?" Hybrid search: cosine similarity from vector embeddings merged with BM25 keyword scores via Reciprocal Rank Fusion (RRF). This is the dominant signal — without it, retrieval scores drop to zero.
 
-**Knowledge freshness** — "How old is the underlying knowledge in the world?" Power law decay. Gentle, long tail. A 2021 strategy doc ranks below a 2025 one, but neither goes to zero. This handles the case where multiple records about the same topic were created at different real-world times.
+**ACT-R activation** — "Is this record likely to be needed, given past usage?" A unified signal based on Anderson's ACT-R base-level activation equation (Anderson & Schooler 1991). Combines access frequency and recency into one theoretically-grounded formula. Spreading activation from neighboring nodes is additive, matching ACT-R's full equation (A = B + S). This replaced the earlier separate recency, frequency, and activation signals after eval showed frequency was actively harmful and the others weren't contributing independently.
 
-For records with `valid_from` and `valid_until` set (documents with known dates, decisions with clear timelines), hard filtering is preferred over soft scoring — see "Validity Filtering" below.
+**Confidence** — "How trustworthy is this record?" Explicit metadata set at capture or by curation. The only secondary signal that consistently improves retrieval quality in evaluation. Reflects the epistemic reliability of the knowledge, not just its relevance.
+
+**Knowledge freshness** — "Is this knowledge still current in the world?" Power law decay based on when the knowledge was created or asserted. Varies by temporality: immutable knowledge never decays, durable knowledge decays gently, temporal/ephemeral knowledge decays faster. This is about when the knowledge became true, not when it was last accessed — a distinct concern from ACT-R activation.
 
 ### Validity Filtering (Before Scoring)
 
@@ -494,19 +496,17 @@ Before scoring, the search tool applies validity filtering:
 - **`--include-historical`:** Treats all records equally regardless of `valid_until`. For queries about evolution, history, or "what changed."
 - **`--valid-from-range 2021-01-01..2021-12-31`:** Hard filter to a specific time window.
 
-This means: five strategy docs from 2021-2025 all ingested today, the 2025 doc (no `valid_until`) ranks at the top by default. The agent sees "Current" vs "Historical" in the metadata summary and knows which to trust.
-
 ### Stored inputs (updated by events)
 
 | Property | Updated when | What it represents |
 |----------|-------------|-------------------|
-| `access_count` | Record returned to a consumer | How frequently this record is used |
-| `last_accessed` | Record returned to a consumer | How recently this record was used |
-| `activation_boost` | Neighbor of an accessed record | Indirect activation from nearby frequently-used records |
+| `access_count` | Record returned to a consumer | Total lifetime accesses (feeds ACT-R activation) |
+| `activation_boost` | Neighbor of an accessed record | Spreading activation from nearby accessed records |
 | `confidence` | At capture or by curation | How likely this record is correct |
 | `importance` | At capture or by curation | Retrieval priority floor — protects high-importance records from decay |
-| `temporality` | At capture or by curation | Selects which decay rate applies |
-| `valid_from` | At capture | When this knowledge became true in the world |
+| `temporality` | At capture or by curation | Selects which freshness exponent applies |
+| `created_at` | At capture | When the record was created (feeds ACT-R lifetime) |
+| `valid_from` | At capture | When this knowledge became true in the world (feeds freshness) |
 | `valid_until` | At capture or by curation | When this knowledge stopped being current |
 
 ### Computed at query time (never stored)
@@ -521,10 +521,8 @@ validity_multiplier = 1.0 if (valid_until is null OR valid_until > now OR includ
 # Step 2: Scoring
 effective_score = validity_multiplier × (
     weight_similarity  × similarity +
-    weight_recency     × access_recency +
     weight_freshness   × knowledge_freshness +
-    weight_frequency   × frequency_score +
-    weight_activation  × activation_score +
+    weight_activation  × actr_activation +
     weight_confidence  × confidence
 )
 
@@ -536,33 +534,39 @@ if importance > importance_threshold:
 Where:
 
 ```
-similarity         = cosine similarity between query embedding and record embedding
-                     (0.0-1.0, from the vector index)
-
-access_recency     = e^(-decay_rate[temporality] × hours_since_last_access)
-                     (exponential decay — rewards recent use, resets on access)
+similarity          = RRF fusion of vector cosine similarity and BM25 keyword score
+                      (normalized to 0.0-1.0)
+                      RRF_score(d) = 1/(k + rank_vector) + 1/(k + rank_bm25)
+                      where k = rrf_k (default 60)
 
 knowledge_freshness = 1 / (1 + hours_since_knowledge_time / freshness_scale) ^ freshness_exponent[temporality]
                       (power law — gentle decay, long tail, old knowledge stays visible)
                       where: knowledge_time = valid_from if set, otherwise created_at
 
-frequency_score    = log(1 + access_count) / log(1 + max_access_count)
-                     (normalized to 0.0-1.0 across the store)
+actr_activation     = sigmoid( (B + spreading_boost) / 2 )
+                      where: B = ln(n / 0.5) - 0.5 × ln(L)
+                      n = max(access_count, 1)  (creation counts as first access)
+                      L = max(lifetime_hours, 1)
+                      sigmoid normalizes to [0, 1]
+                      Reference: Anderson & Schooler 1991
 
-activation_score   = activation_boost × e^(-activation_decay_rate × hours_since_boost)
-                     (activation_boost decays independently)
+confidence          = confidence property value (0.0-1.0, used directly)
 ```
 
-### Access decay rates by temporality (exponential)
+### ACT-R base-level activation
 
-Research-informed defaults based on Ebbinghaus forgetting curves and Generative Agents (Park et al. 2023). The formula `e^(-rate × hours)` gives a half-life of `0.693 / rate` hours.
+The activation signal is grounded in Anderson's ACT-R theory of memory (Anderson & Schooler 1991). The base-level activation equation is the optimal predictor of information need given past access patterns. It naturally combines frequency and recency:
 
-| Temporality | decay_rate | Half-life | After 1 day | After 1 week | After 1 month |
-|---|---|---|---|---|---|
-| `ephemeral` | 0.173 | 4 hours | 0.016 | ~0 | ~0 |
-| `temporal` | 0.0096 | 3 days | 0.79 | 0.19 | 0.001 |
-| `durable` | 0.000321 | 90 days | 0.99 | 0.95 | 0.79 |
-| `immutable` | 0.0 | ∞ | 1.0 | 1.0 | 1.0 |
+- Recent accesses contribute large values (small lifetime)
+- Old accesses contribute almost nothing (large lifetime)
+- Many accesses increase the overall activation
+- Records with zero accesses get minimum activation (creation counts as one access)
+
+The approximation `B = ln(n/(1-d)) - d*ln(L)` (where d=0.5) requires only `access_count` and `created_at` — both already stored. The full formula `B = ln(sum of t_j^(-0.5))` would require per-access timestamps.
+
+Spreading activation from neighbors is additive: `A = B + S`. This matches ACT-R's full equation where total activation is base-level plus associative (spreading) activation. A record connected to heavily-used records gets a boost even if it hasn't been directly accessed.
+
+The raw activation value is normalized to [0, 1] via sigmoid for compatibility with the weighted scoring model.
 
 ### Knowledge freshness by temporality (power law)
 
@@ -579,30 +583,21 @@ The formula `1 / (1 + hours / scale)^exponent` decays quickly at first but has a
 
 **Immutable:** Freshness is always 1.0. A mathematical proof from 1684 is as fresh as one from 2024. Age is irrelevant for definitional truths.
 
-**Durable (exponent 0.5):** Five strategy docs from 2021-2025 rank clearly (0.82 → 0.43) but none are invisible. The 2025 doc is ~2x the 2021 doc. Gentle enough that a 10-year-old durable record still scores 0.32.
+**Durable (exponent 0.5):** Five strategy docs from 2021-2025 rank clearly (0.82 → 0.43) but none are invisible. The 2025 doc is ~2x the 2021 doc.
 
-**Temporal/Ephemeral (exponent 1.0):** Steeper. A 2-year-old temporal record is at 0.33. Access decay (exponential) is the primary driver for these — the power law freshness is a secondary signal.
+**Temporal/Ephemeral (exponent 1.0):** Steeper. A 2-year-old temporal record is at 0.33.
 
 ### Config defaults
 
 ```yaml
 scoring:
-  weight_similarity: 0.35
-  weight_recency: 0.15
-  weight_freshness: 0.15
-  weight_frequency: 0.1
-  weight_activation: 0.05
-  weight_confidence: 0.2
+  weight_similarity: 0.55
+  weight_freshness: 0.10
+  weight_activation: 0.20
+  weight_confidence: 0.15
   importance_threshold: 0.7
   importance_floor_ratio: 0.5
   historical_penalty: 0.5
-
-decay:
-  rates:
-    ephemeral: 0.173
-    temporal: 0.0096
-    durable: 0.000321
-    immutable: 0.0
 
 freshness:
   scale: 8760
@@ -613,12 +608,18 @@ freshness:
     ephemeral: 1.0
 
 activation:
-  base_amount: 1.0
-  attenuation_factor: 0.5
-  decay_rate: 0.05
+  base_amount: 1.0        # spreading activation per access event
+  attenuation_factor: 0.5  # edge weight scaling for neighbor activation
 ```
 
-All values are starting points to be tuned during validation. The formulas and structure are design decisions. The specific constants are empirical.
+### Design history
+
+The scoring model evolved through empirical evaluation:
+
+- **v0.1**: 6 signals (similarity, recency, freshness, frequency, activation, confidence) with weights inspired by Park et al. 2023 (Generative Agents).
+- **Eval finding**: Deep sweep across 2051 records with 100 LLM-judged queries showed frequency was actively harmful (removing it improved NDCG by +0.009). Recency and activation were noise in semantic evaluation. Only similarity and confidence consistently contributed.
+- **Research**: Anderson & Schooler 1991 showed that frequency and recency are not independent signals — they are a joint function optimally captured by the ACT-R base-level activation equation.
+- **v0.2 (current)**: 4 signals. ACT-R activation replaces frequency + recency + old activation. Temporal query evaluation confirmed ACT-R helps time-aware retrieval (activation_heavy wins temporal queries) without hurting semantic retrieval.
 
 ## Spreading Activation
 
@@ -629,7 +630,7 @@ When a node is returned to a consumer (any retrieval that includes the node's co
    `neighbor.activation_boost += base_amount × edge.weight × attenuation_factor`
 3. **Single-hop only.** No multi-hop propagation — attenuates too fast to matter, expensive, hard to control.
 
-The `activation_boost` on a neighbor accumulates from multiple activations (if it's near several frequently accessed nodes) and decays over time via `activation_decay_rate`. This keeps knowledge adjacent to frequently-used knowledge accessible, even if it hasn't been directly accessed recently.
+The `activation_boost` on a neighbor accumulates from multiple activations (if it's near several frequently accessed nodes). The boost is added to the ACT-R base-level activation at query time (A = B + S), keeping knowledge adjacent to frequently-used knowledge accessible even if it hasn't been directly accessed recently.
 
 **Concurrency note:** The direct access writes (`access_count`, `last_accessed`) and neighbor activation writes (`activation_boost`) are triggered by reads. Under concurrent agent load, these writes are serialized by the server. If this becomes a bottleneck, activation writes can be batched (accumulated in memory, flushed periodically) without affecting correctness — activation is approximate by nature.
 
