@@ -103,6 +103,7 @@ func BuildEvalEngine(t *testing.T, records []EvalRecord) (*core.Engine, map[stri
 		if len(rec.Embedding) > 0 {
 			eng.VecIdx().Add(n.ID, rec.Embedding)
 		}
+		eng.BM25Idx().Add(n.ID, rec.Content)
 
 		nameToID[rec.Name] = n.ID
 	}

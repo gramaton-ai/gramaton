@@ -189,3 +189,73 @@ func TestWeightMatrix(t *testing.T) {
 			fmt.Sprintf("%v", q.TopResults))
 	}
 }
+
+// TestMultiConceptQueries isolates multi-concept queries to measure
+// the impact of BM25 hybrid search on cross-concept retrieval.
+func TestMultiConceptQueries(t *testing.T) {
+	dir := DataDir()
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Skipf("no eval data at %s", dir)
+	}
+
+	// Collect multi-concept queries from all datasets.
+	var allRecords []EvalRecord
+	var mcQueries []EvalQuery
+
+	// Personal dataset.
+	rootDS := &EvalDataset{}
+	loadDatasetFiles(dir, rootDS)
+	allRecords = append(allRecords, rootDS.Records...)
+	for _, q := range rootDS.Queries {
+		if len(q.Name) > 2 && q.Name[:2] == "mc" {
+			mcQueries = append(mcQueries, q)
+		}
+	}
+
+	// SEP dataset.
+	sepDS, err := LoadSubDataset(dir, "sep")
+	if err == nil && len(sepDS.Records) > 0 {
+		allRecords = append(allRecords, sepDS.Records...)
+		for _, q := range sepDS.Queries {
+			if len(q.Name) > 2 && q.Name[:2] == "mc" {
+				mcQueries = append(mcQueries, q)
+			}
+		}
+	}
+
+	if len(mcQueries) == 0 {
+		t.Skip("no multi-concept queries found")
+	}
+
+	// Check for embeddings.
+	hasEmbed := false
+	for _, r := range allRecords {
+		if len(r.Embedding) > 0 {
+			hasEmbed = true
+			break
+		}
+	}
+	if !hasEmbed {
+		t.Skip("no embeddings")
+	}
+
+	eng, nameToID := BuildEvalEngine(t, allRecords)
+
+	t.Logf("=== Multi-Concept Query Evaluation ===")
+	t.Logf("Records: %d, Multi-concept queries: %d", len(allRecords), len(mcQueries))
+	t.Log("")
+
+	report := EvalRetrieval(t, eng, nameToID, mcQueries, nil)
+
+	t.Logf("Overall:  NDCG@5=%.3f  P@5=%.3f  MAP=%.3f",
+		report.MeanNDCG5, report.MeanP5, report.MAP)
+	t.Log("")
+	t.Logf("%-35s  %7s  %5s  %s",
+		"Query", "NDCG@5", "P@5", "Top results")
+	t.Logf("%-35s  %7s  %5s  %s",
+		"-----------------------------------", "-------", "-----", "---")
+	for _, q := range report.Queries {
+		t.Logf("%-35s  %7.3f  %5.3f  %v",
+			q.QueryName, q.NDCG5, q.Precision5, q.TopResults)
+	}
+}
