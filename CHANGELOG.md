@@ -19,6 +19,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `suggestions.available_filters` showing meta field values found
   across results. Agents can use these to refine with explicit
   meta filters. Config: `search.suggestion_threshold`.
+- **ACT-R scoring model** -- replaced 6-signal scoring (similarity,
+  recency, freshness, frequency, activation, confidence) with 4-signal
+  model (similarity, freshness, ACT-R activation, confidence). The
+  ACT-R base-level activation `B = ln(n/0.5) - 0.5*ln(L)` unifies
+  frequency and recency into a single theoretically-grounded signal
+  based on Anderson & Schooler 1991. Spreading activation from
+  neighbors is additive (A = B + S), matching ACT-R's full equation.
+  Frequency signal removed (eval showed it was actively harmful).
+  Default weights: similarity=0.55, activation=0.20, confidence=0.15,
+  freshness=0.10.
 
 ### Changed
 

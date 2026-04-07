@@ -16,56 +16,80 @@ func approx(a, b, tolerance float64) bool {
 	return math.Abs(a-b) < tolerance
 }
 
-// --- Access recency ---
+// --- ACT-R activation ---
 
-func TestAccessRecencyJustAccessed(t *testing.T) {
-	cfg := defaultCfg()
+func TestACTRActivationNewRecord(t *testing.T) {
 	now := time.Now().UTC()
-	r := accessRecency("durable", now, now, cfg.Decay)
-	if !approx(r, 1.0, 0.001) {
-		t.Fatalf("just accessed: expected ~1.0, got %f", r)
+	// Brand new record, just created, 1 access (birth).
+	a := actrActivation(0, now, 0, now)
+	// Should be moderate -- new record, not yet proven useful.
+	if a < 0.3 || a > 0.8 {
+		t.Fatalf("new record activation: expected 0.3-0.8, got %f", a)
 	}
 }
 
-func TestAccessRecencyNeverAccessed(t *testing.T) {
-	cfg := defaultCfg()
-	r := accessRecency("durable", time.Time{}, time.Now().UTC(), cfg.Decay)
-	if r != 1.0 {
-		t.Fatalf("never accessed: expected 1.0, got %f", r)
+func TestACTRActivationFrequentRecent(t *testing.T) {
+	now := time.Now().UTC()
+	// 50 accesses, created 1 day ago.
+	a := actrActivation(50, now.Add(-24*time.Hour), 0, now)
+	// Should be high -- heavily used and recent.
+	if a < 0.7 {
+		t.Fatalf("frequent recent: expected > 0.7, got %f", a)
 	}
 }
 
-func TestAccessRecencyEphemeralDecaysFast(t *testing.T) {
-	cfg := defaultCfg()
+func TestACTRActivationOldUnused(t *testing.T) {
 	now := time.Now().UTC()
-	// 8 hours ago (2 half-lives for ephemeral at 4h half-life).
-	lastAccessed := now.Add(-8 * time.Hour)
-	r := accessRecency("ephemeral", lastAccessed, now, cfg.Decay)
-	// e^(-0.173 * 8) = e^(-1.384) ≈ 0.25
-	if !approx(r, 0.25, 0.05) {
-		t.Fatalf("ephemeral after 8h: expected ~0.25, got %f", r)
+	// 0 accesses, created 1 year ago.
+	a := actrActivation(0, now.Add(-365*24*time.Hour), 0, now)
+	// Should be low -- old and never used.
+	if a > 0.4 {
+		t.Fatalf("old unused: expected < 0.4, got %f", a)
 	}
 }
 
-func TestAccessRecencyDurableDecaysSlow(t *testing.T) {
-	cfg := defaultCfg()
+func TestACTRActivationOldHeavilyUsed(t *testing.T) {
 	now := time.Now().UTC()
-	// 7 days ago.
-	lastAccessed := now.Add(-7 * 24 * time.Hour)
-	r := accessRecency("durable", lastAccessed, now, cfg.Decay)
-	// e^(-0.000321 * 168) ≈ 0.947
-	if !approx(r, 0.947, 0.02) {
-		t.Fatalf("durable after 7d: expected ~0.947, got %f", r)
+	// 500 accesses, created 1 year ago.
+	a := actrActivation(500, now.Add(-365*24*time.Hour), 0, now)
+	// Should be moderate-to-high -- many accesses offset the age.
+	if a < 0.5 {
+		t.Fatalf("old heavily used: expected > 0.5, got %f", a)
 	}
 }
 
-func TestAccessRecencyImmutableNeverDecays(t *testing.T) {
-	cfg := defaultCfg()
+func TestACTRActivationSpreadingBoost(t *testing.T) {
 	now := time.Now().UTC()
-	lastAccessed := now.Add(-365 * 24 * time.Hour)
-	r := accessRecency("immutable", lastAccessed, now, cfg.Decay)
-	if r != 1.0 {
-		t.Fatalf("immutable: expected 1.0, got %f", r)
+	created := now.Add(-24 * time.Hour)
+	base := actrActivation(5, created, 0, now)
+	boosted := actrActivation(5, created, 2.0, now)
+	if boosted <= base {
+		t.Fatalf("spreading boost should increase activation: base=%f, boosted=%f", base, boosted)
+	}
+}
+
+func TestACTRActivationMonotonic(t *testing.T) {
+	now := time.Now().UTC()
+	created := now.Add(-7 * 24 * time.Hour)
+	// More accesses should give higher activation.
+	a1 := actrActivation(1, created, 0, now)
+	a10 := actrActivation(10, created, 0, now)
+	a100 := actrActivation(100, created, 0, now)
+	if a1 >= a10 || a10 >= a100 {
+		t.Fatalf("activation should increase with access count: a1=%f, a10=%f, a100=%f", a1, a10, a100)
+	}
+}
+
+func TestACTRActivationBounded(t *testing.T) {
+	now := time.Now().UTC()
+	// Extreme cases should stay in [0, 1].
+	aMin := actrActivation(0, now.Add(-10*365*24*time.Hour), 0, now)
+	aMax := actrActivation(10000, now, 5.0, now)
+	if aMin < 0 || aMin > 1 {
+		t.Fatalf("min case out of bounds: %f", aMin)
+	}
+	if aMax < 0 || aMax > 1 {
+		t.Fatalf("max case out of bounds: %f", aMax)
 	}
 }
 
@@ -95,11 +119,10 @@ func TestFreshnessDurableSixMonths(t *testing.T) {
 func TestFreshnessUsesValidFrom(t *testing.T) {
 	cfg := defaultCfg()
 	now := time.Now().UTC()
-	created := now.Add(-1 * time.Hour)                // recent creation
+	created := now.Add(-1 * time.Hour)              // recent creation
 	validFrom := now.Add(-2 * 365 * 24 * time.Hour) // but knowledge is 2 years old
 	f := knowledgeFreshness("durable", validFrom, created, now, cfg.Freshness)
 	// Should use validFrom, not createdAt.
-	// 2 years ≈ 17520 hours. 1/(1 + 17520/8760)^0.5 = 1/(3)^0.5 ≈ 0.577
 	if !approx(f, 0.577, 0.05) {
 		t.Fatalf("durable 2yr via valid_from: expected ~0.577, got %f", f)
 	}
@@ -113,37 +136,6 @@ func TestFreshnessNoTimestamp(t *testing.T) {
 	}
 }
 
-// --- Frequency score ---
-
-func TestFrequencyScoreZero(t *testing.T) {
-	f := frequencyScore(0, 100)
-	if f != 0.0 {
-		t.Fatalf("expected 0.0, got %f", f)
-	}
-}
-
-func TestFrequencyScoreMax(t *testing.T) {
-	f := frequencyScore(100, 100)
-	if !approx(f, 1.0, 0.001) {
-		t.Fatalf("max access: expected ~1.0, got %f", f)
-	}
-}
-
-func TestFrequencyScoreMiddle(t *testing.T) {
-	f := frequencyScore(50, 100)
-	// log(51) / log(101) ≈ 0.85
-	if f < 0.5 || f > 1.0 {
-		t.Fatalf("mid access: expected 0.5-1.0, got %f", f)
-	}
-}
-
-func TestFrequencyScoreZeroMax(t *testing.T) {
-	f := frequencyScore(5, 0)
-	if f != 0 {
-		t.Fatalf("zero max: expected 0, got %f", f)
-	}
-}
-
 // --- Full scoring ---
 
 func TestComputeScoreBasic(t *testing.T) {
@@ -151,14 +143,12 @@ func TestComputeScoreBasic(t *testing.T) {
 	now := time.Now().UTC()
 
 	inputs := ScoreInputs{
-		Similarity:     0.8,
-		Temporality:    "durable",
-		Confidence:     0.9,
-		Importance:     0.5,
-		AccessCount:    10,
-		LastAccessed:   now.Add(-1 * time.Hour),
-		CreatedAt:      now.Add(-24 * time.Hour),
-		MaxAccessCount: 50,
+		Similarity:  0.8,
+		Temporality: "durable",
+		Confidence:  0.9,
+		Importance:  0.5,
+		AccessCount: 10,
+		CreatedAt:   now.Add(-24 * time.Hour),
 	}
 
 	score := ComputeScore(inputs, now, cfg)
@@ -172,11 +162,10 @@ func TestComputeScoreHistoricalPenalty(t *testing.T) {
 	now := time.Now().UTC()
 
 	base := ScoreInputs{
-		Similarity:     0.8,
-		Temporality:    "durable",
-		Confidence:     0.9,
-		CreatedAt:      now.Add(-24 * time.Hour),
-		MaxAccessCount: 1,
+		Similarity:  0.8,
+		Temporality: "durable",
+		Confidence:  0.9,
+		CreatedAt:   now.Add(-24 * time.Hour),
 	}
 
 	// Without valid_until (current).
@@ -202,12 +191,11 @@ func TestComputeScoreImportanceFloor(t *testing.T) {
 	now := time.Now().UTC()
 
 	inputs := ScoreInputs{
-		Similarity:     0.0, // no vector match
-		Temporality:    "durable",
-		Confidence:     0.1, // low confidence
-		Importance:     0.9, // but very important
-		CreatedAt:      now.Add(-365 * 24 * time.Hour),
-		MaxAccessCount: 1,
+		Similarity:  0.0, // no vector match
+		Temporality: "durable",
+		Confidence:  0.1, // low confidence
+		Importance:  0.9, // but very important
+		CreatedAt:   now.Add(-365 * 24 * time.Hour),
 	}
 
 	score := ComputeScore(inputs, now, cfg)
@@ -222,10 +210,9 @@ func TestComputeScoreHighSimilarityWins(t *testing.T) {
 	now := time.Now().UTC()
 
 	base := ScoreInputs{
-		Temporality:    "durable",
-		Confidence:     0.5,
-		CreatedAt:      now,
-		MaxAccessCount: 1,
+		Temporality: "durable",
+		Confidence:  0.5,
+		CreatedAt:   now,
 	}
 
 	highSim := base

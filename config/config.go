@@ -60,9 +60,7 @@ type EmbeddingConfig struct {
 
 type ScoringConfig struct {
 	WeightSimilarity    float64 `yaml:"weight_similarity"`
-	WeightRecency       float64 `yaml:"weight_recency"`
 	WeightFreshness     float64 `yaml:"weight_freshness"`
-	WeightFrequency     float64 `yaml:"weight_frequency"`
 	WeightActivation    float64 `yaml:"weight_activation"`
 	WeightConfidence    float64 `yaml:"weight_confidence"`
 	ImportanceThreshold float64 `yaml:"importance_threshold"`
@@ -96,7 +94,6 @@ type FreshnessExponents struct {
 type ActivationConfig struct {
 	BaseAmount        float64 `yaml:"base_amount"`
 	AttenuationFactor float64 `yaml:"attenuation_factor"`
-	DecayRate         float64 `yaml:"decay_rate"`
 }
 
 type ChunkingConfig struct {
@@ -240,11 +237,9 @@ func Defaults() Config {
 		},
 
 		Scoring: ScoringConfig{
-			WeightSimilarity:    0.50,
-			WeightRecency:       0.10,
+			WeightSimilarity:    0.55,
 			WeightFreshness:     0.10,
-			WeightFrequency:     0.05,
-			WeightActivation:    0.10,
+			WeightActivation:    0.20,
 			WeightConfidence:    0.15,
 			ImportanceThreshold: 0.7,
 			ImportanceFloor:     0.5,
@@ -273,7 +268,6 @@ func Defaults() Config {
 		Activation: ActivationConfig{
 			BaseAmount:        1.0,
 			AttenuationFactor: 0.5,
-			DecayRate:         0.05,
 		},
 
 		Chunking: ChunkingConfig{

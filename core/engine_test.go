@@ -297,8 +297,8 @@ func TestConfig(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()
 
-	if cfg.Scoring.WeightSimilarity != 0.50 {
-		t.Fatalf("expected default weight_similarity 0.50, got %f", cfg.Scoring.WeightSimilarity)
+	if cfg.Scoring.WeightSimilarity != 0.55 {
+		t.Fatalf("expected default weight_similarity 0.55, got %f", cfg.Scoring.WeightSimilarity)
 	}
 	if cfg.Dedup.SimilarityThreshold != 0.92 {
 		t.Fatalf("expected default dedup threshold 0.92, got %f", cfg.Dedup.SimilarityThreshold)

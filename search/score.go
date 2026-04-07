@@ -15,12 +15,10 @@ type ScoreInputs struct {
 	Confidence      float64 // 0.0-1.0
 	Importance      float64 // 0.0-1.0
 	AccessCount     int64
-	LastAccessed    time.Time
-	ActivationBoost float64
+	ActivationBoost float64 // spreading activation from neighbors
 	ValidFrom       time.Time // zero if unset
 	ValidUntil      time.Time // zero if unset
 	CreatedAt       time.Time
-	MaxAccessCount  int64 // max across the store, for frequency normalization
 }
 
 // ComputeScore calculates the effective_score for a node using the
@@ -36,15 +34,11 @@ func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 
 	}
 
 	// Step 2: Component scores.
-	recency := accessRecency(inputs.Temporality, inputs.LastAccessed, now, cfg.Decay)
 	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.CreatedAt, now, cfg.Freshness)
-	frequency := frequencyScore(inputs.AccessCount, inputs.MaxAccessCount)
-	activation := activationScore(inputs.ActivationBoost, cfg.Activation)
+	activation := actrActivation(inputs.AccessCount, inputs.CreatedAt, inputs.ActivationBoost, now)
 
 	score := validityMult * (sc.WeightSimilarity*inputs.Similarity +
-		sc.WeightRecency*recency +
 		sc.WeightFreshness*freshness +
-		sc.WeightFrequency*frequency +
 		sc.WeightActivation*activation +
 		sc.WeightConfidence*inputs.Confidence)
 
@@ -97,27 +91,50 @@ func knowledgeFreshness(temporality string, validFrom, createdAt, now time.Time,
 	return math.Pow(1.0+hours/cfg.Scale, -exp)
 }
 
-// frequencyScore computes log(1 + access_count) / log(1 + max_access_count).
-// Normalized to 0.0-1.0 across the store.
-func frequencyScore(accessCount, maxAccessCount int64) float64 {
-	if maxAccessCount <= 0 {
-		return 0
-	}
-	return math.Log(1+float64(accessCount)) / math.Log(1+float64(maxAccessCount))
-}
+// actrActivation computes a unified usage signal based on Anderson's
+// ACT-R base-level activation equation. This replaces the separate
+// frequency and recency signals with a single theoretically-grounded
+// formula that naturally combines both.
+//
+// Approximation: B = ln(n / (1-d)) - d * ln(L)
+// where n = access count (min 1, treating creation as first access),
+// L = lifetime in hours, d = 0.5 (canonical decay parameter).
+//
+// The spreading activation boost from neighbors is added after the
+// base-level activation, matching ACT-R's full equation: A = B + S.
+//
+// Output is normalized to [0, 1] via a sigmoid for compatibility with
+// the weighted scoring model.
+//
+// Reference: Anderson & Schooler 1991, "Reflections of the Environment
+// in Memory." The activation equation is the optimal predictor of
+// information need given past access patterns.
+func actrActivation(accessCount int64, createdAt time.Time, spreadingBoost float64, now time.Time) float64 {
+	const d = 0.5 // canonical ACT-R decay parameter
 
-// activationScore normalizes activation_boost to [0, 1]. Full temporal
-// decay of activation_boost (per retrieval.md) requires tracking when
-// each boost was applied, which is deferred to v0.2. For v0.1, the raw
-// accumulated boost is clamped.
-func activationScore(boost float64, _ config.ActivationConfig) float64 {
-	if boost <= 0 {
-		return 0
+	// Treat creation as first access: n is always >= 1.
+	n := float64(accessCount)
+	if n < 1 {
+		n = 1
 	}
-	if boost > 1.0 {
-		return 1.0
+
+	// Lifetime in hours (minimum 1 hour to avoid log(0)).
+	L := now.Sub(createdAt).Hours()
+	if L < 1 {
+		L = 1
 	}
-	return boost
+
+	// ACT-R base-level activation approximation.
+	B := math.Log(n/(1-d)) - d*math.Log(L)
+
+	// Add spreading activation from neighbors (ACT-R: A = B + S).
+	A := B + spreadingBoost
+
+	// Normalize to [0, 1] via sigmoid. The raw activation ranges
+	// roughly from -5 (old, never accessed) to +10 (heavily used,
+	// recently created). Sigmoid with scale=2 maps this to a usable
+	// range where most values fall between 0.1 and 0.9.
+	return 1.0 / (1.0 + math.Exp(-A/2.0))
 }
 
 func decayRate(temporality string, cfg config.DecayConfig) float64 {

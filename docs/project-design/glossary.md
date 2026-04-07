@@ -58,7 +58,7 @@ Quick reference for terminology used across the project.
 | **Spreading activation** | Accessing a node increments `access_count`, updates `last_accessed`, and adds to `activation_boost` on direct neighbors (weighted by edge weight × attenuation factor). Single-hop only. |
 | **Decay** | Retrieval priority decreases over time. Exponential decay with rate determined by temporality: ephemeral (4h half-life), temporal (3d), durable (90d), immutable (never). Computed at query time, not stored. |
 | **activation_boost** | Float64 property on a node. Accumulated indirect activation from neighbor access. Decays over time independently. Part of the scoring model. |
-| **effective_score** | Computed at query time. Weighted combination of vector similarity, recency, frequency, activation, and confidence. Importance acts as a floor. Never stored. |
+| **effective_score** | Computed at query time. Weighted combination of vector similarity, freshness, ACT-R activation, and confidence. Importance acts as a floor. Never stored. |
 
 ## Capture & Processing
 

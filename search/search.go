@@ -304,21 +304,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	}
 	similarities := t.computeSimilarities(q, queryVec, candidateSet)
 
-	// Step 3: Compute max access count for frequency normalization.
-	var maxAccess int64
-	for _, id := range candidates {
-		n, ok := t.graph.GetNode(id)
-		if !ok {
-			continue
-		}
-		if ac, ok := n.Properties["access_count"]; ok {
-			if ac.Int64() > maxAccess {
-				maxAccess = ac.Int64()
-			}
-		}
-	}
-
-	// Step 4: Score each candidate and collect sort values.
+	// Step 3: Score each candidate and collect sort values.
 	type scored struct {
 		id       string
 		score    float64
@@ -333,7 +319,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			continue
 		}
 
-		inputs := t.buildScoreInputs(n, similarities[id], maxAccess)
+		inputs := t.buildScoreInputs(n, similarities[id])
 		score := ComputeScore(inputs, now, t.cfg)
 		sr := scored{id: id, score: score}
 
@@ -709,10 +695,9 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	return result
 }
 
-func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64, maxAccess int64) ScoreInputs {
+func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	inputs := ScoreInputs{
-		Similarity:     similarity,
-		MaxAccessCount: maxAccess,
+		Similarity: similarity,
 	}
 
 	if v, ok := n.Properties.GetString("temporality"); ok {
@@ -726,9 +711,6 @@ func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64, maxAccess int
 	}
 	if v, ok := n.Properties.GetInt64("access_count"); ok {
 		inputs.AccessCount = v
-	}
-	if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
-		inputs.LastAccessed = v
 	}
 	if v, ok := n.Properties.GetFloat64("activation_boost"); ok {
 		inputs.ActivationBoost = v
