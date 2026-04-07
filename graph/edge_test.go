@@ -465,3 +465,64 @@ func TestMultipleEdgesBetweenSameNodes(t *testing.T) {
 		t.Fatalf("expected 2 outbound edges, got %d", len(out))
 	}
 }
+
+func TestIsStructuralEdge(t *testing.T) {
+	if !IsStructuralEdge("chunk_of") {
+		t.Fatal("chunk_of should be structural")
+	}
+	if !IsStructuralEdge("section_of") {
+		t.Fatal("section_of should be structural")
+	}
+	if IsStructuralEdge("related_to") {
+		t.Fatal("related_to should not be structural")
+	}
+	if IsStructuralEdge("supersedes") {
+		t.Fatal("supersedes should not be structural")
+	}
+	if IsStructuralEdge("instance_of") {
+		t.Fatal("instance_of should not be structural")
+	}
+}
+
+func TestIsStructuralChild(t *testing.T) {
+	g := New()
+	parent := g.AddNode(nil)
+	section := g.AddNode(nil)
+	regular := g.AddNode(nil)
+	chunk := g.AddNode(nil)
+
+	g.AddEdge(section.ID, parent.ID, "section_of", 1.0, nil)
+	g.AddEdge(chunk.ID, parent.ID, "chunk_of", 1.0, nil)
+	g.AddEdge(regular.ID, parent.ID, "related_to", 0.8, nil)
+
+	if !g.IsStructuralChild(section.ID) {
+		t.Fatal("section_of node should be structural child")
+	}
+	if !g.IsStructuralChild(chunk.ID) {
+		t.Fatal("chunk_of node should be structural child")
+	}
+	if g.IsStructuralChild(regular.ID) {
+		t.Fatal("related_to node should not be structural child")
+	}
+	if g.IsStructuralChild(parent.ID) {
+		t.Fatal("parent should not be structural child")
+	}
+}
+
+func TestSemanticEdgeCount(t *testing.T) {
+	g := New()
+	a := g.AddNode(nil)
+	b := g.AddNode(nil)
+	c := g.AddNode(nil)
+	d := g.AddNode(nil)
+
+	g.AddEdge(a.ID, b.ID, "related_to", 0.8, nil)     // semantic out
+	g.AddEdge(c.ID, a.ID, "supersedes", 0.9, nil)      // semantic in
+	g.AddEdge(a.ID, d.ID, "section_of", 1.0, nil)      // structural out (excluded)
+	g.AddEdge(d.ID, a.ID, "chunk_of", 1.0, nil)        // structural in (excluded)
+
+	count := g.SemanticEdgeCount(a.ID)
+	if count != 2 {
+		t.Fatalf("expected 2 semantic edges, got %d", count)
+	}
+}

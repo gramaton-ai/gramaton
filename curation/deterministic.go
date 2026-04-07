@@ -440,15 +440,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	return deleted
 }
 
-// isChunkNode checks if a node has an outbound chunk_of or section_of edge.
-func isChunkNode(g *graph.Graph, id string) bool {
-	for _, e := range g.EdgesFrom(id) {
-		if e.Type == "chunk_of" || e.Type == "section_of" {
-			return true
-		}
-	}
-	return false
-}
+func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }
 
 // enrichConcepts updates evidence_count and last_evidence_at on concept
 // nodes based on their inbound edges.
@@ -477,7 +469,7 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		count := 0
 		var latestEvidence time.Time
 		for _, edge := range inbound {
-			if edge.Type == "chunk_of" || edge.Type == "section_of" {
+			if graph.IsStructuralEdge(edge.Type) {
 				continue
 			}
 			count++
@@ -732,18 +724,4 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 	return linked
 }
 
-// nonChunkEdgeCount returns the total edge count excluding structural edges.
-func nonChunkEdgeCount(g *graph.Graph, id string) int {
-	count := 0
-	for _, e := range g.EdgesFrom(id) {
-		if e.Type != "chunk_of" && e.Type != "section_of" {
-			count++
-		}
-	}
-	for _, e := range g.EdgesTo(id) {
-		if e.Type != "chunk_of" && e.Type != "section_of" {
-			count++
-		}
-	}
-	return count
-}
+func nonChunkEdgeCount(g *graph.Graph, id string) int { return g.SemanticEdgeCount(id) }

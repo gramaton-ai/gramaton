@@ -211,7 +211,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			e.SetProp(r.id, "content_keywords", graph.StringListProperty(r.data.Keywords))
 		}
 		if r.data.SummaryShort != "" {
-			e.SetProp(r.id, "content_short", graph.StringProperty(r.data.SummaryShort))
+			e.SetContentProp(r.id, "content_short", r.data.SummaryShort)
 		}
 		e.SetProp(r.id, "processing_status", graph.StringProperty("processed"))
 		result.Classified++
@@ -372,7 +372,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			}
 			continue
 		}
-		e.SetProp(s.id, "content_short", graph.StringProperty(s.summary))
+		e.SetContentProp(s.id, "content_short", s.summary)
 		result.SummariesGenerated++
 	}
 	if result.SummariesGenerated > 0 {
@@ -638,22 +638,11 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 		}
 
 		node := e.Graph().AddNode(props)
-		for k, v := range node.Properties {
-			e.PropIdx().Add(node.ID, k, v)
-		}
-		e.BM25Idx().Add(node.ID, synthesis)
+		e.IndexNode(node.ID, synthesis, conceptVec)
 
-		// Apply pre-computed embedding (fast, no I/O).
-		if conceptVec != nil {
-			prop := graph.VectorProperty(conceptVec)
-			e.Graph().SetNodeProperty(node.ID, "embedding_full", prop)
-			e.PropIdx().Add(node.ID, "embedding_full", prop)
-			e.VecIdx().Add(node.ID, conceptVec)
-			if conceptModel != "" {
-				modelProp := graph.StringProperty(conceptModel)
-				e.Graph().SetNodeProperty(node.ID, "embedding_model", modelProp)
-				e.PropIdx().Add(node.ID, "embedding_model", modelProp)
-			}
+		// Set embedding model property if we embedded.
+		if conceptVec != nil && conceptModel != "" {
+			e.SetProp(node.ID, "embedding_model", graph.StringProperty(conceptModel))
 		}
 
 		// Create instance_of edges from member records to concept node.

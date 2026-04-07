@@ -351,10 +351,7 @@ func (s *Server) storeDeferredCapture(fact string, cfg config.Config) {
 		"source_ref":        graph.StringProperty(fmt.Sprintf("observe:%s", now.Format(time.RFC3339))),
 	}
 	n := s.engine.Graph().AddNode(props)
-	for k, v := range n.Properties {
-		s.engine.PropIdx().Add(n.ID, k, v)
-	}
-	s.engine.BM25Idx().Add(n.ID, fact)
+	s.engine.IndexNode(n.ID, fact, nil)
 	s.engine.Save("observe")
 }
 
@@ -388,11 +385,7 @@ func (s *Server) storeDeferredCaptureWithEmbedding(fact string, vec []float32, c
 	}
 
 	n := s.engine.Graph().AddNode(props)
-	for k, v := range n.Properties {
-		s.engine.PropIdx().Add(n.ID, k, v)
-	}
-	s.engine.VecIdx().Add(n.ID, vec)
-	s.engine.BM25Idx().Add(n.ID, fact)
+	s.engine.IndexNode(n.ID, fact, vec)
 	s.engine.Save("observe")
 }
 

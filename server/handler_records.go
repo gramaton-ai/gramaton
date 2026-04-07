@@ -116,10 +116,7 @@ func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
 	setOptionalProps(props, &req)
 
 	n := s.engine.Graph().AddNode(props)
-	for k, v := range n.Properties {
-		s.engine.PropIdx().Add(n.ID, k, v)
-	}
-	s.engine.BM25Idx().Add(n.ID, req.Content)
+	s.engine.IndexNode(n.ID, req.Content, nil)
 
 	// Apply pre-computed embeddings under the lock (fast, no I/O).
 	var warnings []string

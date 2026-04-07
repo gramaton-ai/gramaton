@@ -247,94 +247,11 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	}
 
 	// Step 2: Compute similarity via hybrid search (vector + BM25 with RRF).
-	similarities := make(map[string]float64)
 	candidateSet := make(map[string]struct{}, len(candidates))
 	for _, id := range candidates {
 		candidateSet[id] = struct{}{}
 	}
-
-	hasVec := queryVec != nil && t.vecIdx != nil
-	hasBM25 := t.bm25Idx != nil && q.Text != ""
-
-	if hasVec || hasBM25 {
-		rrfK := t.cfg.Search.RRFK
-		if rrfK <= 0 {
-			rrfK = 60
-		}
-
-		// Vector search results, ranked.
-		var vecRanked []string
-		if hasVec {
-			vecK := len(candidates)
-			if vecK > q.Top*3 {
-				vecK = q.Top * 3
-			}
-			results := t.vecIdx.Search(queryVec, vecK, candidateSet)
-			for _, r := range results {
-				vecRanked = append(vecRanked, r.NodeID)
-			}
-		}
-
-		// BM25 search results, ranked.
-		var bm25Ranked []string
-		if hasBM25 {
-			queryTokens := index.Tokenize(q.Text)
-			bm25K := len(candidates)
-			if bm25K > q.Top*3 {
-				bm25K = q.Top * 3
-			}
-			results := t.bm25Idx.Search(queryTokens, bm25K, candidateSet)
-			for _, r := range results {
-				bm25Ranked = append(bm25Ranked, r.NodeID)
-			}
-		}
-
-		// Reciprocal Rank Fusion.
-		if hasVec && hasBM25 {
-			// RRF: score(d) = 1/(k+rank_vec) + 1/(k+rank_bm25)
-			rrfScores := make(map[string]float64)
-			for rank, id := range vecRanked {
-				rrfScores[id] += 1.0 / float64(rrfK+rank+1)
-			}
-			for rank, id := range bm25Ranked {
-				rrfScores[id] += 1.0 / float64(rrfK+rank+1)
-			}
-			// Normalize to [0, 1] for compatibility with scoring model.
-			maxRRF := 0.0
-			for _, s := range rrfScores {
-				if s > maxRRF {
-					maxRRF = s
-				}
-			}
-			if maxRRF > 0 {
-				for id, s := range rrfScores {
-					similarities[id] = s / maxRRF
-				}
-			}
-		} else if hasVec {
-			// Vector only (no BM25 data).
-			results := t.vecIdx.Search(queryVec, len(vecRanked), candidateSet)
-			for _, r := range results {
-				similarities[r.NodeID] = float64(r.Similarity)
-			}
-		} else {
-			// BM25 only (no vector).
-			maxBM25 := 0.0
-			bm25Scores := make(map[string]float64)
-			queryTokens := index.Tokenize(q.Text)
-			for _, r := range t.bm25Idx.Search(queryTokens, len(candidates), candidateSet) {
-				bm25Scores[r.NodeID] = float64(r.Similarity)
-				if float64(r.Similarity) > maxBM25 {
-					maxBM25 = float64(r.Similarity)
-				}
-			}
-			if maxBM25 > 0 {
-				for id, s := range bm25Scores {
-					similarities[id] = s / maxBM25
-				}
-			}
-		}
-	}
+	similarities := t.computeSimilarities(q, queryVec, candidateSet)
 
 	// Step 3: Compute max access count for frequency normalization.
 	var maxAccess int64
@@ -436,6 +353,86 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 }
 
 // filterCandidates returns node IDs matching the query's metadata filters.
+// computeSimilarities runs vector search, BM25 search, or both with
+// RRF fusion. Returns nodeID -> normalized similarity score in [0, 1].
+func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map[string]struct{}) map[string]float64 {
+	similarities := make(map[string]float64)
+
+	hasVec := queryVec != nil && t.vecIdx != nil
+	hasBM25 := t.bm25Idx != nil && q.Text != ""
+
+	if !hasVec && !hasBM25 {
+		return similarities
+	}
+
+	topK := q.Top * 3
+	if topK > len(candidateSet) {
+		topK = len(candidateSet)
+	}
+
+	rrfK := t.cfg.Search.RRFK
+	if rrfK <= 0 {
+		rrfK = 60
+	}
+
+	// Run vector search.
+	var vecResults []index.SearchResult
+	if hasVec {
+		vecResults = t.vecIdx.Search(queryVec, topK, candidateSet)
+	}
+
+	// Run BM25 search.
+	var bm25Results []index.SearchResult
+	if hasBM25 {
+		bm25Results = t.bm25Idx.Search(index.Tokenize(q.Text), topK, candidateSet)
+	}
+
+	switch {
+	case hasVec && hasBM25:
+		// RRF: score(d) = 1/(k+rank_vec) + 1/(k+rank_bm25)
+		rrfScores := make(map[string]float64)
+		for rank, r := range vecResults {
+			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
+		}
+		for rank, r := range bm25Results {
+			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
+		}
+		maxRRF := 0.0
+		for _, s := range rrfScores {
+			if s > maxRRF {
+				maxRRF = s
+			}
+		}
+		if maxRRF > 0 {
+			for id, s := range rrfScores {
+				similarities[id] = s / maxRRF
+			}
+		}
+
+	case hasVec:
+		// Vector only -- use cosine similarity directly.
+		for _, r := range vecResults {
+			similarities[r.NodeID] = float64(r.Similarity)
+		}
+
+	default:
+		// BM25 only -- normalize to [0, 1].
+		maxBM25 := float32(0)
+		for _, r := range bm25Results {
+			if r.Similarity > maxBM25 {
+				maxBM25 = r.Similarity
+			}
+		}
+		if maxBM25 > 0 {
+			for _, r := range bm25Results {
+				similarities[r.NodeID] = float64(r.Similarity) / float64(maxBM25)
+			}
+		}
+	}
+
+	return similarities
+}
+
 func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Start with all nodes if no filters narrow the set via index.
 	var sets []map[string]struct{}
@@ -540,7 +537,7 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 
 		// Exclude legacy chunk nodes (dumb fragments). Section nodes
 		// (structural splits with metadata) are included in results.
-		if isChunkNode(t.graph, id) {
+		if isLegacyChunk(t.graph, id) {
 			continue
 		}
 
@@ -876,23 +873,26 @@ func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) floa
 
 // edgeCount returns the total number of edges (in + out) for a node,
 // excluding chunk_of and section_of edges (structural, not semantic).
+// edgeCount returns semantic (non-structural) edge count via graph.IsStructuralEdge.
 func edgeCount(g nodeReader, id string) int {
 	count := 0
 	for _, e := range g.EdgesFrom(id) {
-		if e.Type != "chunk_of" && e.Type != "section_of" {
+		if !graph.IsStructuralEdge(e.Type) {
 			count++
 		}
 	}
 	for _, e := range g.EdgesTo(id) {
-		if e.Type != "chunk_of" && e.Type != "section_of" {
+		if !graph.IsStructuralEdge(e.Type) {
 			count++
 		}
 	}
 	return count
 }
 
-// isChunkNode checks if a node is a chunk (has an outbound chunk_of edge).
-func isChunkNode(g nodeReader, id string) bool {
+// isLegacyChunk checks if a node is a legacy dumb chunk (chunk_of edge).
+// Section nodes (section_of) are intentionally NOT excluded from search
+// results -- they have metadata and are independently meaningful.
+func isLegacyChunk(g nodeReader, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
 		if e.Type == "chunk_of" {
 			return true

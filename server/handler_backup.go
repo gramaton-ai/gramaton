@@ -247,6 +247,10 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rebuild all indexes after bulk import. ImportJSON only populates
+	// PropIdx; BM25 and VecIdx are rebuilt from graph state.
+	s.engine.RebuildAllIndexes()
+
 	s.log.Info("import complete",
 		"imported", result.Imported,
 		"skipped", result.Skipped,

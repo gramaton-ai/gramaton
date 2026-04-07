@@ -35,7 +35,7 @@ func FindDuplicates(g nodeReader, vecIdx index.VectorIndex, threshold float64, m
 		if !ok {
 			continue
 		}
-		if isChunkNode(g, id) {
+		if isLegacyChunk(g, id) {
 			continue
 		}
 		if v, ok := n.Properties["embedding_full"]; ok {

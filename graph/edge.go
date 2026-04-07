@@ -142,3 +142,38 @@ func (g *Graph) EdgesByType(edgeType string) []*Edge {
 func (g *Graph) EdgeCount() int {
 	return len(g.edges)
 }
+
+// IsStructuralEdge returns true for edge types that represent structural
+// relationships (chunk_of, section_of) rather than semantic ones.
+func IsStructuralEdge(edgeType string) bool {
+	return edgeType == "chunk_of" || edgeType == "section_of"
+}
+
+// IsStructuralChild returns true if a node has an outbound structural
+// edge (chunk_of or section_of), meaning it is a chunk or section of
+// another record.
+func (g *Graph) IsStructuralChild(id string) bool {
+	for _, e := range g.EdgesFrom(id) {
+		if IsStructuralEdge(e.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+// SemanticEdgeCount returns the total edge count (in + out) excluding
+// structural edges (chunk_of, section_of).
+func (g *Graph) SemanticEdgeCount(id string) int {
+	count := 0
+	for _, e := range g.EdgesFrom(id) {
+		if !IsStructuralEdge(e.Type) {
+			count++
+		}
+	}
+	for _, e := range g.EdgesTo(id) {
+		if !IsStructuralEdge(e.Type) {
+			count++
+		}
+	}
+	return count
+}

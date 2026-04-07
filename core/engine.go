@@ -538,25 +538,17 @@ func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps
 			}
 		}
 
+		var vec []float32
+		if i < len(pre.Vectors) {
+			vec = pre.Vectors[i]
+		}
+
 		node := e.graph.AddNode(props)
 		e.graph.AddEdge(node.ID, parentID, "section_of", 1.0, nil)
-		for k, v := range node.Properties {
-			e.propIdx.Add(node.ID, k, v)
-		}
-		e.bm25Idx.Add(node.ID, sec.Text)
+		e.IndexNode(node.ID, sec.Text, vec)
 
-		// Apply pre-computed embedding.
-		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
-			vec := pre.Vectors[i]
-			prop := graph.VectorProperty(vec)
-			e.graph.SetNodeProperty(node.ID, "embedding_full", prop)
-			e.propIdx.Add(node.ID, "embedding_full", prop)
-			e.vecIdx.Add(node.ID, vec)
-			if pre.Model != "" {
-				modelProp := graph.StringProperty(pre.Model)
-				e.graph.SetNodeProperty(node.ID, "embedding_model", modelProp)
-				e.propIdx.Add(node.ID, "embedding_model", modelProp)
-			}
+		if vec != nil && pre.Model != "" {
+			e.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}
 	}
 
@@ -566,26 +558,19 @@ func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps
 // applyLegacyChunks creates chunk_of nodes (backward-compatible dumb chunks).
 func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
 	for i, chunkText := range pre.Texts {
+		var vec []float32
+		if i < len(pre.Vectors) {
+			vec = pre.Vectors[i]
+		}
+
 		chunkNode := e.graph.AddNode(graph.Properties{
 			"content_full": graph.StringProperty(chunkText),
 		})
 		e.graph.AddEdge(chunkNode.ID, parentID, "chunk_of", 1.0, nil)
-		for k, v := range chunkNode.Properties {
-			e.propIdx.Add(chunkNode.ID, k, v)
-		}
-		e.bm25Idx.Add(chunkNode.ID, chunkText)
+		e.IndexNode(chunkNode.ID, chunkText, vec)
 
-		if i < len(pre.Vectors) && pre.Vectors[i] != nil {
-			vec := pre.Vectors[i]
-			prop := graph.VectorProperty(vec)
-			e.graph.SetNodeProperty(chunkNode.ID, "embedding_full", prop)
-			e.propIdx.Add(chunkNode.ID, "embedding_full", prop)
-			e.vecIdx.Add(chunkNode.ID, vec)
-			if pre.Model != "" {
-				modelProp := graph.StringProperty(pre.Model)
-				e.graph.SetNodeProperty(chunkNode.ID, "embedding_model", modelProp)
-				e.propIdx.Add(chunkNode.ID, "embedding_model", modelProp)
-			}
+		if vec != nil && pre.Model != "" {
+			e.SetProp(chunkNode.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}
 	}
 
@@ -612,6 +597,27 @@ func (e *Engine) ChunkIfNeeded(ctx context.Context, nodeID string) (int, error) 
 
 // SetProp sets a property on a node and updates the property index.
 // Caller must hold the write lock.
+// IndexNode populates all indexes for a node that has already been
+// added to the graph. Handles PropIdx (all properties), BM25 (if
+// content is non-empty), and VecIdx (if vec is non-nil). Call this
+// once after AddNode instead of manually updating each index.
+// Caller must hold the write lock.
+func (e *Engine) IndexNode(nodeID, content string, vec []float32) {
+	n, ok := e.graph.GetNode(nodeID)
+	if !ok {
+		return
+	}
+	for k, v := range n.Properties {
+		e.propIdx.Add(nodeID, k, v)
+	}
+	if content != "" {
+		e.bm25Idx.Add(nodeID, content)
+	}
+	if vec != nil {
+		e.vecIdx.Add(nodeID, vec)
+	}
+}
+
 func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
 	if n, ok := e.graph.GetNode(nodeID); ok {
 		if old, ok := n.Properties[key]; ok {
@@ -620,6 +626,22 @@ func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
 	}
 	e.graph.SetNodeProperty(nodeID, key, val)
 	e.propIdx.Add(nodeID, key, val)
+}
+
+// SetContentProp updates a string property and refreshes the BM25
+// index with the node's current content_full. Use this instead of
+// SetProp when changing content_full or content_short to keep BM25
+// in sync. Caller must hold the write lock.
+func (e *Engine) SetContentProp(nodeID, key, content string) {
+	e.SetProp(nodeID, key, graph.StringProperty(content))
+	// Re-index the full content for BM25. Even if we're updating
+	// content_short, BM25 should index content_full.
+	if n, ok := e.graph.GetNode(nodeID); ok {
+		if full, ok := n.Properties.GetString("content_full"); ok {
+			e.bm25Idx.Remove(nodeID)
+			e.bm25Idx.Add(nodeID, full)
+		}
+	}
 }
 
 // NodeCount returns the number of nodes. Safe without lock for

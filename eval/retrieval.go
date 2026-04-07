@@ -96,14 +96,11 @@ func BuildEvalEngine(t *testing.T, records []EvalRecord) (*core.Engine, map[stri
 		}
 
 		n := eng.Graph().AddNode(props)
-		for k, v := range n.Properties {
-			eng.PropIdx().Add(n.ID, k, v)
-		}
-
+		var vec []float32
 		if len(rec.Embedding) > 0 {
-			eng.VecIdx().Add(n.ID, rec.Embedding)
+			vec = rec.Embedding
 		}
-		eng.BM25Idx().Add(n.ID, rec.Content)
+		eng.IndexNode(n.ID, rec.Content, vec)
 
 		nameToID[rec.Name] = n.ID
 	}

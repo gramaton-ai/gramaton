@@ -305,10 +305,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		setOptionalProps(props, capReq)
 
 		n := s.engine.Graph().AddNode(props)
-		for k, v := range n.Properties {
-			s.engine.PropIdx().Add(n.ID, k, v)
-		}
-		s.engine.BM25Idx().Add(n.ID, args.Content)
+		s.engine.IndexNode(n.ID, args.Content, nil)
 
 		var warnings []string
 		if err := s.applyPreEmbedded(n.ID, preEmbedded); err != nil {

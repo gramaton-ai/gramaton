@@ -312,9 +312,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		}
 
 		n := s.engine.Graph().AddNode(props)
-		for k, v := range n.Properties {
-			s.engine.PropIdx().Add(n.ID, k, v)
-		}
+		s.engine.IndexNode(n.ID, p.file.Content, nil)
 
 		if err := s.applyPreEmbedded(n.ID, p.embedded); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))

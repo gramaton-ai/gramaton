@@ -434,3 +434,93 @@ func TestNodeAndEdgeCount(t *testing.T) {
 		t.Fatalf("expected 1 edge, got %d", eng.EdgeCount())
 	}
 }
+
+func TestIndexNode(t *testing.T) {
+	eng := setupTestEngine(t)
+	vec := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("test content about memory"),
+		"temporality":       graph.StringProperty("durable"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	eng.IndexNode(n.ID, "test content about memory", vec)
+	eng.Unlock()
+
+	// PropIdx should have the properties.
+	eng.RLock()
+	ids := eng.PropIdx().Lookup("temporality", graph.StringProperty("durable"))
+	eng.RUnlock()
+	found := false
+	for _, id := range ids {
+		if id == n.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("PropIdx should contain the node")
+	}
+
+	// VecIdx should have the vector.
+	if eng.VecIdx().Len() != 1 {
+		t.Fatalf("VecIdx should have 1 entry, got %d", eng.VecIdx().Len())
+	}
+
+	// BM25 should find the content.
+	results := eng.BM25Idx().Search([]string{"memory"}, 10, nil)
+	if len(results) != 1 || results[0].NodeID != n.ID {
+		t.Fatalf("BM25 should find the node, got %v", results)
+	}
+}
+
+func TestIndexNodeSkipsEmptyContent(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("some content"),
+	})
+	eng.IndexNode(n.ID, "", nil) // empty content, nil vec
+	eng.Unlock()
+
+	// BM25 should be empty (no content indexed).
+	if eng.BM25Idx().Len() != 0 {
+		t.Fatalf("BM25 should be empty for empty content, got %d", eng.BM25Idx().Len())
+	}
+	// VecIdx should be empty.
+	if eng.VecIdx().Len() != 0 {
+		t.Fatal("VecIdx should be empty for nil vec")
+	}
+}
+
+func TestSetContentPropUpdatesBM25(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("original content about cats"),
+	})
+	eng.IndexNode(n.ID, "original content about cats", nil)
+
+	// Verify BM25 finds "cats".
+	results := eng.BM25Idx().Search([]string{"cats"}, 10, nil)
+	if len(results) != 1 {
+		t.Fatal("BM25 should find 'cats' initially")
+	}
+
+	// Update content via SetContentProp.
+	eng.SetContentProp(n.ID, "content_full", "updated content about dogs")
+
+	// BM25 should now find "dogs" but not "cats".
+	results = eng.BM25Idx().Search([]string{"dogs"}, 10, nil)
+	if len(results) != 1 {
+		t.Fatal("BM25 should find 'dogs' after update")
+	}
+	results = eng.BM25Idx().Search([]string{"cats"}, 10, nil)
+	if len(results) != 0 {
+		t.Fatal("BM25 should not find 'cats' after content update")
+	}
+
+	eng.Unlock()
+}
