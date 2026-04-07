@@ -259,3 +259,82 @@ func TestMultiConceptQueries(t *testing.T) {
 			q.QueryName, q.NDCG5, q.Precision5, q.TopResults)
 	}
 }
+
+// TestCuratedRetrieval runs the same eval but with deterministic curation
+// applied first. Compares curated vs uncurated to measure the impact of
+// concept nodes, orphan linking, and quality repairs.
+func TestCuratedRetrieval(t *testing.T) {
+	ds := loadTestDataset(t)
+	if !hasEmbeddings(ds) {
+		t.Skip("no embeddings -- regenerate with gramaton-bench --embed")
+	}
+
+	t.Logf("=== Curated vs Uncurated Retrieval ===")
+	t.Logf("Records: %d, Queries: %d", len(ds.Records), len(ds.Queries))
+
+	// Uncurated baseline.
+	engRaw, nameToIDRaw := BuildEvalEngine(t, ds.Records)
+	rawReport := EvalRetrieval(t, engRaw, nameToIDRaw, ds.Queries, nil)
+
+	// Curated.
+	engCurated, nameToIDCurated := BuildCuratedEvalEngine(t, ds.Records)
+	curatedReport := EvalRetrieval(t, engCurated, nameToIDCurated, ds.Queries, nil)
+
+	t.Logf("")
+	t.Logf("%-12s  %7s  %5s  %5s", "", "NDCG@5", "P@5", "MAP")
+	t.Logf("%-12s  %7s  %5s  %5s", "----------", "------", "-----", "-----")
+	t.Logf("%-12s  %7.3f  %5.3f  %5.3f", "Uncurated", rawReport.MeanNDCG5, rawReport.MeanP5, rawReport.MAP)
+	t.Logf("%-12s  %7.3f  %5.3f  %5.3f", "Curated", curatedReport.MeanNDCG5, curatedReport.MeanP5, curatedReport.MAP)
+
+	delta := curatedReport.MeanNDCG5 - rawReport.MeanNDCG5
+	t.Logf("")
+	t.Logf("Delta NDCG@5: %+.3f", delta)
+
+	// Show queries where curated did better or worse.
+	rawByName := make(map[string]RetrievalResult)
+	for _, q := range rawReport.Queries {
+		rawByName[q.QueryName] = q
+	}
+
+	var improved, degraded int
+	for _, cq := range curatedReport.Queries {
+		rq := rawByName[cq.QueryName]
+		diff := cq.NDCG5 - rq.NDCG5
+		if diff > 0.05 {
+			improved++
+			t.Logf("  IMPROVED %-30s  %.3f -> %.3f (+%.3f)", cq.QueryName, rq.NDCG5, cq.NDCG5, diff)
+		} else if diff < -0.05 {
+			degraded++
+			t.Logf("  DEGRADED %-30s  %.3f -> %.3f (%.3f)", cq.QueryName, rq.NDCG5, cq.NDCG5, diff)
+		}
+	}
+	t.Logf("")
+	t.Logf("Improved: %d, Degraded: %d, Unchanged: %d",
+		improved, degraded, len(curatedReport.Queries)-improved-degraded)
+}
+
+// TestTicketRetrieval evaluates the tickets dataset which tests
+// structured/meta queries (assignee, status, priority, sprint).
+func TestTicketRetrieval(t *testing.T) {
+	ds := loadTestSubDataset(t, "tickets")
+	if len(ds.Records) == 0 {
+		t.Skip("no tickets dataset")
+	}
+
+	t.Logf("=== Ticket Retrieval Evaluation ===")
+	t.Logf("Records: %d, Queries: %d", len(ds.Records), len(ds.Queries))
+
+	eng, nameToID := BuildEvalEngine(t, ds.Records)
+	report := EvalRetrieval(t, eng, nameToID, ds.Queries, nil)
+
+	t.Logf("")
+	t.Logf("Overall:  NDCG@5=%.3f  P@5=%.3f  MAP=%.3f",
+		report.MeanNDCG5, report.MeanP5, report.MAP)
+	t.Logf("")
+	t.Logf("%-25s  %7s  %5s  %s", "Query", "NDCG@5", "P@5", "Top results")
+	t.Logf("%-25s  %7s  %5s  %s", "-------------------------", "-------", "-----", "---")
+	for _, q := range report.Queries {
+		t.Logf("%-25s  %7.3f  %5.3f  %v",
+			q.QueryName, q.NDCG5, q.Precision5, q.TopResults)
+	}
+}
