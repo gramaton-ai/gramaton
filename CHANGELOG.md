@@ -9,6 +9,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Server service layer extraction** -- extracted 14 service methods from
+  HTTP handlers into `service_records.go`, `service_search.go`,
+  `service_ops.go`. Both HTTP handlers and MCP tools now delegate to the
+  same service layer, eliminating ~800 lines of duplicated business logic.
+  Split `mcp.go` (1359 lines) into 5 focused files (`mcp.go` 66 lines,
+  `mcp_search.go`, `mcp_records.go`, `mcp_ops.go`, `mcp_admin.go`).
+
+### Fixed
+
+- **MCP capture missing resolution on supersede** -- auto-supersession via
+  MCP now sets `resolution` and `resolved_at` on the old record, matching
+  HTTP handler behavior.
+- **MCP inspect missing edge_id** -- inspect results via MCP now include
+  `edge_id` in related entries, matching HTTP handler behavior.
+- **MCP reembed blocking under lock** -- reembed via MCP now uses 3-phase
+  approach (read lock to identify stale nodes, embed outside lock, write
+  lock to apply). Previously held write lock during all embedding I/O.
+- **MCP observe skipping validation** -- observe via MCP now validates
+  message counts (max 100), content lengths (50KB), fact lengths (10KB),
+  and message roles, matching HTTP handler behavior.
+- **Ingest per-file content length** -- ingest handler now validates
+  per-file content length before pre-embedding.
+- **CLI url.PathEscape** -- added `url.PathEscape` to 6 CLI commands
+  (inspect, classify, delete, update, resolve) to prevent path injection
+  if record ID formats ever change.
+- **Dead code removal** -- removed 4 unused validation functions from
+  `cli/input.go`.
+
+### Changed (continued)
+
 - **Structural refactoring** -- `Engine.IndexNode` centralizes PropIdx +
   BM25 + VecIdx sync after node creation, replacing 10 copy-paste sites.
   `Engine.SetContentProp` refreshes BM25 on content changes. Shared

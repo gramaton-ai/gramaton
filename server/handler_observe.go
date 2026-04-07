@@ -33,77 +33,13 @@ func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.engine.Config()
-	if !cfg.Observe.Enabled {
-		s.writeError(w, http.StatusServiceUnavailable, "observe_disabled",
-			"observe pipeline is not enabled", false)
+	result, svcErr := s.serviceObserve(req)
+	if svcErr != nil {
+		s.writeServiceError(w, svcErr)
 		return
 	}
 
-	if len(req.Messages) == 0 && len(req.Facts) == 0 {
-		s.writeError(w, http.StatusBadRequest, "missing_field",
-			"messages or facts is required", true)
-		return
-	}
-
-	// Input validation: cap counts and field lengths.
-	const maxMessages = 100
-	const maxFacts = 100
-	const maxMessageContentLen = 50000 // 50KB per message
-	const maxFactLen = 10000           // 10KB per fact
-
-	if len(req.Messages) > maxMessages {
-		s.writeError(w, http.StatusBadRequest, "invalid_field",
-			fmt.Sprintf("maximum %d messages allowed", maxMessages), true)
-		return
-	}
-	if len(req.Facts) > maxFacts {
-		s.writeError(w, http.StatusBadRequest, "invalid_field",
-			fmt.Sprintf("maximum %d facts allowed", maxFacts), true)
-		return
-	}
-	for i, m := range req.Messages {
-		if m.Role != "user" && m.Role != "assistant" && m.Role != "system" {
-			s.writeError(w, http.StatusBadRequest, "invalid_field",
-				fmt.Sprintf("messages[%d].role must be user, assistant, or system", i), true)
-			return
-		}
-		if len(m.Content) > maxMessageContentLen {
-			s.writeError(w, http.StatusBadRequest, "invalid_field",
-				fmt.Sprintf("messages[%d].content exceeds %d bytes", i, maxMessageContentLen), true)
-			return
-		}
-	}
-	for i, f := range req.Facts {
-		if len(f) > maxFactLen {
-			s.writeError(w, http.StatusBadRequest, "invalid_field",
-				fmt.Sprintf("facts[%d] exceeds %d bytes", i, maxFactLen), true)
-			return
-		}
-	}
-
-	if len(req.Messages) > 0 && s.engine.LLM() == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "llm_required",
-			"messages mode requires a configured LLM provider. Send facts instead.", false)
-		return
-	}
-
-	// Fire-and-forget: accept the request and process asynchronously.
-	// Bounded by observeSem to prevent goroutine exhaustion.
-	select {
-	case s.observeSem <- struct{}{}:
-		go func() {
-			defer func() { <-s.observeSem }()
-			s.processObservation(req)
-		}()
-		s.writeJSON(w, http.StatusAccepted, map[string]any{
-			"accepted": true,
-		})
-	default:
-		s.writeError(w, http.StatusTooManyRequests, "observe_busy",
-			"too many concurrent observe operations, try again later", true)
-		return
-	}
+	s.writeJSON(w, http.StatusAccepted, result)
 }
 
 // processObservation runs extraction and quality gates in the background.

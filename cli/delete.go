@@ -30,7 +30,7 @@ func init() {
 func runDelete(cmd *cobra.Command, args []string) error {
 	var deleted []string
 	for _, id := range args {
-		path := fmt.Sprintf("/v1/records/%s", id)
+		path := fmt.Sprintf("/v1/records/%s", url.PathEscape(id))
 		if deleteReason != "" {
 			path += "?reason=" + url.QueryEscape(deleteReason)
 		}

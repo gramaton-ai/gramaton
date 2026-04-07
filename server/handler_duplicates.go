@@ -2,8 +2,6 @@ package server
 
 import (
 	"net/http"
-
-	"github.com/brandonlattin/gramaton/search"
 )
 
 type duplicatesRequest struct {
@@ -18,27 +16,11 @@ func (s *Server) handleDuplicates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Threshold <= 0 || req.Threshold > 1.0 {
-		req.Threshold = 0.92
-	}
-	if req.MaxPairs <= 0 {
-		req.MaxPairs = 50
-	}
-	if req.MaxPairs > maxDuplicatePairs {
-		req.MaxPairs = maxDuplicatePairs
+	result, svcErr := s.serviceDuplicates(req.Threshold, req.MaxPairs)
+	if svcErr != nil {
+		s.writeServiceError(w, svcErr)
+		return
 	}
 
-	s.engine.RLock()
-	pairs := search.FindDuplicates(s.engine.Graph(), s.engine.VecIdx(), req.Threshold, req.MaxPairs)
-	s.engine.RUnlock()
-
-	if pairs == nil {
-		pairs = []search.DuplicatePair{}
-	}
-
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
-		"pairs":     pairs,
-		"threshold": req.Threshold,
-		"count":     len(pairs),
-	})
+	s.writeJSON(w, http.StatusOK, result)
 }

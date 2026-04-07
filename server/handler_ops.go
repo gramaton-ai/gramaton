@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/graph"
@@ -32,31 +31,8 @@ type ingestFile struct {
 }
 
 func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
-	s.engine.RLock()
-	defer s.engine.RUnlock()
-
-	captured := s.engine.PropIdx().Lookup("processing_status",
-		graph.StringProperty("captured"))
-
-	var records []map[string]any
-	for _, id := range captured {
-		entry := map[string]any{"id": id}
-		if n, ok := s.engine.Graph().GetNode(id); ok {
-			if v, ok := n.Properties.GetString("content_short"); ok {
-				entry["summary_short"] = v
-			}
-			if v, ok := n.Properties.GetTimestamp("created_at"); ok {
-				entry["created_at"] = v.Format("2006-01-02T15:04:05Z")
-			}
-		}
-		records = append(records, entry)
-	}
-
-	if records == nil {
-		records = []map[string]any{}
-	}
-
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{"records": records})
+	result, _ := s.servicePending()
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
@@ -111,130 +87,13 @@ func (s *Server) handleReembed(w http.ResponseWriter, r *http.Request) {
 		req = reembedRequest{}
 	}
 
-	if req.Batch <= 0 {
-		req.Batch = 50
-	}
-	if req.Batch > maxReembedBatch {
-		req.Batch = maxReembedBatch
-	}
-
-	// Phase 1: Identify stale IDs and gather content under read lock.
-	s.engine.RLock()
-	if s.engine.Embedder() == nil {
-		s.engine.RUnlock()
-		s.writeError(w, http.StatusServiceUnavailable, "no_embedder",
-			"no embedding provider configured", false)
+	result, svcErr := s.serviceReembed(r.Context(), req.Batch)
+	if svcErr != nil {
+		s.writeServiceError(w, svcErr)
 		return
 	}
 
-	currentModel := s.engine.Embedder().ModelID()
-
-	type reembedTarget struct {
-		nodeID string
-		texts  []string
-		keys   []string
-	}
-	var targets []reembedTarget
-
-	for _, id := range s.engine.Graph().AllNodeIDs() {
-		if len(targets) >= req.Batch {
-			break
-		}
-		n, ok := s.engine.Graph().GetNode(id)
-		if !ok {
-			continue
-		}
-		model, ok := n.Properties.GetString("embedding_model")
-		if ok && model == currentModel {
-			continue
-		}
-		if _, hasContent := n.Properties.GetString("content_full"); !hasContent {
-			continue
-		}
-
-		embedSources := []struct {
-			sourceKey string
-			embedKey  string
-		}{
-			{"content_keywords", "embedding_keywords"},
-			{"content_short", "embedding_short"},
-			{"content_abstract", "embedding_abstract"},
-			{"content_full", "embedding_full"},
-		}
-
-		var texts []string
-		var keys []string
-		for _, src := range embedSources {
-			var text string
-			if sl, ok := n.Properties.GetStringList(src.sourceKey); ok {
-				text = strings.Join(sl, " ")
-			} else if s, ok := n.Properties.GetString(src.sourceKey); ok {
-				text = s
-			}
-			if text != "" {
-				texts = append(texts, text)
-				keys = append(keys, src.embedKey)
-			}
-		}
-		if len(texts) > 0 {
-			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys})
-		}
-	}
-	s.engine.RUnlock()
-
-	// Phase 2: Embed all texts outside the lock (no I/O under lock).
-	type reembedResult struct {
-		target  reembedTarget
-		vectors [][]float32
-		err     error
-	}
-	var results []reembedResult
-	for _, t := range targets {
-		vecs, err := s.engine.Embedder().Embed(context.Background(), t.texts)
-		results = append(results, reembedResult{target: t, vectors: vecs, err: err})
-	}
-
-	// Phase 3: Apply embeddings under write lock (fast, no I/O).
-	s.engine.Lock()
-	defer s.engine.Unlock()
-
-	reembedded := 0
-	errors := 0
-	for _, res := range results {
-		if res.err != nil {
-			errors++
-			continue
-		}
-		if _, ok := s.engine.Graph().GetNode(res.target.nodeID); !ok {
-			errors++ // node deleted between phases
-			continue
-		}
-
-		for i, vec := range res.vectors {
-			prop := graph.VectorProperty(vec)
-			s.engine.Graph().SetNodeProperty(res.target.nodeID, res.target.keys[i], prop)
-			s.engine.PropIdx().Add(res.target.nodeID, res.target.keys[i], prop)
-		}
-		if len(res.vectors) > 0 {
-			s.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
-		}
-
-		modelProp := graph.StringProperty(currentModel)
-		s.engine.Graph().SetNodeProperty(res.target.nodeID, "embedding_model", modelProp)
-		s.engine.PropIdx().Add(res.target.nodeID, "embedding_model", modelProp)
-
-		reembedded++
-	}
-
-	if reembedded > 0 {
-		s.engine.Save("reembed")
-	}
-
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
-		"reembedded": reembedded,
-		"skipped":    len(targets) - reembedded - errors,
-		"errors":     errors,
-	})
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +148,10 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 
 		if f.Content == "" {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: empty content", f.Filename))
+			continue
+		}
+		if len(f.Content) > s.engine.Config().Limits.MaxContentLength {
+			warnings = append(warnings, fmt.Sprintf("skipped %s: content exceeds maximum length", f.Filename))
 			continue
 		}
 		capReq := &captureRequest{Content: f.Content}

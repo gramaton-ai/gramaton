@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 )
@@ -53,7 +54,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 			edgeBody["edge_weight"] = w
 		}
 
-		resp, err := serverPost(fmt.Sprintf("/v1/records/%s/edges", id), edgeBody)
+		resp, err := serverPost(fmt.Sprintf("/v1/records/%s/edges", url.PathEscape(id)), edgeBody)
 		if err != nil {
 			return fmt.Errorf("update: %w", err)
 		}
@@ -68,7 +69,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	resp, err := serverPatch(fmt.Sprintf("/v1/records/%s", id), updateBody)
+	resp, err := serverPatch(fmt.Sprintf("/v1/records/%s", url.PathEscape(id)), updateBody)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}

@@ -23,58 +23,8 @@ type confidenceDist struct {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
-	s.engine.RLock()
-	defer s.engine.RUnlock()
-
-	g := s.engine.Graph()
-	resp := statsResponse{
-		Temporality:     make(map[string]int),
-		KnowledgeType:   make(map[string]int),
-		EpistemicStatus: make(map[string]int),
-	}
-
-	for _, id := range g.AllNodeIDs() {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
-
-		// Skip chunk nodes and deleted records.
-		if isChunkNode(g, id) {
-			continue
-		}
-		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
-			continue
-		}
-
-		resp.TotalRecords++
-
-		if v, ok := n.Properties.GetString("temporality"); ok {
-			resp.Temporality[v]++
-		}
-		if v, ok := n.Properties.GetString("knowledge_type"); ok {
-			resp.KnowledgeType[v]++
-		}
-		if v, ok := n.Properties.GetString("epistemic_status"); ok {
-			resp.EpistemicStatus[v]++
-		}
-		if c, ok := n.Properties.GetFloat64("confidence"); ok {
-			switch {
-			case c >= 0.9:
-				resp.Confidence.High++
-			case c >= 0.7:
-				resp.Confidence.Medium++
-			case c >= 0.4:
-				resp.Confidence.Moderate++
-			default:
-				resp.Confidence.Low++
-			}
-		} else {
-			resp.Confidence.Unset++
-		}
-	}
-
-	s.writeJSONLocked(w, http.StatusOK, resp)
+	result, _ := s.serviceStats()
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }

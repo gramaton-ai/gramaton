@@ -221,7 +221,7 @@ func TestAccessorPanics(t *testing.T) {
 		prop Property
 		fn   func(Property)
 	}{
-		{"String on Int64", Int64Property(1), func(p Property) { p.String() }},
+		{"String on Int64", Int64Property(1), func(p Property) { _ = p.String() }},
 		{"Float64 on String", StringProperty("x"), func(p Property) { p.Float64() }},
 		{"Int64 on Bool", BoolProperty(true), func(p Property) { p.Int64() }},
 		{"Bool on Float64", Float64Property(1.0), func(p Property) { p.Bool() }},

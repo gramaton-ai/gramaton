@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 )
@@ -46,7 +47,7 @@ func runClassify(cmd *cobra.Command, args []string) error {
 	// Remove id from body -- it goes in the URL.
 	delete(input, "id")
 
-	resp, err := serverPost(fmt.Sprintf("/v1/records/%s/classify", id), input)
+	resp, err := serverPost(fmt.Sprintf("/v1/records/%s/classify", url.PathEscape(id)), input)
 	if err != nil {
 		return fmt.Errorf("classify: %w", err)
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/spf13/cobra"
 )
@@ -22,7 +23,7 @@ func init() {
 func runInspect(cmd *cobra.Command, args []string) error {
 	nodeID := args[0]
 
-	resp, err := serverGet(fmt.Sprintf("/v1/records/%s", nodeID))
+	resp, err := serverGet(fmt.Sprintf("/v1/records/%s", url.PathEscape(nodeID)))
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
 	}
