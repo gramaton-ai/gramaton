@@ -33,6 +33,10 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	registerReembedProxy(mcpServer)
 	registerDuplicatesProxy(mcpServer)
 	registerBackupProxy(mcpServer)
+	// registerDeleteProxy intentionally excluded -- destructive operations
+	// should not be available to agents via MCP. Use the CLI or HTTP API.
+	registerUnlinkProxy(mcpServer)
+	registerHistoryProxy(mcpServer)
 }
 
 // --- helpers ---
@@ -500,5 +504,55 @@ func registerBackupProxy(s *mcp.Server) {
 		default:
 			return proxyGet("/v1/backup")
 		}
+	})
+}
+
+// --- delete record ---
+
+type proxyDeleteInput struct {
+	ID     string `json:"id" jsonschema:"record ID to delete"`
+	Reason string `json:"reason,omitempty" jsonschema:"reason for deletion"`
+}
+
+func registerDeleteProxy(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_delete",
+		Description: "Soft-delete a record from the knowledge store.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyDeleteInput) (*mcp.CallToolResult, any, error) {
+		path := fmt.Sprintf("/v1/records/%s", url.PathEscape(args.ID))
+		if args.Reason != "" {
+			path += "?reason=" + url.QueryEscape(args.Reason)
+		}
+		return proxyDelete(path)
+	})
+}
+
+// --- unlink (delete edge) ---
+
+type proxyUnlinkInput struct {
+	EdgeID string `json:"edge_id" jsonschema:"edge ID to delete"`
+}
+
+func registerUnlinkProxy(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_unlink",
+		Description: "Delete an edge between records.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyUnlinkInput) (*mcp.CallToolResult, any, error) {
+		return proxyDelete(fmt.Sprintf("/v1/edges/%s", url.PathEscape(args.EdgeID)))
+	})
+}
+
+// --- record history ---
+
+type proxyHistoryInput struct {
+	ID string `json:"id" jsonschema:"record ID to view history for"`
+}
+
+func registerHistoryProxy(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_history",
+		Description: "View change history for a specific record.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyHistoryInput) (*mcp.CallToolResult, any, error) {
+		return proxyGet(fmt.Sprintf("/v1/records/%s/history", url.PathEscape(args.ID)))
 	})
 }

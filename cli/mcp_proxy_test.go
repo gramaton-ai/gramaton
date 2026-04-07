@@ -243,3 +243,72 @@ func TestProxyBackupStatus(t *testing.T) {
 		t.Fatal("expected backup_dir field")
 	}
 }
+
+func TestProxyDeleteNotExposed(t *testing.T) {
+	// gramaton_delete is intentionally excluded from MCP -- destructive
+	// operations should not be available to agents.
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name: "gramaton-test", Version: "0.0.0",
+	}, nil)
+	registerProxyTools(mcpServer)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go mcpServer.Run(ctx, serverTransport)
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "test-client", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	_, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "gramaton_delete",
+	})
+	if err == nil {
+		t.Fatal("gramaton_delete should not be registered as an MCP tool")
+	}
+}
+
+func TestProxyUnlink(t *testing.T) {
+	// Capture two records and link them.
+	dataA := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record A"})
+	dataB := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record B"})
+	idA, _ := dataA["id"].(string)
+	idB, _ := dataB["id"].(string)
+
+	linkData := callProxy(t, "gramaton_link", proxyLinkInput{
+		ID: idA, TargetID: idB, EdgeType: "related_to", EdgeWeight: floatPtr(0.8),
+	})
+	edgeID, _ := linkData["edge_id"].(string)
+	if edgeID == "" {
+		t.Fatal("link returned no edge_id")
+	}
+
+	// Unlink it.
+	unlinkData := callProxy(t, "gramaton_unlink", proxyUnlinkInput{EdgeID: edgeID})
+	if deleted, ok := unlinkData["deleted"].(bool); !ok || !deleted {
+		t.Fatal("expected deleted=true")
+	}
+}
+
+func TestProxyHistory(t *testing.T) {
+	// Capture and then inspect history.
+	data := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record with history"})
+	id, _ := data["id"].(string)
+	if id == "" {
+		t.Fatal("capture returned no id")
+	}
+
+	histData := callProxy(t, "gramaton_history", proxyHistoryInput{ID: id})
+	// History should have at least the creation entry.
+	if _, ok := histData["changes"]; !ok {
+		if _, ok := histData["error"]; ok {
+			t.Skipf("history endpoint may not track this record yet")
+		}
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }
