@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+
+	"github.com/brandonlattin/gramaton/core"
 )
 
 // handleStatus returns server health and store stats.
@@ -33,7 +35,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"edges":   s.engine.Graph().EdgeCount(),
 			"commits": len(storeChunks),
 		},
-		"branch":    "main", // TODO: track active branch in engine
+		"branch":    core.ActiveBranch(s.engine.Config().DataDir),
 		"embedding": embedding,
 	}
 

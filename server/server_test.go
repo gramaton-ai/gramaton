@@ -99,6 +99,10 @@ func TestHandleStatus(t *testing.T) {
 	if store["nodes"].(float64) != 0 {
 		t.Fatalf("expected 0 nodes, got %v", store["nodes"])
 	}
+	branch, ok := data["branch"].(string)
+	if !ok || branch != "main" {
+		t.Fatalf("expected branch 'main', got %v", data["branch"])
+	}
 }
 
 // --- Records CRUD ---
