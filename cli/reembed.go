@@ -23,7 +23,7 @@ func init() {
 }
 
 func runReembed(cmd *cobra.Command, args []string) error {
-	resp, err := serverPost("/v1/reembed", map[string]int{"batch": reembedBatch})
+	resp, err := serverPostSlow("/v1/reembed", map[string]int{"batch": reembedBatch})
 	if err != nil {
 		return writeError("reembed_error", fmt.Sprintf("reembed: %s", err), false)
 	}
