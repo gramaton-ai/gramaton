@@ -111,6 +111,34 @@ func TestRestorePathTraversal(t *testing.T) {
 	}
 }
 
+func TestRestorePathTraversalPrefixFalsePositive(t *testing.T) {
+	// Ensure a directory name that is a prefix of the data dir
+	// doesn't bypass the traversal check. E.g., dataDir="/tmp/foo"
+	// should not allow writes to "/tmp/foobar/evil".
+	parent := t.TempDir()
+	dataDir := filepath.Join(parent, "store")
+	os.MkdirAll(dataDir, 0o700)
+
+	archivePath := filepath.Join(t.TempDir(), "prefix.tar.gz")
+	f, _ := os.Create(archivePath)
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "data/HEAD", Size: 3, Mode: 0o600})
+	tw.Write([]byte("abc"))
+	// This name, after filepath.Join(dataDir, name), would resolve
+	// to a sibling directory if prefix check is naive.
+	tw.WriteHeader(&tar.Header{Name: "data/../storebar/evil", Size: 4, Mode: 0o600})
+	tw.Write([]byte("pwnd"))
+	tw.Close()
+	gz.Close()
+	f.Close()
+
+	err := Restore(archivePath, dataDir)
+	if err == nil || !strings.Contains(err.Error(), "path traversal") {
+		t.Fatalf("expected path traversal error for prefix attack, got: %v", err)
+	}
+}
+
 func TestRestoreClearsExistingData(t *testing.T) {
 	dataDir := t.TempDir()
 	backupDir := t.TempDir()

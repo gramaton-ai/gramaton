@@ -201,8 +201,9 @@ func Restore(archivePath, dataDir string) error {
 
 		target := filepath.Join(dataDir, name)
 
-		// Path traversal protection.
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dataDir)) {
+		// Path traversal protection. Append separator to prevent
+		// prefix false positives (e.g., /foo/bar matching /foo/barbaz).
+		if !strings.HasPrefix(filepath.Clean(target)+string(filepath.Separator), filepath.Clean(dataDir)+string(filepath.Separator)) {
 			return fmt.Errorf("path traversal in archive: %s", header.Name)
 		}
 

@@ -95,6 +95,33 @@ func TestSweepStaleTempFiles(t *testing.T) {
 	_ = os.Remove(freshPath)
 }
 
+func TestIsInTempDir_TraversalVariants(t *testing.T) {
+	dir, err := TempDir()
+	if err != nil {
+		t.Fatalf("TempDir: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"double dot mid-path", filepath.Join(dir, "a", "..", "b.json"), true},
+		{"double dot escape", filepath.Join(dir, "..", "escape.json"), false},
+		{"dot only", filepath.Join(dir, "."), false},
+		{"absolute unrelated", filepath.Join(string(filepath.Separator), "tmp", "other"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isInTempDir(tt.path)
+			if got != tt.want {
+				t.Errorf("isInTempDir(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSweepRemovesSymlinks(t *testing.T) {
 	dir, err := TempDir()
 	if err != nil {
