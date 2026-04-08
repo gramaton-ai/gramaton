@@ -336,7 +336,9 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 		return "", 0
 	}
 
-	results := e.vecIdx.Search(vec, 2, nil)
+	// Request extra candidates since one will be self (skipped) and
+	// others may fail the Jaccard guard.
+	results := e.vecIdx.Search(vec, 5, nil)
 	for _, r := range results {
 		if r.NodeID == nodeID {
 			continue
