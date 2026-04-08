@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/brandonlattin/gramaton/internal/version"
 )
 
 func TestWriteAndReadServerInfo(t *testing.T) {
@@ -31,8 +33,8 @@ func TestWriteAndReadServerInfo(t *testing.T) {
 	if info.Port != srv.cfg.Port {
 		t.Fatalf("expected port %d, got %d", srv.cfg.Port, info.Port)
 	}
-	if info.Version != "0.2.0" {
-		t.Fatalf("expected version 0.2.0, got %q", info.Version)
+	if info.Version != version.Version {
+		t.Fatalf("expected version %q, got %q", version.Version, info.Version)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/brandonlattin/gramaton/core"
 	"github.com/brandonlattin/gramaton/curation"
 	"github.com/brandonlattin/gramaton/graph"
+	"github.com/brandonlattin/gramaton/internal/version"
 )
 
 // Config holds server configuration.
@@ -527,7 +528,7 @@ func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curat
 		Data:     data,
 		Curation: curation,
 		Meta: ResponseMeta{
-			Version: "0.2.0",
+			Version: version.Version,
 		},
 	}
 

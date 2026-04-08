@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brandonlattin/gramaton/core"
+	"github.com/brandonlattin/gramaton/internal/version"
 )
 
 // ServerInfo is written to server.json for CLI discovery.
@@ -36,7 +37,7 @@ func (s *Server) writeServerInfo() error {
 		StartedAt: time.Now().UTC(),
 		StoreDir:  s.engine.Config().DataDir,
 		StoreName: s.cfg.StoreName,
-		Version:   "0.2.0",
+		Version:   version.Version,
 	}
 
 	data, err := json.MarshalIndent(info, "", "  ")

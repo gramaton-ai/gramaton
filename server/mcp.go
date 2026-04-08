@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/brandonlattin/gramaton/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -12,7 +13,7 @@ import (
 func (s *Server) MCPHandler() http.Handler {
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "gramaton",
-		Version: "0.2.0",
+		Version: version.Version,
 	}, nil)
 
 	s.registerMCPTools(mcpServer)
@@ -30,7 +31,7 @@ func (s *Server) MCPHandler() http.Handler {
 func (s *Server) MCPServer() *mcp.Server {
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "gramaton",
-		Version: "0.2.0",
+		Version: version.Version,
 	}, nil)
 
 	s.registerMCPTools(mcpServer)

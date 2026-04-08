@@ -99,6 +99,10 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
 
+	if err := CheckFormatVersion(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("store format: %w", err)
+	}
+
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	vecIdx := index.NewFlatIndex()

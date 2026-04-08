@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/brandonlattin/gramaton/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +35,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "gramaton",
-		Version: "0.2.0",
+		Version: version.Version,
 	}, nil)
 
 	registerProxyTools(mcpServer)
