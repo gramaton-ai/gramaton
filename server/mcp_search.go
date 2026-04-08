@@ -41,7 +41,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
-		Description: "Search the knowledge store. Text is optional -- omit it for filter-only queries (e.g. 'all procedural records'). Returns results ranked by composite score or sorted by a specified field.",
+		Description: "Search the knowledge graph. Returns results ranked by composite score. Text is optional -- omit for filter-only queries. Note: this searches knowledge records, not collection items. For exhaustive collection listing, use gramaton_collection_items.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchInput) (*mcp.CallToolResult, any, error) {
 		result, svcErr := s.serviceSearch(ctx, &searchRequest{
 			Text:               args.Text,

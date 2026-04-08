@@ -17,7 +17,7 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_create",
-		Description: "Create a new collection. Collections are structured containers with schema enforcement and guaranteed exhaustive retrieval. Use for tasks, lists, backlogs -- anything where missing an item is a failure.",
+		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use the knowledge graph (gramaton_capture) for semantic knowledge like decisions, context, and research.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args createInput) (*mcp.CallToolResult, any, error) {
 		result, svcErr := s.serviceCollectionCreate(ctx, &collectionCreateRequest{
 			Name:        args.Name,
@@ -76,7 +76,7 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_add",
-		Description: "Add an item to a collection. Fields are validated against the collection's schema. Returns duplicate info if an item with the same title already exists.",
+		Description: "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns duplicate info if an item with the same title already exists.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args addInput) (*mcp.CallToolResult, any, error) {
 		result, svcErr := s.serviceCollectionAdd(args.CollectionID, &collectionAddRequest{
 			Fields: args.Fields,

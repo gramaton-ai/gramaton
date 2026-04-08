@@ -62,7 +62,9 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		Description: `Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
 
 Send EITHER messages (server extracts facts, requires LLM) OR facts (server runs quality gates only).
-Call at natural breakpoints: end of task, topic change, session wind-down. Not every turn.`,
+Call at natural breakpoints: end of task, topic change, session wind-down. Not every turn.
+
+Extracted knowledge enters the knowledge graph as ephemeral, low-confidence records. It does NOT go into collections.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args observeInput) (*mcp.CallToolResult, any, error) {
 		result, svcErr := s.serviceObserve(observeRequest{
 			Messages: args.Messages,

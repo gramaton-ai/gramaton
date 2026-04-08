@@ -27,7 +27,9 @@ func (s *Server) registerMCPRecordTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_capture",
-		Description: `Store a knowledge record in the graph. Returns the new record ID.
+		Description: `Store a knowledge record in the graph. Use for decisions, context, research findings, preferences -- things where ranked semantic search is the right retrieval mode.
+
+NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
 
 Example: gramaton_capture(content="User prefers dark mode", temporality="durable", confidence=0.95, knowledge_type="semantic", keywords=["preference", "ui"], summary_short="User prefers dark mode")
 
@@ -77,9 +79,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	type updateInput struct {
 		ID              string   `json:"id" jsonschema:"record ID to update"`
 		Confidence      *float64 `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
-		Temporality     string   `json:"temporality,omitempty"`
-		KnowledgeType   string   `json:"knowledge_type,omitempty"`
-		EpistemicStatus string   `json:"epistemic_status,omitempty"`
+		Temporality     string   `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
+		KnowledgeType   string   `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
+		EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
 		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
@@ -89,7 +91,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
-		Description: "Update metadata properties on an existing record.",
+		Description: "Update metadata on a knowledge graph record. For collection item fields, use gramaton_collection_update instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args updateInput) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return mcpErr("id is required")
@@ -149,7 +151,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
-		Description: "Mark a record as resolved. Sets resolution status, resolved_at timestamp, and auto-sets valid_until to deprioritize in search. Use for TODOs, questions, decisions, or any record with a lifecycle.",
+		Description: "Mark a knowledge record as resolved. Sets resolution status, resolved_at timestamp, and auto-sets valid_until to deprioritize in search. Use for decisions, questions, or knowledge records with a lifecycle. For task completion in collections, use gramaton_collection_update to change the status field instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args resolveInput) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return mcpErr("id is required")
@@ -172,7 +174,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_link",
-		Description: "Create an edge between two records in the knowledge graph.",
+		Description: "Create an edge between two records in the knowledge graph. Collection items are also graph nodes and can be linked.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args linkInput) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return mcpErr("id is required")

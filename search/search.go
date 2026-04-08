@@ -210,8 +210,9 @@ type Result struct {
 	AccessCount     int64   `json:"access_count,omitempty"`
 	Importance      float64 `json:"importance,omitempty"`
 	ContentLength   int     `json:"content_length,omitempty"`
-	EdgeCount       int     `json:"edge_count,omitempty"`
-	Staleness       float64 `json:"staleness,omitempty"`
+	EdgeCount       int      `json:"edge_count,omitempty"`
+	Staleness       float64  `json:"staleness,omitempty"`
+	Collections     []string `json:"collections,omitempty"`
 }
 
 // Execute runs the search query and returns results. This calls

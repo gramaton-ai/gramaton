@@ -334,7 +334,16 @@ func (s *Server) serviceUpdate(id string, req *updateRequest) (map[string]any, *
 		}
 	}
 
-	return map[string]any{"id": id, "updated": updated}, nil
+	result := map[string]any{"id": id, "updated": updated}
+
+	// Warn if this node is a collection member.
+	if colls := s.nodeCollectionNames(id); len(colls) > 0 {
+		result["collection_warning"] = fmt.Sprintf(
+			"This record is a member of collection(s): %s. Use gramaton_collection_update to modify collection item fields.",
+			joinCollectionNames(colls))
+	}
+
+	return result, nil
 }
 
 // serviceClassify classifies a pending record with metadata and sets
@@ -422,7 +431,16 @@ func (s *Server) serviceResolve(id string, req *resolveRequest) (map[string]any,
 		return nil, errInternal("failed to save")
 	}
 
-	return map[string]any{"id": id, "resolved": true}, nil
+	result := map[string]any{"id": id, "resolved": true}
+
+	// Warn if this node is a collection member.
+	if colls := s.nodeCollectionNames(id); len(colls) > 0 {
+		result["collection_warning"] = fmt.Sprintf(
+			"This record is in collection(s): %s. Consider updating the item's status field via gramaton_collection_update instead.",
+			joinCollectionNames(colls))
+	}
+
+	return result, nil
 }
 
 // serviceLink creates an edge between two records.

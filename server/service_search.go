@@ -166,6 +166,18 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		results = []search.Result{}
 	}
 
+	// Annotate results that are collection members so agents know
+	// to use gramaton_collection_items for exhaustive listing.
+	if len(results) > 0 {
+		s.engine.RLock()
+		for i := range results {
+			if colls := s.nodeCollectionNames(results[i].ID); len(colls) > 0 {
+				results[i].Collections = colls
+			}
+		}
+		s.engine.RUnlock()
+	}
+
 	// Track retrieved IDs for observe feedback loop detection.
 	if len(results) > 0 {
 		ids := make([]string, len(results))

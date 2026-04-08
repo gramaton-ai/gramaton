@@ -139,6 +139,30 @@ func (s *Server) isMemberOf(itemID, collectionID string) (*graph.Edge, bool) {
 	return nil, false
 }
 
+// nodeCollectionNames returns the names of all collections a node belongs to.
+// Caller must hold at least RLock.
+func (s *Server) nodeCollectionNames(nodeID string) []string {
+	var names []string
+	for _, e := range s.engine.Graph().EdgesFrom(nodeID) {
+		if e.Type != "member_of" {
+			continue
+		}
+		n, ok := s.engine.Graph().GetNode(e.TargetID)
+		if !ok {
+			continue
+		}
+		if name, ok := n.Properties.GetString("collection_name"); ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// joinCollectionNames formats a list of collection names for display.
+func joinCollectionNames(names []string) string {
+	return strings.Join(names, ", ")
+}
+
 // --- service methods ---
 
 type collectionCreateRequest struct {
