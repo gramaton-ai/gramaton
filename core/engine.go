@@ -30,7 +30,7 @@ type Engine struct {
 	store    *storage.Store
 	graph    *graph.Graph
 	propIdx  *index.PropertyIndex
-	vecIdx   *index.FlatIndex
+	vecIdx   index.VectorIndex
 	bm25Idx  *index.BM25Index
 	embedder embed.Provider
 	llmProv  llm.Provider
@@ -111,7 +111,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
-	vecIdx := index.NewFlatIndex()
+	var vecIdx index.VectorIndex // set after graph load (need node count)
 	bm25Idx := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
 
 	// Load HEAD commit if it exists.
@@ -127,6 +127,21 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 			}
 			headCommit = c
 		}
+	}
+
+	// Select vector index type based on graph size.
+	hnswThreshold := cfg.Search.HNSWThreshold
+	if hnswThreshold <= 0 {
+		hnswThreshold = 5000
+	}
+	if g.NodeCount() >= hnswThreshold {
+		vecIdx = index.NewHNSWIndex(
+			cfg.Search.HNSWM,
+			cfg.Search.HNSWEfConstruction,
+			cfg.Search.HNSWEfSearch,
+		)
+	} else {
+		vecIdx = index.NewFlatIndex()
 	}
 
 	// Try to load persisted BM25 index from commit. If available,
@@ -206,7 +221,7 @@ func (e *Engine) Graph() *graph.Graph { return e.graph }
 func (e *Engine) PropIdx() *index.PropertyIndex { return e.propIdx }
 
 // VecIdx returns the vector index.
-func (e *Engine) VecIdx() *index.FlatIndex { return e.vecIdx }
+func (e *Engine) VecIdx() index.VectorIndex { return e.vecIdx }
 
 // Embedder returns the embedding provider (may be nil).
 func (e *Engine) Embedder() embed.Provider { return e.embedder }
@@ -309,10 +324,27 @@ func (e *Engine) FlushAccess() {
 // Caller must hold the write lock.
 func (e *Engine) RebuildAllIndexes() {
 	e.propIdx = index.NewPropertyIndex()
-	e.vecIdx = index.NewFlatIndex()
+	e.vecIdx = e.newVectorIndex()
 	e.bm25Idx = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
 	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, e.embedder, e.cfg)
+}
+
+// newVectorIndex creates the appropriate vector index based on config
+// and current node count. Uses HNSW above the threshold, FlatIndex below.
+func (e *Engine) newVectorIndex() index.VectorIndex {
+	threshold := e.cfg.Search.HNSWThreshold
+	if threshold <= 0 {
+		threshold = 5000
+	}
+	if e.graph.NodeCount() >= threshold {
+		return index.NewHNSWIndex(
+			e.cfg.Search.HNSWM,
+			e.cfg.Search.HNSWEfConstruction,
+			e.cfg.Search.HNSWEfSearch,
+		)
+	}
+	return index.NewFlatIndex()
 }
 
 // BM25Idx returns the BM25 index.
@@ -736,7 +768,7 @@ func (e *Engine) EdgeCount() int {
 // rebuildIndexes populates indexes from graph state. If bm25Loaded
 // is true, the BM25 index was already restored from a persisted
 // snapshot and only property and vector indexes are rebuilt.
-func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
+func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
 	for _, id := range g.AllNodeIDs() {
 		n, _ := g.GetNode(id)
 		for k, v := range n.Properties {

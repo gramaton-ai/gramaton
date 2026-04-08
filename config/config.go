@@ -119,6 +119,10 @@ type SearchConfig struct {
 	BM25B               float64 `yaml:"bm25_b"`               // length normalization (default 0.75)
 	RRFK                int     `yaml:"rrf_k"`                // RRF rank constant (default 60)
 	SuggestionThreshold float64 `yaml:"suggestion_threshold"` // top-result score below which suggestions are returned (default 0.75)
+	HNSWThreshold       int     `yaml:"hnsw_threshold"`       // vector count above which HNSW is used instead of flat scan (default 5000)
+	HNSWM               int     `yaml:"hnsw_m"`               // HNSW max connections per layer (default 16)
+	HNSWEfConstruction  int     `yaml:"hnsw_ef_construction"` // HNSW build quality (default 200)
+	HNSWEfSearch        int     `yaml:"hnsw_ef_search"`       // HNSW search width (default 100)
 }
 
 type GraphConfig struct {
@@ -301,6 +305,10 @@ func Defaults() Config {
 			BM25B:               0.75,
 			RRFK:                60,
 			SuggestionThreshold: 0.75,
+			HNSWThreshold:       5000,
+			HNSWM:               16,
+			HNSWEfConstruction:  200,
+			HNSWEfSearch:        100,
 		},
 
 		Storage: StorageConfig{
