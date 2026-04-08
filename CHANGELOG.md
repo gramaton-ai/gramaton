@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Collections** -- structured containers with schema enforcement and
+  guaranteed exhaustive retrieval. Collections complement the knowledge
+  graph for data that needs complete visibility (tasks, backlogs,
+  checklists). Features: named collections with optional schema (6 field
+  types: string, number, boolean, date, enum, enum[]), schema evolution
+  with explicit migration, multi-collection membership, retirement
+  (reversible), title-based dedup detection, field-based sorting.
+  11 MCP tools (`gramaton_collection_*`) and 12 HTTP endpoints.
+- **Integrator guide** -- documentation for agent builders covering
+  graph vs. collection usage, capture/search best practices, collection
+  patterns (PARA, kanban), schema definitions, and prompt guidance.
 - **Structured metadata** -- records accept a `meta` map at capture
   and update time. Values (string, number, bool, string array) are
   stored as typed `meta.*` properties, validated at write time, and

@@ -42,6 +42,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPRecordTools(mcpServer)
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
+	s.registerMCPCollectionTools(mcpServer)
 }
 
 // mcpErr returns an MCP tool result indicating an error.

@@ -152,6 +152,7 @@ See [docs/configuration.md](docs/configuration.md) for all fields and [docs/prov
 
 | | |
 |---|---|
+| [Integrator Guide](docs/integrator-guide.md) | How to build agents and tools on Gramaton |
 | [Configuration](docs/configuration.md) | All config fields, defaults, and examples |
 | [Providers](docs/providers.md) | Embedding and LLM provider setup |
 | [Architecture](docs/architecture.md) | Package structure, data flow, concurrency model |

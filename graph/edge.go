@@ -144,9 +144,9 @@ func (g *Graph) EdgeCount() int {
 }
 
 // IsStructuralEdge returns true for edge types that represent structural
-// relationships (chunk_of, section_of) rather than semantic ones.
+// relationships (chunk_of, section_of, member_of) rather than semantic ones.
 func IsStructuralEdge(edgeType string) bool {
-	return edgeType == "chunk_of" || edgeType == "section_of"
+	return edgeType == "chunk_of" || edgeType == "section_of" || edgeType == "member_of"
 }
 
 // IsStructuralChild returns true if a node has an outbound structural

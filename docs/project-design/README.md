@@ -27,6 +27,7 @@ Start with tenets and foundations for context, then read the system design docs 
 | [Curation](curation.md) | Deterministic and autonomous curation, decay, consolidation, manifest |
 | [Observe Pipeline](observe-pipeline.md) | Passive knowledge extraction from agent conversations |
 | [Agent Integration](agent-integration.md) | System prompts, subagent templates, capture modes, transparent operation |
+| [Collections](collections.md) | Structured containers with schema enforcement and exhaustive retrieval |
 | [Server Design](server-design.md) | Daemon architecture, HTTP API, MCP tools, concurrency |
 
 ### Reference

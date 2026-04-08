@@ -85,7 +85,7 @@ var validTemporalities = map[string]bool{
 
 // validKnowledgeTypes is the set of valid knowledge_type values.
 var validKnowledgeTypes = map[string]bool{
-	"episodic": true, "semantic": true, "procedural": true, "conceptual": true, "reference": true,
+	"episodic": true, "semantic": true, "procedural": true, "conceptual": true, "reference": true, "collection": true,
 }
 
 // validEpistemicStatuses is the set of valid epistemic_status values.

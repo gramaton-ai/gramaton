@@ -40,6 +40,17 @@ escaping, no permission prompts.
 | `gramaton_observe` | Send conversation for knowledge extraction |
 | `gramaton_resolve` | Mark a record as resolved (completed/abandoned/obsolete) |
 | `gramaton_backup` | Create a backup or check status |
+| `gramaton_collection_create` | Create a collection with optional schema |
+| `gramaton_collection_list` | List all collections |
+| `gramaton_collection_items` | List ALL items in a collection (exhaustive) |
+| `gramaton_collection_add` | Add an item to a collection |
+| `gramaton_collection_update` | Update item fields |
+| `gramaton_collection_move` | Move an item between collections |
+| `gramaton_collection_remove` | Remove an item from a collection |
+| `gramaton_collection_rename` | Rename a collection |
+| `gramaton_collection_delete` | Retire/unretire a collection |
+| `gramaton_collection_schema` | Read a collection's schema |
+| `gramaton_collection_migrate` | Bulk-update items for schema migration |
 
 ### 2. REST API
 
@@ -72,6 +83,20 @@ POST   /v1/curation/trigger     Trigger a curation cycle
 POST   /v1/observe              Send conversation for extraction
 GET    /v1/backup               List existing backups
 POST   /v1/backup               Create a backup
+
+# Collections
+POST   /v1/collections                          Create a collection
+GET    /v1/collections                          List all collections
+GET    /v1/collections/{id}/items               List items (exhaustive)
+POST   /v1/collections/{id}/items               Add an item
+PATCH  /v1/collections/{id}/items/{item_id}     Update item fields
+POST   /v1/collections/{id}/items/{item_id}/move Move item
+DELETE /v1/collections/{id}/items/{item_id}     Remove item
+PATCH  /v1/collections/{id}                     Rename collection
+DELETE /v1/collections/{id}                     Retire/unretire
+GET    /v1/collections/{id}/schema              Read schema
+PUT    /v1/collections/{id}/schema              Update schema
+POST   /v1/collections/{id}/migrate             Bulk migrate items
 ```
 
 All responses use a standard envelope:
