@@ -115,7 +115,13 @@ search:
   bm25_b: 0.75             # BM25 length normalization
   rrf_k: 60                # reciprocal rank fusion constant
   suggestion_threshold: 0.75  # score below which faceted suggestions are returned
+  hnsw_threshold: 5000     # vector count above which HNSW replaces flat scan
+  hnsw_m: 16               # HNSW max connections per layer
+  hnsw_ef_construction: 200  # HNSW build quality (higher = better recall, slower build)
+  hnsw_ef_search: 100      # HNSW search width (higher = better recall, slower search)
 ```
+
+Below `hnsw_threshold`, vector search uses exact brute-force (FlatIndex). Above it, HNSW provides O(log N) approximate search with high recall. The HNSW parameters rarely need tuning -- defaults are from the original paper and work well for most workloads.
 
 ## Concepts
 

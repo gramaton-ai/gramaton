@@ -49,7 +49,7 @@ Gramaton is a single Go binary that runs as an on-demand daemon. The CLI auto-st
 | Package | Purpose |
 |---------|---------|
 | `graph/` | Property graph: nodes, edges, properties. Pure in-memory data structure. |
-| `index/` | `PropertyIndex` (exact + range lookups), `FlatIndex` (brute-force vector search), `BM25Index` (keyword search). |
+| `index/` | `PropertyIndex` (exact + range lookups), `FlatIndex` / `HNSWIndex` (vector search with dynamic switching), `BM25Index` (keyword search, persisted). |
 | `storage/` | Prolly tree -- content-addressed, append-only persistence. Serialization, chunking, commit history. |
 | `store/` | Named store management. Resolves store paths, validates names. |
 
@@ -156,6 +156,8 @@ Gramaton uses a prolly tree (probabilistic B-tree) for persistence. Key properti
 - **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean merges).
 
 The storage layer is below the graph layer. The graph is fully materialized in memory on startup and flushed to the prolly tree on commit. This keeps search fast (no disk I/O during queries) at the cost of memory proportional to store size.
+
+Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed. The prolly tree is updated incrementally via `Update()` (O(K * depth)) rather than rebuilt from scratch. Access metadata (access_count, last_accessed) is flushed by a background goroutine every 30 seconds rather than on every read. The BM25 index is persisted alongside each commit and loaded from disk on startup, skipping re-tokenization.
 
 ## Adding a New Provider
 

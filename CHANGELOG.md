@@ -9,6 +9,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **HNSW vector index** -- pure Go Hierarchical Navigable Small World
+  implementation behind the existing VectorIndex interface. O(log N)
+  approximate nearest neighbor search replaces O(N) brute-force at
+  scale. Dynamic switching: FlatIndex (exact) below `hnsw_threshold`
+  (default 5000), HNSW above. Candidate-filtered queries fall back to
+  flat scan on small candidate sets. Configurable M, efConstruction,
+  efSearch. 1.00 recall@10 at 1000 vectors with default parameters.
+- **Persisted BM25 index** -- BM25 term frequencies serialized as a
+  content-addressed chunk alongside each commit (`bm25_root` field).
+  On startup, the index loads from disk instead of re-tokenizing all
+  content. Saves 10-30 seconds at 100K+ nodes. Backward compatible:
+  old commits without `bm25_root` fall back to full rebuild.
+- **Dirty tracking** -- graph tracks which nodes/edges are modified
+  since the last save. `Save()` only marshals dirty items (O(K)
+  instead of O(N) where K is typically 1-5 per mutation).
+- **Incremental prolly tree** -- `ProllyTree.Update()` applies
+  mutations by walking from root to affected leaves, modifying only
+  touched chunks. O(K * depth) where depth is 3-4 for trees up to
+  millions of entries. Falls back to full `Build()` for first save
+  or branch switch.
+- **Debounced access saves** -- `serviceInspect` and `serviceSearch`
+  no longer trigger a full save to persist access_count. Access
+  metadata is flushed by a background goroutine every 30 seconds
+  and on shutdown. Eliminates 80-90% of unnecessary full saves.
+- **--version flag** -- `gramaton --version` and `gramaton version`
+  subcommand with commit hash, build date, and store format version.
+  Version set via ldflags at build time. Replaces all hardcoded
+  version strings.
+- **Store format versioning** -- `FORMAT` file in the data directory
+  tracks the on-disk store format version. Checked on engine load:
+  stores from newer binaries are rejected with a clear upgrade
+  message. Backward compatible: missing FORMAT file gets current
+  version written automatically.
 - **Collections** -- structured containers with schema enforcement and
   guaranteed exhaustive retrieval. Collections complement the knowledge
   graph for data that needs complete visibility (tasks, backlogs,
