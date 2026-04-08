@@ -1,6 +1,8 @@
 package index
 
 import (
+	"encoding/binary"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -186,4 +188,177 @@ func (idx *BM25Index) Search(queryTokens []string, k int, candidates map[string]
 // Len returns the number of indexed documents.
 func (idx *BM25Index) Len() int {
 	return idx.numDocs
+}
+
+// AddPreTokenized indexes a document from pre-computed term frequencies,
+// skipping tokenization entirely. Used when restoring from a persisted
+// index where tokenization was already done at capture time.
+func (idx *BM25Index) AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int) {
+	if _, exists := idx.tf[nodeID]; exists {
+		idx.removeInternal(nodeID)
+	}
+	if len(termFreqs) == 0 {
+		return
+	}
+
+	idx.tf[nodeID] = termFreqs
+	idx.docLen[nodeID] = docLength
+
+	for token := range termFreqs {
+		if idx.inverted[token] == nil {
+			idx.inverted[token] = make(map[string]struct{})
+		}
+		idx.inverted[token][nodeID] = struct{}{}
+	}
+
+	idx.numDocs++
+	idx.recomputeAvgDL()
+}
+
+// bm25 serialization format (binary, little-endian):
+//
+//   header:
+//     magic     [4]byte  "BM25"
+//     version   uint16   1
+//     numDocs   uint32
+//     k1        float64
+//     b         float64
+//
+//   per document (repeated numDocs times):
+//     nodeID_len   uint16
+//     nodeID       []byte
+//     docLen       uint32
+//     numTerms     uint32
+//     per term (repeated numTerms times):
+//       term_len   uint16
+//       term       []byte
+//       count      uint32
+
+// MarshalBinary serializes the BM25 index to a compact binary format.
+// Persists term frequencies and document lengths per document. The
+// inverted index is rebuilt from this data on unmarshal (O(N), no
+// tokenization needed).
+func (idx *BM25Index) MarshalBinary() ([]byte, error) {
+	// Estimate size: header + per-doc overhead.
+	buf := make([]byte, 0, 128+idx.numDocs*256)
+
+	// Header.
+	buf = append(buf, 'B', 'M', '2', '5')
+	buf = binary.LittleEndian.AppendUint16(buf, 1) // version
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(idx.numDocs))
+	buf = appendFloat64(buf, idx.k1)
+	buf = appendFloat64(buf, idx.b)
+
+	// Documents (sorted by nodeID for deterministic output).
+	nodeIDs := make([]string, 0, len(idx.tf))
+	for id := range idx.tf {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+
+	for _, nodeID := range nodeIDs {
+		tf := idx.tf[nodeID]
+		dl := idx.docLen[nodeID]
+
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(nodeID)))
+		buf = append(buf, nodeID...)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(dl))
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(tf)))
+
+		// Sort terms for determinism.
+		terms := make([]string, 0, len(tf))
+		for t := range tf {
+			terms = append(terms, t)
+		}
+		sort.Strings(terms)
+
+		for _, term := range terms {
+			buf = binary.LittleEndian.AppendUint16(buf, uint16(len(term)))
+			buf = append(buf, term...)
+			buf = binary.LittleEndian.AppendUint32(buf, uint32(tf[term]))
+		}
+	}
+
+	return buf, nil
+}
+
+// UnmarshalBinary restores a BM25 index from binary data produced by
+// MarshalBinary. Rebuilds the inverted index from term frequencies
+// without re-tokenizing any text.
+func (idx *BM25Index) UnmarshalBinary(data []byte) error {
+	if len(data) < 26 { // minimum header size
+		return fmt.Errorf("bm25: data too short")
+	}
+
+	// Header.
+	if string(data[:4]) != "BM25" {
+		return fmt.Errorf("bm25: invalid magic")
+	}
+	version := binary.LittleEndian.Uint16(data[4:6])
+	if version != 1 {
+		return fmt.Errorf("bm25: unsupported version %d", version)
+	}
+	numDocs := binary.LittleEndian.Uint32(data[6:10])
+	k1 := readFloat64(data[10:18])
+	b := readFloat64(data[18:26])
+
+	idx.k1 = k1
+	idx.b = b
+	idx.tf = make(map[string]map[string]int, numDocs)
+	idx.docLen = make(map[string]int, numDocs)
+	idx.inverted = make(map[string]map[string]struct{})
+	idx.numDocs = 0
+
+	pos := 26
+	for i := uint32(0); i < numDocs; i++ {
+		if pos+2 > len(data) {
+			return fmt.Errorf("bm25: truncated at doc %d", i)
+		}
+		nodeIDLen := int(binary.LittleEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+		if pos+nodeIDLen > len(data) {
+			return fmt.Errorf("bm25: truncated nodeID at doc %d", i)
+		}
+		nodeID := string(data[pos : pos+nodeIDLen])
+		pos += nodeIDLen
+
+		if pos+8 > len(data) {
+			return fmt.Errorf("bm25: truncated doc header at doc %d", i)
+		}
+		docLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		pos += 4
+		numTerms := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		pos += 4
+
+		tf := make(map[string]int, numTerms)
+		for j := 0; j < numTerms; j++ {
+			if pos+2 > len(data) {
+				return fmt.Errorf("bm25: truncated term at doc %d term %d", i, j)
+			}
+			termLen := int(binary.LittleEndian.Uint16(data[pos : pos+2]))
+			pos += 2
+			if pos+termLen+4 > len(data) {
+				return fmt.Errorf("bm25: truncated term data at doc %d term %d", i, j)
+			}
+			term := string(data[pos : pos+termLen])
+			pos += termLen
+			count := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+			pos += 4
+			tf[term] = count
+		}
+
+		idx.AddPreTokenized(nodeID, tf, docLen)
+	}
+
+	return nil
+}
+
+func appendFloat64(buf []byte, v float64) []byte {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], math.Float64bits(v))
+	return append(buf, b[:]...)
+}
+
+func readFloat64(data []byte) float64 {
+	return math.Float64frombits(binary.LittleEndian.Uint64(data))
 }

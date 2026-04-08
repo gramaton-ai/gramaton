@@ -116,17 +116,32 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// Load HEAD commit if it exists.
 	var headHash string
+	var headCommit *graph.Commit
 	headPath := filepath.Join(cfg.DataDir, "HEAD")
 	if data, err := os.ReadFile(headPath); err == nil {
 		headHash = strings.TrimSpace(string(data))
 		if headHash != "" {
-			if _, err := g.Load(s, headHash); err != nil {
+			c, err := g.Load(s, headHash)
+			if err != nil {
 				return nil, fmt.Errorf("load HEAD commit: %w", err)
+			}
+			headCommit = c
+		}
+	}
+
+	// Try to load persisted BM25 index from commit. If available,
+	// skip re-tokenization (saves seconds at 100K+ nodes).
+	bm25Loaded := false
+	if headCommit != nil && headCommit.BM25Root != "" {
+		bm25Data, err := s.Read(headCommit.BM25Root)
+		if err == nil {
+			if err := bm25Idx.UnmarshalBinary(bm25Data); err == nil {
+				bm25Loaded = true
 			}
 		}
 	}
 
-	rebuildIndexes(g, propIdx, vecIdx, bm25Idx)
+	rebuildIndexes(g, propIdx, vecIdx, bm25Idx, bm25Loaded)
 
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
@@ -224,13 +239,33 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // Save commits the current graph state and updates HEAD and the
 // active branch ref. Caller must hold the write lock. Clears the
 // accessDirty flag since all in-memory state is now persisted.
+//
+// Persists the BM25 index alongside the commit so startup can
+// skip re-tokenization.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
+	// Persist the BM25 index as a content-addressed chunk.
+	bm25Data, err := e.bm25Idx.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal BM25 index: %w", err)
+	}
+	bm25Root, err := e.store.Write(bm25Data)
+	if err != nil {
+		return nil, fmt.Errorf("write BM25 index: %w", err)
+	}
+
 	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
 		SplitBits:       e.cfg.Storage.ProllySplitBits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("save commit: %w", err)
+	}
+
+	// Attach index roots and re-serialize the commit.
+	commit.BM25Root = bm25Root
+	commit, err = graph.RewriteCommit(e.store, commit)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite commit with indexes: %w", err)
 	}
 
 	headPath := filepath.Join(e.cfg.DataDir, "HEAD")
@@ -276,7 +311,7 @@ func (e *Engine) RebuildAllIndexes() {
 	e.propIdx = index.NewPropertyIndex()
 	e.vecIdx = index.NewFlatIndex()
 	e.bm25Idx = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
-	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx)
+	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, e.embedder, e.cfg)
 }
 
@@ -698,8 +733,10 @@ func (e *Engine) EdgeCount() int {
 	return e.graph.EdgeCount()
 }
 
-// rebuildIndexes populates indexes from graph state.
-func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex, bm25Idx *index.BM25Index) {
+// rebuildIndexes populates indexes from graph state. If bm25Loaded
+// is true, the BM25 index was already restored from a persisted
+// snapshot and only property and vector indexes are rebuilt.
+func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.FlatIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
 	for _, id := range g.AllNodeIDs() {
 		n, _ := g.GetNode(id)
 		for k, v := range n.Properties {
@@ -711,11 +748,13 @@ func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx *index.
 				break
 			}
 		}
-		// BM25: index content text.
-		if text, ok := n.Properties.GetString("content_full"); ok {
-			bm25Idx.Add(id, text)
-		} else if text, ok := n.Properties.GetString("content_short"); ok {
-			bm25Idx.Add(id, text)
+		if !bm25Loaded {
+			// BM25: index content text (skip if loaded from disk).
+			if text, ok := n.Properties.GetString("content_full"); ok {
+				bm25Idx.Add(id, text)
+			} else if text, ok := n.Properties.GetString("content_short"); ok {
+				bm25Idx.Add(id, text)
+			}
 		}
 	}
 }

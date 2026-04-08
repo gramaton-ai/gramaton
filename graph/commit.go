@@ -18,6 +18,9 @@ type Commit struct {
 	Message      string    `json:"message"`
 	NodeTreeRoot string    `json:"node_tree_root,omitempty"`
 	EdgeTreeRoot string    `json:"edge_tree_root,omitempty"`
+	// Persisted index roots (content-addressed chunks).
+	// Omitempty ensures backward compatibility with older commits.
+	BM25Root string `json:"bm25_root,omitempty"`
 	// NodeHashes/EdgeHashes retained for reading v0 commits only.
 	NodeHashes []string `json:"node_hashes,omitempty"`
 	EdgeHashes []string `json:"edge_hashes,omitempty"`
@@ -193,6 +196,23 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 	g.ClearDirty()
 
 	return commit, nil
+}
+
+// RewriteCommit re-serializes a commit with updated fields (e.g.,
+// index roots) and returns the new commit with updated hash. The
+// old commit chunk remains in the store but is unreferenced.
+func RewriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
+	c.Hash = "" // clear so it doesn't affect serialization
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite commit: marshal: %w", err)
+	}
+	hash, err := s.Write(data)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite commit: write: %w", err)
+	}
+	c.Hash = hash
+	return c, nil
 }
 
 // Load restores graph state from a commit. Clears the current graph

@@ -208,3 +208,96 @@ func TestBM25RemoveNonExistent(t *testing.T) {
 		t.Fatal("should still be empty")
 	}
 }
+
+func TestBM25MarshalRoundTrip(t *testing.T) {
+	idx := NewBM25Index(1.5, 0.8)
+	idx.Add("doc1", "the quick brown fox jumps over the lazy dog")
+	idx.Add("doc2", "machine learning and artificial intelligence are related fields")
+	idx.Add("doc3", "the fox went to the market to buy some eggs")
+
+	// Search before serialization.
+	before := idx.Search(Tokenize("fox"), 10, nil)
+	if len(before) == 0 {
+		t.Fatal("expected results before marshal")
+	}
+
+	// Marshal.
+	data, err := idx.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary: %v", err)
+	}
+
+	// Unmarshal into fresh index.
+	idx2 := NewBM25Index(0, 0)
+	if err := idx2.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary: %v", err)
+	}
+
+	// Verify structure.
+	if idx2.Len() != 3 {
+		t.Fatalf("Len = %d, want 3", idx2.Len())
+	}
+
+	// Search after deserialization should produce same results.
+	after := idx2.Search(Tokenize("fox"), 10, nil)
+	if len(after) != len(before) {
+		t.Fatalf("result count: before=%d, after=%d", len(before), len(after))
+	}
+	for i := range before {
+		if before[i].NodeID != after[i].NodeID {
+			t.Errorf("result[%d]: before=%s, after=%s", i, before[i].NodeID, after[i].NodeID)
+		}
+		if before[i].Similarity != after[i].Similarity {
+			t.Errorf("result[%d] score: before=%f, after=%f", i, before[i].Similarity, after[i].Similarity)
+		}
+	}
+
+	// Verify params preserved.
+	if idx2.k1 != 1.5 {
+		t.Errorf("k1 = %f, want 1.5", idx2.k1)
+	}
+	if idx2.b != 0.8 {
+		t.Errorf("b = %f, want 0.8", idx2.b)
+	}
+}
+
+func TestBM25MarshalEmpty(t *testing.T) {
+	idx := NewBM25Index(0, 0)
+	data, err := idx.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary: %v", err)
+	}
+
+	idx2 := NewBM25Index(0, 0)
+	if err := idx2.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary: %v", err)
+	}
+	if idx2.Len() != 0 {
+		t.Fatalf("Len = %d, want 0", idx2.Len())
+	}
+}
+
+func TestBM25AddPreTokenized(t *testing.T) {
+	// Build from raw text.
+	idx1 := NewBM25Index(0, 0)
+	idx1.Add("doc1", "the quick brown fox")
+
+	// Build from pre-tokenized data.
+	idx2 := NewBM25Index(0, 0)
+	tokens := Tokenize("the quick brown fox")
+	tf := make(map[string]int)
+	for _, t := range tokens {
+		tf[t]++
+	}
+	idx2.AddPreTokenized("doc1", tf, len(tokens))
+
+	// Both should produce same search results.
+	r1 := idx1.Search(Tokenize("fox"), 10, nil)
+	r2 := idx2.Search(Tokenize("fox"), 10, nil)
+	if len(r1) != len(r2) {
+		t.Fatalf("result count: text=%d, pretok=%d", len(r1), len(r2))
+	}
+	if r1[0].Similarity != r2[0].Similarity {
+		t.Errorf("scores differ: %f vs %f", r1[0].Similarity, r2[0].Similarity)
+	}
+}
