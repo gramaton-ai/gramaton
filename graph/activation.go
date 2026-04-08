@@ -29,6 +29,7 @@ func (g *Graph) RecordAccess(nodeID string, now time.Time, cfg ActivationConfig)
 	}
 	n.Properties["access_count"] = Int64Property(count + 1)
 	n.Properties["last_accessed"] = TimestampProperty(now)
+	g.markNodeDirty(nodeID)
 
 	// Spread activation to neighbors via outbound edges.
 	if outs, ok := g.outEdges[nodeID]; ok {
@@ -57,4 +58,5 @@ func boostNeighbor(g *Graph, neighborID string, amount float64) {
 		current = v
 	}
 	n.Properties["activation_boost"] = Float64Property(current + amount)
+	g.markNodeDirty(neighborID)
 }

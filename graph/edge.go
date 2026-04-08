@@ -40,6 +40,7 @@ func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, pro
 	addToIndex(g.outEdges, sourceID, e.ID)
 	addToIndex(g.inEdges, targetID, e.ID)
 	addToIndex(g.typeEdges, edgeType, e.ID)
+	g.markEdgeDirty(e.ID)
 
 	return e, nil
 }
@@ -57,6 +58,7 @@ func (g *Graph) SetEdgeWeight(id string, weight float64) error {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
 	e.Weight = weight
+	g.markEdgeDirty(id)
 	return nil
 }
 
@@ -67,6 +69,7 @@ func (g *Graph) SetEdgeProperty(id, key string, val Property) error {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
 	e.Properties[key] = val
+	g.markEdgeDirty(id)
 	return nil
 }
 
@@ -77,6 +80,7 @@ func (g *Graph) RemoveEdgeProperty(id, key string) error {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
 	delete(e.Properties, key)
+	g.markEdgeDirty(id)
 	return nil
 }
 
@@ -97,6 +101,8 @@ func (g *Graph) deleteEdge(id string) {
 	removeFromIndex(g.inEdges, e.TargetID, id)
 	removeFromIndex(g.typeEdges, e.Type, id)
 	delete(g.edges, id)
+	delete(g.dirtyEdges, id)
+	g.deletedEdges[id] = struct{}{}
 }
 
 // EdgesFrom returns all outbound edges from a node.

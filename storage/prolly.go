@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"sort"
 )
 
 // ProllyTree is a content-addressed sorted map backed by a prolly tree.
@@ -98,6 +99,17 @@ func (t *ProllyTree) RootHash() string {
 	return t.rootHash
 }
 
+// SetConfig applies chunking parameters to a loaded tree. Required
+// before calling Update() on a tree created via LoadProllyTree().
+func (t *ProllyTree) SetConfig(cfg ProllyConfig) {
+	if cfg.TargetChunkSize > 0 {
+		t.targetChunkSize = cfg.TargetChunkSize
+	}
+	if cfg.SplitBits > 0 {
+		t.splitMask = (1 << cfg.SplitBits) - 1
+	}
+}
+
 // Build constructs a prolly tree from a sorted slice of key-value entries.
 // This is more efficient than inserting one at a time.
 func (t *ProllyTree) Build(entries []ProllyEntry) error {
@@ -162,6 +174,202 @@ func (t *ProllyTree) buildLevel(entries []ProllyEntry, leaf bool) ([]string, []s
 	}
 
 	return hashes, firstKeys, nil
+}
+
+// ProllyMutation describes a key-level mutation for incremental update.
+type ProllyMutation struct {
+	Key    string
+	Value  string // new content hash; ignored if Delete is true
+	Delete bool
+}
+
+// Update incrementally applies mutations to an existing prolly tree.
+// Only touches chunks on the path from root to each affected leaf,
+// giving O(K * depth) I/O where K is the number of mutations and
+// depth is typically 3-4 for trees up to millions of entries.
+//
+// If the tree is empty, Update builds from the non-deleted mutations.
+// Mutations need not be sorted; they are sorted internally.
+func (t *ProllyTree) Update(mutations []ProllyMutation) error {
+	if len(mutations) == 0 {
+		return nil
+	}
+
+	sort.Slice(mutations, func(i, j int) bool {
+		return mutations[i].Key < mutations[j].Key
+	})
+
+	if t.rootHash == "" {
+		var entries []ProllyEntry
+		for _, m := range mutations {
+			if !m.Delete {
+				entries = append(entries, ProllyEntry{Key: m.Key, Value: m.Value})
+			}
+		}
+		return t.Build(entries)
+	}
+
+	resultEntries, err := t.applyMutations(t.rootHash, mutations, 0)
+	if err != nil {
+		return err
+	}
+
+	if len(resultEntries) == 0 {
+		t.rootHash = ""
+		return nil
+	}
+
+	// Single chunk result is the new root.
+	if len(resultEntries) == 1 {
+		t.rootHash = resultEntries[0].Value
+		return nil
+	}
+
+	// Multiple chunks: build internal levels above until single root.
+	hashes := make([]string, len(resultEntries))
+	firstKeys := make([]string, len(resultEntries))
+	for i, e := range resultEntries {
+		hashes[i] = e.Value
+		firstKeys[i] = e.Key
+	}
+	for len(hashes) > 1 {
+		internalEntries := make([]ProllyEntry, len(hashes))
+		for i := range hashes {
+			internalEntries[i] = ProllyEntry{Key: firstKeys[i], Value: hashes[i]}
+		}
+		var err error
+		hashes, firstKeys, err = t.buildLevel(internalEntries, false)
+		if err != nil {
+			return err
+		}
+	}
+	t.rootHash = hashes[0]
+	return nil
+}
+
+// applyMutations recursively applies sorted mutations to a subtree.
+// Returns the new (firstKey, chunkHash) entries for the parent level.
+// May return 0 (subtree emptied), 1 (unchanged or updated), or
+// multiple entries (subtree split due to growth).
+func (t *ProllyTree) applyMutations(nodeHash string, mutations []ProllyMutation, depth int) ([]ProllyEntry, error) {
+	if depth > maxTreeDepth {
+		return nil, fmt.Errorf("prolly: update depth exceeds maximum (%d)", maxTreeDepth)
+	}
+
+	node, err := t.readNode(nodeHash)
+	if err != nil {
+		return nil, err
+	}
+
+	if node.Leaf {
+		return t.applyLeafMutations(node, mutations)
+	}
+	return t.applyInternalMutations(node, mutations, depth)
+}
+
+// applyLeafMutations merges mutations into a leaf's entries and
+// re-chunks the result using content-defined boundaries.
+func (t *ProllyTree) applyLeafMutations(node *ProllyNode, mutations []ProllyMutation) ([]ProllyEntry, error) {
+	merged := mergeLeafEntries(node.Entries, mutations)
+	if len(merged) == 0 {
+		return nil, nil
+	}
+	hashes, firstKeys, err := t.buildLevel(merged, true)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ProllyEntry, len(hashes))
+	for i := range hashes {
+		result[i] = ProllyEntry{Key: firstKeys[i], Value: hashes[i]}
+	}
+	return result, nil
+}
+
+// applyInternalMutations routes mutations to the correct children,
+// recursively updates them, and re-chunks the internal level.
+func (t *ProllyTree) applyInternalMutations(node *ProllyNode, mutations []ProllyMutation, depth int) ([]ProllyEntry, error) {
+	var newEntries []ProllyEntry
+	mutIdx := 0
+
+	for i, child := range node.Entries {
+		// Key upper bound: the next child's first key, or unbounded.
+		var upperBound string
+		if i+1 < len(node.Entries) {
+			upperBound = node.Entries[i+1].Key
+		}
+
+		// Collect mutations for this child's key range.
+		start := mutIdx
+		for mutIdx < len(mutations) {
+			if upperBound != "" && mutations[mutIdx].Key >= upperBound {
+				break
+			}
+			mutIdx++
+		}
+		childMuts := mutations[start:mutIdx]
+
+		if len(childMuts) == 0 {
+			newEntries = append(newEntries, child)
+			continue
+		}
+
+		childResult, err := t.applyMutations(child.Value, childMuts, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		newEntries = append(newEntries, childResult...)
+	}
+
+	if len(newEntries) == 0 {
+		return nil, nil
+	}
+
+	// Re-chunk the internal level with updated children.
+	hashes, firstKeys, err := t.buildLevel(newEntries, false)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ProllyEntry, len(hashes))
+	for i := range hashes {
+		result[i] = ProllyEntry{Key: firstKeys[i], Value: hashes[i]}
+	}
+	return result, nil
+}
+
+// mergeLeafEntries merges sorted mutations into sorted leaf entries.
+// Inserts add new entries. Updates replace existing values. Deletes
+// remove entries.
+func mergeLeafEntries(entries []ProllyEntry, mutations []ProllyMutation) []ProllyEntry {
+	result := make([]ProllyEntry, 0, len(entries)+len(mutations))
+	ei, mi := 0, 0
+
+	for ei < len(entries) && mi < len(mutations) {
+		switch {
+		case entries[ei].Key < mutations[mi].Key:
+			result = append(result, entries[ei])
+			ei++
+		case entries[ei].Key > mutations[mi].Key:
+			if !mutations[mi].Delete {
+				result = append(result, ProllyEntry{Key: mutations[mi].Key, Value: mutations[mi].Value})
+			}
+			mi++
+		default: // same key
+			if !mutations[mi].Delete {
+				result = append(result, ProllyEntry{Key: mutations[mi].Key, Value: mutations[mi].Value})
+			}
+			ei++
+			mi++
+		}
+	}
+	for ; ei < len(entries); ei++ {
+		result = append(result, entries[ei])
+	}
+	for ; mi < len(mutations); mi++ {
+		if !mutations[mi].Delete {
+			result = append(result, ProllyEntry{Key: mutations[mi].Key, Value: mutations[mi].Value})
+		}
+	}
+	return result
 }
 
 // Get looks up a value by key. Returns ("", false) if not found.

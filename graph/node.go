@@ -22,6 +22,7 @@ func (g *Graph) AddNode(props Properties) *Node {
 		n.Properties = make(Properties)
 	}
 	g.nodes[n.ID] = n
+	g.markNodeDirty(n.ID)
 	return n
 }
 
@@ -39,6 +40,7 @@ func (g *Graph) SetNodeProperty(id, key string, val Property) error {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
 	}
 	n.Properties[key] = val
+	g.markNodeDirty(id)
 	return nil
 }
 
@@ -50,6 +52,7 @@ func (g *Graph) RemoveNodeProperty(id, key string) error {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
 	}
 	delete(n.Properties, key)
+	g.markNodeDirty(id)
 	return nil
 }
 
@@ -80,6 +83,8 @@ func (g *Graph) DeleteNode(id string) error {
 	}
 
 	delete(g.nodes, id)
+	delete(g.dirtyNodes, id)
+	g.deletedNodes[id] = struct{}{}
 	return nil
 }
 

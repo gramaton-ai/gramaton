@@ -328,6 +328,235 @@ func TestProllyTreeSortedEntries(t *testing.T) {
 	}
 }
 
+func TestProllyTreeUpdateInsert(t *testing.T) {
+	s := testStore(t)
+
+	// Build initial tree.
+	entries := make([]ProllyEntry, 100)
+	for i := range entries {
+		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
+	}
+	tree := NewProllyTree(s, ProllyConfig{})
+	tree.Build(entries)
+
+	// Insert a new key via Update.
+	err := tree.Update([]ProllyMutation{
+		{Key: "k0050a", Value: "vnew"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Verify the new key exists.
+	val, ok := tree.Get("k0050a")
+	if !ok || val != "vnew" {
+		t.Fatalf("Get(k0050a) = %q, %v; want vnew, true", val, ok)
+	}
+
+	// Verify existing keys are intact.
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("k%04d", i)
+		val, ok := tree.Get(key)
+		if !ok {
+			t.Fatalf("Get(%s) not found after insert", key)
+		}
+		if val != fmt.Sprintf("v%04d", i) {
+			t.Fatalf("Get(%s) = %q, want v%04d", key, val, i)
+		}
+	}
+
+	// Total count should be 101.
+	count, _ := tree.EntryCount()
+	if count != 101 {
+		t.Fatalf("EntryCount = %d, want 101", count)
+	}
+}
+
+func TestProllyTreeUpdateModify(t *testing.T) {
+	s := testStore(t)
+
+	entries := make([]ProllyEntry, 100)
+	for i := range entries {
+		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
+	}
+	tree := NewProllyTree(s, ProllyConfig{})
+	tree.Build(entries)
+
+	// Update existing key.
+	err := tree.Update([]ProllyMutation{
+		{Key: "k0042", Value: "updated"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	val, ok := tree.Get("k0042")
+	if !ok || val != "updated" {
+		t.Fatalf("Get(k0042) = %q, %v; want updated, true", val, ok)
+	}
+
+	// Count unchanged.
+	count, _ := tree.EntryCount()
+	if count != 100 {
+		t.Fatalf("EntryCount = %d, want 100", count)
+	}
+}
+
+func TestProllyTreeUpdateDelete(t *testing.T) {
+	s := testStore(t)
+
+	entries := make([]ProllyEntry, 100)
+	for i := range entries {
+		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
+	}
+	tree := NewProllyTree(s, ProllyConfig{})
+	tree.Build(entries)
+
+	// Delete a key.
+	err := tree.Update([]ProllyMutation{
+		{Key: "k0042", Delete: true},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	_, ok := tree.Get("k0042")
+	if ok {
+		t.Fatal("k0042 should be deleted")
+	}
+
+	count, _ := tree.EntryCount()
+	if count != 99 {
+		t.Fatalf("EntryCount = %d, want 99", count)
+	}
+}
+
+func TestProllyTreeUpdateMultiple(t *testing.T) {
+	s := testStore(t)
+
+	entries := make([]ProllyEntry, 200)
+	for i := range entries {
+		entries[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
+	}
+	tree := NewProllyTree(s, ProllyConfig{})
+	tree.Build(entries)
+
+	// Multiple mutations: insert, update, delete.
+	err := tree.Update([]ProllyMutation{
+		{Key: "k0010", Value: "modified"},     // update
+		{Key: "k0050", Delete: true},          // delete
+		{Key: "k0200", Value: "appended"},     // insert at end
+		{Key: "k0000a", Value: "inserted"},    // insert in middle
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if v, ok := tree.Get("k0010"); !ok || v != "modified" {
+		t.Fatalf("k0010 = %q, %v; want modified", v, ok)
+	}
+	if _, ok := tree.Get("k0050"); ok {
+		t.Fatal("k0050 should be deleted")
+	}
+	if v, ok := tree.Get("k0200"); !ok || v != "appended" {
+		t.Fatalf("k0200 = %q, %v; want appended", v, ok)
+	}
+	if v, ok := tree.Get("k0000a"); !ok || v != "inserted" {
+		t.Fatalf("k0000a = %q, %v; want inserted", v, ok)
+	}
+
+	count, _ := tree.EntryCount()
+	if count != 201 { // 200 - 1 delete + 2 inserts
+		t.Fatalf("EntryCount = %d, want 201", count)
+	}
+}
+
+func TestProllyTreeUpdateMatchesBuild(t *testing.T) {
+	// Verify that building from scratch and applying updates
+	// produce the same tree structure.
+	s := testStore(t)
+
+	initial := make([]ProllyEntry, 100)
+	for i := range initial {
+		initial[i] = ProllyEntry{Key: fmt.Sprintf("k%04d", i), Value: fmt.Sprintf("v%04d", i)}
+	}
+
+	// Path A: Build initial, then Update.
+	treeA := NewProllyTree(s, ProllyConfig{})
+	treeA.Build(initial)
+	treeA.Update([]ProllyMutation{
+		{Key: "k0010", Value: "mod"},
+		{Key: "k0050", Delete: true},
+		{Key: "k0100", Value: "new"},
+	})
+
+	// Path B: Build the final state directly.
+	final := make([]ProllyEntry, 0, 100)
+	for i := 0; i < 100; i++ {
+		if i == 50 {
+			continue // deleted
+		}
+		key := fmt.Sprintf("k%04d", i)
+		val := fmt.Sprintf("v%04d", i)
+		if i == 10 {
+			val = "mod"
+		}
+		final = append(final, ProllyEntry{Key: key, Value: val})
+	}
+	final = append(final, ProllyEntry{Key: "k0100", Value: "new"})
+	sortEntries(final)
+
+	treeB := NewProllyTree(s, ProllyConfig{})
+	treeB.Build(final)
+
+	if treeA.RootHash() != treeB.RootHash() {
+		t.Fatalf("Update path and Build path produce different roots:\n  Update: %s\n  Build:  %s",
+			treeA.RootHash(), treeB.RootHash())
+	}
+}
+
+func TestProllyTreeUpdateEmpty(t *testing.T) {
+	s := testStore(t)
+
+	// Update on empty tree should build.
+	tree := NewProllyTree(s, ProllyConfig{})
+	err := tree.Update([]ProllyMutation{
+		{Key: "a", Value: "1"},
+		{Key: "b", Value: "2"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if v, ok := tree.Get("a"); !ok || v != "1" {
+		t.Fatalf("a = %q, %v", v, ok)
+	}
+	count, _ := tree.EntryCount()
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+}
+
+func TestProllyTreeUpdateDeleteAll(t *testing.T) {
+	s := testStore(t)
+
+	tree := NewProllyTree(s, ProllyConfig{})
+	tree.Build([]ProllyEntry{
+		{Key: "a", Value: "1"},
+		{Key: "b", Value: "2"},
+	})
+
+	err := tree.Update([]ProllyMutation{
+		{Key: "a", Delete: true},
+		{Key: "b", Delete: true},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if tree.RootHash() != "" {
+		t.Fatal("tree should be empty after deleting all entries")
+	}
+}
+
 func TestProllyTreeDeterministic(t *testing.T) {
 	s := testStore(t)
 

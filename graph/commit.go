@@ -24,61 +24,159 @@ type Commit struct {
 }
 
 // Save persists the current graph state as a commit to the store.
-// Nodes and edges are stored as content-addressed chunks. Their IDs
-// and chunk hashes are indexed in prolly trees for efficient diff.
+// Uses dirty tracking to only marshal modified nodes/edges. The
+// full entry maps (nodeHashes/edgeHashes) are rebuilt for the
+// prolly tree, but unchanged chunks deduplicate via content-addressing.
 func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...storage.ProllyConfig) (*Commit, error) {
 	var treeCfg storage.ProllyConfig
 	if len(pCfg) > 0 {
 		treeCfg = pCfg[0]
 	}
-	// Write all nodes and build the ID -> hash mapping.
-	nodeMap := make(map[string]string, len(g.nodes))
-	for _, id := range sortedNodeIDs(g) {
-		n := g.nodes[id]
-		data, err := MarshalNode(n)
-		if err != nil {
-			return nil, fmt.Errorf("save: marshal node %s: %w", id, err)
+
+	// Determine if we can use incremental save (have cached hashes
+	// from a previous save/load) or need a full save.
+	incremental := len(g.nodeHashes) > 0 || len(g.edgeHashes) > 0
+
+	if incremental {
+		// Only marshal dirty nodes; reuse cached hashes for clean ones.
+		for id := range g.dirtyNodes {
+			n, ok := g.nodes[id]
+			if !ok {
+				continue // deleted after being marked dirty
+			}
+			data, err := MarshalNode(n)
+			if err != nil {
+				return nil, fmt.Errorf("save: marshal node %s: %w", id, err)
+			}
+			hash, err := s.Write(data)
+			if err != nil {
+				return nil, fmt.Errorf("save: write node %s: %w", id, err)
+			}
+			g.nodeHashes[id] = hash
 		}
-		hash, err := s.Write(data)
-		if err != nil {
-			return nil, fmt.Errorf("save: write node %s: %w", id, err)
+		// Remove deleted nodes from hash cache.
+		for id := range g.deletedNodes {
+			delete(g.nodeHashes, id)
 		}
-		nodeMap[id] = hash
+
+		// Same for edges.
+		for id := range g.dirtyEdges {
+			e, ok := g.edges[id]
+			if !ok {
+				continue
+			}
+			data, err := MarshalEdge(e)
+			if err != nil {
+				return nil, fmt.Errorf("save: marshal edge %s: %w", id, err)
+			}
+			hash, err := s.Write(data)
+			if err != nil {
+				return nil, fmt.Errorf("save: write edge %s: %w", id, err)
+			}
+			g.edgeHashes[id] = hash
+		}
+		for id := range g.deletedEdges {
+			delete(g.edgeHashes, id)
+		}
+	} else {
+		// Full save: marshal all nodes and edges (first save or after
+		// branch switch). Populates the hash caches for future
+		// incremental saves.
+		g.nodeHashes = make(map[string]string, len(g.nodes))
+		for _, id := range sortedNodeIDs(g) {
+			n := g.nodes[id]
+			data, err := MarshalNode(n)
+			if err != nil {
+				return nil, fmt.Errorf("save: marshal node %s: %w", id, err)
+			}
+			hash, err := s.Write(data)
+			if err != nil {
+				return nil, fmt.Errorf("save: write node %s: %w", id, err)
+			}
+			g.nodeHashes[id] = hash
+		}
+
+		g.edgeHashes = make(map[string]string, len(g.edges))
+		for _, id := range sortedEdgeIDs(g) {
+			e := g.edges[id]
+			data, err := MarshalEdge(e)
+			if err != nil {
+				return nil, fmt.Errorf("save: marshal edge %s: %w", id, err)
+			}
+			hash, err := s.Write(data)
+			if err != nil {
+				return nil, fmt.Errorf("save: write edge %s: %w", id, err)
+			}
+			g.edgeHashes[id] = hash
+		}
 	}
 
-	// Write all edges and build the ID -> hash mapping.
-	edgeMap := make(map[string]string, len(g.edges))
-	for _, id := range sortedEdgeIDs(g) {
-		e := g.edges[id]
-		data, err := MarshalEdge(e)
-		if err != nil {
-			return nil, fmt.Errorf("save: marshal edge %s: %w", id, err)
+	// Update prolly trees. Use incremental Update() when a previous
+	// tree root exists (touches only affected chunks -- O(K*depth)).
+	// Fall back to full Build() for the first save or after branch switch.
+	var nodeTreeRoot, edgeTreeRoot string
+
+	if incremental && g.lastNodeTreeRoot != "" {
+		// Incremental: collect mutations from dirty/deleted sets.
+		var nodeMuts []storage.ProllyMutation
+		for id := range g.dirtyNodes {
+			if h, ok := g.nodeHashes[id]; ok {
+				nodeMuts = append(nodeMuts, storage.ProllyMutation{Key: id, Value: h})
+			}
 		}
-		hash, err := s.Write(data)
-		if err != nil {
-			return nil, fmt.Errorf("save: write edge %s: %w", id, err)
+		for id := range g.deletedNodes {
+			nodeMuts = append(nodeMuts, storage.ProllyMutation{Key: id, Delete: true})
 		}
-		edgeMap[id] = hash
+
+		nodeTree := storage.LoadProllyTree(s, g.lastNodeTreeRoot)
+		nodeTree.SetConfig(treeCfg)
+		if err := nodeTree.Update(nodeMuts); err != nil {
+			return nil, fmt.Errorf("save: update node tree: %w", err)
+		}
+		nodeTreeRoot = nodeTree.RootHash()
+	} else {
+		nodeTree := storage.NewProllyTree(s, treeCfg)
+		if err := nodeTree.Build(storage.SortedEntries(g.nodeHashes)); err != nil {
+			return nil, fmt.Errorf("save: build node tree: %w", err)
+		}
+		nodeTreeRoot = nodeTree.RootHash()
 	}
 
-	// Build prolly trees.
-	nodeTree := storage.NewProllyTree(s, treeCfg)
-	if err := nodeTree.Build(storage.SortedEntries(nodeMap)); err != nil {
-		return nil, fmt.Errorf("save: build node tree: %w", err)
+	if incremental && g.lastEdgeTreeRoot != "" {
+		var edgeMuts []storage.ProllyMutation
+		for id := range g.dirtyEdges {
+			if h, ok := g.edgeHashes[id]; ok {
+				edgeMuts = append(edgeMuts, storage.ProllyMutation{Key: id, Value: h})
+			}
+		}
+		for id := range g.deletedEdges {
+			edgeMuts = append(edgeMuts, storage.ProllyMutation{Key: id, Delete: true})
+		}
+
+		edgeTree := storage.LoadProllyTree(s, g.lastEdgeTreeRoot)
+		edgeTree.SetConfig(treeCfg)
+		if err := edgeTree.Update(edgeMuts); err != nil {
+			return nil, fmt.Errorf("save: update edge tree: %w", err)
+		}
+		edgeTreeRoot = edgeTree.RootHash()
+	} else {
+		edgeTree := storage.NewProllyTree(s, treeCfg)
+		if err := edgeTree.Build(storage.SortedEntries(g.edgeHashes)); err != nil {
+			return nil, fmt.Errorf("save: build edge tree: %w", err)
+		}
+		edgeTreeRoot = edgeTree.RootHash()
 	}
 
-	edgeTree := storage.NewProllyTree(s, treeCfg)
-	if err := edgeTree.Build(storage.SortedEntries(edgeMap)); err != nil {
-		return nil, fmt.Errorf("save: build edge tree: %w", err)
-	}
+	g.lastNodeTreeRoot = nodeTreeRoot
+	g.lastEdgeTreeRoot = edgeTreeRoot
 
 	commit := &Commit{
 		Version:      1,
 		Parent:       parent,
 		Timestamp:    time.Now().UTC(),
 		Message:      message,
-		NodeTreeRoot: nodeTree.RootHash(),
-		EdgeTreeRoot: edgeTree.RootHash(),
+		NodeTreeRoot: nodeTreeRoot,
+		EdgeTreeRoot: edgeTreeRoot,
 	}
 
 	commitData, err := json.Marshal(commit)
@@ -90,6 +188,9 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 		return nil, fmt.Errorf("save: write commit: %w", err)
 	}
 	commit.Hash = commitHash
+
+	// Clear dirty tracking after successful save.
+	g.ClearDirty()
 
 	return commit, nil
 }
@@ -114,62 +215,78 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	g.outEdges = make(map[string]map[string]struct{})
 	g.inEdges = make(map[string]map[string]struct{})
 	g.typeEdges = make(map[string]map[string]struct{})
+	g.nodeHashes = make(map[string]string)
+	g.edgeHashes = make(map[string]string)
+	g.ClearDirty()
 
-	// Collect node/edge hashes based on commit version.
-	var nodeHashes []string
-	var edgeHashes []string
+	// Collect node/edge entries based on commit version.
+	// For v1 commits, we read from prolly trees and populate
+	// the hash caches for future incremental saves.
+	type idHash struct {
+		id, hash string
+	}
+	var nodeEntries []idHash
+	var edgeEntries []idHash
 
 	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
-		// v1: read from prolly tree.
+		g.lastNodeTreeRoot = commit.NodeTreeRoot
 		nodeTree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
 		entries, err := nodeTree.AllEntries()
 		if err != nil {
 			return nil, fmt.Errorf("load: read node tree: %w", err)
 		}
 		for _, e := range entries {
-			nodeHashes = append(nodeHashes, e.Value)
+			nodeEntries = append(nodeEntries, idHash{e.Key, e.Value})
 		}
 
 		if commit.EdgeTreeRoot != "" {
+			g.lastEdgeTreeRoot = commit.EdgeTreeRoot
 			edgeTree := storage.LoadProllyTree(s, commit.EdgeTreeRoot)
 			entries, err := edgeTree.AllEntries()
 			if err != nil {
 				return nil, fmt.Errorf("load: read edge tree: %w", err)
 			}
 			for _, e := range entries {
-				edgeHashes = append(edgeHashes, e.Value)
+				edgeEntries = append(edgeEntries, idHash{e.Key, e.Value})
 			}
 		}
 	} else {
-		// v0: flat hash lists.
-		nodeHashes = commit.NodeHashes
-		edgeHashes = commit.EdgeHashes
+		// v0: flat hash lists -- no IDs available, can't populate
+		// hash caches. First save will be a full save.
+		for _, hash := range commit.NodeHashes {
+			nodeEntries = append(nodeEntries, idHash{"", hash})
+		}
+		for _, hash := range commit.EdgeHashes {
+			edgeEntries = append(edgeEntries, idHash{"", hash})
+		}
 	}
 
-	// Load nodes.
-	for _, hash := range nodeHashes {
-		data, err := s.Read(hash)
+	// Load nodes and populate hash cache.
+	for _, nh := range nodeEntries {
+		data, err := s.Read(nh.hash)
 		if err != nil {
-			return nil, fmt.Errorf("load: read node chunk %s: %w", hash, err)
+			return nil, fmt.Errorf("load: read node chunk %s: %w", nh.hash, err)
 		}
 		n, err := UnmarshalNode(data)
 		if err != nil {
 			return nil, fmt.Errorf("load: unmarshal node: %w", err)
 		}
 		g.nodes[n.ID] = n
+		g.nodeHashes[n.ID] = nh.hash
 	}
 
-	// Load edges and rebuild indexes.
-	for _, hash := range edgeHashes {
-		data, err := s.Read(hash)
+	// Load edges, rebuild indexes, and populate hash cache.
+	for _, eh := range edgeEntries {
+		data, err := s.Read(eh.hash)
 		if err != nil {
-			return nil, fmt.Errorf("load: read edge chunk %s: %w", hash, err)
+			return nil, fmt.Errorf("load: read edge chunk %s: %w", eh.hash, err)
 		}
 		e, err := UnmarshalEdge(data)
 		if err != nil {
 			return nil, fmt.Errorf("load: unmarshal edge: %w", err)
 		}
 		g.edges[e.ID] = e
+		g.edgeHashes[e.ID] = eh.hash
 		addToIndex(g.outEdges, e.SourceID, e.ID)
 		addToIndex(g.inEdges, e.TargetID, e.ID)
 		addToIndex(g.typeEdges, e.Type, e.ID)
