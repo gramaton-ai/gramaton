@@ -37,6 +37,7 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
 	registerUnlinkProxy(mcpServer)
 	registerHistoryProxy(mcpServer)
+	registerCollectionProxyTools(mcpServer)
 }
 
 // --- helpers ---
