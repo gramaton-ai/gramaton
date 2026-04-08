@@ -382,7 +382,10 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	// Step 6: Build results.
 	results := make([]Result, 0, len(scoredResults))
 	for _, sr := range scoredResults {
-		n, _ := t.graph.GetNode(sr.id)
+		n, ok := t.graph.GetNode(sr.id)
+		if !ok {
+			continue // node deleted between search and result assembly
+		}
 		results = append(results, t.buildResult(n, sr.score))
 	}
 

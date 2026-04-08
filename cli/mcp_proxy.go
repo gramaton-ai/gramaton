@@ -230,7 +230,7 @@ func registerResolveProxy(s *mcp.Server) {
 		if args.ID == "" {
 			return proxyErr("id is required")
 		}
-		return proxyPost(fmt.Sprintf("/v1/records/%s/resolve", args.ID), args)
+		return proxyPost(fmt.Sprintf("/v1/records/%s/resolve", url.PathEscape(args.ID)), args)
 	})
 }
 
@@ -251,7 +251,7 @@ func registerLinkProxy(s *mcp.Server) {
 		if args.ID == "" {
 			return proxyErr("id is required")
 		}
-		return proxyPost(fmt.Sprintf("/v1/records/%s/edges", args.ID), args)
+		return proxyPost(fmt.Sprintf("/v1/records/%s/edges", url.PathEscape(args.ID)), args)
 	})
 }
 
@@ -275,7 +275,7 @@ func registerClassifyProxy(s *mcp.Server) {
 		if args.ID == "" {
 			return proxyErr("id is required")
 		}
-		return proxyPost(fmt.Sprintf("/v1/records/%s/classify", args.ID), args)
+		return proxyPost(fmt.Sprintf("/v1/records/%s/classify", url.PathEscape(args.ID)), args)
 	})
 }
 

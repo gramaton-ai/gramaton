@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"unicode/utf8"
 )
@@ -98,9 +99,13 @@ var validResolutions = map[string]bool{
 }
 
 // validateFloat64Range checks that a float64 pointer is in [min, max].
+// Rejects NaN and Inf which would bypass comparison checks.
 func validateFloat64Range(name string, val *float64, min, max float64) error {
 	if val == nil {
 		return nil
+	}
+	if math.IsNaN(*val) || math.IsInf(*val, 0) {
+		return fmt.Errorf("%s must be a finite number", name)
 	}
 	if *val < min || *val > max {
 		return fmt.Errorf("%s must be between %g and %g, got %g", name, min, max, *val)

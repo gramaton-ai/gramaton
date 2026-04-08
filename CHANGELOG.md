@@ -33,6 +33,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (137M params, 768d) to `mxbai-embed-large` (335M params, 1024d).
   Eval showed +14% NDCG@5 and +12% MAP. Run `gramaton reembed` after
   upgrading to re-embed existing records.
+- **Bedrock provider support** -- added Amazon Bedrock as a provider for
+  both embeddings and LLM. Embedding supports Titan Embed V2 and Cohere
+  Embed model families. LLM uses the Converse API (works with Claude,
+  Titan, Llama, Mistral, and any Bedrock model). Auth via AWS named
+  profiles, environment variables, or the default credential chain.
+  Config: `embedding.provider: bedrock` / `llm.provider: bedrock`.
+- **OpenAI-compatible provider** -- added OpenAI-compatible provider for
+  both embeddings (`/v1/embeddings`) and LLM (`/v1/chat/completions`).
+  Works with OpenAI, Azure OpenAI, vLLM, LiteLLM, Together, Fireworks,
+  and any compatible API. API key is optional (local servers often don't
+  need one). Config: `embedding.provider: openai` / `llm.provider: openai`.
 
 ### Changed
 

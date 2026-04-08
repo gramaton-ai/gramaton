@@ -70,7 +70,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Limit response reads to prevent unbounded memory allocation.
+	const maxResponseSize = 50 * 1024 * 1024 // 50 MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("ollama: read response: %w", err)
 	}

@@ -69,7 +69,7 @@ type RotatingWriter struct {
 // and enforces maxTotal bytes across all log files.
 func NewRotatingWriter(path string, rotateAt, maxTotal int64) (*RotatingWriter, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 

@@ -6,6 +6,8 @@ import (
 
 	"github.com/brandonlattin/gramaton/config"
 	"github.com/brandonlattin/gramaton/llm/anthropic"
+	"github.com/brandonlattin/gramaton/llm/bedrock"
+	"github.com/brandonlattin/gramaton/llm/openai"
 )
 
 // Provider generates text completions from prompts.
@@ -23,6 +25,10 @@ func New(cfg config.LLMConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "anthropic":
 		return anthropic.New(cfg)
+	case "bedrock":
+		return bedrock.New(cfg)
+	case "openai":
+		return openai.New(cfg)
 	case "":
 		return nil, nil
 	default:

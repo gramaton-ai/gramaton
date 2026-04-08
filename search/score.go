@@ -88,7 +88,11 @@ func knowledgeFreshness(temporality string, validFrom, createdAt, now time.Time,
 		return 1.0 // immutable: freshness is always 1.0
 	}
 
-	return math.Pow(1.0+hours/cfg.Scale, -exp)
+	scale := cfg.Scale
+	if scale <= 0 {
+		scale = 8760 // default: 1 year in hours
+	}
+	return math.Pow(1.0+hours/scale, -exp)
 }
 
 // actrActivation computes a unified usage signal based on Anderson's

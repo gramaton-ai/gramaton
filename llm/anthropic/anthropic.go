@@ -130,7 +130,9 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Limit response reads to prevent unbounded memory allocation.
+	const maxResponseSize = 10 * 1024 * 1024 // 10 MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return "", fmt.Errorf("anthropic: read response: %w", err)
 	}

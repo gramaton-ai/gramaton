@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"github.com/brandonlattin/gramaton/config"
+	"github.com/brandonlattin/gramaton/embed/bedrock"
 	"github.com/brandonlattin/gramaton/embed/ollama"
+	"github.com/brandonlattin/gramaton/embed/openai"
 )
 
 // Provider generates vector embeddings from text. This is the shared
@@ -28,6 +30,10 @@ func New(cfg config.EmbeddingConfig) (Provider, error) {
 	switch cfg.Provider {
 	case "ollama":
 		return ollama.New(cfg.Endpoint, cfg.Model), nil
+	case "bedrock":
+		return bedrock.New(cfg)
+	case "openai":
+		return openai.New(cfg)
 	case "":
 		return nil, nil
 	default:

@@ -55,7 +55,7 @@ type EmbeddingConfig struct {
 	Region              string `yaml:"region,omitempty"`
 	AWSProfile          string `yaml:"aws_profile,omitempty"`
 	AWSAccessKeyIDEnv   string `yaml:"aws_access_key_id_env,omitempty"`
-	AWSSecretAccessKey  string `yaml:"aws_secret_access_key_env,omitempty"`
+	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 }
 
 type ScoringConfig struct {
@@ -183,6 +183,10 @@ type LLMConfig struct {
 	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
 	Region     string `yaml:"region,omitempty"`
 	AWSProfile string `yaml:"aws_profile,omitempty"`
+
+	// Bedrock credential env vars (alternative to aws_profile).
+	AWSAccessKeyIDEnv     string `yaml:"aws_access_key_id_env,omitempty"`
+	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 }
 
 type LLMCurationConfig struct {

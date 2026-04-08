@@ -224,7 +224,9 @@ func Restore(archivePath, dataDir string) error {
 				out.Close()
 				return err
 			}
-			out.Close()
+			if err := out.Close(); err != nil {
+				return fmt.Errorf("close restored file %s: %w", header.Name, err)
+			}
 		default:
 			// Reject symlinks, hardlinks, and other special file types.
 			return fmt.Errorf("unsupported file type in archive: %s (type flag %d)", header.Name, header.Typeflag)
