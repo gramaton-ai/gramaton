@@ -2,7 +2,7 @@
 
 Structured containers for exhaustive knowledge management.
 
-**Status:** Design draft. Under active iteration.
+**Status:** Implemented. Shipped in v0.2.0.
 
 ## Problem
 
@@ -253,6 +253,4 @@ This means agents can interact with collections without perfect behavior. The se
 
 12. **Multi-collection membership** -- allowed. An item can belong to multiple collections via multiple `member_of` edges. Removing from one collection doesn't affect other memberships. Schema enforcement applies per collection.
 
-## Open Questions
-
-1. **Versioning** -- collections live in the same versioned store. Diffing a collection over time should work naturally with existing commits, but needs verification during implementation.
+13. **Versioning** -- collections live in the same versioned store and are covered by the store format version (`FORMAT` file). Collection diffs over time work naturally via existing commit history. No separate collection versioning needed -- schema evolution with explicit migration handles structural changes.
