@@ -3,8 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/server"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/server"
 )
 
 // printEnvelope prints a server response in the v0.1-compatible format:

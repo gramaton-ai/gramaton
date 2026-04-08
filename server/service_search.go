@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/search"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 // serviceSearch executes a search query with validation, embedding,

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/store"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/store"
 	"github.com/spf13/cobra"
 )
 

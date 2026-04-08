@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )

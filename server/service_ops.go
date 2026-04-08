@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // serviceStats returns aggregate statistics for the knowledge store.

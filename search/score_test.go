@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 func defaultCfg() config.Config {

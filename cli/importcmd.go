@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/backup"
+	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/spf13/cobra"
 )
 

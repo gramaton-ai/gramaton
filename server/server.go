@@ -18,11 +18,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brandonlattin/gramaton/backup"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/curation"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/backup"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
 // Config holds server configuration.

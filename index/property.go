@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // PropertyIndex supports exact match, range, and substring queries over

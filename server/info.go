@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
 // ServerInfo is written to server.json for CLI discovery.

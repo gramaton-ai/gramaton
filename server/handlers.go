@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/brandonlattin/gramaton/core"
+	"github.com/gramaton-ai/gramaton/core"
 )
 
 // handleStatus returns server health and store stats.

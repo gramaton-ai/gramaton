@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // NewEngine creates a minimal engine backed by a temp directory.

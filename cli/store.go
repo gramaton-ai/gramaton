@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/server"
-	"github.com/brandonlattin/gramaton/store"
+	"github.com/gramaton-ai/gramaton/server"
+	"github.com/gramaton-ai/gramaton/store"
 	"github.com/spf13/cobra"
 )
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
 func TestReadFormatVersionMissing(t *testing.T) {

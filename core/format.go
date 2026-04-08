@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
 // ReadFormatVersion reads the store format version from the FORMAT

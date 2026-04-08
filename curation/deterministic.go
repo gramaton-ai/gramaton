@@ -8,11 +8,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/index"
-	"github.com/brandonlattin/gramaton/search"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 // DeterministicResult summarizes what a deterministic curation cycle did.

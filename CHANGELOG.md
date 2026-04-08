@@ -469,5 +469,5 @@ property graph storage, vector search, and versioned persistence.
 - **Configuration** -- YAML config with all design doc defaults, prolly
   tree tuning parameters, activation settings, storage paths
 
-[Unreleased]: https://github.com/brandonlattin/gramaton/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/brandonlattin/gramaton/releases/tag/v0.1.0
+[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gramaton-ai/gramaton/releases/tag/v0.1.0

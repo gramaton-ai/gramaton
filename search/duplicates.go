@@ -1,7 +1,7 @@
 package search
 
 import (
-	"github.com/brandonlattin/gramaton/index"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // DuplicatePair represents two records with high embedding similarity.

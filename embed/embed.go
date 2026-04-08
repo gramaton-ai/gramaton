@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/embed/bedrock"
-	"github.com/brandonlattin/gramaton/embed/ollama"
-	"github.com/brandonlattin/gramaton/embed/openai"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/embed/bedrock"
+	"github.com/gramaton-ai/gramaton/embed/ollama"
+	"github.com/gramaton-ai/gramaton/embed/openai"
 )
 
 // Provider generates vector embeddings from text. This is the shared

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // New creates a slog.Logger that writes JSON to a rotating log file.

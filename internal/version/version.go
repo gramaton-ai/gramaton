@@ -6,9 +6,9 @@ package version
 
 // Build-time variables, set via:
 //
-//	go build -ldflags "-X github.com/brandonlattin/gramaton/internal/version.Version=0.2.0
-//	  -X github.com/brandonlattin/gramaton/internal/version.Commit=$(git rev-parse --short HEAD)
-//	  -X github.com/brandonlattin/gramaton/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+//	go build -ldflags "-X github.com/gramaton-ai/gramaton/internal/version.Version=0.2.0
+//	  -X github.com/gramaton-ai/gramaton/internal/version.Commit=$(git rev-parse --short HEAD)
+//	  -X github.com/gramaton-ai/gramaton/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 var (
 	Version = "dev"
 	Commit  = "unknown"

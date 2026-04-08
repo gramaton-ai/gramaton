@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 func TestNewMissingModel(t *testing.T) {

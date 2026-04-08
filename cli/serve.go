@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/logging"
-	"github.com/brandonlattin/gramaton/server"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/logging"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
 )
 

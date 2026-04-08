@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/index"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 type observeRequest struct {

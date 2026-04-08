@@ -14,7 +14,7 @@
 
 ```bash
 # Install
-go install github.com/brandonlattin/gramaton@latest
+go install github.com/gramaton-ai/gramaton@latest
 
 # Install Ollama for local embeddings (https://ollama.com)
 curl -fsSL https://ollama.com/install.sh | sh

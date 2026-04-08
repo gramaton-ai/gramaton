@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func TestParseJSON(t *testing.T) {

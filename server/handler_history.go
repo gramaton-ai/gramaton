@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // setMetaProps stores meta.* properties on a node from a meta map.

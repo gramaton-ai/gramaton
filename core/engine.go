@@ -12,13 +12,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/embed"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/index"
-	"github.com/brandonlattin/gramaton/llm"
-	"github.com/brandonlattin/gramaton/search"
-	"github.com/brandonlattin/gramaton/storage"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/embed"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/search"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 // Engine holds the loaded graph state, indexes, and providers.

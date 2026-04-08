@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // --- Request types ---

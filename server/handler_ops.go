@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/storage"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 type revertRequest struct {

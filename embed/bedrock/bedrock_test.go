@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 func TestDetectFamily(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/storage"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 func tempStorage(t *testing.T) *storage.Store {

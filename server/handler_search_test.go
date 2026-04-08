@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func addRecordWithProps(t *testing.T, eng *core.Engine, content, temporality, knowledgeType string, confidence float64, keywords []string) string {

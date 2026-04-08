@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/brandonlattin/gramaton/storage"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 // Commit is an immutable snapshot of the graph state.

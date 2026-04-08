@@ -3,7 +3,7 @@ package llm
 import (
 	"testing"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 func TestNewEmptyProvider(t *testing.T) {

@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 type statsResponse struct {

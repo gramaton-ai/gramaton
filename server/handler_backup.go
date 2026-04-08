@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/brandonlattin/gramaton/backup"
-	"github.com/brandonlattin/gramaton/search"
+	"github.com/gramaton-ai/gramaton/backup"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 type backupRequest struct{}

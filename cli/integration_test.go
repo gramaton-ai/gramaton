@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/server"
-	"github.com/brandonlattin/gramaton/testutil"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/server"
+	"github.com/gramaton-ai/gramaton/testutil"
 	"github.com/spf13/pflag"
 )
 

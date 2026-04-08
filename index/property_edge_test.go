@@ -3,7 +3,7 @@ package index
 import (
 	"testing"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func TestKeywordAddRemoveReadd(t *testing.T) {

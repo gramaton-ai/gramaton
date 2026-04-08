@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/brandonlattin/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 // llmWork represents a single LLM call to be executed in a worker pool.

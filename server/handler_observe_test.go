@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/embed"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/embed"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 // mockLLMProvider is a test LLM that returns pre-configured responses.

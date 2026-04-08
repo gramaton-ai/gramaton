@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/internal/version"
 	"github.com/spf13/cobra"
 )
 

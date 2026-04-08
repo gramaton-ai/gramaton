@@ -1,7 +1,7 @@
 package graph
 
 import (
-	"github.com/brandonlattin/gramaton/storage"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 // DiffResult describes the structural differences between two commits.

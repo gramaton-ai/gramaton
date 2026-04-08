@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/embed/ollama"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/embed/ollama"
 )
 
 // SetupResult describes what the setup process found and configured.

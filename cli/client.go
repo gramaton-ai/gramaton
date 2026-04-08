@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/brandonlattin/gramaton/server"
+	"github.com/gramaton-ai/gramaton/server"
 )
 
 // serverURL returns the base URL for the running server, starting it

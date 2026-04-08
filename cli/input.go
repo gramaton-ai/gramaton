@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // readInputJSON reads JSON from a file (if filePath is non-empty) or stdin.

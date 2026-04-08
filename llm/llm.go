@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/llm/anthropic"
-	"github.com/brandonlattin/gramaton/llm/bedrock"
-	"github.com/brandonlattin/gramaton/llm/openai"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/llm/anthropic"
+	"github.com/gramaton-ai/gramaton/llm/bedrock"
+	"github.com/gramaton-ai/gramaton/llm/openai"
 )
 
 // Provider generates text completions from prompts.

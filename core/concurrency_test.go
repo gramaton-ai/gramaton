@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func TestConcurrentReads(t *testing.T) {

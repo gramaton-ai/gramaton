@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // PopulatedStore is the set of record IDs from a pre-populated engine.

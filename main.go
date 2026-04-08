@@ -1,6 +1,6 @@
 package main
 
-import "github.com/brandonlattin/gramaton/cli"
+import "github.com/gramaton-ai/gramaton/cli"
 
 func main() {
 	cli.Execute()

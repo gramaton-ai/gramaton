@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // ScoreInputs holds the values needed to compute a node's effective score.

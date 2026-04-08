@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/brandonlattin/gramaton/core"
+	"github.com/gramaton-ai/gramaton/core"
 )
 
 type branchCreateRequest struct {

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brandonlattin/gramaton/config"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 // AutonomousResult summarizes what an LLM curation cycle did.

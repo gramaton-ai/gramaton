@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/brandonlattin/gramaton/server"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
 )
 

@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/brandonlattin/gramaton/backup"
-	"github.com/brandonlattin/gramaton/core"
-	"github.com/brandonlattin/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/backup"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brandonlattin/gramaton/graph"
-	"github.com/brandonlattin/gramaton/index"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // setupCombinedGraph creates a diverse set of records for combined filter testing.
