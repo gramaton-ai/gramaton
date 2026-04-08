@@ -192,14 +192,16 @@ func (s *Server) serviceInspect(id string) (map[string]any, *serviceError) {
 		return nil, errNotFound("record not found")
 	}
 
-	// Record access and spread activation.
+	// Record access and spread activation. The in-memory state is
+	// updated immediately; disk persistence is deferred to a periodic
+	// background flush to avoid a full save on every read.
 	now := time.Now().UTC()
 	cfg := s.engine.Config()
 	s.engine.Graph().RecordAccess(id, now, graph.ActivationConfig{
 		BaseAmount:        cfg.Activation.BaseAmount,
 		AttenuationFactor: cfg.Activation.AttenuationFactor,
 	})
-	s.engine.Save("access")
+	s.engine.MarkAccessDirty()
 	n, _ = s.engine.Graph().GetNode(id)
 
 	props := make(map[string]any, len(n.Properties))

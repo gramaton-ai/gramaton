@@ -36,6 +36,12 @@ type Engine struct {
 	llmProv  llm.Provider
 	searcher *search.Tool
 	headHash string
+
+	// accessDirty is set when access metadata (access_count,
+	// last_accessed, activation_boost) has been recorded in memory
+	// but not yet persisted to disk. The server flushes this
+	// periodically rather than saving on every read.
+	accessDirty bool
 }
 
 // EngineOption configures an engine at construction time. Options are
@@ -216,7 +222,8 @@ func (e *Engine) Lock() { e.mu.Lock() }
 func (e *Engine) Unlock() { e.mu.Unlock() }
 
 // Save commits the current graph state and updates HEAD and the
-// active branch ref. Caller must hold the write lock.
+// active branch ref. Caller must hold the write lock. Clears the
+// accessDirty flag since all in-memory state is now persisted.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
 	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
@@ -235,7 +242,32 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 	WriteRef(e.cfg.DataDir, branch, commit.Hash)
 
 	e.headHash = commit.Hash
+	e.accessDirty = false
 	return commit, nil
+}
+
+// MarkAccessDirty records that access metadata has been modified
+// in memory but not yet persisted. Caller must hold the write lock.
+func (e *Engine) MarkAccessDirty() {
+	e.accessDirty = true
+}
+
+// IsAccessDirty reports whether access metadata needs flushing.
+// Caller must hold at least a read lock.
+func (e *Engine) IsAccessDirty() bool {
+	return e.accessDirty
+}
+
+// FlushAccess saves the current graph state if access metadata is
+// dirty. Acquires the write lock internally. Safe to call from a
+// background goroutine.
+func (e *Engine) FlushAccess() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.accessDirty {
+		return
+	}
+	e.Save("access_flush")
 }
 
 // RebuildAllIndexes clears and rebuilds all indexes from graph state.

@@ -146,7 +146,8 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		return nil, errInternal("search failed")
 	}
 
-	// Record access under write lock.
+	// Record access under write lock. Disk persistence is deferred
+	// to a periodic background flush to avoid a full save on every search.
 	if len(results) > 0 {
 		s.engine.Lock()
 		now := time.Now().UTC()
@@ -158,7 +159,7 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		for _, r := range results {
 			s.engine.Graph().RecordAccess(r.ID, now, activationCfg)
 		}
-		s.engine.Save("access")
+		s.engine.MarkAccessDirty()
 		s.engine.Unlock()
 	}
 

@@ -55,6 +55,7 @@ type Server struct {
 	lastRequest    time.Time
 	lastBackup     time.Time
 	curationCancel context.CancelFunc
+	accessCancel   context.CancelFunc
 
 	retrieval  *retrievalTracker
 	observeSem chan struct{} // bounded semaphore for observe goroutines
@@ -202,6 +203,9 @@ func (s *Server) Run() error {
 	shutdownCh := make(chan string, 1)
 	go s.idleWatcher(shutdownCh)
 
+	// Start access flusher.
+	s.startAccessFlusher()
+
 	// Start curation runner.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
@@ -242,6 +246,13 @@ func (s *Server) Run() error {
 		}
 	}
 
+	// Stop access flusher (triggers final flush).
+	s.mu.Lock()
+	if s.accessCancel != nil {
+		s.accessCancel()
+	}
+	s.mu.Unlock()
+
 	// Graceful shutdown with 30-second deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -272,6 +283,9 @@ func (s *Server) StartHTTP() error {
 		"addr", ln.Addr().String(),
 		"store", s.engine.Config().DataDir)
 
+	// Start access flusher.
+	s.startAccessFlusher()
+
 	// Start curation runner.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
@@ -301,14 +315,21 @@ func (s *Server) StartHTTP() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server and curation runner.
+// Shutdown gracefully stops the HTTP server, access flusher, and
+// curation runner.
 func (s *Server) Shutdown() {
 	s.mu.Lock()
-	cancel := s.curationCancel
+	curationCancel := s.curationCancel
+	accessCancel := s.accessCancel
 	s.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	// Stop access flusher first (triggers final flush).
+	if accessCancel != nil {
+		accessCancel()
+	}
+
+	if curationCancel != nil {
+		curationCancel()
 	}
 
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -334,6 +355,34 @@ func (s *Server) recordActivity() {
 	s.mu.Lock()
 	s.lastRequest = time.Now()
 	s.mu.Unlock()
+}
+
+// accessFlusher periodically persists deferred access metadata
+// (access_count, last_accessed, activation_boost). Runs as a
+// background goroutine. Exits when ctx is cancelled.
+func (s *Server) accessFlusher(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Final flush on shutdown.
+			s.engine.FlushAccess()
+			return
+		case <-ticker.C:
+			s.engine.FlushAccess()
+		}
+	}
+}
+
+// startAccessFlusher starts the background access flusher and
+// stores its cancel function for shutdown.
+func (s *Server) startAccessFlusher() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.accessCancel = cancel
+	s.mu.Unlock()
+	go s.accessFlusher(ctx)
 }
 
 // idleWatcher checks for idle timeout and signals shutdown.
