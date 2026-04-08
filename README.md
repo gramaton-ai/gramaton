@@ -1,149 +1,163 @@
-# Gramaton
+<p align="center">
+  <img src=".github/gramaton-logo.jpg" alt="Gramaton — Knowledge, written and remembered." width="340">
+</p>
+<p align="center"><b>gram·a·ton</b> <i>/ˈɡramətɒn/</i> — from Greek <i>gramma</i> (writing) + <i>automaton</i> (self-acting). A thing that writes and remembers by itself.</p>
 
-A knowledge store for AI agents.
+<p align="center">
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
+</p>
 
-Gramaton stores knowledge in a versioned property graph with vector search and epistemic metadata -- fields like confidence, temporality, and provenance that help retrieval tools decide what's still relevant and what's gone stale. Agents interact through a CLI that filters and ranks by metadata before returning results.
-
-## What It Does
-
-Most AI memory solutions store text with timestamps. Gramaton adds structure:
-
-- **Metadata on every record.** Temporality (is this a permanent fact or a time-bound decision?), confidence (how sure are we?), epistemic status (well-established, speculative, contested, or refuted), knowledge type, and source provenance.
-- **A versioned property graph.** Records are nodes. Relationships are typed, weighted edges. Every mutation is a commit with full history. You can diff knowledge over time, inspect why a record's confidence changed, branch for speculative exploration, and roll back bad captures.
-- **Vector similarity search with metadata filtering.** The query pattern is filter (narrow by metadata), rank (sort by embedding similarity), traverse (follow graph edges to related knowledge) -- in that order, as a single operation.
-- **Concept emergence.** Keywords that appear across multiple records graduate to concept nodes -- graph hubs that connect related knowledge across domains.
-- **Decay.** Records lose retrieval priority over time at rates determined by their temporality classification. Ephemeral knowledge fades in hours. Durable knowledge persists for months. High-importance records resist decay.
-
-## How It Works
-
-Two parts:
-
-**A server** -- a single Go binary with no native dependencies. Stores the graph, manages vector indexes (embeddings delegated to Ollama, OpenAI-compatible APIs, or AWS Bedrock), handles versioning, and serves queries via CLI. No LLM runs inside the server.
-
-**An agent integration kit** -- prompt patterns and subagent templates that give the user's existing LLM agent the ability to store and retrieve knowledge. The agent classifies and decomposes knowledge using its own LLM capabilities, then writes structured records to Gramaton via the CLI. Retrieval happens inline during the agent's normal reasoning. The goal is transparent operation -- the agent searches and captures without the user needing to think about it.
+**Gramaton is a knowledge store for AI agents.** It stores facts, decisions, and context in a versioned property graph with semantic search, epistemic metadata, and automatic curation. Agents capture knowledge during their sessions and retrieve it later -- across conversations, across tools, across time.
 
 ## Quick Start
 
 ```bash
-# Build
-go build -o gramaton .
+# Install
+go install github.com/brandonlattin/gramaton@latest
 
-# Initialize
+# Install Ollama for local embeddings (https://ollama.com)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Initialize (pulls embedding model, starts server)
 gramaton init
-
-# Configure embedding (optional, enables semantic search)
-# Edit ~/.gramaton/config.yaml and set embedding.provider to "ollama"
-# Requires: ollama pull nomic-embed-text
-
-# Capture knowledge
-gramaton capture <<'EOF'
-{
-  "content": "We chose Kafka over RabbitMQ for the event pipeline.",
-  "temporality": "durable",
-  "confidence": 0.9,
-  "knowledge_type": "episodic",
-  "keywords": ["kafka", "rabbitmq", "event-pipeline"],
-  "summary_short": "Chose Kafka for event pipeline"
-}
-EOF
-
-# Search
-gramaton search "event pipeline" --confidence-min 0.5
-
-# Inspect a record
-gramaton inspect <record-id>
-
-# Explore the graph
-gramaton explore <record-id> --depth 2
 ```
 
-## CLI Commands
+Then add Gramaton to your MCP client (Claude Code, Kiro, etc.):
 
-### Read Commands
+```json
+{
+  "mcpServers": {
+    "gramaton": {
+      "command": "gramaton",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Your agent now has tools like `gramaton_capture`, `gramaton_search`, `gramaton_inspect`, and `gramaton_explore`. A CLI is also available for inspection and debugging.
+
+## Who This Is For
+
+Gramaton is for anyone who works with AI tools and wants them to remember things properly.
+
+A researcher tracking findings across hundreds of papers. A project manager whose AI assistant should know what was decided last quarter and why. A developer whose coding agent keeps forgetting architecture decisions. A writer building a novel with an AI collaborator that needs to keep characters and plot points straight. Anyone who has ever wished their AI tools had a better memory.
+
+Gramaton gives AI agents a structured, searchable, versioned place to store and retrieve knowledge -- so context survives across sessions, across tools, and across time.
+
+**What it is:** A knowledge graph with versioning, metadata-aware search, and background curation. A single binary with no infrastructure to manage.
+
+## How It Works
+
+Records are nodes in a property graph. Each carries metadata: confidence, temporality (ephemeral, temporal, durable, immutable), epistemic status, knowledge type, and provenance. Relationships are typed, weighted edges. Every mutation is a versioned commit with full history.
+
+Search combines vector similarity and BM25 keywords (RRF fusion), then scores results using four signals: similarity, freshness, ACT-R activation (usage-based), and confidence. Metadata filters narrow results before ranking -- a superseded decision doesn't compete with its replacement.
+
+Background curation runs automatically: expiring stale records, linking orphans, detecting duplicates, and (with an LLM provider configured) classifying unprocessed records, generating summaries, and finding contradictions.
+
+```
+Agent ──► CLI / MCP / HTTP ──► Server ──► Graph Engine
+                                            ├── Vector Index
+                                            ├── BM25 Index
+                                            ├── Property Index
+                                            └── Prolly Tree (storage)
+```
+
+## Features
+
+- **Epistemic metadata** -- confidence, temporality, knowledge type, epistemic status on every record
+- **Hybrid search** -- vector similarity + BM25 keyword search, fused with RRF
+- **Versioned graph** -- branch, diff, merge, revert. Full commit history.
+- **Concept emergence** -- recurring keywords graduate to concept nodes that connect related knowledge
+- **Automatic curation** -- lifecycle management, orphan linking, dedup, optional LLM classification
+- **Multiple providers** -- Ollama (local), OpenAI-compatible, AWS Bedrock for embeddings and LLM
+
+## MCP Tools
+
+Gramaton's primary interface is MCP. Agents interact through structured tools.
+
+| Tool | What it does |
+|------|-------------|
+| `gramaton_search` | Hybrid vector + keyword search with metadata filtering |
+| `gramaton_capture` | Store a knowledge record |
+| `gramaton_inspect` | Full content, metadata, related edges |
+| `gramaton_explore` | Graph traversal from a node |
+| `gramaton_observe` | Extract knowledge from conversation context |
+| `gramaton_update` | Modify record properties |
+| `gramaton_classify` | Classify a pending record with metadata |
+| `gramaton_resolve` | Mark as resolved (completed, superseded, abandoned) |
+| `gramaton_link` / `gramaton_unlink` | Manage edges between records |
+| `gramaton_pending` | List records awaiting classification |
+| `gramaton_duplicates` | Find near-duplicate records |
+| `gramaton_stats` | Aggregate statistics |
+| `gramaton_curation` | View curation status, trigger, or dry-run |
+| `gramaton_branch` | Branch management (create, checkout, merge) |
+| `gramaton_diff` / `gramaton_log` | Version history and diffs |
+| `gramaton_reembed` | Re-embed records after model change |
+| `gramaton_backup` | Create a backup archive |
+
+Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
+
+<details>
+<summary><strong>CLI Reference</strong></summary>
+
+A CLI mirrors every MCP tool for inspection, debugging, and scripting.
 
 | Command | Description |
 |---------|-------------|
-| `gramaton search <query> [flags]` | Tier 1: discover relevant records |
-| `gramaton inspect <id>` | Tier 2: full content, metadata, related edges |
-| `gramaton explore <id> [flags]` | Tier 3: graph traversal from a node |
-| `gramaton pending` | List records awaiting classification |
-| `gramaton status` | Store health, counts, embedding status |
+| `gramaton search <query> [flags]` | Search with metadata filtering |
+| `gramaton inspect <id>` | Full record details |
+| `gramaton explore <id> [--depth N]` | Graph traversal |
+| `gramaton capture` | Store a record (JSON on stdin) |
+| `gramaton classify <id>` | Classify a pending record |
+| `gramaton update <id>` | Modify properties or create edges |
+| `gramaton resolve <id>` | Mark as resolved |
+| `gramaton delete <id> --reason "..."` | Soft delete |
+| `gramaton ingest <files>` | Bulk-load text files |
 | `gramaton log [--last N]` | Commit history |
 | `gramaton diff [ref1..ref2]` | Structural diff between commits |
-
-### Write Commands (JSON on stdin)
-
-| Command | Description |
-|---------|-------------|
-| `gramaton capture` | Store a knowledge record |
-| `gramaton classify` | Classify a pending record |
-| `gramaton update` | Modify properties or create edges |
-| `gramaton ingest <files>` | Bulk-load text files |
-| `gramaton reembed [--batch N]` | Re-embed records after model change |
-
-### Versioning
-
-| Command | Description |
-|---------|-------------|
-| `gramaton branch create <name>` | Fork a branch from HEAD |
-| `gramaton branch list` | List all branches |
-| `gramaton branch checkout <name>` | Switch to a branch |
-| `gramaton branch merge <name>` | Merge branch into main |
-| `gramaton branch discard <name>` | Discard a branch |
+| `gramaton branch create/list/checkout/merge/discard` | Branch management |
 | `gramaton revert <commit>` | Rollback to a prior commit |
+| `gramaton backup` / `gramaton restore` | Backup and restore |
+| `gramaton export` / `gramaton import` | Export and import records |
+| `gramaton reembed [--batch N]` | Re-embed after model change |
 
-### Repair Tools
+</details>
 
-| Command | Description |
-|---------|-------------|
-| `gramaton delete <id> --reason "..."` | Soft delete (recoverable via revert) |
+<details>
+<summary><strong>Configuration</strong></summary>
 
-## Agent Integration
+Config lives at `~/.gramaton/config.yaml`. All fields have sensible defaults.
 
-Gramaton includes prompt templates and subagent instructions for transparent agent integration:
+```yaml
+# Minimal config -- local embeddings
+embedding:
+  provider: ollama
+  model: mxbai-embed-large
 
-- `integration/claude-code/CLAUDE.md` -- System prompt for Claude Code
-- `integration/claude-code/subagent-capture.md` -- Capture subagent instructions
-- `integration/claude-code/subagent-curate.md` -- Curation subagent instructions
-- `integration/docs/custom-agents.md` -- Guide for custom agent frameworks
+# Optional -- enables autonomous curation
+llm:
+  provider: anthropic
+  api_key_env: ANTHROPIC_API_KEY
+```
 
-See [Agent Integration](docs/project-design/agent-integration.md) for the full design.
+Embedding and LLM providers: Ollama (local), OpenAI-compatible, AWS Bedrock, Anthropic (LLM only).
 
-## What Makes It Different
+See [docs/configuration.md](docs/configuration.md) for all fields and [docs/providers.md](docs/providers.md) for provider setup.
 
-**Metadata-aware retrieval.** Most vector databases return results ranked by similarity alone. Gramaton filters by confidence, temporality, and epistemic status before ranking. A superseded architecture decision doesn't compete with its replacement.
-
-**Knowledge diffing.** "What changed about our caching strategy since January?" is a query that vector search can't answer. Gramaton's versioned graph can -- it diffs two points in history and returns what was added, modified, or superseded.
-
-**The agent is the LLM.** Instead of building LLM infrastructure into the server (API keys, model providers, async processing queues), Gramaton uses the LLM the user already has. Classification happens in the agent session via subagents. The server stays simple.
-
-**Epistemic honesty.** Records can be marked as refuted but retained for context. A superseded decision stays in the graph, linked to what replaced it. The system tracks not just what's true, but what used to be true and why it changed.
+</details>
 
 ## Documentation
 
-The [project design docs](docs/project-design/) cover the full system design:
-
-| Document | What It Covers |
-|----------|---------------|
-| [Tenets](docs/project-design/tenets.md) | Guiding principles |
-| [Foundations](docs/project-design/foundations.md) | Research influences |
-| [Architecture](docs/project-design/architecture.md) | System design, components, package structure |
-| [Data Model](docs/project-design/data-model.md) | Graph structure, property types, metadata schema |
-| [Capture and Processing](docs/project-design/capture-and-processing.md) | How knowledge enters the system |
-| [Retrieval](docs/project-design/retrieval.md) | Query pattern, CLI, versioning tools, scoring model |
-| [Embedding](docs/project-design/embedding.md) | Providers, vector indexing, chunking |
-| [Curation](docs/project-design/curation.md) | Background maintenance |
-| [Agent Integration](docs/project-design/agent-integration.md) | System prompts, subagent patterns |
-| [Case Studies](docs/project-design/case-studies.md) | Real-world examples testing the design |
-| [Data Integrity](docs/project-design/data-integrity.md) | Threat model, failure modes, defenses |
-| [Validation](docs/project-design/validation.md) | How we test the core hypothesis |
-| [Design Decisions](docs/project-design/design-decisions.md) | Decision log with rationale |
-| [Glossary](docs/project-design/glossary.md) | Terminology reference |
+| | |
+|---|---|
+| [Configuration](docs/configuration.md) | All config fields, defaults, and examples |
+| [Providers](docs/providers.md) | Embedding and LLM provider setup |
+| [Architecture](docs/architecture.md) | Package structure, data flow, concurrency model |
+| [Tenets](docs/tenets.md) | Design principles |
+| [Design Documents](docs/project-design/) | Research foundations, data model, scoring, curation, threat model |
 
 ## License
 
 [Apache 2.0](LICENSE)
-
-## Author
-
-Brandon Lattin -- [github.com/brandonlattin](https://github.com/brandonlattin)
