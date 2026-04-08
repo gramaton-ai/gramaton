@@ -38,6 +38,13 @@ type hnswNode struct {
 	conns [][]string // conns[l] = neighbor IDs at layer l
 }
 
+// Safety limits for deserialization to prevent OOM from malicious input.
+const (
+	maxNodes  = 10_000_000 // 10M nodes max
+	maxDim    = 65_536     // 64K dimensions max (dim*4 fits in int)
+	maxLayers = 100        // HNSW layers (typical max is ~20 for 1M nodes)
+)
+
 // distNode pairs a node ID with its distance (1 - cosine similarity)
 // for use in search candidates.
 type distNode struct {
@@ -523,6 +530,9 @@ func (h *HNSWIndex) UnmarshalBinary(data []byte) error {
 
 	h.M = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 	pos += 2
+	if h.M < 2 {
+		return fmt.Errorf("hnsw: M must be >= 2, got %d", h.M)
+	}
 	h.Mmax0 = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 	pos += 2
 	h.EfConstruction = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
@@ -531,8 +541,14 @@ func (h *HNSWIndex) UnmarshalBinary(data []byte) error {
 	pos += 2
 	h.dim = int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 	pos += 4
+	if h.dim > maxDim {
+		return fmt.Errorf("hnsw: dim %d exceeds maximum %d", h.dim, maxDim)
+	}
 	h.maxLayer = int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 	pos += 2
+	if h.maxLayer > maxLayers {
+		return fmt.Errorf("hnsw: maxLayer %d exceeds maximum %d", h.maxLayer, maxLayers)
+	}
 	h.ml = 1.0 / math.Log(float64(h.M))
 	if h.rng == nil {
 		h.rng = rand.New(rand.NewSource(42))
@@ -548,6 +564,9 @@ func (h *HNSWIndex) UnmarshalBinary(data []byte) error {
 
 	numNodes := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 	pos += 4
+	if numNodes > maxNodes {
+		return fmt.Errorf("hnsw: numNodes %d exceeds maximum %d", numNodes, maxNodes)
+	}
 
 	h.nodes = make(map[string]*hnswNode, numNodes)
 
@@ -568,9 +587,12 @@ func (h *HNSWIndex) UnmarshalBinary(data []byte) error {
 		}
 		layer := int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 		pos += 2
+		if layer > maxLayers {
+			return fmt.Errorf("hnsw: node %d layer %d exceeds maximum %d", i, layer, maxLayers)
+		}
 
-		// Vector.
-		vecSize := h.dim * 4
+		// Vector. Use safe multiplication to prevent overflow.
+		vecSize := h.dim * 4 // safe: dim <= maxDim (65536), so dim*4 <= 262144
 		if pos+vecSize > len(data) {
 			return fmt.Errorf("hnsw: truncated vector at node %d", i)
 		}

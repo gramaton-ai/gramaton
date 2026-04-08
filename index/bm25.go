@@ -299,6 +299,9 @@ func (idx *BM25Index) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("bm25: unsupported version %d", version)
 	}
 	numDocs := binary.LittleEndian.Uint32(data[6:10])
+	if numDocs > 10_000_000 {
+		return fmt.Errorf("bm25: numDocs %d exceeds maximum 10000000", numDocs)
+	}
 	k1 := readFloat64(data[10:18])
 	b := readFloat64(data[18:26])
 
@@ -329,6 +332,9 @@ func (idx *BM25Index) UnmarshalBinary(data []byte) error {
 		pos += 4
 		numTerms := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 		pos += 4
+		if numTerms > 10_000_000 {
+			return fmt.Errorf("bm25: numTerms %d exceeds maximum at doc %d", numTerms, i)
+		}
 
 		tf := make(map[string]int, numTerms)
 		for j := 0; j < numTerms; j++ {
@@ -337,7 +343,8 @@ func (idx *BM25Index) UnmarshalBinary(data []byte) error {
 			}
 			termLen := int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 			pos += 2
-			if pos+termLen+4 > len(data) {
+			remaining := len(data) - pos
+			if remaining < termLen+4 {
 				return fmt.Errorf("bm25: truncated term data at doc %d term %d", i, j)
 			}
 			term := string(data[pos : pos+termLen])
