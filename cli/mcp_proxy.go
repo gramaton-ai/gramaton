@@ -75,6 +75,23 @@ func proxyGet(path string) (*mcp.CallToolResult, any, error) {
 	return proxyResult(env.Data)
 }
 
+// Slow variants for I/O-heavy operations (backup, reembed).
+func proxyPostSlow(path string, args any) (*mcp.CallToolResult, any, error) {
+	env, err := serverPostSlow(path, args)
+	if err != nil {
+		return proxyErr(err.Error())
+	}
+	return proxyResult(env.Data)
+}
+
+func proxyGetSlow(path string) (*mcp.CallToolResult, any, error) {
+	env, err := serverGetSlow(path)
+	if err != nil {
+		return proxyErr(err.Error())
+	}
+	return proxyResult(env.Data)
+}
+
 func proxyPatch(path string, args any) (*mcp.CallToolResult, any, error) {
 	env, err := serverPatch(path, args)
 	if err != nil {
@@ -475,7 +492,7 @@ func registerReembedProxy(s *mcp.Server) {
 		Name:        "gramaton_reembed",
 		Description: "Regenerate stale embeddings (model changed or missing).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyReembedInput) (*mcp.CallToolResult, any, error) {
-		return proxyPost("/v1/reembed", args)
+		return proxyPostSlow("/v1/reembed", args)
 	})
 }
 
@@ -508,9 +525,9 @@ func registerBackupProxy(s *mcp.Server) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyBackupInput) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "backup":
-			return proxyPost("/v1/backup", nil)
+			return proxyPostSlow("/v1/backup", nil)
 		default:
-			return proxyGet("/v1/backup")
+			return proxyGetSlow("/v1/backup")
 		}
 	})
 }

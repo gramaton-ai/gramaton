@@ -45,7 +45,7 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 	}
 	defer f.Close()
 
-	gz, err := gzip.NewWriterLevel(f, gzip.BestCompression)
+	gz, err := gzip.NewWriterLevel(f, gzip.DefaultCompression)
 	if err != nil {
 		return "", fmt.Errorf("create gzip writer: %w", err)
 	}

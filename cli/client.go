@@ -96,6 +96,47 @@ func serverPost(path string, body any) (*server.ResponseEnvelope, error) {
 	return parseResponse(resp)
 }
 
+// serverPostSlow is like serverPost but uses the slow client timeout.
+// Use for I/O-heavy operations (backup, reembed).
+func serverPostSlow(path string, body any) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	var reqBody []byte
+	if body != nil {
+		reqBody, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
+	}
+
+	resp, err := httpPostSlow(base+path, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
+// serverGetSlow is like serverGet but uses the slow client timeout.
+func serverGetSlow(path string) (*server.ResponseEnvelope, error) {
+	base, err := serverURL()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := httpGetSlow(base + path)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return parseResponse(resp)
+}
+
 // serverPatch sends a PATCH request to the server.
 func serverPatch(path string, body any) (*server.ResponseEnvelope, error) {
 	base, err := serverURL()
