@@ -257,7 +257,7 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		if !t.needsChunk {
 			continue
 		}
-		pre := s.engine.PreChunk(ctx, t.content, t.summary)
+		pre := s.engine.PreChunk(ctx, t.content, "", t.summary)
 		if pre != nil {
 			chunkResults = append(chunkResults, chunkResult{nodeID: t.nodeID, pre: pre})
 		}

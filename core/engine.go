@@ -655,7 +655,11 @@ const maxChunkRetries = 4
 // any embedding model's context window without configuration.
 //
 // Call this BEFORE acquiring the write lock. Returns nil if no splitting needed.
-func (e *Engine) PreChunk(ctx context.Context, content string, summary string) *PreChunkResult {
+// PreChunk splits content into sections/chunks and pre-embeds them.
+// medium is the content_medium text (~1500 chars) used as the preferred
+// source for the parent embedding when available (better than truncated
+// content_full). summary is content_short (~200 chars), used as fallback.
+func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) *PreChunkResult {
 	cfg := e.cfg.Chunking
 
 	// Use the model's context window to determine threshold in chars.
@@ -670,16 +674,16 @@ func (e *Engine) PreChunk(ctx context.Context, content string, summary string) *
 	// Try structural splitting first.
 	sections := graph.SplitSections(content, cfg.SectionMin, cfg.SectionMax)
 	if sections != nil {
-		return e.preChunkSections(ctx, content, summary, sections)
+		return e.preChunkSections(ctx, content, medium, summary, sections)
 	}
 
 	// Fallback to dumb chunking with adaptive sizing.
-	return e.preChunkAdaptive(ctx, content, summary, cfg)
+	return e.preChunkAdaptive(ctx, content, medium, summary, cfg)
 }
 
 // preChunkSections embeds structurally-split sections. If any section
 // exceeds the model's context, falls back to adaptive dumb chunking.
-func (e *Engine) preChunkSections(ctx context.Context, content, summary string, sections []graph.Section) *PreChunkResult {
+func (e *Engine) preChunkSections(ctx context.Context, content, medium, summary string, sections []graph.Section) *PreChunkResult {
 	result := &PreChunkResult{Sections: sections}
 
 	if e.embedder == nil {
@@ -695,14 +699,14 @@ func (e *Engine) preChunkSections(ctx context.Context, content, summary string, 
 	if err == nil {
 		result.Vectors = vecs
 		result.Model = e.embedder.ModelID()
-		e.preChunkParent(ctx, result, content, summary)
+		e.preChunkParent(ctx, result, content, medium, summary)
 		return result
 	}
 
 	if IsContextLengthError(err) {
 		// Sections are too large for the model. Fall back to
 		// adaptive dumb chunking which will find the right size.
-		return e.preChunkAdaptive(ctx, content, summary, e.cfg.Chunking)
+		return e.preChunkAdaptive(ctx, content, medium, summary, e.cfg.Chunking)
 	}
 
 	// Non-context error (network, etc.) -- return sections without embeddings.
@@ -712,7 +716,7 @@ func (e *Engine) preChunkSections(ctx context.Context, content, summary string, 
 // preChunkAdaptive splits content into overlapping chunks and embeds
 // them. If chunks exceed the model's context window, reduces chunk
 // size and re-splits until they fit.
-func (e *Engine) preChunkAdaptive(ctx context.Context, content, summary string, cfg config.ChunkingConfig) *PreChunkResult {
+func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary string, cfg config.ChunkingConfig) *PreChunkResult {
 	// Start with chunk_size from config, but cap to the model's
 	// context window so initial chunks are likely to fit.
 	chunkSize := cfg.ChunkSize
@@ -760,7 +764,7 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, summary string, 
 			result.Model = e.embedder.ModelID()
 		}
 
-		e.preChunkParent(ctx, result, content, summary)
+		e.preChunkParent(ctx, result, content, medium, summary)
 		return result
 	}
 
@@ -769,16 +773,21 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, summary string, 
 	return &PreChunkResult{Texts: chunks}
 }
 
-// preChunkParent computes a fallback embedding for the parent record
-// from the summary or truncated content.
-func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, content, summary string) {
+// preChunkParent computes the parent embedding for chunked records.
+// Preference order: content_medium (purpose-built for the model's
+// context window), then content_short, then truncated content_full.
+func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, content, medium, summary string) {
 	if e.embedder == nil {
 		return
 	}
-	parentText := summary
+	// Prefer content_medium: it's purpose-built to represent the
+	// document's identity within the model's context window.
+	parentText := medium
 	if parentText == "" {
-		// Use first portion of content as fallback. Try embedding it;
-		// if it exceeds context, halve until it fits.
+		parentText = summary
+	}
+	if parentText == "" {
+		// Last resort: use first portion of content_full.
 		parentText = content
 		if len(parentText) > 2000 {
 			parentText = parentText[:2000]
@@ -920,7 +929,8 @@ func (e *Engine) ChunkIfNeeded(ctx context.Context, nodeID string) (int, error) 
 		return 0, nil
 	}
 
-	pre := e.PreChunk(ctx, contentProp.String(), "")
+	medium, _ := n.Properties.GetString("content_medium")
+	pre := e.PreChunk(ctx, contentProp.String(), medium, "")
 	return e.ApplyChunks(nodeID, pre, n.Properties), nil
 }
 

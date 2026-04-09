@@ -383,7 +383,7 @@ func TestPreChunkConcurrentWithReads(t *testing.T) {
 				for k := 0; k < 600; k++ {
 					longContent += "word "
 				}
-				_ = eng.PreChunk(ctx, longContent, "")
+				_ = eng.PreChunk(ctx, longContent, "", "")
 			}
 		}()
 	}

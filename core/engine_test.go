@@ -226,7 +226,7 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 		longContent += "word "
 	}
 
-	pre := eng.PreChunk(context.Background(), longContent, "")
+	pre := eng.PreChunk(context.Background(), longContent, "", "")
 	if pre == nil {
 		t.Fatal("PreChunk should return result for long content")
 	}
@@ -262,7 +262,7 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 
 func TestPreChunkShortContent(t *testing.T) {
 	eng := setupTestEngine(t)
-	pre := eng.PreChunk(context.Background(), "short content", "")
+	pre := eng.PreChunk(context.Background(), "short content", "", "")
 	if pre != nil {
 		t.Fatal("PreChunk should return nil for short content")
 	}

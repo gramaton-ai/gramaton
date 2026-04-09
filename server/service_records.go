@@ -86,7 +86,7 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 
 	// Pre-embed and pre-chunk outside the lock.
 	preEmbedded := s.preEmbedContent(req)
-	preChunked := s.engine.PreChunk(ctx, req.Content, req.SummaryShort)
+	preChunked := s.engine.PreChunk(ctx, req.Content, req.SummaryMedium, req.SummaryShort)
 
 	s.engine.Lock()
 	defer s.engine.Unlock()

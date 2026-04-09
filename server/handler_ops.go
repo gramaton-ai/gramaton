@@ -160,7 +160,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		prepared = append(prepared, precomputed{
 			file:     f,
 			embedded: s.preEmbedContent(capReq),
-			chunked:  s.engine.PreChunk(context.Background(), f.Content, ""),
+			chunked:  s.engine.PreChunk(context.Background(), f.Content, "", ""),
 		})
 	}
 
