@@ -707,18 +707,26 @@ func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps g
 		return 0
 	}
 
-	// Apply parent fallback embedding if the parent doesn't already have one.
+	// Apply parent embedding from the chunk pipeline. When chunking is
+	// triggered, the content exceeded the embedding model's context
+	// window, so any embedding_full set by preEmbedContent is degraded
+	// (silently truncated by the model). The chunk pipeline's ParentVec
+	// is computed from the summary or first 2000 chars -- intentionally
+	// sized for the model and a better representation of the document's
+	// identity. Always prefer it over a degraded pre-embed result.
 	if pre.ParentVec != nil {
-		if _, hasEmbed := parentProps.GetVector("embedding_full"); !hasEmbed {
-			prop := graph.VectorProperty(pre.ParentVec)
-			e.graph.SetNodeProperty(parentID, "embedding_full", prop)
-			e.propIdx.Add(parentID, "embedding_full", prop)
-			e.vecIdx.Add(parentID, pre.ParentVec)
-			if pre.Model != "" {
-				modelProp := graph.StringProperty(pre.Model)
-				e.graph.SetNodeProperty(parentID, "embedding_model", modelProp)
-				e.propIdx.Add(parentID, "embedding_model", modelProp)
-			}
+		if old, hasEmbed := parentProps.GetVector("embedding_full"); hasEmbed {
+			e.propIdx.Remove(parentID, "embedding_full", graph.VectorProperty(old))
+			e.vecIdx.Remove(parentID)
+		}
+		prop := graph.VectorProperty(pre.ParentVec)
+		e.graph.SetNodeProperty(parentID, "embedding_full", prop)
+		e.propIdx.Add(parentID, "embedding_full", prop)
+		e.vecIdx.Add(parentID, pre.ParentVec)
+		if pre.Model != "" {
+			modelProp := graph.StringProperty(pre.Model)
+			e.graph.SetNodeProperty(parentID, "embedding_model", modelProp)
+			e.propIdx.Add(parentID, "embedding_model", modelProp)
 		}
 	}
 
