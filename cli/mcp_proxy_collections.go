@@ -183,7 +183,7 @@ type proxyCollectionRenameInput struct {
 func registerCollectionRenameProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_rename",
-		Description: "Rename a collection. Name must be unique within the store.",
+		Description: "Rename a collection. Name must be unique.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionRenameInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.Name == "" {
 			return proxyErr("collection_id and name are required")
@@ -202,7 +202,7 @@ type proxyCollectionDeleteInput struct {
 func registerCollectionDeleteProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_delete",
-		Description: "Retire a collection (reversible). Items and edges are preserved. Calling again on a retired collection unretires it.",
+		Description: "Retire a collection (reversible). Items and edges are preserved. Call again on a retired collection to re-activate it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionDeleteInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")

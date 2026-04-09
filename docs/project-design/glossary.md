@@ -2,11 +2,20 @@
 
 Quick reference for terminology used across the project.
 
+## Terminology Convention
+
+Two terms describe the same thing for different audiences:
+
+- **Knowledge graph** — used in tool descriptions, API docs, and developer docs. Primes LLMs and developers to think in terms of nodes, edges, and traversal.
+- **Knowledge store** — used in README, user-facing docs, error messages, and CLI output. Approachable for non-technical users who just want to store and retrieve knowledge.
+
+Never mix both in the same surface. Pick one per context.
+
 ## System
 
 | Term | Definition |
 |------|-----------|
-| **Gramaton** | The complete system — service + agent integration kit. Placeholder name. |
+| **Gramaton** | The complete system — service + agent integration kit. |
 | **Gramaton Service** | The Go server binary. Stores knowledge, delegates embedding to an external provider (Ollama/API/Bedrock), serves queries. No LLM dependency. Pure Go, no native dependencies. |
 | **Agent Integration Kit** | Prompt patterns, system prompt templates, subagent prompts, and skill definitions that give agents the ability to use Gramaton transparently. |
 | **Context envelope** | Five domain-neutral structured fields the agent packages alongside content at capture time: what is this about, who/what is involved, what prompted this, what should this be findable by, what else relates. Contains implicit knowledge that isn't in the content itself. What makes records findable by context, not just by content. |
@@ -89,7 +98,7 @@ Quick reference for terminology used across the project.
 | **Commit** | An immutable snapshot of the graph state, with parent pointers and metadata (author, timestamp, message). Every mutation creates a commit. |
 | **Branch** | A named mutable pointer to a commit. Enables speculative reasoning, curation safety, and per-project isolation. |
 | **Three-way merge** | Conflict resolution: find common ancestor, diff both sides, combine non-conflicting changes, surface conflicts. |
-| **Knowledge diffing** | Querying what changed between two points in the store's history, optionally scoped to a topic. A retrieval pattern unique to versioned knowledge stores — answers "what evolved" not just "what exists." |
+| **Knowledge diffing** | Querying what changed between two points in the graph's history, optionally scoped to a topic. Answers "what evolved" not just "what exists." |
 | **Speculative branching** | Creating a branch to explore a design option or hypothesis without polluting the main store. Merge if adopted, discard if rejected. Maps to hippocampal working memory in neuroscience. |
 | **Audit trail** | The commit history of a specific record — when it was created, how it changed, why confidence was adjusted, what contradicted it. Enables provenance-aware reasoning by agents. |
 | **Rollback** | Atomic revert of any commit. Undoes a batch of captures or a bad curation run cleanly. |

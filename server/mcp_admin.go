@@ -374,7 +374,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_backup",
-		Description: "Create a backup of the knowledge store or list existing backups.",
+		Description: "Create a backup of the knowledge graph or list existing backups.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args backupToolInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_backup")
 		defer done(nil)

@@ -170,7 +170,7 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_rename",
-		Description: "Rename a collection. Name must be unique within the store.",
+		Description: "Rename a collection. Name must be unique.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args renameInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_rename")
 		defer done(nil)
@@ -191,7 +191,7 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_delete",
-		Description: "Retire a collection (reversible). Items and edges are preserved. Calling again on a retired collection unretires it.",
+		Description: "Retire a collection (reversible). Items and edges are preserved. Call again on a retired collection to re-activate it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args deleteInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_delete")
 		defer done(nil)

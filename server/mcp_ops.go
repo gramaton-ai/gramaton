@@ -19,7 +19,7 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_status",
-		Description: "Get knowledge store health: node/edge counts, embedding status, curation status.",
+		Description: "Get knowledge graph health: node/edge counts, embedding status, curation status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_status")
 		defer done(nil)

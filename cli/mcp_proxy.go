@@ -360,7 +360,7 @@ func registerPendingProxy(s *mcp.Server) {
 func registerStatusProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_status",
-		Description: "Get knowledge store health: node/edge counts, embedding status, curation status.",
+		Description: "Get knowledge graph health: node/edge counts, embedding status, curation status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return proxyGet("/v1/status")
 	})
@@ -526,7 +526,7 @@ type proxyBackupInput struct {
 func registerBackupProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_backup",
-		Description: "Create a backup of the knowledge store or list existing backups.",
+		Description: "Create a backup of the knowledge graph or list existing backups.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyBackupInput) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "backup":
@@ -547,7 +547,7 @@ type proxyDeleteInput struct {
 func registerDeleteProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_delete",
-		Description: "Soft-delete a record from the knowledge store.",
+		Description: "Mark a record as deleted (recoverable). Sets processing_status to deleted.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyDeleteInput) (*mcp.CallToolResult, any, error) {
 		path := fmt.Sprintf("/v1/records/%s", url.PathEscape(args.ID))
 		if args.Reason != "" {
