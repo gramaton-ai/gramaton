@@ -21,6 +21,8 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_branch",
 		Description: "Manage branches: create, list, checkout, merge, or discard.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args branchInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_branch")
+		defer done(nil)
 		switch args.Action {
 		case "list":
 			s.engine.RLock()
@@ -161,6 +163,8 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_diff",
 		Description: "Show what changed in the knowledge store since a date, optionally filtered by topic.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args diffInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_diff")
+		defer done(nil)
 		if len(args.Topic) > maxTopicLength {
 			return mcpErr(fmt.Sprintf("topic exceeds maximum length of %d", maxTopicLength))
 		}
@@ -250,6 +254,8 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_log",
 		Description: "View commit history or per-record change history.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args logInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_log")
+		defer done(nil)
 		limit := args.Limit
 		if limit <= 0 {
 			limit = 20
@@ -328,6 +334,8 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_backup",
 		Description: "Create a backup of the knowledge store or list existing backups.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args backupToolInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_backup")
+		defer done(nil)
 		cfg := s.engine.Config()
 		backupDir := cfg.Backup.Dir
 		if backupDir == "" {

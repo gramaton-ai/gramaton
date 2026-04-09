@@ -19,6 +19,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_create",
 		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use the knowledge graph (gramaton_capture) for semantic knowledge like decisions, context, and research.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args createInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_create")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionCreate(ctx, &collectionCreateRequest{
 			Name:        args.Name,
 			Description: args.Description,
@@ -36,6 +38,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_list",
 		Description: "List all collections with their names, item counts, and schema status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_list")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionList()
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -56,6 +60,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_items",
 		Description: "List ALL items in a collection. Returns every item, guaranteed complete. Supports sorting by any field.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args itemsInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_items")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionItems(args.CollectionID, &collectionItemsRequest{
 			Sort:           args.Sort,
 			Order:          args.Order,
@@ -78,6 +84,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_add",
 		Description: "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns duplicate info if an item with the same title already exists.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args addInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_add")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionAdd(args.CollectionID, &collectionAddRequest{
 			Fields: args.Fields,
 		})
@@ -99,6 +107,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_update",
 		Description: "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args updateInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_update")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionUpdate(args.CollectionID, args.ItemID, &collectionUpdateRequest{
 			Fields: args.Fields,
 		})
@@ -120,6 +130,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_move",
 		Description: "Move an item from one collection to another. The item's fields are validated against the target collection's schema.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args moveInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_move")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionMove(args.CollectionID, args.ItemID, &collectionMoveRequest{
 			TargetCollectionID: args.TargetCollectionID,
 		})
@@ -140,6 +152,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_remove",
 		Description: "Remove an item from a collection. The item node is preserved in the graph; only the membership edge is deleted.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args removeInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_remove")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionRemove(args.CollectionID, args.ItemID)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -158,6 +172,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_rename",
 		Description: "Rename a collection. Name must be unique within the store.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args renameInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_rename")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionRename(args.CollectionID, &collectionRenameRequest{
 			Name: args.Name,
 		})
@@ -177,6 +193,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_delete",
 		Description: "Retire a collection (reversible). Items and edges are preserved. Calling again on a retired collection unretires it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args deleteInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_delete")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionDelete(args.CollectionID)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -194,6 +212,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_schema",
 		Description: "Read a collection's schema and migration status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args schemaReadInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_schema")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionSchemaRead(args.CollectionID)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -213,6 +233,8 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_collection_migrate",
 		Description: "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args migrateInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_migrate")
+		defer done(nil)
 		result, svcErr := s.serviceCollectionMigrate(args.CollectionID, &collectionMigrateRequest{
 			Field: args.Field,
 			Value: args.Value,

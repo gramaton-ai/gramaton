@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/embed"
@@ -117,6 +118,7 @@ func (s *Server) servicePending() (map[string]any, *serviceError) {
 // content that lack chunk children are automatically chunked before
 // embedding (same as capture does for new records).
 func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any, *serviceError) {
+	start := time.Now()
 	if batch <= 0 {
 		batch = 50
 	}
@@ -295,7 +297,7 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		numChunks := s.engine.ApplyChunks(cr.nodeID, cr.pre, n.Properties)
 		if numChunks > 0 {
 			chunked++
-			s.log.Info("reembed chunked record", "node", cr.nodeID, "chunks", numChunks)
+			s.log.Info("reembed chunked record", "component", "reembed", "node", cr.nodeID, "chunks", numChunks)
 		}
 	}
 
@@ -307,7 +309,7 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		if res.err != nil {
 			errors++
 			errorIDs = append(errorIDs, res.target.nodeID)
-			s.log.Warn("reembed failed", "node", res.target.nodeID, "err", res.err)
+			s.log.Warn("reembed failed", "component", "reembed", "node", res.target.nodeID, "err", res.err)
 			continue
 		}
 		if _, ok := s.engine.Graph().GetNode(res.target.nodeID); !ok {
@@ -335,6 +337,8 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 	if reembedded > 0 || chunked > 0 {
 		s.engine.Save("reembed")
 	}
+
+	s.log.Info("reembed complete", "component", "reembed", "reembedded", reembedded, "chunked", chunked, "errors", errors, "duration_ms", time.Since(start).Milliseconds())
 
 	result := map[string]any{
 		"reembedded": reembedded,

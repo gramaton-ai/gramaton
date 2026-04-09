@@ -43,6 +43,8 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_search",
 		Description: "Search the knowledge graph. Returns results ranked by composite score. Text is optional -- omit for filter-only queries. Note: this searches knowledge records, not collection items. For exhaustive collection listing, use gramaton_collection_items.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_search")
+		defer done(nil)
 		result, svcErr := s.serviceSearch(ctx, &searchRequest{
 			Text:               args.Text,
 			Top:                args.Top,
@@ -91,6 +93,8 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_explore",
 		Description: "Traverse the knowledge graph from a starting node. Returns connected nodes and edges.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args exploreInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_explore")
+		defer done(nil)
 		result, svcErr := s.serviceExplore(&exploreRequest{
 			NodeID:    args.NodeID,
 			Depth:     args.Depth,
@@ -111,6 +115,8 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_duplicates",
 		Description: "Find near-duplicate records by comparing stored embeddings. Returns pairs above the similarity threshold.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args duplicatesInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_duplicates")
+		defer done(nil)
 		result, svcErr := s.serviceDuplicates(args.Threshold, args.MaxPairs)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)

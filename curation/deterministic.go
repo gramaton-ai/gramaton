@@ -4,6 +4,7 @@
 package curation
 
 import (
+	"io"
 	"log/slog"
 	"sort"
 	"time"
@@ -14,6 +15,14 @@ import (
 	"github.com/gramaton-ai/gramaton/index"
 	"github.com/gramaton-ai/gramaton/search"
 )
+
+// ensureLogger returns a no-op logger if the provided logger is nil.
+func ensureLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // DeterministicResult summarizes what a deterministic curation cycle did.
 type DeterministicResult struct {
@@ -55,6 +64,8 @@ type StoreManifest struct {
 // It acquires and releases locks as needed -- caller must NOT hold
 // any lock.
 func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *DeterministicResult {
+	start := time.Now()
+	logger = ensureLogger(logger)
 	result := &DeterministicResult{}
 
 	// All read-gather happens under RLock. We collect IDs and data,
@@ -391,7 +402,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	result.ConceptCandidates = candidates
 	result.Manifest = manifest
 
-	if logger != nil && mutations > 0 {
+	if mutations > 0 {
 		logger.Info("deterministic curation complete",
 			"component", "curation",
 			"lifecycle_transitions", result.LifecycleTransitions,
@@ -400,7 +411,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"quality_repairs", result.QualityRepairs,
 			"quality_flags", result.QualityFlags,
 			"gc_collected", result.GCCollected,
-			"concept_candidates", len(candidates))
+			"concept_candidates", len(candidates),
+			"duration_ms", time.Since(start).Milliseconds())
 	}
 
 	return result
@@ -417,6 +429,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 //
 // In dry-run mode, returns the count that WOULD be deleted without deleting.
 func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
+	logger = ensureLogger(logger)
 	minAge := cfg.GC.MinAgeDays
 	if minAge <= 0 {
 		minAge = 30
@@ -483,11 +496,9 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	}
 
 	if cfg.GC.DryRun {
-		if logger != nil {
-			logger.Info("GC dry-run: would delete records",
-				"component", "curation",
-				"count", len(gcIDs))
-		}
+		logger.Info("GC dry-run: would delete records",
+			"component", "curation",
+			"count", len(gcIDs))
 		return len(gcIDs)
 	}
 
@@ -509,7 +520,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	}
 	e.Unlock()
 
-	if logger != nil && deleted > 0 {
+	if deleted > 0 {
 		logger.Info("GC: deleted debris records",
 			"component", "curation",
 			"deleted", deleted)
@@ -523,6 +534,7 @@ func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id
 // enrichConcepts updates evidence_count and last_evidence_at on concept
 // nodes based on their inbound edges.
 func enrichConcepts(e *core.Engine, logger *slog.Logger) {
+	logger = ensureLogger(logger)
 	// Read phase: find concept nodes and compute their evidence.
 	type conceptUpdate struct {
 		id             string
@@ -595,7 +607,7 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 	}
 	e.Unlock()
 
-	if logger != nil && len(updates) > 0 {
+	if len(updates) > 0 {
 		logger.Info("concept enrichment complete",
 			"component", "curation",
 			"concepts_updated", len(updates))
@@ -644,6 +656,7 @@ func curationNodeText(n *graph.Node) string {
 // entity resolution pattern: embedding comparison scoped to sections,
 // with sibling exclusion to avoid linking sections from the same article.
 func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
+	logger = ensureLogger(logger)
 	minSim := cfg.Curation.SectionLinkMin
 	if minSim <= 0 {
 		minSim = 0.75
@@ -792,11 +805,9 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 
 	if linked > 0 {
 		e.Save("curation: section linking")
-		if logger != nil {
-			logger.Info("cross-section linking complete",
-				"component", "curation",
-				"sections_linked", linked)
-		}
+		logger.Info("cross-section linking complete",
+			"component", "curation",
+			"sections_linked", linked)
 	}
 
 	return linked

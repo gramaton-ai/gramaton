@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/gramaton-ai/gramaton/search"
@@ -70,6 +71,7 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	if !isLoopback(r) {
 		s.writeError(w, http.StatusForbidden, "forbidden",
 			"backup is restricted to loopback connections", false)
@@ -91,7 +93,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "backup_error", "backup failed", false)
-		s.log.Error("backup failed", "err", err)
+		s.log.Error("backup failed", "component", "backup", "err", err)
 		return
 	}
 
@@ -104,7 +106,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		sizeBytes = info.Size()
 	}
 
-	s.log.Info("backup created", "path", archivePath, "size_bytes", sizeBytes)
+	s.log.Info("backup created", "component", "backup", "path", archivePath, "size_bytes", sizeBytes, "duration_ms", time.Since(start).Milliseconds())
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"path":        archivePath,
@@ -114,6 +116,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	if !isLoopback(r) {
 		s.writeError(w, http.StatusForbidden, "forbidden",
 			"restore is restricted to loopback connections", false)
@@ -143,7 +146,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	if err := backup.Restore(req.Path, dataDir); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "restore_error", "restore failed", false)
-		s.log.Error("restore failed", "err", err)
+		s.log.Error("restore failed", "component", "backup", "err", err)
 		return
 	}
 
@@ -159,7 +162,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		s.engine.RebuildAllIndexes()
 	}
 
-	s.log.Info("restore complete", "path", req.Path)
+	s.log.Info("restore complete", "component", "backup", "path", req.Path, "duration_ms", time.Since(start).Milliseconds())
 
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"restored": true,
@@ -218,6 +221,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req importRequest
 	if err := parseJSON(r, &req, maxIngestBodySize); err != nil {
 		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
@@ -252,9 +256,11 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	s.engine.RebuildAllIndexes()
 
 	s.log.Info("import complete",
+		"component", "backup",
 		"imported", result.Imported,
 		"skipped", result.Skipped,
-		"errors", result.Errors)
+		"errors", result.Errors,
+		"duration_ms", time.Since(start).Milliseconds())
 
 	s.writeJSON(w, http.StatusOK, result)
 }

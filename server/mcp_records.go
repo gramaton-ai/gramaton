@@ -35,6 +35,8 @@ Example: gramaton_capture(content="User prefers dark mode", temporality="durable
 
 IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args captureInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_capture")
+		defer done(nil)
 		result, svcErr := s.serviceCapture(ctx, &captureRequest{
 			Content:           args.Content,
 			Temporality:       args.Temporality,
@@ -66,6 +68,8 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_inspect",
 		Description: "Get full content, metadata, and related records for a specific record.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args inspectInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_inspect")
+		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
@@ -93,6 +97,8 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_update",
 		Description: "Update metadata on a knowledge graph record. For collection item fields, use gramaton_collection_update instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args updateInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_update")
+		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
@@ -127,6 +133,8 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_classify",
 		Description: "Classify a pending record with metadata. Sets processing_status to processed.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args classifyInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_classify")
+		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
@@ -153,6 +161,8 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_resolve",
 		Description: "Mark a knowledge record as resolved. Sets resolution status, resolved_at timestamp, and auto-sets valid_until to deprioritize in search. Use for decisions, questions, or knowledge records with a lifecycle. For task completion in collections, use gramaton_collection_update to change the status field instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args resolveInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_resolve")
+		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
@@ -176,6 +186,8 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 		Name:        "gramaton_link",
 		Description: "Create an edge between two records in the knowledge graph. Collection items are also graph nodes and can be linked.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args linkInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_link")
+		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}

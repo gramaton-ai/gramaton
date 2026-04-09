@@ -11,6 +11,8 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_pending",
 		Description: "List records awaiting classification (processing_status=captured).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_pending")
+		defer done(nil)
 		result, _ := s.servicePending()
 		return mcpJSONResult(result)
 	})
@@ -19,6 +21,8 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_status",
 		Description: "Get knowledge store health: node/edge counts, embedding status, curation status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_status")
+		defer done(nil)
 		s.engine.RLock()
 		defer s.engine.RUnlock()
 
@@ -35,6 +39,8 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_stats",
 		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_stats")
+		defer done(nil)
 		result, _ := s.serviceStats()
 		return mcpJSONResult(result)
 	})
@@ -46,6 +52,8 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		Name:        "gramaton_reembed",
 		Description: "Regenerate stale embeddings (model changed or missing).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args reembedInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_reembed")
+		defer done(nil)
 		result, svcErr := s.serviceReembed(ctx, args.Batch)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -66,6 +74,8 @@ Call at natural breakpoints: end of task, topic change, session wind-down. Not e
 
 Extracted knowledge enters the knowledge graph as ephemeral, low-confidence records. It does NOT go into collections.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args observeInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_observe")
+		defer done(nil)
 		result, svcErr := s.serviceObserve(observeRequest{
 			Messages: args.Messages,
 			Facts:    args.Facts,
@@ -83,6 +93,8 @@ Extracted knowledge enters the knowledge graph as ephemeral, low-confidence reco
 		Name:        "gramaton_curation",
 		Description: "View curation status, trigger a curation cycle, or dry-run to see what autonomous curation would change without applying.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args curationInput) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_curation")
+		defer done(nil)
 		if s.runner == nil {
 			return mcpErr("curation is not enabled")
 		}

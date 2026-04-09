@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -526,6 +527,21 @@ func (s *Server) runAutoBackup() {
 	s.log.Info("auto-backup created", "path", archivePath, "deleted_old", len(deleted))
 }
 
+// requestIDKey is the context key for per-request correlation IDs.
+type requestIDKey struct{}
+
+// requestCounter generates monotonically increasing request IDs.
+var requestCounter atomic.Uint64
+
+// requestID extracts the correlation ID from a context. Returns ""
+// if no ID is set.
+func requestID(ctx context.Context) string {
+	if id, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
 // securityHeaders wraps a handler with security response headers
 // and request logging. Skips the /mcp path since MCP has its own
 // content types.
@@ -533,6 +549,10 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.recordActivity()
 		start := time.Now()
+
+		// Generate a short correlation ID for this request.
+		reqID := fmt.Sprintf("r%d", requestCounter.Add(1))
+		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, reqID))
 
 		// Don't set JSON content-type for MCP -- it uses SSE and
 		// has its own content negotiation.
@@ -542,16 +562,30 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 
-		next.ServeHTTP(w, r)
+		rec := &statusRecorder{ResponseWriter: w, status: 200}
+		next.ServeHTTP(rec, r)
 
-		// Request logging at debug level.
-		s.log.Debug("request",
+		dur := time.Since(start)
+		s.log.Info("request",
 			"component", "http",
+			"req_id", reqID,
 			"method", r.Method,
 			"path", r.URL.Path,
-			"duration_ms", time.Since(start).Milliseconds(),
+			"status", rec.status,
+			"duration_ms", dur.Milliseconds(),
 			"remote", r.RemoteAddr)
 	})
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // writeJSON writes a JSON response with the standard envelope.

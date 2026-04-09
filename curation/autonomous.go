@@ -51,6 +51,8 @@ func RunAutonomousDryRun(ctx context.Context, e *core.Engine, llmProv llm.Provid
 }
 
 func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool, conceptCandidates []ConceptCandidate) *AutonomousResult {
+	start := time.Now()
+	logger = ensureLogger(logger)
 	result := &AutonomousResult{DryRun: dryRun}
 	maxCalls := cfg.LLMCuration.MaxCallsPerRun
 	if maxCalls <= 0 {
@@ -68,14 +70,15 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 		generateManifestSummary(ctx, e, llmProv, result, logger)
 	}
 
-	if logger != nil && (result.Classified+result.SummariesGenerated+result.ConceptsCreated) > 0 {
+	if (result.Classified + result.SummariesGenerated + result.ConceptsCreated) > 0 {
 		logger.Info("autonomous curation complete",
 			"component", "curation",
 			"classified", result.Classified,
 			"summaries", result.SummariesGenerated,
 			"concepts", result.ConceptsCreated,
 			"errors", result.Errors,
-			"llm_calls", result.LLMCalls)
+			"llm_calls", result.LLMCalls,
+			"duration_ms", time.Since(start).Milliseconds())
 	}
 
 	return result
@@ -83,6 +86,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 
 // classifyPending classifies records with processing_status="captured".
 func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+	logger = ensureLogger(logger)
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -146,18 +150,14 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	for i, lr := range llmResults {
 		if lr.err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("classify LLM error", "component", "curation", "record", batch[i].id[:12], "err", lr.err)
-			}
+			logger.Warn("classify LLM error", "component", "curation", "record", batch[i].id, "err", lr.err)
 			continue
 		}
 
 		classification, err := parseClassification(lr.response)
 		if err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("classify parse error", "component", "curation", "record", batch[i].id[:12], "err", err)
-			}
+			logger.Warn("classify parse error", "component", "curation", "record", batch[i].id, "err", err)
 			continue
 		}
 
@@ -190,9 +190,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	e.Lock()
 	for _, r := range ready {
 		if _, ok := e.Graph().GetNode(r.id); !ok {
-			if logger != nil {
-				logger.Debug("classify node gone", "component", "curation", "record", r.id[:12])
-			}
+			logger.Debug("classify node gone", "component", "curation", "record", r.id)
 			continue
 		}
 		if r.data.Temporality != "" {
@@ -224,6 +222,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 
 // generateSummaries adds summary_short to records that lack one.
 func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+	logger = ensureLogger(logger)
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -324,9 +323,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	for i, lr := range llmResults {
 		if lr.err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("summarize LLM error", "component", "curation", "record", batch[i].id[:12], "err", lr.err)
-			}
+			logger.Warn("summarize LLM error", "component", "curation", "record", batch[i].id, "err", lr.err)
 			continue
 		}
 
@@ -367,9 +364,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	e.Lock()
 	for _, s := range readySummaries {
 		if _, ok := e.Graph().GetNode(s.id); !ok {
-			if logger != nil {
-				logger.Debug("summarize node gone", "component", "curation", "record", s.id[:12])
-			}
+			logger.Debug("summarize node gone", "component", "curation", "record", s.id)
 			continue
 		}
 		e.SetContentProp(s.id, "content_short", s.summary)
@@ -385,6 +380,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 // strengths and gaps using the LLM. The summary is stored on
 // AutonomousResult.ManifestSummary for the runner to apply.
 func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Provider, result *AutonomousResult, logger *slog.Logger) {
+	logger = ensureLogger(logger)
 	// Gather lightweight stats under RLock.
 	e.RLock()
 	totalRecords := 0
@@ -475,9 +471,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	result.LLMCalls++
 	if err != nil {
 		result.Errors++
-		if logger != nil {
-			logger.Warn("manifest summary LLM error", "component", "curation", "err", err)
-		}
+		logger.Warn("manifest summary LLM error", "component", "curation", "err", err)
 		return
 	}
 
@@ -494,6 +488,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 // nodes with LLM-generated summaries. Each concept node links to its
 // constituent records, acting as a retrieval hub (RAPTOR-inspired).
 func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool, candidates []ConceptCandidate) {
+	logger = ensureLogger(logger)
 	if len(candidates) == 0 || result.LLMCalls >= maxCalls {
 		return
 	}
@@ -583,12 +578,10 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 		result.LLMCalls++
 		if err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("concept synthesis failed",
-					"component", "curation",
-					"keyword", candidate.Keyword,
-					"err", err)
-			}
+			logger.Warn("concept synthesis failed",
+				"component", "curation",
+				"keyword", candidate.Keyword,
+				"err", err)
 			continue
 		}
 
@@ -676,13 +669,11 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 
 		result.ConceptsCreated++
 
-		if logger != nil {
-			logger.Info("concept node created",
-				"component", "curation",
-				"keyword", candidate.Keyword,
-				"members", candidate.Count,
-				"node_id", node.ID)
-		}
+		logger.Info("concept node created",
+			"component", "curation",
+			"keyword", candidate.Keyword,
+			"members", candidate.Count,
+			"node_id", node.ID)
 	}
 }
 
@@ -713,6 +704,7 @@ func conceptShortSummary(synthesis string, maxLen int) string {
 // detectContradictions finds records with moderate similarity and uses the
 // LLM to determine if they contradict or supersede each other.
 func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+	logger = ensureLogger(logger)
 	maxChecks := cfg.LLMCuration.MaxContradictionChecks
 	if maxChecks <= 0 {
 		maxChecks = 5
@@ -838,18 +830,14 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 		if err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("contradiction LLM error", "component", "curation", "err", err)
-			}
+			logger.Warn("contradiction LLM error", "component", "curation", "err", err)
 			continue
 		}
 
 		cr, err := parseContradictionResult(resp)
 		if err != nil {
 			result.Errors++
-			if logger != nil {
-				logger.Warn("contradiction parse error", "component", "curation", "err", err)
-			}
+			logger.Warn("contradiction parse error", "component", "curation", "err", err)
 			continue
 		}
 
@@ -919,7 +907,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	}
 	e.Unlock()
 
-	if logger != nil && result.ContradictionsDetected > 0 {
+	if result.ContradictionsDetected > 0 {
 		logger.Info("contradiction detection complete",
 			"component", "curation",
 			"detected", result.ContradictionsDetected)

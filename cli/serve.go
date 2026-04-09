@@ -115,9 +115,10 @@ func startBackground() error {
 	child := exec.Command(executable, cmdArgs...)
 	child.Stdout = nil
 
-	// Redirect stderr to log file so panics are visible.
-	logPath := filepath.Join(dir, "gramaton.log")
-	stderrFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// Redirect stderr to a separate file so panics are visible
+	// without duplicating structured log lines.
+	stderrPath := filepath.Join(dir, "gramaton.stderr")
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		child.Stderr = nil // fall back to discard
 	} else {

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -44,6 +45,30 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
 	s.registerMCPCollectionTools(mcpServer)
+}
+
+// mcpToolStart records the start of an MCP tool call and returns a
+// function that logs the completion. Usage:
+//
+//	done := s.mcpToolStart("gramaton_search")
+//	defer done(err)
+func (s *Server) mcpToolStart(tool string) func(error) {
+	start := time.Now()
+	return func(err error) {
+		dur := time.Since(start)
+		if err != nil {
+			s.log.Warn("mcp tool error",
+				"component", "mcp",
+				"tool", tool,
+				"duration_ms", dur.Milliseconds(),
+				"err", err)
+		} else {
+			s.log.Info("mcp tool",
+				"component", "mcp",
+				"tool", tool,
+				"duration_ms", dur.Milliseconds())
+		}
+	}
 }
 
 // mcpErr returns an MCP tool result indicating an error.

@@ -57,10 +57,8 @@ func (s *Server) processObservation(req observeRequest) {
 		// Messages mode: extract facts via LLM.
 		extracted, err := s.extractFacts(ctx, req.Messages)
 		if err != nil {
-			if s.log != nil {
-				s.log.Warn("observe extraction failed",
-					"component", "observe", "err", err)
-			}
+			s.log.Warn("observe extraction failed",
+				"component", "observe", "err", err)
 			return
 		}
 		facts = extracted
@@ -78,7 +76,7 @@ func (s *Server) processObservation(req observeRequest) {
 	// Run quality gates and store survivors.
 	stored := s.applyQualityGates(ctx, facts, cfg)
 
-	if s.log != nil && stored > 0 {
+	if stored > 0 {
 		s.log.Info("observe pipeline complete",
 			"component", "observe",
 			"extracted", len(facts),
@@ -154,6 +152,7 @@ func parseExtractedFacts(resp string) ([]string, error) {
 // Returns the number of facts stored.
 func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg config.Config) int {
 	stored := 0
+	var gateSubstance, gateDedup, gateRecency, gateRetrieval int
 
 	// Gather retrieval tracker IDs and their embeddings for Gate 3.
 	var retrievedEmbeddings map[string][]float32
@@ -183,6 +182,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 
 		// Gate 4: Substance filter.
 		if len(fact) < minLength {
+			gateSubstance++
 			continue
 		}
 
@@ -209,6 +209,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 		s.engine.RUnlock()
 
 		skipFact := false
+		skipGate := 0 // which gate caused the skip
 		feedbackHours := cfg.Observe.FeedbackLoopHours
 		if feedbackHours <= 0 {
 			feedbackHours = 4
@@ -221,6 +222,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 			// Gate 1: exact/near dedup.
 			if sim >= 0.92 {
 				skipFact = true
+				skipGate = 1
 				break
 			}
 
@@ -231,6 +233,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 					if la, ok := n.Properties.GetTimestamp("last_accessed"); ok {
 						if la.After(recencyCutoff) {
 							skipFact = true
+							skipGate = 2
 						}
 					}
 				}
@@ -242,6 +245,11 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 		}
 
 		if skipFact {
+			if skipGate == 1 {
+				gateDedup++
+			} else {
+				gateRecency++
+			}
 			continue
 		}
 
@@ -255,6 +263,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 				}
 			}
 			if skipFact {
+				gateRetrieval++
 				continue
 			}
 		}
@@ -262,6 +271,18 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 		// All gates passed. Store with embedding.
 		s.storeDeferredCaptureWithEmbedding(fact, factVec, cfg)
 		stored++
+	}
+
+	rejected := gateSubstance + gateDedup + gateRecency + gateRetrieval
+	if rejected > 0 {
+		s.log.Debug("observe quality gates",
+			"component", "observe",
+			"input", len(facts),
+			"stored", stored,
+			"rejected_substance", gateSubstance,
+			"rejected_dedup", gateDedup,
+			"rejected_recency", gateRecency,
+			"rejected_retrieval", gateRetrieval)
 	}
 
 	return stored
