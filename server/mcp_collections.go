@@ -34,13 +34,21 @@ func (s *Server) registerMCPCollectionTools(mcpServer *mcp.Server) {
 
 	// --- list ---
 
+	type listInput struct {
+		Limit  int `json:"limit,omitempty" jsonschema:"max collections to return (default 50, max 500)"`
+		Offset int `json:"offset,omitempty" jsonschema:"starting position for pagination (default 0)"`
+	}
+
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_list",
-		Description: "List all collections with their names, item counts, and schema status.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		Description: "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args listInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_list")
 		defer done(nil)
-		result, svcErr := s.serviceCollectionList()
+		result, svcErr := s.serviceCollectionList(&collectionListRequest{
+			Limit:  args.Limit,
+			Offset: args.Offset,
+		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
 		}

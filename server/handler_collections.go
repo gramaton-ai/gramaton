@@ -19,7 +19,10 @@ func (s *Server) handleCollectionCreate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleCollectionList(w http.ResponseWriter, r *http.Request) {
-	result, svcErr := s.serviceCollectionList()
+	result, svcErr := s.serviceCollectionList(&collectionListRequest{
+		Limit:  parseIntParam(r, "limit", 50, 500),
+		Offset: parseIntParam(r, "offset", 0, 100000),
+	})
 	if svcErr != nil {
 		s.writeServiceError(w, svcErr)
 		return

@@ -25,7 +25,7 @@ func TestCollectionCreateAndList(t *testing.T) {
 	}
 
 	// List should return it.
-	list, svcErr := srv.serviceCollectionList()
+	list, svcErr := srv.serviceCollectionList(&collectionListRequest{})
 	if svcErr != nil {
 		t.Fatalf("list: %v", svcErr)
 	}
@@ -613,7 +613,7 @@ func TestCollectionPerformance(t *testing.T) {
 	}
 
 	// List collections (with item count computation).
-	list, svcErr := srv.serviceCollectionList()
+	list, svcErr := srv.serviceCollectionList(&collectionListRequest{})
 	if svcErr != nil {
 		t.Fatalf("list: %v", svcErr)
 	}

@@ -44,12 +44,28 @@ func registerCollectionCreateProxy(s *mcp.Server) {
 
 // --- list ---
 
+type proxyCollectionListInput struct {
+	Limit  int `json:"limit,omitempty" jsonschema:"max collections to return (default 50, max 500)"`
+	Offset int `json:"offset,omitempty" jsonschema:"starting position for pagination (default 0)"`
+}
+
 func registerCollectionListProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_list",
-		Description: "List all collections with their names, item counts, and schema status.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
-		return proxyGet("/v1/collections")
+		Description: "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionListInput) (*mcp.CallToolResult, any, error) {
+		path := "/v1/collections"
+		params := url.Values{}
+		if args.Limit > 0 {
+			params.Set("limit", fmt.Sprintf("%d", args.Limit))
+		}
+		if args.Offset > 0 {
+			params.Set("offset", fmt.Sprintf("%d", args.Offset))
+		}
+		if len(params) > 0 {
+			path += "?" + params.Encode()
+		}
+		return proxyGet(path)
 	})
 }
 

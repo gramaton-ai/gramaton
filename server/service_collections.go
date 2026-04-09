@@ -219,12 +219,29 @@ func (s *Server) serviceCollectionCreate(_ context.Context, req *collectionCreat
 	return map[string]any{"id": n.ID, "name": req.Name}, nil
 }
 
-func (s *Server) serviceCollectionList() (map[string]any, *serviceError) {
+type collectionListRequest struct {
+	Limit  int
+	Offset int
+}
+
+func (s *Server) serviceCollectionList(req *collectionListRequest) (map[string]any, *serviceError) {
 	s.engine.RLock()
 	defer s.engine.RUnlock()
 
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
 	ids := s.engine.PropIdx().Lookup("knowledge_type", graph.StringProperty("collection"))
-	collections := make([]map[string]any, 0, len(ids))
+	all := make([]map[string]any, 0, len(ids))
 
 	for _, id := range ids {
 		n, ok := s.engine.Graph().GetNode(id)
@@ -255,10 +272,29 @@ func (s *Server) serviceCollectionList() (map[string]any, *serviceError) {
 			entry["created_at"] = ca.Format(time.RFC3339)
 		}
 
-		collections = append(collections, entry)
+		all = append(all, entry)
 	}
 
-	return map[string]any{"collections": collections}, nil
+	total := len(all)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	page := all[offset:end]
+
+	result := map[string]any{
+		"collections": page,
+		"showing":     len(page),
+		"total":       total,
+	}
+	if end < total {
+		result["has_more"] = true
+		result["next_offset"] = end
+	}
+	return result, nil
 }
 
 type collectionItemsRequest struct {
@@ -267,6 +303,9 @@ type collectionItemsRequest struct {
 	IncludeRetired bool   `json:"include_retired,omitempty"`
 }
 
+// serviceCollectionItems is deliberately unpaginated -- exhaustive retrieval is the
+// contract that distinguishes collections from the knowledge graph. If a collection
+// grows large enough to need pagination, it's a signal to split it.
 func (s *Server) serviceCollectionItems(collectionID string, req *collectionItemsRequest) (map[string]any, *serviceError) {
 	s.engine.RLock()
 	defer s.engine.RUnlock()
