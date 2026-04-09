@@ -524,3 +524,69 @@ func TestSetContentPropUpdatesBM25(t *testing.T) {
 
 	eng.Unlock()
 }
+
+func TestIndexNodeSetsEmbeddingFullProperty(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("test content"),
+	})
+	vec := []float32{0.1, 0.2, 0.3}
+	eng.IndexNode(n.ID, "test content", vec)
+	eng.Unlock()
+
+	// The embedding_full property should be set on the node.
+	eng.RLock()
+	defer eng.RUnlock()
+	loaded, ok := eng.Graph().GetNode(n.ID)
+	if !ok {
+		t.Fatal("node not found")
+	}
+	storedVec, ok := loaded.Properties.GetVector("embedding_full")
+	if !ok {
+		t.Fatal("embedding_full property not set on node after IndexNode")
+	}
+	if len(storedVec) != 3 || storedVec[0] != 0.1 {
+		t.Fatalf("embedding_full value mismatch: %v", storedVec)
+	}
+}
+
+func TestSetContentPropUpdatesBM25Layers(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("full content about databases"),
+		"content_medium": graph.StringProperty("databases overview"),
+		"content_short":  graph.StringProperty("databases"),
+	})
+	eng.IndexNode(n.ID, "full content about databases", nil)
+
+	// Manually add to medium and short BM25 indexes via SetContentProp.
+	eng.SetContentProp(n.ID, "content_medium", "databases overview")
+	eng.SetContentProp(n.ID, "content_short", "databases")
+	eng.Unlock()
+
+	// All three BM25 indexes should have entries.
+	if eng.BM25Full().Len() != 1 {
+		t.Fatalf("BM25Full should have 1 entry, got %d", eng.BM25Full().Len())
+	}
+	if eng.BM25Medium().Len() != 1 {
+		t.Fatalf("BM25Medium should have 1 entry, got %d", eng.BM25Medium().Len())
+	}
+	if eng.BM25Short().Len() != 1 {
+		t.Fatalf("BM25Short should have 1 entry, got %d", eng.BM25Short().Len())
+	}
+
+	// Each should find its respective content.
+	if len(eng.BM25Full().Search([]string{"databases"}, 10, nil)) != 1 {
+		t.Fatal("BM25Full should find 'databases'")
+	}
+	if len(eng.BM25Medium().Search([]string{"overview"}, 10, nil)) != 1 {
+		t.Fatal("BM25Medium should find 'overview'")
+	}
+	if len(eng.BM25Short().Search([]string{"databases"}, 10, nil)) != 1 {
+		t.Fatal("BM25Short should find 'databases'")
+	}
+}

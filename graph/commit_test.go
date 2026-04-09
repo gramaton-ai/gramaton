@@ -147,6 +147,113 @@ func TestSaveAndLoadWithData(t *testing.T) {
 	}
 }
 
+func TestLazyNodeLoading(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	// Create and save two nodes.
+	n1 := g.AddNode(Properties{
+		"content": StringProperty("node one"),
+		"score":   Float64Property(0.8),
+	})
+	n2 := g.AddNode(Properties{
+		"content": StringProperty("node two"),
+	})
+	commit, err := g.Save(s, "", "test commit")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Load into a fresh graph. With lazy loading, nodes should NOT
+	// be in the in-memory cache -- they're loaded on demand.
+	g2 := New()
+	_, err = g2.Load(s, commit.Hash)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Verify nodes are NOT in the cache but count is correct.
+	if len(g2.nodes) != 0 {
+		t.Fatalf("expected 0 cached nodes after lazy load, got %d", len(g2.nodes))
+	}
+	if g2.NodeCount() != 2 {
+		t.Fatalf("expected NodeCount 2, got %d", g2.NodeCount())
+	}
+
+	// GetNode should lazy-load from prolly tree.
+	loaded, ok := g2.GetNode(n1.ID)
+	if !ok {
+		t.Fatal("n1 not found via lazy load")
+	}
+	if loaded.Properties["content"].String() != "node one" {
+		t.Fatal("n1 content mismatch after lazy load")
+	}
+	if loaded.Properties["score"].Float64() != 0.8 {
+		t.Fatal("n1 score mismatch after lazy load")
+	}
+
+	// After first access, node should be in the cache.
+	if len(g2.nodes) != 1 {
+		t.Fatalf("expected 1 cached node after first access, got %d", len(g2.nodes))
+	}
+
+	// Second access should hit cache.
+	loaded2, ok := g2.GetNode(n1.ID)
+	if !ok || loaded2 != loaded {
+		t.Fatal("second GetNode should return cached pointer")
+	}
+
+	// Access n2 to verify independent loading.
+	loaded3, ok := g2.GetNode(n2.ID)
+	if !ok || loaded3.Properties["content"].String() != "node two" {
+		t.Fatal("n2 not loaded correctly")
+	}
+	if len(g2.nodes) != 2 {
+		t.Fatalf("expected 2 cached nodes, got %d", len(g2.nodes))
+	}
+
+	// Nonexistent node should return false.
+	_, ok = g2.GetNode("NONEXISTENT")
+	if ok {
+		t.Fatal("nonexistent node should not be found")
+	}
+}
+
+func TestLazyNodeIterator(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	ids := make(map[string]struct{})
+	for i := 0; i < 5; i++ {
+		n := g.AddNode(Properties{
+			"idx": Int64Property(int64(i)),
+		})
+		ids[n.ID] = struct{}{}
+	}
+	commit, _ := g.Save(s, "", "test")
+
+	g2 := New()
+	g2.Load(s, commit.Hash)
+
+	// Iterator should visit all 5 nodes via lazy loading.
+	visited := make(map[string]struct{})
+	it := g2.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		visited[n.ID] = struct{}{}
+	}
+	it.Close()
+
+	if len(visited) != 5 {
+		t.Fatalf("expected 5 nodes from iterator, got %d", len(visited))
+	}
+	for id := range ids {
+		if _, ok := visited[id]; !ok {
+			t.Fatalf("node %s missing from iterator", id)
+		}
+	}
+}
+
 func TestSaveChainedCommits(t *testing.T) {
 	g := New()
 	s := tempStorage(t)

@@ -107,6 +107,38 @@ func TestIngestEmptyContent(t *testing.T) {
 	}
 }
 
+func TestIngestSetsCreatedAt(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	w := doRequest(t, srv, "POST", "/v1/ingest", map[string]any{
+		"files": []map[string]any{
+			{"filename": "test.md", "content": "Test content for timestamp check"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Find the ingested node and verify created_at is set.
+	eng.RLock()
+	defer eng.RUnlock()
+	found := false
+	it := eng.Graph().NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		if c, ok := n.Properties.GetString("content_full"); ok && c == "Test content for timestamp check" {
+			if _, ok := n.Properties.GetTimestamp("created_at"); !ok {
+				t.Fatal("ingested record missing created_at")
+			}
+			found = true
+			break
+		}
+	}
+	it.Close()
+	if !found {
+		t.Fatal("ingested record not found")
+	}
+}
+
 // --- Record history ---
 
 func TestRecordHistory(t *testing.T) {

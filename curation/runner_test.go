@@ -240,6 +240,56 @@ func TestDeterministicOrphanLinking(t *testing.T) {
 	}
 }
 
+func TestOrphanLinkerSkipsLowQuality(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Curation.OrphanSimilarityMin = 0.5
+
+	now := time.Now().UTC()
+
+	eng.Lock()
+	// Low-confidence orphan -- should NOT be linked.
+	lowConf := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Low confidence orphan about kafka"),
+		"processing_status": graph.StringProperty("processed"),
+		"confidence":        graph.Float64Property(0.1),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range lowConf.Properties {
+		eng.PropIdx().Add(lowConf.ID, k, v)
+	}
+	eng.VecIdx().Add(lowConf.ID, []float32{0.9, 0.1, 0.0})
+	eng.Graph().SetNodeProperty(lowConf.ID, "embedding_full",
+		graph.VectorProperty([]float32{0.9, 0.1, 0.0}))
+
+	// Unclassified orphan -- should NOT be linked.
+	captured := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Unclassified orphan about kafka"),
+		"processing_status": graph.StringProperty("captured"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range captured.Properties {
+		eng.PropIdx().Add(captured.ID, k, v)
+	}
+	eng.VecIdx().Add(captured.ID, []float32{0.85, 0.15, 0.0})
+	eng.Graph().SetNodeProperty(captured.ID, "embedding_full",
+		graph.VectorProperty([]float32{0.85, 0.15, 0.0}))
+
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	// Neither low-confidence nor captured orphans should be linked.
+	if result.OrphansLinked != 0 {
+		t.Fatalf("expected 0 orphans linked (quality filter), got %d", result.OrphansLinked)
+	}
+}
+
 func TestStartAndStop(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
