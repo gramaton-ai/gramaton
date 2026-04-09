@@ -10,6 +10,10 @@ import (
 	"github.com/gramaton-ai/gramaton/embed/openai"
 )
 
+// DefaultContextWindow is the fallback context window (in tokens)
+// when auto-detection is unavailable and no config is set.
+const DefaultContextWindow = 512
+
 // Provider generates vector embeddings from text. This is the shared
 // interface with multiple implementations -- the correct Go reason to
 // define an interface at the provider (D29).
@@ -22,6 +26,12 @@ type Provider interface {
 	// ModelID returns the identifier of the model being used, for
 	// tracking in the embedding_model property on nodes.
 	ModelID() string
+
+	// ContextWindow returns the model's context window in tokens.
+	// Used to size chunks before embedding. Implementations should
+	// auto-detect where possible (e.g., Ollama /api/show) and fall
+	// back to config or DefaultContextWindow.
+	ContextWindow() int
 }
 
 // New creates an embedding provider from the config. Returns nil if

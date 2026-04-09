@@ -510,81 +510,193 @@ type PreChunkResult struct {
 	ParentVec []float32 // fallback embedding for parent (truncated content)
 }
 
-// maxEmbedChars is the maximum content length sent to the embedder.
-// nomic-embed-text has ~8192 token context; 4000 chars is safe.
-const maxEmbedChars = 4000
+// embedContextWindow returns the effective context window in tokens
+// for the configured embedding provider. Priority: config override >
+// auto-detected from provider > default.
+func (e *Engine) embedContextWindow() int {
+	if e.cfg.Embedding.MaxTokens > 0 {
+		return e.cfg.Embedding.MaxTokens
+	}
+	if e.embedder != nil {
+		if cw := e.embedder.ContextWindow(); cw > 0 {
+			return cw
+		}
+	}
+	return embed.DefaultContextWindow
+}
+
+// IsContextLengthError reports whether an embedding error indicates
+// the input exceeded the model's context window.
+func IsContextLengthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context length") ||
+		strings.Contains(msg, "too many tokens") ||
+		strings.Contains(msg, "maximum context") ||
+		strings.Contains(msg, "token limit")
+}
+
+// maxChunkRetries limits how many times PreChunk will reduce chunk
+// size before giving up on embedding.
+const maxChunkRetries = 4
 
 // PreChunk determines if content needs sectioning/chunking and pre-embeds
 // outside the lock. Uses structural splitting first (SplitSections),
 // falls back to dumb chunking (ChunkText) if no structure is detected.
-// Also computes a fallback embedding for the parent from truncated content.
+//
+// If embedding fails due to context length, PreChunk reduces the chunk
+// size and re-splits until the chunks fit the model. This adapts to
+// any embedding model's context window without configuration.
+//
 // Call this BEFORE acquiring the write lock. Returns nil if no splitting needed.
 func (e *Engine) PreChunk(ctx context.Context, content string, summary string) *PreChunkResult {
 	cfg := e.cfg.Chunking
 
-	// Check if content exceeds the threshold.
-	thresholdChars := cfg.Threshold * 4
+	// Use the model's context window to determine threshold in chars.
+	// Conservative: 3 chars/token to avoid exceeding the real limit.
+	ctxTokens := e.embedContextWindow()
+	charsPerToken := 3
+	thresholdChars := ctxTokens * charsPerToken
 	if len(content) <= thresholdChars {
 		return nil
 	}
 
-	result := &PreChunkResult{}
-
 	// Try structural splitting first.
 	sections := graph.SplitSections(content, cfg.SectionMin, cfg.SectionMax)
 	if sections != nil {
-		result.Sections = sections
-	} else {
-		// Fallback to dumb chunking.
-		chunks := graph.ChunkText(content, cfg.Threshold, cfg.ChunkSize, cfg.Overlap)
-		if len(chunks) == 0 {
-			return nil
-		}
-		result.Texts = chunks
+		return e.preChunkSections(ctx, content, summary, sections)
 	}
+
+	// Fallback to dumb chunking with adaptive sizing.
+	return e.preChunkAdaptive(ctx, content, summary, cfg)
+}
+
+// preChunkSections embeds structurally-split sections. If any section
+// exceeds the model's context, falls back to adaptive dumb chunking.
+func (e *Engine) preChunkSections(ctx context.Context, content, summary string, sections []graph.Section) *PreChunkResult {
+	result := &PreChunkResult{Sections: sections}
 
 	if e.embedder == nil {
 		return result
 	}
 
-	// Pre-embed sections or chunks.
-	var texts []string
-	if len(result.Sections) > 0 {
-		for _, s := range result.Sections {
-			t := s.Text
-			if len(t) > maxEmbedChars {
-				t = t[:maxEmbedChars]
-			}
-			texts = append(texts, t)
-		}
-	} else {
-		for _, t := range result.Texts {
-			if len(t) > maxEmbedChars {
-				t = t[:maxEmbedChars]
-			}
-			texts = append(texts, t)
-		}
+	texts := make([]string, len(sections))
+	for i, s := range sections {
+		texts[i] = s.Text
 	}
 
 	vecs, err := e.embedder.Embed(ctx, texts)
 	if err == nil {
 		result.Vectors = vecs
 		result.Model = e.embedder.ModelID()
+		e.preChunkParent(ctx, result, content, summary)
+		return result
 	}
 
-	// Pre-embed a fallback for the parent record.
-	parentText := summary
-	if parentText == "" && len(content) > maxEmbedChars {
-		parentText = content[:maxEmbedChars]
+	if IsContextLengthError(err) {
+		// Sections are too large for the model. Fall back to
+		// adaptive dumb chunking which will find the right size.
+		return e.preChunkAdaptive(ctx, content, summary, e.cfg.Chunking)
 	}
-	if parentText != "" {
+
+	// Non-context error (network, etc.) -- return sections without embeddings.
+	return result
+}
+
+// preChunkAdaptive splits content into overlapping chunks and embeds
+// them. If chunks exceed the model's context window, reduces chunk
+// size and re-splits until they fit.
+func (e *Engine) preChunkAdaptive(ctx context.Context, content, summary string, cfg config.ChunkingConfig) *PreChunkResult {
+	// Start with chunk_size from config, but cap to the model's
+	// context window so initial chunks are likely to fit.
+	chunkSize := cfg.ChunkSize
+	ctxTokens := e.embedContextWindow()
+	if chunkSize > ctxTokens {
+		chunkSize = ctxTokens
+	}
+	overlap := cfg.Overlap
+
+	for attempt := 0; attempt <= maxChunkRetries; attempt++ {
+		chunks := graph.ChunkText(content, cfg.Threshold, chunkSize, overlap)
+		if len(chunks) == 0 {
+			return nil
+		}
+
+		result := &PreChunkResult{Texts: chunks}
+
+		if e.embedder == nil {
+			return result
+		}
+
+		// Test the longest chunk first (canary).
+		longest := chunks[0]
+		for _, c := range chunks[1:] {
+			if len(c) > len(longest) {
+				longest = c
+			}
+		}
+
+		_, err := e.embedder.Embed(ctx, []string{longest})
+		if err != nil && IsContextLengthError(err) {
+			// Chunks too large -- reduce by 25% and retry.
+			chunkSize = chunkSize * 3 / 4
+			if chunkSize < 64 {
+				chunkSize = 64
+			}
+			overlap = overlap * 3 / 4
+			continue
+		}
+
+		// Canary passed (or non-context error). Embed all chunks.
+		vecs, err := e.embedder.Embed(ctx, chunks)
+		if err == nil {
+			result.Vectors = vecs
+			result.Model = e.embedder.ModelID()
+		}
+
+		e.preChunkParent(ctx, result, content, summary)
+		return result
+	}
+
+	// Exhausted retries -- return chunks without embeddings.
+	chunks := graph.ChunkText(content, cfg.Threshold, chunkSize, overlap)
+	return &PreChunkResult{Texts: chunks}
+}
+
+// preChunkParent computes a fallback embedding for the parent record
+// from the summary or truncated content.
+func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, content, summary string) {
+	if e.embedder == nil {
+		return
+	}
+	parentText := summary
+	if parentText == "" {
+		// Use first portion of content as fallback. Try embedding it;
+		// if it exceeds context, halve until it fits.
+		parentText = content
+		if len(parentText) > 2000 {
+			parentText = parentText[:2000]
+		}
+	}
+	if parentText == "" {
+		return
+	}
+	for attempt := 0; attempt <= maxChunkRetries; attempt++ {
 		pvecs, err := e.embedder.Embed(ctx, []string{parentText})
 		if err == nil && len(pvecs) > 0 {
 			result.ParentVec = pvecs[0]
+			return
+		}
+		if !IsContextLengthError(err) {
+			return // non-context error, give up
+		}
+		parentText = parentText[:len(parentText)/2]
+		if len(parentText) == 0 {
+			return
 		}
 	}
-
-	return result
 }
 
 // ApplyChunks creates section/chunk nodes from a PreChunkResult. Caller

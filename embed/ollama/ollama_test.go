@@ -10,6 +10,15 @@ import (
 
 func TestEmbed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/show" {
+			// Context window detection -- return model info.
+			json.NewEncoder(w).Encode(map[string]any{
+				"model_info": map[string]any{
+					"bert.context_length": float64(512),
+				},
+			})
+			return
+		}
 		if r.URL.Path != "/api/embed" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -135,5 +144,43 @@ func TestModelID(t *testing.T) {
 	client := New("http://unused", "nomic-embed-text")
 	if client.ModelID() != "nomic-embed-text" {
 		t.Fatalf("expected 'nomic-embed-text', got %q", client.ModelID())
+	}
+}
+
+func TestContextWindowAutoDetect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/show" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"model_info": map[string]any{
+					"bert.context_length": float64(512),
+				},
+			})
+			return
+		}
+		// Embed handler.
+		resp := embedResponse{
+			Model:      "test",
+			Embeddings: [][]float32{{0.1, 0.2}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "mxbai-embed-large")
+	if client.ContextWindow() != 512 {
+		t.Fatalf("ContextWindow = %d, want 512", client.ContextWindow())
+	}
+}
+
+func TestContextWindowFallback(t *testing.T) {
+	// Server that doesn't support /api/show.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "unknown-model")
+	if client.ContextWindow() != 0 {
+		t.Fatalf("ContextWindow = %d, want 0 (fallback)", client.ContextWindow())
 	}
 }

@@ -12,17 +12,55 @@ import (
 
 // Client is an embedding provider that calls Ollama's HTTP API.
 type Client struct {
-	endpoint string
-	model    string
-	client   *http.Client
+	endpoint      string
+	model         string
+	client        *http.Client
+	contextWindow int // auto-detected from /api/show, 0 = not yet queried
 }
 
-// New creates an Ollama embedding client.
+// New creates an Ollama embedding client. The context window is
+// auto-detected from the model metadata on first use.
 func New(endpoint, model string) *Client {
-	return &Client{
+	c := &Client{
 		endpoint: endpoint,
 		model:    model,
 		client:   &http.Client{Timeout: 60 * time.Second},
+	}
+	c.detectContextWindow()
+	return c
+}
+
+// detectContextWindow queries Ollama's /api/show endpoint to get the
+// model's context window (num_ctx). Falls back to 0 (use default)
+// if the query fails.
+func (c *Client) detectContextWindow() {
+	body, _ := json.Marshal(map[string]string{"name": c.model})
+	resp, err := c.client.Post(c.endpoint+"/api/show", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var result struct {
+		ModelInfo map[string]any `json:"model_info"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	// Look for context length in model_info. The key varies by model
+	// family but commonly appears as "*context_length" (e.g.,
+	// "bert.context_length", "llama.context_length").
+	for k, v := range result.ModelInfo {
+		if len(k) > 15 && k[len(k)-14:] == "context_length" {
+			if f, ok := v.(float64); ok && f > 0 {
+				c.contextWindow = int(f)
+				return
+			}
+		}
 	}
 }
 
@@ -100,4 +138,11 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 // ModelID returns the model identifier for embedding provenance tracking.
 func (c *Client) ModelID() string {
 	return c.model
+}
+
+// ContextWindow returns the model's context window in tokens,
+// auto-detected from Ollama's /api/show endpoint. Returns 0 if
+// detection failed (caller should use a default).
+func (c *Client) ContextWindow() int {
+	return c.contextWindow
 }

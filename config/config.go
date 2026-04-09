@@ -47,6 +47,11 @@ type EmbeddingConfig struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
 
+	// MaxTokens overrides the model's context window (in tokens).
+	// Auto-detected for Ollama models. Set manually for OpenAI or
+	// Bedrock if the default (512) produces suboptimal chunk sizes.
+	MaxTokens int `yaml:"max_tokens,omitempty"`
+
 	// OpenAI-compatible
 	BaseURL   string `yaml:"base_url,omitempty"`
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`

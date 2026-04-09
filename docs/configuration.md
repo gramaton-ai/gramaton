@@ -26,6 +26,8 @@ embedding:
   aws_profile: ""         # AWS named profile (Bedrock)
 ```
 
+Long content is automatically chunked before embedding. If chunks exceed the model's context window, the chunk size is reduced and content is re-split until it fits. No configuration needed -- the system adapts to any model.
+
 ## LLM
 
 Used for autonomous curation. Optional.

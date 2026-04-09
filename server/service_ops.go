@@ -5,8 +5,29 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 )
+
+// embedWithRetry embeds a single text, truncating by half on each
+// context length error until it fits. Returns the embedding vector.
+func embedWithRetry(ctx context.Context, emb embed.Provider, text string) ([]float32, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		vecs, err := emb.Embed(ctx, []string{text})
+		if err == nil && len(vecs) > 0 {
+			return vecs[0], nil
+		}
+		if !core.IsContextLengthError(err) {
+			return nil, err
+		}
+		text = text[:len(text)/2]
+		if len(text) == 0 {
+			return nil, fmt.Errorf("text too short after truncation")
+		}
+	}
+	return nil, fmt.Errorf("exceeded retry limit for context length")
+}
 
 // serviceStats returns aggregate statistics for the knowledge store.
 func (s *Server) serviceStats() (statsResponse, *serviceError) {
@@ -92,8 +113,9 @@ func (s *Server) servicePending() (map[string]any, *serviceError) {
 }
 
 // serviceReembed regenerates stale embeddings using a 3-phase approach
-// to avoid holding the lock during embedding I/O. Fixes Bug 3: MCP
-// previously held a write lock during all embedding calls.
+// to avoid holding the lock during embedding I/O. Records with long
+// content that lack chunk children are automatically chunked before
+// embedding (same as capture does for new records).
 func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any, *serviceError) {
 	if batch <= 0 {
 		batch = 50
@@ -110,11 +132,16 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 	}
 
 	currentModel := s.engine.Embedder().ModelID()
+	chunkThreshold := s.engine.Config().Chunking.Threshold * 4 // chars
 
 	type reembedTarget struct {
-		nodeID string
-		texts  []string
-		keys   []string
+		nodeID    string
+		texts     []string
+		keys      []string
+		needsChunk bool   // content_full exceeds chunk threshold, no chunks exist
+		content   string  // raw content_full for chunking (only if needsChunk)
+		summary   string  // content_short for chunk fallback embedding
+		props     graph.Properties // for metadata inheritance during chunking
 	}
 	var targets []reembedTarget
 
@@ -126,14 +153,12 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		if !ok {
 			continue
 		}
-		if _, hasContent := n.Properties.GetString("content_full"); !hasContent {
+		contentFull, hasContent := n.Properties.GetString("content_full")
+		if !hasContent {
 			continue
 		}
 		model, ok := n.Properties.GetString("embedding_model")
 		if ok && model == currentModel {
-			// Model matches, but check for missing embedding layers.
-			// A record might have embedding_full but not embedding_short
-			// (e.g., concept nodes after summary repair).
 			hasGap := false
 			if _, has := n.Properties.GetString("content_short"); has {
 				if _, has := n.Properties["embedding_short"]; !has {
@@ -145,6 +170,21 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 			}
 		}
 
+		// Check if this record needs chunking: long content, no chunk children.
+		needsChunk := false
+		if len(contentFull) > chunkThreshold {
+			hasChunks := false
+			for _, e := range s.engine.Graph().EdgesTo(id) {
+				if e.Type == "chunk_of" || e.Type == "section_of" {
+					hasChunks = true
+					break
+				}
+			}
+			needsChunk = !hasChunks
+		}
+
+		// Build embed sources. Skip content_full for records that need
+		// chunking -- the chunks will be embedded instead.
 		embedSources := []struct {
 			sourceKey string
 			embedKey  string
@@ -152,7 +192,12 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 			{"content_keywords", "embedding_keywords"},
 			{"content_short", "embedding_short"},
 			{"content_abstract", "embedding_abstract"},
-			{"content_full", "embedding_full"},
+		}
+		if !needsChunk {
+			embedSources = append(embedSources, struct {
+				sourceKey string
+				embedKey  string
+			}{"content_full", "embedding_full"})
 		}
 
 		var texts []string
@@ -169,13 +214,45 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 				keys = append(keys, src.embedKey)
 			}
 		}
-		if len(texts) > 0 {
-			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys})
+
+		t := reembedTarget{
+			nodeID:     id,
+			texts:      texts,
+			keys:       keys,
+			needsChunk: needsChunk,
+		}
+		if needsChunk {
+			t.content = contentFull
+			if cs, ok := n.Properties.GetString("content_short"); ok {
+				t.summary = cs
+			}
+			t.props = n.Properties.Clone()
+		}
+		if len(texts) > 0 || needsChunk {
+			targets = append(targets, t)
 		}
 	}
 	s.engine.RUnlock()
 
+	// Phase 1b: Chunk records that need it (outside lock, involves embedding).
+	type chunkResult struct {
+		nodeID string
+		pre    *core.PreChunkResult
+	}
+	var chunkResults []chunkResult
+	for _, t := range targets {
+		if !t.needsChunk {
+			continue
+		}
+		pre := s.engine.PreChunk(ctx, t.content, t.summary)
+		if pre != nil {
+			chunkResults = append(chunkResults, chunkResult{nodeID: t.nodeID, pre: pre})
+		}
+	}
+
 	// Phase 2: Embed all texts outside the lock (no I/O under lock).
+	// If a text exceeds the model's context window, truncate by half
+	// and retry until it fits.
 	type reembedResult struct {
 		target  reembedTarget
 		vectors [][]float32
@@ -183,23 +260,59 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 	}
 	var results []reembedResult
 	for _, t := range targets {
+		if len(t.texts) == 0 {
+			results = append(results, reembedResult{target: t})
+			continue
+		}
 		vecs, err := s.engine.Embedder().Embed(ctx, t.texts)
+		if err != nil && core.IsContextLengthError(err) {
+			// Retry each text individually, truncating until it fits.
+			vecs = make([][]float32, len(t.texts))
+			err = nil
+			for i, text := range t.texts {
+				v, e := embedWithRetry(ctx, s.engine.Embedder(), text)
+				if e != nil {
+					err = e
+					break
+				}
+				vecs[i] = v
+			}
+		}
 		results = append(results, reembedResult{target: t, vectors: vecs, err: err})
 	}
 
-	// Phase 3: Apply embeddings under write lock (fast, no I/O).
+	// Phase 3: Apply embeddings and chunks under write lock.
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
+	// Apply chunks first.
+	chunked := 0
+	for _, cr := range chunkResults {
+		n, ok := s.engine.Graph().GetNode(cr.nodeID)
+		if !ok {
+			continue
+		}
+		numChunks := s.engine.ApplyChunks(cr.nodeID, cr.pre, n.Properties)
+		if numChunks > 0 {
+			chunked++
+			s.log.Info("reembed chunked record", "node", cr.nodeID, "chunks", numChunks)
+		}
+	}
+
+	// Apply embeddings.
 	reembedded := 0
 	errors := 0
+	var errorIDs []string
 	for _, res := range results {
 		if res.err != nil {
 			errors++
+			errorIDs = append(errorIDs, res.target.nodeID)
+			s.log.Warn("reembed failed", "node", res.target.nodeID, "err", res.err)
 			continue
 		}
 		if _, ok := s.engine.Graph().GetNode(res.target.nodeID); !ok {
 			errors++
+			errorIDs = append(errorIDs, res.target.nodeID)
 			continue
 		}
 
@@ -219,15 +332,22 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		reembedded++
 	}
 
-	if reembedded > 0 {
+	if reembedded > 0 || chunked > 0 {
 		s.engine.Save("reembed")
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"reembedded": reembedded,
 		"skipped":    len(targets) - reembedded - errors,
 		"errors":     errors,
-	}, nil
+	}
+	if chunked > 0 {
+		result["chunked"] = chunked
+	}
+	if len(errorIDs) > 0 {
+		result["error_ids"] = errorIDs
+	}
+	return result, nil
 }
 
 // serviceObserve validates and fires off an asynchronous observation.

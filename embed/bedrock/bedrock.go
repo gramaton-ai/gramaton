@@ -72,6 +72,12 @@ func (c *Client) ModelID() string {
 	return c.model
 }
 
+// ContextWindow returns 0 (unknown). Bedrock does not expose model
+// context limits via API. Callers should use config or default.
+func (c *Client) ContextWindow() int {
+	return 0
+}
+
 // --- Titan Embed V2 ---
 
 type titanRequest struct {

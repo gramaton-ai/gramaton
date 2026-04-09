@@ -145,6 +145,12 @@ func (c *Client) ModelID() string {
 	return c.model
 }
 
+// ContextWindow returns 0 (unknown). OpenAI-compatible APIs don't
+// expose model context limits. Callers should use config or default.
+func (c *Client) ContextWindow() int {
+	return 0
+}
+
 func resolveKey(val string) string {
 	if val == "" {
 		return ""

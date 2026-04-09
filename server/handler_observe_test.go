@@ -50,7 +50,8 @@ func (m *mockEmbedProvider) Embed(_ context.Context, texts []string) ([][]float3
 	return vecs, nil
 }
 
-func (m *mockEmbedProvider) ModelID() string { return "mock-embed" }
+func (m *mockEmbedProvider) ModelID() string     { return "mock-embed" }
+func (m *mockEmbedProvider) ContextWindow() int { return 512 }
 
 // setupTestServerWithProviders creates a server with injected mock providers.
 func setupTestServerWithProviders(t *testing.T, emb embed.Provider, llmProv llm.Provider) (*Server, *core.Engine) {
