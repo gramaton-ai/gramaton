@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,14 @@ func init() {
 
 func runRepair(cmd *cobra.Command, args []string) error {
 	dir := configDir()
+
+	// Refuse to run while the server is active to prevent concurrent
+	// writes to the same store.
+	if !repairDryRun {
+		if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
+			return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
+		}
+	}
 
 	eng, err := core.LoadEngine(dir, baseConfigDir())
 	if err != nil {
