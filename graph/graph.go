@@ -6,14 +6,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/storage"
 	"github.com/oklog/ulid/v2"
 )
 
 // ErrNotFound is returned when a node or edge does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Graph is an in-memory property graph engine. It holds nodes and edges,
-// maintains bidirectional edge indexes, and enforces cascading deletion.
+// Graph is a property graph engine backed by a content-addressed store.
+// Nodes are lazily loaded from a prolly tree on first access and cached
+// in memory. Edges are fully loaded at startup (they're lightweight).
 //
 // The graph tracks which nodes and edges have been modified since the
 // last save (dirty tracking), enabling incremental persistence. The
@@ -22,7 +24,7 @@ var ErrNotFound = errors.New("not found")
 //
 // The graph is not thread-safe. The server layer handles write serialization.
 type Graph struct {
-	nodes map[string]*Node
+	nodes map[string]*Node // in-memory node cache (lazy-loaded)
 	edges map[string]*Edge
 
 	// Edge indexes for efficient traversal.
@@ -31,8 +33,8 @@ type Graph struct {
 	typeEdges map[string]map[string]struct{} // edge type → set of edge IDs
 
 	// Dirty tracking for incremental saves.
-	dirtyNodes map[string]struct{} // node IDs modified since last save
-	dirtyEdges map[string]struct{} // edge IDs modified since last save
+	dirtyNodes   map[string]struct{} // node IDs modified since last save
+	dirtyEdges   map[string]struct{} // edge IDs modified since last save
 	deletedNodes map[string]struct{} // node IDs deleted since last save
 	deletedEdges map[string]struct{} // edge IDs deleted since last save
 
@@ -46,6 +48,12 @@ type Graph struct {
 	// tree updates.
 	lastNodeTreeRoot string
 	lastEdgeTreeRoot string
+
+	// Lazy loading support. When store is non-nil, GetNode falls
+	// back to the prolly tree on cache miss. nodeTotal is the count
+	// from the prolly tree (set during Load).
+	store     *storage.Store
+	nodeTotal int // total node count (prolly tree entries)
 
 	entropy *ulid.MonotonicEntropy
 	mu      sync.Mutex // protects entropy only

@@ -17,10 +17,10 @@ type Edge struct {
 // target nodes must exist. Weight should be in [0.0, 1.0]. Properties
 // are cloned on creation.
 func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, props Properties) (*Edge, error) {
-	if _, ok := g.nodes[sourceID]; !ok {
+	if _, ok := g.GetNode(sourceID); !ok {
 		return nil, fmt.Errorf("graph: source node %s: %w", sourceID, ErrNotFound)
 	}
-	if _, ok := g.nodes[targetID]; !ok {
+	if _, ok := g.GetNode(targetID); !ok {
 		return nil, fmt.Errorf("graph: target node %s: %w", targetID, ErrNotFound)
 	}
 

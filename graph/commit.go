@@ -217,9 +217,14 @@ func RewriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
 	return c, nil
 }
 
-// Load restores graph state from a commit. Clears the current graph
-// and replaces it with the committed state. Handles both v0 (flat
-// hash lists) and v1 (prolly tree) commit formats.
+// Load restores graph state from a commit. For v1 commits, nodes are
+// NOT loaded eagerly -- they are lazily loaded from the prolly tree on
+// first access via GetNode. Edges are fully loaded since they're
+// lightweight and needed for adjacency indexes.
+//
+// Handles both v0 (flat hash lists) and v1 (prolly tree) commit formats.
+// v0 commits still load everything eagerly since they lack prolly tree
+// support for single-key lookup.
 func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	commitData, err := s.Read(commitHash)
 	if err != nil {
@@ -239,26 +244,35 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	g.typeEdges = make(map[string]map[string]struct{})
 	g.nodeHashes = make(map[string]string)
 	g.edgeHashes = make(map[string]string)
+	g.store = s
+	g.nodeTotal = 0
 	g.ClearDirty()
 
-	// Collect node/edge entries based on commit version.
-	// For v1 commits, we read from prolly trees and populate
-	// the hash caches for future incremental saves.
 	type idHash struct {
 		id, hash string
 	}
-	var nodeEntries []idHash
 	var edgeEntries []idHash
 
 	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
 		g.lastNodeTreeRoot = commit.NodeTreeRoot
+
+		// Lazy loading: don't load nodes. Just count them and store
+		// the tree root for on-demand access via GetNode.
 		nodeTree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
+		nodeCount, err := nodeTree.EntryCount()
+		if err != nil {
+			return nil, fmt.Errorf("load: count node tree: %w", err)
+		}
+		g.nodeTotal = nodeCount
+
+		// Populate nodeHashes from prolly tree entries so incremental
+		// saves know about all existing nodes (even uncached ones).
 		entries, err := nodeTree.AllEntries()
 		if err != nil {
-			return nil, fmt.Errorf("load: read node tree: %w", err)
+			return nil, fmt.Errorf("load: read node tree entries: %w", err)
 		}
 		for _, e := range entries {
-			nodeEntries = append(nodeEntries, idHash{e.Key, e.Value})
+			g.nodeHashes[e.Key] = e.Value
 		}
 
 		if commit.EdgeTreeRoot != "" {
@@ -273,31 +287,27 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 			}
 		}
 	} else {
-		// v0: flat hash lists -- no IDs available, can't populate
-		// hash caches. First save will be a full save.
+		// v0: flat hash lists -- no prolly tree, must load all nodes eagerly.
 		for _, hash := range commit.NodeHashes {
-			nodeEntries = append(nodeEntries, idHash{"", hash})
+			data, err := s.Read(hash)
+			if err != nil {
+				return nil, fmt.Errorf("load: read node chunk %s: %w", hash, err)
+			}
+			n, err := UnmarshalNode(data)
+			if err != nil {
+				return nil, fmt.Errorf("load: unmarshal node: %w", err)
+			}
+			g.nodes[n.ID] = n
+			g.nodeHashes[n.ID] = hash
 		}
+		g.nodeTotal = len(g.nodes)
+
 		for _, hash := range commit.EdgeHashes {
 			edgeEntries = append(edgeEntries, idHash{"", hash})
 		}
 	}
 
-	// Load nodes and populate hash cache.
-	for _, nh := range nodeEntries {
-		data, err := s.Read(nh.hash)
-		if err != nil {
-			return nil, fmt.Errorf("load: read node chunk %s: %w", nh.hash, err)
-		}
-		n, err := UnmarshalNode(data)
-		if err != nil {
-			return nil, fmt.Errorf("load: unmarshal node: %w", err)
-		}
-		g.nodes[n.ID] = n
-		g.nodeHashes[n.ID] = nh.hash
-	}
-
-	// Load edges, rebuild indexes, and populate hash cache.
+	// Load edges and rebuild adjacency indexes.
 	for _, eh := range edgeEntries {
 		data, err := s.Read(eh.hash)
 		if err != nil {

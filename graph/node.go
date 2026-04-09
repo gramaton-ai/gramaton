@@ -1,6 +1,10 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/gramaton-ai/gramaton/storage"
+)
 
 // Node is a vertex in the property graph. It has a stable ULID and a
 // set of typed properties. The graph engine treats all nodes identically --
@@ -22,20 +26,54 @@ func (g *Graph) AddNode(props Properties) *Node {
 		n.Properties = make(Properties)
 	}
 	g.nodes[n.ID] = n
+	g.nodeTotal++
 	g.markNodeDirty(n.ID)
 	return n
 }
 
 // GetNode returns the node with the given ID, or nil and false if not found.
+// When the graph has a backing store (after Load), cache misses trigger a
+// lazy load from the prolly tree.
 func (g *Graph) GetNode(id string) (*Node, bool) {
-	n, ok := g.nodes[id]
-	return n, ok
+	if n, ok := g.nodes[id]; ok {
+		return n, true
+	}
+	// Lazy load from prolly tree if we have a backing store.
+	if g.store != nil && g.lastNodeTreeRoot != "" {
+		n, err := g.loadNode(id)
+		if err != nil || n == nil {
+			return nil, false
+		}
+		g.nodes[id] = n
+		return n, true
+	}
+	return nil, false
+}
+
+// loadNode fetches a single node from the prolly tree by ID.
+func (g *Graph) loadNode(id string) (*Node, error) {
+	tree := storage.LoadProllyTree(g.store, g.lastNodeTreeRoot)
+	hash, ok := tree.Get(id)
+	if !ok {
+		return nil, nil
+	}
+	data, err := g.store.Read(hash)
+	if err != nil {
+		return nil, err
+	}
+	n, err := UnmarshalNode(data)
+	if err != nil {
+		return nil, err
+	}
+	// Cache the content hash for incremental saves.
+	g.nodeHashes[id] = hash
+	return n, nil
 }
 
 // SetNodeProperty sets a single property on a node. Creates the property
-// if absent, overwrites if present.
+// if absent, overwrites if present. Lazily loads the node if needed.
 func (g *Graph) SetNodeProperty(id, key string, val Property) error {
-	n, ok := g.nodes[id]
+	n, ok := g.GetNode(id)
 	if !ok {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
 	}
@@ -45,9 +83,9 @@ func (g *Graph) SetNodeProperty(id, key string, val Property) error {
 }
 
 // RemoveNodeProperty removes a property from a node. No error if the
-// property doesn't exist.
+// property doesn't exist. Lazily loads the node if needed.
 func (g *Graph) RemoveNodeProperty(id, key string) error {
-	n, ok := g.nodes[id]
+	n, ok := g.GetNode(id)
 	if !ok {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
 	}
@@ -58,8 +96,9 @@ func (g *Graph) RemoveNodeProperty(id, key string) error {
 
 // DeleteNode removes a node and all its inbound and outbound edges
 // (cascading deletion). Returns ErrNotFound if the node doesn't exist.
+// Lazily loads the node if needed.
 func (g *Graph) DeleteNode(id string) error {
-	if _, ok := g.nodes[id]; !ok {
+	if _, ok := g.GetNode(id); !ok {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
 	}
 
@@ -85,19 +124,42 @@ func (g *Graph) DeleteNode(id string) error {
 	delete(g.nodes, id)
 	delete(g.dirtyNodes, id)
 	g.deletedNodes[id] = struct{}{}
+	g.nodeTotal--
 	return nil
 }
 
-// NodeCount returns the number of nodes in the graph.
+// NodeCount returns the number of nodes in the graph. In lazy mode,
+// this returns the count from the prolly tree (which includes nodes
+// not yet loaded into the cache).
 func (g *Graph) NodeCount() int {
+	if g.nodeTotal > 0 {
+		return g.nodeTotal
+	}
 	return len(g.nodes)
 }
 
 // AllNodeIDs returns all node IDs in the graph. Order is not guaranteed.
+// In lazy mode, iterates the prolly tree for IDs.
 //
-// Prefer NodeIterator for new code -- it avoids allocating the full ID
-// slice and will cursor through the prolly tree under lazy loading.
+// Prefer NodeIterator for new code -- it avoids the intermediate slice.
 func (g *Graph) AllNodeIDs() []string {
+	if g.store != nil && g.lastNodeTreeRoot != "" {
+		tree := storage.LoadProllyTree(g.store, g.lastNodeTreeRoot)
+		entries, err := tree.AllEntries()
+		if err != nil {
+			// Fall back to cache-only.
+			return g.cachedNodeIDs()
+		}
+		ids := make([]string, len(entries))
+		for i, e := range entries {
+			ids[i] = e.Key
+		}
+		return ids
+	}
+	return g.cachedNodeIDs()
+}
+
+func (g *Graph) cachedNodeIDs() []string {
 	ids := make([]string, 0, len(g.nodes))
 	for id := range g.nodes {
 		ids = append(ids, id)
@@ -106,14 +168,60 @@ func (g *Graph) AllNodeIDs() []string {
 }
 
 // NodeIterator returns an iterator over all nodes in the graph.
-// The current implementation wraps the in-memory map. A future lazy
-// implementation will cursor through the prolly tree on demand.
+// In lazy mode, iterates prolly tree entries and loads each node on
+// demand. In eager mode (no backing store), iterates the in-memory map.
 func (g *Graph) NodeIterator() NodeIterator {
+	if g.store != nil && g.lastNodeTreeRoot != "" {
+		tree := storage.LoadProllyTree(g.store, g.lastNodeTreeRoot)
+		entries, err := tree.AllEntries()
+		if err != nil {
+			return g.cachedIterator()
+		}
+		return &lazyNodeIterator{g: g, entries: entries, pos: -1}
+	}
+	return g.cachedIterator()
+}
+
+func (g *Graph) cachedIterator() NodeIterator {
 	nodes := make([]*Node, 0, len(g.nodes))
 	for _, n := range g.nodes {
 		nodes = append(nodes, n)
 	}
 	return &sliceNodeIterator{nodes: nodes, pos: -1}
+}
+
+// lazyNodeIterator iterates prolly tree entries, loading each node
+// via GetNode (which checks the cache first).
+type lazyNodeIterator struct {
+	g       *Graph
+	entries []storage.ProllyEntry
+	pos     int
+	current *Node
+}
+
+func (it *lazyNodeIterator) Next() bool {
+	for {
+		it.pos++
+		if it.pos >= len(it.entries) {
+			return false
+		}
+		id := it.entries[it.pos].Key
+		n, ok := it.g.GetNode(id)
+		if ok {
+			it.current = n
+			return true
+		}
+		// Node missing from tree (shouldn't happen, but skip).
+	}
+}
+
+func (it *lazyNodeIterator) Node() *Node {
+	return it.current
+}
+
+func (it *lazyNodeIterator) Close() {
+	it.entries = nil
+	it.current = nil
 }
 
 // sliceNodeIterator is the in-memory NodeIterator backed by a slice.
