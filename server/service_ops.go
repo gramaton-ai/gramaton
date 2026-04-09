@@ -42,11 +42,11 @@ func (s *Server) serviceStats() (statsResponse, *serviceError) {
 		EpistemicStatus: make(map[string]int),
 	}
 
-	for _, id := range g.AllNodeIDs() {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
+	it := g.NodeIterator()
+	defer it.Close()
+	for it.Next() {
+		n := it.Node()
+		id := n.ID
 		if isChunkNode(g, id) {
 			continue
 		}
@@ -158,14 +158,14 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 	}
 	var targets []reembedTarget
 
-	for _, id := range s.engine.Graph().AllNodeIDs() {
+	rit := s.engine.Graph().NodeIterator()
+	defer rit.Close()
+	for rit.Next() {
 		if len(targets) >= batch {
 			break
 		}
-		n, ok := s.engine.Graph().GetNode(id)
-		if !ok {
-			continue
-		}
+		n := rit.Node()
+		id := n.ID
 		contentFull, hasContent := n.Properties.GetString("content_full")
 		if !hasContent {
 			continue

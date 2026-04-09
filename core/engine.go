@@ -888,24 +888,25 @@ func (e *Engine) EdgeCount() int {
 // rebuildIndexes populates indexes from graph state. If bm25Loaded
 // is true, the BM25 index was already restored from a persisted
 // snapshot and only property and vector indexes are rebuilt.
-func rebuildIndexes(g *graph.Graph, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
-	for _, id := range g.AllNodeIDs() {
-		n, _ := g.GetNode(id)
+func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
+	it := g.NodeIterator()
+	defer it.Close()
+	for it.Next() {
+		n := it.Node()
 		for k, v := range n.Properties {
-			propIdx.Add(id, k, v)
+			propIdx.Add(n.ID, k, v)
 		}
 		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
 			if v, ok := n.Properties.GetVector(embKey); ok {
-				vecIdx.Add(id, v)
+				vecIdx.Add(n.ID, v)
 				break
 			}
 		}
 		if !bm25Loaded {
-			// BM25: index content text (skip if loaded from disk).
 			if text, ok := n.Properties.GetString("content_full"); ok {
-				bm25Idx.Add(id, text)
+				bm25Idx.Add(n.ID, text)
 			} else if text, ok := n.Properties.GetString("content_short"); ok {
-				bm25Idx.Add(id, text)
+				bm25Idx.Add(n.ID, text)
 			}
 		}
 	}

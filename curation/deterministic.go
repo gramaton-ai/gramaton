@@ -76,7 +76,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 
 	now := time.Now().UTC()
 	g := e.Graph()
-	allIDs := g.AllNodeIDs()
 
 	// Lifecycle: find stale records that need valid_until.
 	var staleIDs []string
@@ -88,11 +87,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	staleCount := 0
 
-	for _, id := range allIDs {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		id := n.ID
 
 		// Skip chunks and deleted records.
 		if isChunkNode(g, id) {
@@ -156,6 +154,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			orphanIDs = append(orphanIDs, id)
 		}
 	}
+
+	it.Close()
 
 	manifest.TotalEdges = g.EdgeCount()
 	manifest.OrphanCount = len(orphanIDs)
@@ -244,11 +244,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	var qualityIssues []qualityIssue
 
-	for _, id := range allIDs {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
+	it2 := g.NodeIterator()
+	for it2.Next() {
+		n := it2.Node()
+		id := n.ID
 		if isChunkNode(g, id) {
 			continue
 		}
@@ -291,6 +290,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			})
 		}
 	}
+	it2.Close()
 
 	e.RUnlock()
 
@@ -440,11 +440,10 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	var gcIDs []string
 
 	e.RLock()
-	for _, id := range e.Graph().AllNodeIDs() {
-		n, ok := e.Graph().GetNode(id)
-		if !ok {
-			continue
-		}
+	gcIt := e.Graph().NodeIterator()
+	for gcIt.Next() {
+		n := gcIt.Node()
+		id := n.ID
 
 		// Must be "captured" (never classified).
 		ps, ok := n.Properties.GetString("processing_status")
@@ -489,6 +488,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 
 		gcIDs = append(gcIDs, id)
 	}
+	gcIt.Close()
 	e.RUnlock()
 
 	if len(gcIDs) == 0 {
@@ -529,7 +529,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	return deleted
 }
 
-func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }
+func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }
 
 // enrichConcepts updates evidence_count and last_evidence_at on concept
 // nodes based on their inbound edges.
@@ -676,7 +676,9 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 	}
 	var sections []sectionInfo
 
-	for _, id := range g.AllNodeIDs() {
+	slIt := g.NodeIterator()
+	for slIt.Next() {
+		id := slIt.Node().ID
 		for _, edge := range g.EdgesFrom(id) {
 			if edge.Type == "section_of" {
 				sections = append(sections, sectionInfo{
@@ -687,6 +689,7 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 			}
 		}
 	}
+	slIt.Close()
 
 	if len(sections) < 2 {
 		e.RUnlock()
@@ -813,4 +816,4 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 	return linked
 }
 
-func nonChunkEdgeCount(g *graph.Graph, id string) int { return g.SemanticEdgeCount(id) }
+func nonChunkEdgeCount(g graph.NodeReader, id string) int { return g.SemanticEdgeCount(id) }

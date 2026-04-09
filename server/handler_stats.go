@@ -27,4 +27,4 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, result)
 }
 
-func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }
+func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }

@@ -34,11 +34,11 @@ func gatherRecords(e *core.Engine) []ExportRecord {
 	g := e.Graph()
 	var records []ExportRecord
 
-	for _, id := range g.AllNodeIDs() {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
+	it := g.NodeIterator()
+	defer it.Close()
+	for it.Next() {
+		n := it.Node()
+		id := n.ID
 
 		// Skip chunks and deleted records.
 		if isChunkNode(g, id) {
@@ -237,4 +237,4 @@ func formatKeywords(props map[string]any) string {
 }
 
 // isChunkNode delegates to graph.IsStructuralChild.
-func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }
+func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }

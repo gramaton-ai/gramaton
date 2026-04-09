@@ -29,11 +29,15 @@ func (e *Engine) Validate() *ValidationResult {
 	r := &ValidationResult{}
 	g := e.Graph()
 
-	allIDs := g.AllNodeIDs()
-	nodeSet := make(map[string]struct{}, len(allIDs))
-	for _, id := range allIDs {
+	allIDs := make([]string, 0, g.NodeCount())
+	nodeSet := make(map[string]struct{}, g.NodeCount())
+	it := g.NodeIterator()
+	for it.Next() {
+		id := it.Node().ID
+		allIDs = append(allIDs, id)
 		nodeSet[id] = struct{}{}
 	}
+	it.Close()
 
 	r.Stats.Nodes = len(allIDs)
 
@@ -187,4 +191,4 @@ func (r *ValidationResult) addWarning(format string, args ...any) {
 }
 
 // isChunkNode returns true if a node is a chunk or section child.
-func isChunkNode(g *graph.Graph, id string) bool { return g.IsStructuralChild(id) }
+func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }

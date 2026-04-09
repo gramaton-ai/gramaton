@@ -16,11 +16,15 @@ func (e *Engine) Repair() *RepairResult {
 	r := &RepairResult{}
 	g := e.Graph()
 
-	allIDs := g.AllNodeIDs()
-	nodeSet := make(map[string]struct{}, len(allIDs))
-	for _, id := range allIDs {
+	allIDs := make([]string, 0, g.NodeCount())
+	nodeSet := make(map[string]struct{}, g.NodeCount())
+	it := g.NodeIterator()
+	for it.Next() {
+		id := it.Node().ID
+		allIDs = append(allIDs, id)
 		nodeSet[id] = struct{}{}
 	}
+	it.Close()
 
 	// --- Remove dangling edges ---
 	edgeSeen := make(map[string]struct{})

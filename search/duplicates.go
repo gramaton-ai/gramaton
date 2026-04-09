@@ -1,6 +1,7 @@
 package search
 
 import (
+	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 )
 
@@ -16,7 +17,7 @@ type DuplicatePair struct {
 // FindDuplicates returns pairs of records whose embedding similarity
 // exceeds the given threshold. Each pair appears once (not mirrored).
 // Returns at most maxPairs results, ordered by descending similarity.
-func FindDuplicates(g nodeReader, vecIdx index.VectorIndex, threshold float64, maxPairs int) []DuplicatePair {
+func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold float64, maxPairs int) []DuplicatePair {
 	if vecIdx == nil || vecIdx.Len() == 0 {
 		return nil
 	}
@@ -30,18 +31,17 @@ func FindDuplicates(g nodeReader, vecIdx index.VectorIndex, threshold float64, m
 		vec []float32
 	}
 	var nodes []embedded
-	for _, id := range g.AllNodeIDs() {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
-		if isLegacyChunk(g, id) {
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		if isLegacyChunk(g, n.ID) {
 			continue
 		}
 		if v, ok := n.Properties["embedding_full"]; ok {
-			nodes = append(nodes, embedded{id: id, vec: v.Vector()})
+			nodes = append(nodes, embedded{id: n.ID, vec: v.Vector()})
 		}
 	}
+	it.Close()
 
 	if len(nodes) < 2 {
 		return nil

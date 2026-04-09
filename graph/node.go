@@ -94,10 +94,43 @@ func (g *Graph) NodeCount() int {
 }
 
 // AllNodeIDs returns all node IDs in the graph. Order is not guaranteed.
+//
+// Prefer NodeIterator for new code -- it avoids allocating the full ID
+// slice and will cursor through the prolly tree under lazy loading.
 func (g *Graph) AllNodeIDs() []string {
 	ids := make([]string, 0, len(g.nodes))
 	for id := range g.nodes {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// NodeIterator returns an iterator over all nodes in the graph.
+// The current implementation wraps the in-memory map. A future lazy
+// implementation will cursor through the prolly tree on demand.
+func (g *Graph) NodeIterator() NodeIterator {
+	nodes := make([]*Node, 0, len(g.nodes))
+	for _, n := range g.nodes {
+		nodes = append(nodes, n)
+	}
+	return &sliceNodeIterator{nodes: nodes, pos: -1}
+}
+
+// sliceNodeIterator is the in-memory NodeIterator backed by a slice.
+type sliceNodeIterator struct {
+	nodes []*Node
+	pos   int
+}
+
+func (it *sliceNodeIterator) Next() bool {
+	it.pos++
+	return it.pos < len(it.nodes)
+}
+
+func (it *sliceNodeIterator) Node() *Node {
+	return it.nodes[it.pos]
+}
+
+func (it *sliceNodeIterator) Close() {
+	it.nodes = nil
 }

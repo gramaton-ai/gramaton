@@ -15,7 +15,7 @@ import (
 
 // Tool implements the search command -- Tier 1 of the retrieval funnel.
 type Tool struct {
-	graph    nodeReader
+	graph    graph.NodeReader
 	propIdx  *index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Idx  *index.BM25Index
@@ -23,22 +23,12 @@ type Tool struct {
 	cfg      config.Config
 }
 
-// Consumer-defined interfaces. The search tool only needs these methods.
-
-type nodeReader interface {
-	GetNode(id string) (*graph.Node, bool)
-	AllNodeIDs() []string
-	NodeCount() int
-	EdgesFrom(nodeID string) []*graph.Edge
-	EdgesTo(nodeID string) []*graph.Edge
-}
-
 type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 // New creates a search tool. embedder and bm25Idx may be nil.
-func New(g nodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, emb embedder, cfg config.Config) *Tool {
+func New(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, emb embedder, cfg config.Config) *Tool {
 	return &Tool{
 		graph:    g,
 		propIdx:  propIdx,
@@ -126,8 +116,8 @@ type Suggestions struct {
 
 // ComputeSuggestions builds refinement suggestions from search results.
 // Returns nil if results are high quality (top score above threshold).
-// The nodeReader is used to read meta.* properties from result nodes.
-func ComputeSuggestions(results []Result, reader nodeReader, threshold float64) *Suggestions {
+// The NodeReader is used to read meta.* properties from result nodes.
+func ComputeSuggestions(results []Result, reader graph.NodeReader, threshold float64) *Suggestions {
 	if len(results) == 0 {
 		return nil
 	}
@@ -514,13 +504,15 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	if q.Resolution == "unresolved" {
 		// Nodes that do NOT have a resolution property.
 		have := t.propIdx.NodesWithKey("resolution")
-		allIDs := t.graph.AllNodeIDs()
 		result := make(map[string]struct{})
-		for _, id := range allIDs {
+		it := t.graph.NodeIterator()
+		for it.Next() {
+			id := it.Node().ID
 			if _, has := have[id]; !has {
 				result[id] = struct{}{}
 			}
 		}
+		it.Close()
 		sets = append(sets, result)
 	} else {
 		enumFilter("resolution", q.Resolution)
@@ -529,13 +521,15 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Missing filter: exclude nodes that have the specified properties.
 	for _, field := range q.Missing {
 		have := t.propIdx.NodesWithKey(field)
-		allIDs := t.graph.AllNodeIDs()
 		result := make(map[string]struct{})
-		for _, id := range allIDs {
+		it := t.graph.NodeIterator()
+		for it.Next() {
+			id := it.Node().ID
 			if _, has := have[id]; !has {
 				result[id] = struct{}{}
 			}
 		}
+		it.Close()
 		sets = append(sets, result)
 	}
 
@@ -566,8 +560,12 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Intersect all filter sets, or start with all nodes if no index filters.
 	var candidateSet map[string]struct{}
 	if len(sets) == 0 {
-		allIDs := t.graph.AllNodeIDs()
-		candidateSet = toSet(allIDs)
+		candidateSet = make(map[string]struct{}, t.graph.NodeCount())
+		it := t.graph.NodeIterator()
+		for it.Next() {
+			candidateSet[it.Node().ID] = struct{}{}
+		}
+		it.Close()
 	} else {
 		candidateSet = sets[0]
 		for i := 1; i < len(sets); i++ {
@@ -918,7 +916,7 @@ func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) floa
 // edgeCount returns the total number of edges (in + out) for a node,
 // excluding chunk_of and section_of edges (structural, not semantic).
 // edgeCount returns semantic (non-structural) edge count via graph.IsStructuralEdge.
-func edgeCount(g nodeReader, id string) int {
+func edgeCount(g graph.NodeReader, id string) int {
 	count := 0
 	for _, e := range g.EdgesFrom(id) {
 		if !graph.IsStructuralEdge(e.Type) {
@@ -936,7 +934,7 @@ func edgeCount(g nodeReader, id string) int {
 // isLegacyChunk checks if a node is a legacy dumb chunk (chunk_of edge).
 // Section nodes (section_of) are intentionally NOT excluded from search
 // results -- they have metadata and are independently meaningful.
-func isLegacyChunk(g nodeReader, id string) bool {
+func isLegacyChunk(g graph.NodeReader, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
 		if e.Type == "chunk_of" {
 			return true
