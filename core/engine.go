@@ -417,7 +417,7 @@ func (e *Engine) GenerateEmbeddings(ctx context.Context, nodeID string) error {
 	targets := []embedTarget{
 		{"content_keywords", "embedding_keywords"},
 		{"content_short", "embedding_short"},
-		{"content_abstract", "embedding_abstract"},
+		{"content_medium", "embedding_medium"},
 		{"content_full", "embedding_full"},
 	}
 
@@ -477,7 +477,7 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	}
 
 	var vec []float32
-	for _, key := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
+	for _, key := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
 		if v, ok := n.Properties.GetVector(key); ok {
 			vec = v
 			break
@@ -951,7 +951,7 @@ func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx ind
 			}
 		}
 		if !vecLoaded {
-			for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
+			for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
 				if v, ok := n.Properties.GetVector(embKey); ok {
 					vecIdx.Add(n.ID, v)
 					break

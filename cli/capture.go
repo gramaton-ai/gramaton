@@ -20,7 +20,7 @@ Required fields:
 
 Optional fields:
   temporality, confidence, knowledge_type, epistemic_status,
-  importance, keywords, summary_short, summary_abstract,
+  importance, keywords, summary_short, summary_medium,
   source_ref, source_credibility, testimony_hops,
   context_about, context_who, context_prompted,
   context_findable_by, context_related,

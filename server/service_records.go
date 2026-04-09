@@ -383,8 +383,8 @@ func (s *Server) serviceClassify(id string, req *classifyRequest) (map[string]an
 	if req.SummaryShort != "" {
 		s.engine.SetProp(id, "content_short", graph.StringProperty(req.SummaryShort))
 	}
-	if req.SummaryAbstract != "" {
-		s.engine.SetProp(id, "content_abstract", graph.StringProperty(req.SummaryAbstract))
+	if req.SummaryMedium != "" {
+		s.engine.SetProp(id, "content_medium", graph.StringProperty(req.SummaryMedium))
 	}
 
 	s.engine.SetProp(id, "processing_status", graph.StringProperty("processed"))

@@ -31,7 +31,7 @@ type ImportResult struct {
 var safeProperties = map[string]bool{
 	"content_full":        true,
 	"content_short":       true,
-	"content_abstract":    true,
+	"content_medium":    true,
 	"content_keywords":    true,
 	"source_ref":          true,
 	"created_at":          true,
@@ -438,7 +438,7 @@ func buildSafeProps(raw map[string]any) graph.Properties {
 			continue
 		}
 		switch k {
-		case "content_full", "content_short", "content_abstract",
+		case "content_full", "content_short", "content_medium",
 			"source_ref", "temporality", "knowledge_type",
 			"epistemic_status", "context_about", "context_who",
 			"context_prompted", "context_findable_by", "context_related",

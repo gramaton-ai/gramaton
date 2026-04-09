@@ -20,7 +20,7 @@ type captureRequest struct {
 	Importance        *float64       `json:"importance,omitempty"`
 	Keywords          []string       `json:"keywords,omitempty"`
 	SummaryShort      string         `json:"summary_short,omitempty"`
-	SummaryAbstract   string         `json:"summary_abstract,omitempty"`
+	SummaryMedium   string         `json:"summary_medium,omitempty"`
 	SourceRef         string         `json:"source_ref,omitempty"`
 	SourceCredibility *float64       `json:"source_credibility,omitempty"`
 	TestimonyHops     *int64         `json:"testimony_hops,omitempty"`
@@ -56,7 +56,7 @@ type classifyRequest struct {
 	Importance      *float64 `json:"importance,omitempty"`
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string   `json:"summary_short,omitempty"`
-	SummaryAbstract string   `json:"summary_abstract,omitempty"`
+	SummaryMedium string   `json:"summary_medium,omitempty"`
 }
 
 type resolveRequest struct {
@@ -113,7 +113,7 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 	}{
 		{"content_keywords", "embedding_keywords"},
 		{"content_short", "embedding_short"},
-		{"content_abstract", "embedding_abstract"},
+		{"content_medium", "embedding_medium"},
 		{"content_full", "embedding_full"},
 	}
 
@@ -124,8 +124,8 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 	if req.SummaryShort != "" {
 		texts["content_short"] = req.SummaryShort
 	}
-	if req.SummaryAbstract != "" {
-		texts["content_abstract"] = req.SummaryAbstract
+	if req.SummaryMedium != "" {
+		texts["content_medium"] = req.SummaryMedium
 	}
 	if len(req.Keywords) > 0 {
 		texts["content_keywords"] = joinStrings(req.Keywords)
@@ -335,8 +335,8 @@ func validateCaptureRequest(req *captureRequest) error {
 	if len(req.SummaryShort) > maxSummaryShortLen {
 		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
 	}
-	if len(req.SummaryAbstract) > maxSummaryAbstractLen {
-		return fmt.Errorf("summary_abstract exceeds maximum length of %d", maxSummaryAbstractLen)
+	if len(req.SummaryMedium) > maxSummaryMediumLen {
+		return fmt.Errorf("summary_medium exceeds maximum length of %d", maxSummaryMediumLen)
 	}
 	if len(req.SourceRef) > maxSourceRefLen {
 		return fmt.Errorf("source_ref exceeds maximum length of %d", maxSourceRefLen)
@@ -406,8 +406,8 @@ func validateClassifyRequest(req *classifyRequest) error {
 	if len(req.SummaryShort) > maxSummaryShortLen {
 		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
 	}
-	if len(req.SummaryAbstract) > maxSummaryAbstractLen {
-		return fmt.Errorf("summary_abstract exceeds maximum length of %d", maxSummaryAbstractLen)
+	if len(req.SummaryMedium) > maxSummaryMediumLen {
+		return fmt.Errorf("summary_medium exceeds maximum length of %d", maxSummaryMediumLen)
 	}
 	return nil
 }
@@ -434,8 +434,8 @@ func setOptionalProps(props graph.Properties, req *captureRequest) {
 	if req.SummaryShort != "" {
 		props["content_short"] = graph.StringProperty(req.SummaryShort)
 	}
-	if req.SummaryAbstract != "" {
-		props["content_abstract"] = graph.StringProperty(req.SummaryAbstract)
+	if req.SummaryMedium != "" {
+		props["content_medium"] = graph.StringProperty(req.SummaryMedium)
 	}
 	if req.SourceRef != "" {
 		props["source_ref"] = graph.StringProperty(req.SourceRef)

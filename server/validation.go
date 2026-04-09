@@ -36,7 +36,7 @@ const (
 	maxKeywordLength      = 256
 	maxReembedBatch       = 500
 	maxSummaryShortLen    = 500
-	maxSummaryAbstractLen = 5000
+	maxSummaryMediumLen = 5000
 	maxSourceRefLen       = 2048
 	maxContextFieldLen    = 2048
 )
