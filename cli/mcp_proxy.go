@@ -312,7 +312,7 @@ type proxyExploreInput struct {
 func registerExploreProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_explore",
-		Description: "Traverse the knowledge graph from a starting node. Returns connected nodes and edges.",
+		Description: "Traverse the knowledge graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyExploreInput) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/explore", args)
 	})
@@ -409,7 +409,7 @@ type proxyBranchInput struct {
 func registerBranchProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_branch",
-		Description: "Manage branches: create, list, checkout, merge, or discard.",
+		Description: "Manage branches: create, list, checkout, merge, or discard. Use for safe experimentation, bulk imports, or testing curation changes before merging.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyBranchInput) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "list":
@@ -439,7 +439,7 @@ type proxyDiffInput struct {
 func registerDiffProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_diff",
-		Description: "Show what changed in the knowledge store since a date, optionally filtered by topic.",
+		Description: "Show what changed since a date: added, modified, and removed records with summaries. Use to audit curation, catch up after time away, or review what other agents captured.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyDiffInput) (*mcp.CallToolResult, any, error) {
 		params := url.Values{}
 		if args.Since != "" {
@@ -469,7 +469,7 @@ type proxyLogInput struct {
 func registerLogProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_log",
-		Description: "View commit history or per-record change history.",
+		Description: "View commit history. Use to see what operations modified the knowledge graph and when. For per-record history, use gramaton_history instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyLogInput) (*mcp.CallToolResult, any, error) {
 		params := url.Values{}
 		if args.Limit > 0 {
@@ -581,7 +581,7 @@ type proxyHistoryInput struct {
 func registerHistoryProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_history",
-		Description: "View change history for a specific record.",
+		Description: "View how a specific record changed over time: what fields were added, modified, or removed at each commit.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyHistoryInput) (*mcp.CallToolResult, any, error) {
 		return proxyGet(fmt.Sprintf("/v1/records/%s/history", url.PathEscape(args.ID)))
 	})

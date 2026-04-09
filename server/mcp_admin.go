@@ -19,7 +19,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_branch",
-		Description: "Manage branches: create, list, checkout, merge, or discard.",
+		Description: "Manage branches: create, list, checkout, merge, or discard. Use for safe experimentation, bulk imports, or testing curation changes before merging.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args branchInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_branch")
 		defer done(nil)
@@ -162,7 +162,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_diff",
-		Description: "Show what changed in the knowledge store since a date, optionally filtered by topic.",
+		Description: "Show what changed since a date: added, modified, and removed records with summaries. Use to audit curation, catch up after time away, or review what other agents captured.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args diffInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_diff")
 		defer done(nil)
@@ -294,7 +294,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_log",
-		Description: "View commit history or per-record change history.",
+		Description: "View commit history. Use to see what operations modified the knowledge graph and when. For per-record history, use gramaton_history instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args logInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_log")
 		defer done(nil)

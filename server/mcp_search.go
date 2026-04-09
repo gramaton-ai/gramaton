@@ -92,7 +92,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_explore",
-		Description: "Traverse the knowledge graph from a starting node. Returns connected nodes and edges.",
+		Description: "Traverse the knowledge graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args exploreInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_explore")
 		defer done(nil)
