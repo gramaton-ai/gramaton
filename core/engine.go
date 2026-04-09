@@ -888,6 +888,12 @@ func (e *Engine) IndexNode(nodeID, content string, vec []float32) {
 	}
 	if vec != nil {
 		e.vecIdx.Add(nodeID, vec)
+		// Set embedding_full as a node property so it's persisted and
+		// visible to inspection/export. The vector index is a derived
+		// structure; the property is the source of truth.
+		prop := graph.VectorProperty(vec)
+		e.graph.SetNodeProperty(nodeID, "embedding_full", prop)
+		e.propIdx.Add(nodeID, "embedding_full", prop)
 	}
 }
 
