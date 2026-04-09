@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
@@ -166,11 +167,13 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
+	now := time.Now().UTC()
 	ingested := 0
 	for _, p := range prepared {
 		props := graph.Properties{
 			"content_full":      graph.StringProperty(p.file.Content),
 			"source_ref":        graph.StringProperty(p.file.Filename),
+			"created_at":        graph.TimestampProperty(now),
 			"processing_status": graph.StringProperty("captured"),
 			"access_count":      graph.Int64Property(0),
 		}
@@ -180,6 +183,20 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 
 		if err := s.applyPreEmbedded(n.ID, p.embedded); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
+		}
+
+		// Dedup check: auto-supersede if similar record exists.
+		if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
+			oldNode, _ := s.engine.Graph().GetNode(dupID)
+			if oldNode != nil {
+				if _, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until"); !alreadyHistorical {
+					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+					s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+					s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
+					s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil)
+				}
+			}
+			warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
 		}
 
 		if numChunks := s.engine.ApplyChunks(n.ID, p.chunked, n.Properties); numChunks > 0 {
