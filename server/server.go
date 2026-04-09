@@ -449,6 +449,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/duplicates", s.handleDuplicates)
 
 	// System
+	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)

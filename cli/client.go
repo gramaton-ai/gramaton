@@ -20,11 +20,14 @@ func serverURL() (string, error) {
 	if err == nil && server.IsProcessAlive(info.PID) {
 		url := fmt.Sprintf("http://%s:%d", info.Bind, info.Port)
 		// Verify it's actually gramaton (PID reuse protection).
+		// Uses lock-free /v1/health endpoint so a busy server
+		// still responds even when curation holds the write lock.
 		if verifyServer(url) {
 			return url, nil
 		}
-		// Stale info, clean up.
-		server.RemoveServerInfo(dir)
+		// Process is alive but not responding at all.
+		// Don't remove server info -- the process may just be
+		// starting up. Only remove if the process is dead.
 	} else if err == nil {
 		// PID file exists but process is dead.
 		server.RemoveServerInfo(dir)
@@ -44,9 +47,11 @@ func serverURL() (string, error) {
 }
 
 // verifyServer checks that a URL responds to the gramaton health check.
-// Uses the short-timeout healthClient to avoid long hangs on dead servers.
+// Uses the lock-free /v1/health endpoint which responds even when the
+// server is busy with curation or bulk writes. Short timeout to avoid
+// long hangs on dead servers.
 func verifyServer(baseURL string) bool {
-	resp, err := healthClient.Get(baseURL + "/v1/status")
+	resp, err := healthClient.Get(baseURL + "/v1/health")
 	if err != nil {
 		return false
 	}

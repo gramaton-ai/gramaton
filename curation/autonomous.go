@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"time"
 
@@ -60,8 +61,11 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	}
 
 	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	runtime.Gosched() // yield so other goroutines can acquire the lock
 	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	runtime.Gosched()
 	createConceptNodes(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun, conceptCandidates)
+	runtime.Gosched()
 	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 
 	// Generate manifest qualitative summary if we have a manifest from
@@ -666,6 +670,7 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 
 		e.Save("curation: concept node")
 		e.Unlock()
+		runtime.Gosched() // yield between concept saves
 
 		result.ConceptsCreated++
 

@@ -8,6 +8,17 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 )
 
+// handleHealth is a lock-free liveness endpoint. It returns immediately
+// without acquiring any graph lock, so it stays responsive even when
+// curation or bulk writes are holding the write lock. Used by the CLI
+// to verify the server is alive (verifyServer).
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"version": s.cfg.StoreName,
+	})
+}
+
 // handleStatus returns server health and store stats.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.engine.RLock()
