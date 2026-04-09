@@ -85,7 +85,11 @@ func (s *Server) serviceStats() (statsResponse, *serviceError) {
 }
 
 // servicePending lists records awaiting classification.
-func (s *Server) servicePending() (map[string]any, *serviceError) {
+func (s *Server) servicePending(limit int) (map[string]any, *serviceError) {
+	if limit <= 0 {
+		limit = 50
+	}
+
 	s.engine.RLock()
 	defer s.engine.RUnlock()
 
@@ -94,6 +98,9 @@ func (s *Server) servicePending() (map[string]any, *serviceError) {
 
 	var records []map[string]any
 	for _, id := range captured {
+		if len(records) >= limit {
+			break
+		}
 		entry := map[string]any{"id": id}
 		if n, ok := s.engine.Graph().GetNode(id); ok {
 			if v, ok := n.Properties.GetString("content_short"); ok {
@@ -110,7 +117,11 @@ func (s *Server) servicePending() (map[string]any, *serviceError) {
 		records = []map[string]any{}
 	}
 
-	return map[string]any{"records": records}, nil
+	resp := map[string]any{"records": records, "total": len(captured)}
+	if len(captured) > limit {
+		resp["truncated"] = true
+	}
+	return resp, nil
 }
 
 // serviceReembed regenerates stale embeddings using a 3-phase approach

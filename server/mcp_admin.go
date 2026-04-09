@@ -158,6 +158,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	type diffInput struct {
 		Since string `json:"since,omitempty" jsonschema:"show changes after date (YYYY-MM-DD)"`
 		Topic string `json:"topic,omitempty" jsonschema:"filter by topic keyword"`
+		Limit int    `json:"limit,omitempty" jsonschema:"max changes to return (default 50)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_diff",
@@ -218,8 +219,29 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 			return mcpErr("failed to compute diff")
 		}
 
-		var added, removed []map[string]any
+		limit := args.Limit
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 1000 {
+			limit = 1000
+		}
+
+		addedSet := make(map[string]struct{}, len(diff.Added))
+		for _, e := range diff.Added {
+			addedSet[e.Key] = struct{}{}
+		}
+		removedSet := make(map[string]struct{}, len(diff.Removed))
+		for _, e := range diff.Removed {
+			removedSet[e.Key] = struct{}{}
+		}
+
+		var added, modified, removed []map[string]any
+		total := 0
 		for _, entry := range diff.Added {
+			if total >= limit {
+				break
+			}
 			if args.Topic != "" && !matchesTopic(s, entry.Key, args.Topic) {
 				continue
 			}
@@ -229,21 +251,41 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 					rec["summary_short"] = v
 				}
 			}
-			added = append(added, rec)
+			if _, wasRemoved := removedSet[entry.Key]; wasRemoved {
+				modified = append(modified, rec)
+			} else {
+				added = append(added, rec)
+			}
+			total++
 		}
 		for _, entry := range diff.Removed {
+			if total >= limit {
+				break
+			}
+			if _, wasAdded := addedSet[entry.Key]; wasAdded {
+				continue
+			}
 			if args.Topic != "" && !matchesTopic(s, entry.Key, args.Topic) {
 				continue
 			}
 			removed = append(removed, map[string]any{"id": entry.Key})
+			total++
 		}
 		if added == nil {
 			added = []map[string]any{}
 		}
+		if modified == nil {
+			modified = []map[string]any{}
+		}
 		if removed == nil {
 			removed = []map[string]any{}
 		}
-		return mcpJSONResult(map[string]any{"added": added, "removed": removed})
+		resp := map[string]any{"added": added, "modified": modified, "removed": removed}
+		if total >= limit {
+			resp["truncated"] = true
+			resp["limit"] = limit
+		}
+		return mcpJSONResult(resp)
 	})
 
 	type logInput struct {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -51,6 +52,22 @@ func validateKeywords(keywords []string) error {
 		}
 	}
 	return nil
+}
+
+// parseIntParam reads an integer query parameter with a default and max.
+func parseIntParam(r *http.Request, name string, defaultVal, maxVal int) int {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v <= 0 {
+		return defaultVal
+	}
+	if v > maxVal {
+		return maxVal
+	}
+	return v
 }
 
 // parseJSON reads and validates a JSON request body into target.

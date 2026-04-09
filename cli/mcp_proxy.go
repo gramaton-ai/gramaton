@@ -306,6 +306,7 @@ type proxyExploreInput struct {
 	Depth     int      `json:"depth,omitempty" jsonschema:"max traversal depth (default 2)"`
 	EdgeTypes []string `json:"edge_types,omitempty" jsonschema:"edge types to follow"`
 	MinWeight float64  `json:"min_weight,omitempty" jsonschema:"minimum edge weight"`
+	MaxNodes  int      `json:"max_nodes,omitempty" jsonschema:"max nodes to return (default 100)"`
 }
 
 func registerExploreProxy(s *mcp.Server) {
@@ -432,6 +433,7 @@ func registerBranchProxy(s *mcp.Server) {
 type proxyDiffInput struct {
 	Since string `json:"since,omitempty" jsonschema:"show changes after date (YYYY-MM-DD)"`
 	Topic string `json:"topic,omitempty" jsonschema:"filter by topic keyword"`
+	Limit int    `json:"limit,omitempty" jsonschema:"max changes to return (default 50)"`
 }
 
 func registerDiffProxy(s *mcp.Server) {
@@ -445,6 +447,9 @@ func registerDiffProxy(s *mcp.Server) {
 		}
 		if args.Topic != "" {
 			params.Set("topic", args.Topic)
+		}
+		if args.Limit > 0 {
+			params.Set("limit", fmt.Sprintf("%d", args.Limit))
 		}
 		path := "/v1/diff"
 		if len(params) > 0 {

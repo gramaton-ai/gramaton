@@ -105,6 +105,7 @@ func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, lim
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	topic := r.URL.Query().Get("topic")
+	limit := parseIntParam(r, "limit", 50, 1000)
 
 	if len(topic) > maxTopicLength {
 		s.writeError(w, http.StatusBadRequest, "invalid_field", "topic too long", true)
@@ -169,37 +170,73 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build response from prolly entries.
-	var added, removed []map[string]any
+	// Build added/removed sets for modified detection.
+	addedSet := make(map[string]struct{}, len(diff.Added))
+	for _, e := range diff.Added {
+		addedSet[e.Key] = struct{}{}
+	}
+	removedSet := make(map[string]struct{}, len(diff.Removed))
+	for _, e := range diff.Removed {
+		removedSet[e.Key] = struct{}{}
+	}
+
+	// Build response: separate added, modified, removed.
+	var added, modified, removed []map[string]any
+	total := 0
 	for _, entry := range diff.Added {
-		rec := map[string]any{"id": entry.Key}
+		if total >= limit {
+			break
+		}
 		if topic != "" && !matchesTopic(s, entry.Key, topic) {
 			continue
 		}
+		rec := map[string]any{"id": entry.Key}
 		if n, ok := s.engine.Graph().GetNode(entry.Key); ok {
 			if v, ok := n.Properties.GetString("content_short"); ok {
 				rec["summary_short"] = v
 			}
 		}
-		added = append(added, rec)
+		if _, wasRemoved := removedSet[entry.Key]; wasRemoved {
+			modified = append(modified, rec)
+		} else {
+			added = append(added, rec)
+		}
+		total++
 	}
 	for _, entry := range diff.Removed {
+		if total >= limit {
+			break
+		}
+		if _, wasAdded := addedSet[entry.Key]; wasAdded {
+			continue // already counted as modified
+		}
 		if topic != "" && !matchesTopic(s, entry.Key, topic) {
 			continue
 		}
 		removed = append(removed, map[string]any{"id": entry.Key})
+		total++
 	}
 
 	if added == nil {
 		added = []map[string]any{}
 	}
+	if modified == nil {
+		modified = []map[string]any{}
+	}
 	if removed == nil {
 		removed = []map[string]any{}
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
-		"added": added, "removed": removed,
-	})
+	resp := map[string]any{
+		"added":    added,
+		"modified": modified,
+		"removed":  removed,
+	}
+	if total >= limit {
+		resp["truncated"] = true
+		resp["limit"] = limit
+	}
+	s.writeJSONLocked(w, http.StatusOK, resp)
 }
 
 // loadCommit loads a commit from the store by hash, returning only

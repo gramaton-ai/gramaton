@@ -13,7 +13,7 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_pending")
 		defer done(nil)
-		result, _ := s.servicePending()
+		result, _ := s.servicePending(50)
 		return mcpJSONResult(result)
 	})
 

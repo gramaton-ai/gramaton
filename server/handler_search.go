@@ -44,6 +44,7 @@ type exploreRequest struct {
 	Depth     int      `json:"depth"`
 	EdgeTypes []string `json:"edge_types,omitempty"`
 	MinWeight float64  `json:"min_weight,omitempty"`
+	MaxNodes  int      `json:"max_nodes,omitempty"`
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

@@ -88,6 +88,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		Depth     int      `json:"depth,omitempty" jsonschema:"max traversal depth (default 2)"`
 		EdgeTypes []string `json:"edge_types,omitempty" jsonschema:"edge types to follow"`
 		MinWeight float64  `json:"min_weight,omitempty" jsonschema:"minimum edge weight"`
+		MaxNodes  int      `json:"max_nodes,omitempty" jsonschema:"max nodes to return (default 100)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_explore",
@@ -100,6 +101,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 			Depth:     args.Depth,
 			EdgeTypes: args.EdgeTypes,
 			MinWeight: args.MinWeight,
+			MaxNodes:  args.MaxNodes,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)

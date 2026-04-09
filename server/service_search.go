@@ -246,10 +246,26 @@ func (s *Server) serviceExplore(req *exploreRequest) (map[string]any, *serviceEr
 	}
 	s.retrieval.Track(ids...)
 
-	return map[string]any{
+	// Apply node limit.
+	maxNodes := req.MaxNodes
+	if maxNodes <= 0 {
+		maxNodes = 100
+	}
+	truncated := false
+	if len(sub.Nodes) > maxNodes {
+		sub.Nodes = sub.Nodes[:maxNodes]
+		truncated = true
+	}
+
+	resp := map[string]any{
 		"nodes": sub.Nodes,
 		"edges": sub.Edges,
-	}, nil
+	}
+	if truncated {
+		resp["truncated"] = true
+		resp["max_nodes"] = maxNodes
+	}
+	return resp, nil
 }
 
 // serviceDuplicates finds near-duplicate records by embedding similarity.

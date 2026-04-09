@@ -31,7 +31,8 @@ type ingestFile struct {
 }
 
 func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
-	result, _ := s.servicePending()
+	limit := parseIntParam(r, "limit", 50, 500)
+	result, _ := s.servicePending(limit)
 	s.writeJSON(w, http.StatusOK, result)
 }
 
