@@ -425,6 +425,58 @@ func TestNonStringTypesNotInSubstring(t *testing.T) {
 	}
 }
 
+// --- Persistence ---
+
+func TestPropertyIndexRoundTrip(t *testing.T) {
+	idx := NewPropertyIndex()
+
+	// Add a mix of property types.
+	idx.Add("n1", "temporality", graph.StringProperty("durable"))
+	idx.Add("n2", "temporality", graph.StringProperty("ephemeral"))
+	idx.Add("n1", "confidence", graph.Float64Property(0.9))
+	idx.Add("n2", "confidence", graph.Float64Property(0.3))
+	idx.Add("n1", "access_count", graph.Int64Property(5))
+	idx.Add("n1", "content_keywords", graph.StringListProperty([]string{"kafka", "rabbitmq"}))
+	idx.Add("n2", "content_keywords", graph.StringListProperty([]string{"kafka"}))
+	idx.Add("n1", "content_full", graph.StringProperty("We chose Kafka for the event pipeline"))
+	idx.Add("n1", "created_at", graph.TimestampProperty(time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)))
+
+	// Marshal.
+	data, err := idx.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Unmarshal into a fresh index.
+	idx2 := NewPropertyIndex()
+	if err := idx2.UnmarshalBinary(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Exact match.
+	assertContains(t, idx2.Lookup("temporality", graph.StringProperty("durable")), "n1")
+	assertContains(t, idx2.Lookup("temporality", graph.StringProperty("ephemeral")), "n2")
+
+	// Range query.
+	rangeResult := idx2.Range("confidence", graph.Float64Property(0.5), graph.Float64Property(1.0))
+	assertContains(t, rangeResult, "n1")
+
+	// Substring search.
+	subResult := idx2.ContainsFold("content_full", "kafka")
+	assertContains(t, subResult, "n1")
+
+	// Keyword index.
+	kwResult := idx2.LookupKeyword("content_keywords", "kafka")
+	assertContains(t, kwResult, "n1", "n2")
+	kwResult2 := idx2.LookupKeyword("content_keywords", "rabbitmq")
+	assertContains(t, kwResult2, "n1")
+
+	// Count should match.
+	if idx.Count() != idx2.Count() {
+		t.Fatalf("count mismatch: original %d, restored %d", idx.Count(), idx2.Count())
+	}
+}
+
 // --- Helpers ---
 
 func assertContains(t *testing.T, got []string, want ...string) {

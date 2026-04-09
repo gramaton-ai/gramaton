@@ -21,6 +21,8 @@ type Commit struct {
 	// Persisted index roots (content-addressed chunks).
 	// Omitempty ensures backward compatibility with older commits.
 	BM25Root string `json:"bm25_root,omitempty"`
+	VecRoot  string `json:"vec_root,omitempty"`
+	PropRoot string `json:"prop_root,omitempty"`
 	// NodeHashes/EdgeHashes retained for reading v0 commits only.
 	NodeHashes []string `json:"node_hashes,omitempty"`
 	EdgeHashes []string `json:"edge_hashes,omitempty"`

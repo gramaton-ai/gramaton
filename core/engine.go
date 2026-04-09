@@ -6,6 +6,7 @@ package core
 
 import (
 	"context"
+	"encoding"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,19 +145,39 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		vecIdx = index.NewFlatIndex()
 	}
 
-	// Try to load persisted BM25 index from commit. If available,
-	// skip re-tokenization (saves seconds at 100K+ nodes).
+	// Try to load persisted indexes from commit. Each index that loads
+	// successfully is skipped during rebuildIndexes.
 	bm25Loaded := false
-	if headCommit != nil && headCommit.BM25Root != "" {
-		bm25Data, err := s.Read(headCommit.BM25Root)
-		if err == nil {
-			if err := bm25Idx.UnmarshalBinary(bm25Data); err == nil {
-				bm25Loaded = true
+	vecLoaded := false
+	propLoaded := false
+
+	if headCommit != nil {
+		if headCommit.BM25Root != "" {
+			if bm25Data, err := s.Read(headCommit.BM25Root); err == nil {
+				if err := bm25Idx.UnmarshalBinary(bm25Data); err == nil {
+					bm25Loaded = true
+				}
+			}
+		}
+		if headCommit.VecRoot != "" {
+			if u, ok := vecIdx.(encoding.BinaryUnmarshaler); ok {
+				if vecData, err := s.Read(headCommit.VecRoot); err == nil {
+					if err := u.UnmarshalBinary(vecData); err == nil {
+						vecLoaded = true
+					}
+				}
+			}
+		}
+		if headCommit.PropRoot != "" {
+			if propData, err := s.Read(headCommit.PropRoot); err == nil {
+				if err := propIdx.UnmarshalBinary(propData); err == nil {
+					propLoaded = true
+				}
 			}
 		}
 	}
 
-	rebuildIndexes(g, propIdx, vecIdx, bm25Idx, bm25Loaded)
+	rebuildIndexes(g, propIdx, vecIdx, bm25Idx, bm25Loaded, vecLoaded, propLoaded)
 
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
@@ -255,8 +276,8 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // active branch ref. Caller must hold the write lock. Clears the
 // accessDirty flag since all in-memory state is now persisted.
 //
-// Persists the BM25 index alongside the commit so startup can
-// skip re-tokenization.
+// Persists indexes (BM25, vector, property) alongside the commit
+// so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
 	// Persist the BM25 index as a content-addressed chunk.
 	bm25Data, err := e.bm25Idx.MarshalBinary()
@@ -266,6 +287,31 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 	bm25Root, err := e.store.Write(bm25Data)
 	if err != nil {
 		return nil, fmt.Errorf("write BM25 index: %w", err)
+	}
+
+	// Persist the vector index if it supports binary marshaling (HNSW
+	// does, FlatIndex does not -- and doesn't need to, it's cheap to rebuild).
+	var vecRoot string
+	if m, ok := e.vecIdx.(encoding.BinaryMarshaler); ok {
+		vecData, err := m.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("marshal vector index: %w", err)
+		}
+		vecRoot, err = e.store.Write(vecData)
+		if err != nil {
+			return nil, fmt.Errorf("write vector index: %w", err)
+		}
+	}
+
+	// Persist the property index.
+	var propRoot string
+	propData, err := e.propIdx.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal property index: %w", err)
+	}
+	propRoot, err = e.store.Write(propData)
+	if err != nil {
+		return nil, fmt.Errorf("write property index: %w", err)
 	}
 
 	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
@@ -278,6 +324,8 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 
 	// Attach index roots and re-serialize the commit.
 	commit.BM25Root = bm25Root
+	commit.VecRoot = vecRoot
+	commit.PropRoot = propRoot
 	commit, err = graph.RewriteCommit(e.store, commit)
 	if err != nil {
 		return nil, fmt.Errorf("rewrite commit with indexes: %w", err)
@@ -326,7 +374,7 @@ func (e *Engine) RebuildAllIndexes() {
 	e.propIdx = index.NewPropertyIndex()
 	e.vecIdx = e.newVectorIndex()
 	e.bm25Idx = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
-	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, false)
+	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, false, false, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, e.embedder, e.cfg)
 }
 
@@ -885,21 +933,29 @@ func (e *Engine) EdgeCount() int {
 	return e.graph.EdgeCount()
 }
 
-// rebuildIndexes populates indexes from graph state. If bm25Loaded
-// is true, the BM25 index was already restored from a persisted
-// snapshot and only property and vector indexes are rebuilt.
-func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded bool) {
+// rebuildIndexes populates indexes from graph state. Each *Loaded flag
+// indicates that the corresponding index was restored from a persisted
+// snapshot and should be skipped. When all three are true, this is a
+// no-op (the target state for lazy loading).
+func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded, vecLoaded, propLoaded bool) {
+	if bm25Loaded && vecLoaded && propLoaded {
+		return
+	}
 	it := g.NodeIterator()
 	defer it.Close()
 	for it.Next() {
 		n := it.Node()
-		for k, v := range n.Properties {
-			propIdx.Add(n.ID, k, v)
+		if !propLoaded {
+			for k, v := range n.Properties {
+				propIdx.Add(n.ID, k, v)
+			}
 		}
-		for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
-			if v, ok := n.Properties.GetVector(embKey); ok {
-				vecIdx.Add(n.ID, v)
-				break
+		if !vecLoaded {
+			for _, embKey := range []string{"embedding_full", "embedding_abstract", "embedding_short", "embedding_keywords"} {
+				if v, ok := n.Properties.GetVector(embKey); ok {
+					vecIdx.Add(n.ID, v)
+					break
+				}
 			}
 		}
 		if !bm25Loaded {
