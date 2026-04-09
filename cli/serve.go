@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
@@ -113,7 +114,15 @@ func startBackground() error {
 
 	child := exec.Command(executable, cmdArgs...)
 	child.Stdout = nil
-	child.Stderr = nil
+
+	// Redirect stderr to log file so panics are visible.
+	logPath := filepath.Join(dir, "gramaton.log")
+	stderrFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		child.Stderr = nil // fall back to discard
+	} else {
+		child.Stderr = stderrFile
+	}
 
 	// Detach the child process.
 	setSysProcAttr(child)

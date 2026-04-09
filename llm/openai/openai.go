@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/secret"
 )
 
 const defaultBaseURL = "https://api.openai.com"
@@ -32,7 +32,7 @@ type Client struct {
 
 // New creates an OpenAI-compatible LLM client.
 func New(cfg config.LLMConfig) (*Client, error) {
-	key := resolveKey(cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
 
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
@@ -136,15 +136,3 @@ func (c *Client) ModelID() string {
 	return c.model
 }
 
-func resolveKey(val string) string {
-	if val == "" {
-		return ""
-	}
-	if env := os.Getenv(val); env != "" {
-		return env
-	}
-	if strings.HasPrefix(val, "sk-") {
-		return val
-	}
-	return ""
-}

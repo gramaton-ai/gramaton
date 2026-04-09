@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/secret"
 )
 
 const defaultBaseURL = "https://api.openai.com"
@@ -32,7 +32,7 @@ type Client struct {
 
 // New creates an OpenAI-compatible embedding client.
 func New(cfg config.EmbeddingConfig) (*Client, error) {
-	key := resolveKey(cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
 	// Key is optional -- some local servers (vLLM, LiteLLM) don't need one.
 
 	baseURL := cfg.BaseURL
@@ -151,16 +151,3 @@ func (c *Client) ContextWindow() int {
 	return 0
 }
 
-func resolveKey(val string) string {
-	if val == "" {
-		return ""
-	}
-	if env := os.Getenv(val); env != "" {
-		return env
-	}
-	// If it looks like a key, use directly.
-	if strings.HasPrefix(val, "sk-") {
-		return val
-	}
-	return ""
-}

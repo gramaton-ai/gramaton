@@ -5,36 +5,61 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/secret"
 )
 
-func TestResolveAPIKeyFromEnv(t *testing.T) {
+func TestResolveKeyFromEnv(t *testing.T) {
 	t.Setenv("TEST_GRAMATON_KEY", "sk-ant-test-key")
-	key := resolveAPIKey("TEST_GRAMATON_KEY")
+	key := secret.ResolveKey("", "TEST_GRAMATON_KEY")
 	if key != "sk-ant-test-key" {
 		t.Fatalf("expected key from env, got %q", key)
 	}
 }
 
-func TestResolveAPIKeyDirect(t *testing.T) {
-	key := resolveAPIKey("sk-ant-direct-key-value")
+func TestResolveKeyDirect(t *testing.T) {
+	key := secret.ResolveKey("", "sk-ant-direct-key-value")
 	if key != "sk-ant-direct-key-value" {
 		t.Fatalf("expected direct key, got %q", key)
 	}
 }
 
-func TestResolveAPIKeyEmpty(t *testing.T) {
-	key := resolveAPIKey("")
+func TestResolveKeyFromFile(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "api.key")
+	os.WriteFile(keyPath, []byte("sk-ant-file-key\n"), 0o600)
+
+	key := secret.ResolveKey(keyPath, "")
+	if key != "sk-ant-file-key" {
+		t.Fatalf("expected key from file, got %q", key)
+	}
+}
+
+func TestResolveKeyFileTakesPrecedence(t *testing.T) {
+	t.Setenv("TEST_GRAMATON_KEY", "sk-ant-env-key")
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "api.key")
+	os.WriteFile(keyPath, []byte("sk-ant-file-key\n"), 0o600)
+
+	key := secret.ResolveKey(keyPath, "TEST_GRAMATON_KEY")
+	if key != "sk-ant-file-key" {
+		t.Fatalf("expected file key to take precedence, got %q", key)
+	}
+}
+
+func TestResolveKeyEmpty(t *testing.T) {
+	key := secret.ResolveKey("", "")
 	if key != "" {
 		t.Fatalf("expected empty, got %q", key)
 	}
 }
 
-func TestResolveAPIKeyUnsetEnv(t *testing.T) {
-	// Neither an env var that exists nor a direct key.
-	key := resolveAPIKey("NONEXISTENT_VAR_12345")
+func TestResolveKeyUnsetEnv(t *testing.T) {
+	key := secret.ResolveKey("", "NONEXISTENT_VAR_12345")
 	if key != "" {
 		t.Fatalf("expected empty for unset env var, got %q", key)
 	}

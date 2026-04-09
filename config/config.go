@@ -53,8 +53,9 @@ type EmbeddingConfig struct {
 	MaxTokens int `yaml:"max_tokens,omitempty"`
 
 	// OpenAI-compatible
-	BaseURL   string `yaml:"base_url,omitempty"`
-	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	BaseURL    string `yaml:"base_url,omitempty"`
+	APIKeyFile string `yaml:"api_key_file,omitempty"`
+	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
 
 	// Bedrock
 	Region              string `yaml:"region,omitempty"`
@@ -189,6 +190,7 @@ type LLMConfig struct {
 	Provider   string `yaml:"provider"`
 	Model      string `yaml:"model"`
 	BaseURL    string `yaml:"base_url,omitempty"`
+	APIKeyFile string `yaml:"api_key_file,omitempty"`
 	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
 	Region     string `yaml:"region,omitempty"`
 	AWSProfile string `yaml:"aws_profile,omitempty"`

@@ -13,13 +13,11 @@ func (s *Server) handleCurationStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	status := s.runner.Status()
-	candidates := s.runner.ConceptCandidates()
 	manifest := s.runner.Manifest()
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"status":              status,
-		"concept_candidates":  candidates,
-		"manifest":            manifest,
+		"status":   status,
+		"manifest": manifest,
 	})
 }
 

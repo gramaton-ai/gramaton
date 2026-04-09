@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/secret"
 )
 
 func TestNewMissingModel(t *testing.T) {
@@ -152,8 +153,8 @@ func TestResolveKey(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			if got := resolveKey(tt.val); got != tt.want {
-				t.Errorf("resolveKey(%q) = %q, want %q", tt.val, got, tt.want)
+			if got := secret.ResolveKey("", tt.val); got != tt.want {
+				t.Errorf("ResolveKey(%q) = %q, want %q", tt.val, got, tt.want)
 			}
 		})
 	}

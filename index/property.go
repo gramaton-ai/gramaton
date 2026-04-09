@@ -76,9 +76,15 @@ func (idx *PropertyIndex) Add(nodeID, key string, val graph.Property) {
 	if isOrdered(val.Type) {
 		entries := idx.sorted[key]
 		pos := sort.Search(len(entries), func(i int) bool {
-			c := entries[i].Value.Compare(val)
+			e := entries[i]
+			// Mixed types for the same key (e.g., String and Float64
+			// from JSON). Sort by type ordinal to group by type.
+			if e.Value.Type != val.Type {
+				return e.Value.Type > val.Type
+			}
+			c := e.Value.Compare(val)
 			if c == 0 {
-				return entries[i].NodeID >= nodeID
+				return e.NodeID >= nodeID
 			}
 			return c > 0
 		})

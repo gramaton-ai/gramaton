@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/secret"
 )
 
 const defaultBaseURL = "https://api.anthropic.com"
@@ -25,12 +25,11 @@ type Client struct {
 	client  *http.Client
 }
 
-// New creates an Anthropic LLM client from config. The api_key_env
-// field is either an environment variable name or a direct key value.
+// New creates an Anthropic LLM client from config.
 func New(cfg config.LLMConfig) (*Client, error) {
-	key := resolveAPIKey(cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
 	if key == "" {
-		return nil, fmt.Errorf("anthropic: API key not configured")
+		return nil, fmt.Errorf("anthropic: API key not configured (set api_key_file or api_key_env, or run 'gramaton configure')")
 	}
 
 	baseURL := cfg.BaseURL
@@ -51,22 +50,6 @@ func New(cfg config.LLMConfig) (*Client, error) {
 	}, nil
 }
 
-// resolveAPIKey tries the value as an env var name first, then as a
-// direct key value.
-func resolveAPIKey(val string) string {
-	if val == "" {
-		return ""
-	}
-	// Try as env var name first.
-	if env := os.Getenv(val); env != "" {
-		return env
-	}
-	// If it looks like a key (starts with sk-), use directly.
-	if strings.HasPrefix(val, "sk-") {
-		return val
-	}
-	return ""
-}
 
 // messagesRequest is the Anthropic Messages API request body.
 type messagesRequest struct {

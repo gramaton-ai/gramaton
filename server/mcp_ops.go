@@ -106,9 +106,8 @@ Extracted knowledge enters the knowledge graph as ephemeral, low-confidence reco
 			})
 		default:
 			return mcpJSONResult(map[string]any{
-				"status":             s.runner.Status(),
-				"concept_candidates": s.runner.ConceptCandidates(),
-				"manifest":           s.runner.Manifest(),
+				"status":   s.runner.Status(),
+				"manifest": s.runner.Manifest(),
 			})
 		}
 	})
