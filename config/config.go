@@ -123,6 +123,9 @@ type DedupConfig struct {
 type SearchConfig struct {
 	BM25K1              float64 `yaml:"bm25_k1"`              // term frequency saturation (default 1.2)
 	BM25B               float64 `yaml:"bm25_b"`               // length normalization (default 0.75)
+	BM25WeightFull      float64 `yaml:"bm25_weight_full"`     // RRF weight for content_full BM25 (default 1.0)
+	BM25WeightMedium    float64 `yaml:"bm25_weight_medium"`   // RRF weight for content_medium BM25 (default 2.0)
+	BM25WeightShort     float64 `yaml:"bm25_weight_short"`    // RRF weight for content_short BM25 (default 3.0)
 	RRFK                int     `yaml:"rrf_k"`                // RRF rank constant (default 60)
 	SuggestionThreshold float64 `yaml:"suggestion_threshold"` // top-result score below which suggestions are returned (default 0.75)
 	HNSWThreshold       int     `yaml:"hnsw_threshold"`       // vector count above which HNSW is used instead of flat scan (default 5000)
@@ -310,6 +313,9 @@ func Defaults() Config {
 		Search: SearchConfig{
 			BM25K1:              1.2,
 			BM25B:               0.75,
+			BM25WeightFull:      1.0,
+			BM25WeightMedium:    2.0,
+			BM25WeightShort:     3.0,
 			RRFK:                60,
 			SuggestionThreshold: 0.75,
 			HNSWThreshold:       5000,

@@ -136,24 +136,39 @@ func (e *Engine) Validate() *ValidationResult {
 		}
 	}
 
-	// --- Index consistency: BM25 ---
-	bm25Len := e.BM25Idx().Len()
-	r.Stats.BM25Docs = bm25Len
+	// --- Index consistency: BM25 (three layers) ---
+	bm25FullLen := e.BM25Full().Len()
+	bm25MediumLen := e.BM25Medium().Len()
+	bm25ShortLen := e.BM25Short().Len()
+	r.Stats.BM25Docs = bm25FullLen // report the full index size as primary stat
 
-	// Count nodes that should be in BM25 (have content_full or are
-	// chunk/section nodes with indexed text).
-	bm25Expected := 0
+	// Count nodes that should be in each BM25 layer.
+	bm25FullExpected := 0
+	bm25MediumExpected := 0
+	bm25ShortExpected := 0
 	for _, id := range allIDs {
 		n, ok := g.GetNode(id)
 		if !ok {
 			continue
 		}
 		if _, ok := n.Properties.GetString("content_full"); ok {
-			bm25Expected++
+			bm25FullExpected++
+		}
+		if _, ok := n.Properties.GetString("content_medium"); ok {
+			bm25MediumExpected++
+		}
+		if _, ok := n.Properties.GetString("content_short"); ok {
+			bm25ShortExpected++
 		}
 	}
-	if bm25Len != bm25Expected {
-		r.addWarning("bm25: indexed %d docs, expected ~%d (nodes with content_full)", bm25Len, bm25Expected)
+	if bm25FullLen != bm25FullExpected {
+		r.addWarning("bm25_full: indexed %d docs, expected ~%d (nodes with content_full)", bm25FullLen, bm25FullExpected)
+	}
+	if bm25MediumLen != bm25MediumExpected {
+		r.addWarning("bm25_medium: indexed %d docs, expected ~%d (nodes with content_medium)", bm25MediumLen, bm25MediumExpected)
+	}
+	if bm25ShortLen != bm25ShortExpected {
+		r.addWarning("bm25_short: indexed %d docs, expected ~%d (nodes with content_short)", bm25ShortLen, bm25ShortExpected)
 	}
 
 	// --- Index consistency: Vector ---

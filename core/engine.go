@@ -32,7 +32,9 @@ type Engine struct {
 	graph    *graph.Graph
 	propIdx  *index.PropertyIndex
 	vecIdx   index.VectorIndex
-	bm25Idx  *index.BM25Index
+	bm25Full   *index.BM25Index // content_full (detail match, weight 1x)
+	bm25Medium *index.BM25Index // content_medium (theme match, weight 2x)
+	bm25Short  *index.BM25Index // content_short (topic match, weight 3x)
 	embedder embed.Provider
 	llmProv  llm.Provider
 	searcher *search.Tool
@@ -57,7 +59,7 @@ func WithEmbedder(p embed.Provider) EngineOption {
 	return func(e *Engine) {
 		e.embedder = p
 		// Rebuild searcher with the new embedder.
-		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, p, e.cfg)
+		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.bm25Medium, e.bm25Short, p, e.cfg)
 	}
 }
 
@@ -113,7 +115,9 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	var vecIdx index.VectorIndex // set after graph load (need node count)
-	bm25Idx := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
+	bm25Full := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
+	bm25Medium := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
+	bm25Short := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
 
 	// Load HEAD commit if it exists.
 	var headHash string
@@ -147,15 +151,37 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// Try to load persisted indexes from commit. Each index that loads
 	// successfully is skipped during rebuildIndexes.
-	bm25Loaded := false
+	bm25FullLoaded := false
+	bm25MediumLoaded := false
+	bm25ShortLoaded := false
 	vecLoaded := false
 	propLoaded := false
 
 	if headCommit != nil {
-		if headCommit.BM25Root != "" {
-			if bm25Data, err := s.Read(headCommit.BM25Root); err == nil {
-				if err := bm25Idx.UnmarshalBinary(bm25Data); err == nil {
-					bm25Loaded = true
+		// Load per-layer BM25 indexes. Fall back to legacy single
+		// BM25Root as bm25Full for backward compatibility.
+		bm25FullRoot := headCommit.BM25FullRoot
+		if bm25FullRoot == "" {
+			bm25FullRoot = headCommit.BM25Root // legacy compat
+		}
+		if bm25FullRoot != "" {
+			if bm25Data, err := s.Read(bm25FullRoot); err == nil {
+				if err := bm25Full.UnmarshalBinary(bm25Data); err == nil {
+					bm25FullLoaded = true
+				}
+			}
+		}
+		if headCommit.BM25MediumRoot != "" {
+			if bm25Data, err := s.Read(headCommit.BM25MediumRoot); err == nil {
+				if err := bm25Medium.UnmarshalBinary(bm25Data); err == nil {
+					bm25MediumLoaded = true
+				}
+			}
+		}
+		if headCommit.BM25ShortRoot != "" {
+			if bm25Data, err := s.Read(headCommit.BM25ShortRoot); err == nil {
+				if err := bm25Short.UnmarshalBinary(bm25Data); err == nil {
+					bm25ShortLoaded = true
 				}
 			}
 		}
@@ -177,14 +203,14 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}
 
-	rebuildIndexes(g, propIdx, vecIdx, bm25Idx, bm25Loaded, vecLoaded, propLoaded)
+	rebuildIndexes(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded)
 
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	searcher := search.New(g, propIdx, vecIdx, bm25Idx, emb, cfg)
+	searcher := search.New(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, emb, cfg)
 
 	llmProv, err := llm.New(cfg.LLM)
 	if err != nil {
@@ -193,16 +219,18 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	e := &Engine{
-		cfg:      cfg,
-		store:    s,
-		graph:    g,
-		propIdx:  propIdx,
-		vecIdx:   vecIdx,
-		bm25Idx:  bm25Idx,
-		embedder: emb,
-		llmProv:  llmProv,
-		searcher: searcher,
-		headHash: headHash,
+		cfg:        cfg,
+		store:      s,
+		graph:      g,
+		propIdx:    propIdx,
+		vecIdx:     vecIdx,
+		bm25Full:   bm25Full,
+		bm25Medium: bm25Medium,
+		bm25Short:  bm25Short,
+		embedder:   emb,
+		llmProv:    llmProv,
+		searcher:   searcher,
+		headHash:   headHash,
 	}
 
 	// Apply options after all default initialization.
@@ -279,14 +307,32 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // Persists indexes (BM25, vector, property) alongside the commit
 // so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
-	// Persist the BM25 index as a content-addressed chunk.
-	bm25Data, err := e.bm25Idx.MarshalBinary()
+	// Persist the three BM25 indexes as content-addressed chunks.
+	bm25FullData, err := e.bm25Full.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("marshal BM25 index: %w", err)
+		return nil, fmt.Errorf("marshal BM25 full index: %w", err)
 	}
-	bm25Root, err := e.store.Write(bm25Data)
+	bm25FullRoot, err := e.store.Write(bm25FullData)
 	if err != nil {
-		return nil, fmt.Errorf("write BM25 index: %w", err)
+		return nil, fmt.Errorf("write BM25 full index: %w", err)
+	}
+
+	bm25MediumData, err := e.bm25Medium.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal BM25 medium index: %w", err)
+	}
+	bm25MediumRoot, err := e.store.Write(bm25MediumData)
+	if err != nil {
+		return nil, fmt.Errorf("write BM25 medium index: %w", err)
+	}
+
+	bm25ShortData, err := e.bm25Short.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal BM25 short index: %w", err)
+	}
+	bm25ShortRoot, err := e.store.Write(bm25ShortData)
+	if err != nil {
+		return nil, fmt.Errorf("write BM25 short index: %w", err)
 	}
 
 	// Persist the vector index if it supports binary marshaling (HNSW
@@ -323,7 +369,9 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 	}
 
 	// Attach index roots and re-serialize the commit.
-	commit.BM25Root = bm25Root
+	commit.BM25FullRoot = bm25FullRoot
+	commit.BM25MediumRoot = bm25MediumRoot
+	commit.BM25ShortRoot = bm25ShortRoot
 	commit.VecRoot = vecRoot
 	commit.PropRoot = propRoot
 	commit, err = graph.RewriteCommit(e.store, commit)
@@ -373,9 +421,11 @@ func (e *Engine) FlushAccess() {
 func (e *Engine) RebuildAllIndexes() {
 	e.propIdx = index.NewPropertyIndex()
 	e.vecIdx = e.newVectorIndex()
-	e.bm25Idx = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
-	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, false, false, false)
-	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Idx, e.embedder, e.cfg)
+	e.bm25Full = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
+	e.bm25Medium = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
+	e.bm25Short = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
+	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.bm25Medium, e.bm25Short, false, false, false, false, false)
+	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.bm25Medium, e.bm25Short, e.embedder, e.cfg)
 }
 
 // newVectorIndex creates the appropriate vector index based on config
@@ -395,8 +445,14 @@ func (e *Engine) newVectorIndex() index.VectorIndex {
 	return index.NewFlatIndex()
 }
 
-// BM25Idx returns the BM25 index.
-func (e *Engine) BM25Idx() *index.BM25Index { return e.bm25Idx }
+// BM25Full returns the BM25 index for content_full.
+func (e *Engine) BM25Full() *index.BM25Index { return e.bm25Full }
+
+// BM25Medium returns the BM25 index for content_medium.
+func (e *Engine) BM25Medium() *index.BM25Index { return e.bm25Medium }
+
+// BM25Short returns the BM25 index for content_short.
+func (e *Engine) BM25Short() *index.BM25Index { return e.bm25Short }
 
 // GenerateEmbeddings creates embeddings for a node's content properties.
 // Caller must hold the write lock.
@@ -883,8 +939,17 @@ func (e *Engine) IndexNode(nodeID, content string, vec []float32) {
 	for k, v := range n.Properties {
 		e.propIdx.Add(nodeID, k, v)
 	}
+	// Add to per-layer BM25 indexes. content param is used for
+	// bm25Full; content_medium and content_short are read from
+	// the node's properties if available.
 	if content != "" {
-		e.bm25Idx.Add(nodeID, content)
+		e.bm25Full.Add(nodeID, content)
+	}
+	if medium, ok := n.Properties.GetString("content_medium"); ok {
+		e.bm25Medium.Add(nodeID, medium)
+	}
+	if short, ok := n.Properties.GetString("content_short"); ok {
+		e.bm25Short.Add(nodeID, short)
 	}
 	if vec != nil {
 		e.vecIdx.Add(nodeID, vec)
@@ -907,19 +972,24 @@ func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
 	e.propIdx.Add(nodeID, key, val)
 }
 
-// SetContentProp updates a string property and refreshes the BM25
-// index with the node's current content_full. Use this instead of
-// SetProp when changing content_full or content_short to keep BM25
-// in sync. Caller must hold the write lock.
+// SetContentProp updates a string property and refreshes the
+// appropriate BM25 index. Use this instead of SetProp when changing
+// content_full, content_medium, or content_short to keep BM25 in
+// sync. Caller must hold the write lock.
 func (e *Engine) SetContentProp(nodeID, key, content string) {
 	e.SetProp(nodeID, key, graph.StringProperty(content))
-	// Re-index the full content for BM25. Even if we're updating
-	// content_short, BM25 should index content_full.
-	if n, ok := e.graph.GetNode(nodeID); ok {
-		if full, ok := n.Properties.GetString("content_full"); ok {
-			e.bm25Idx.Remove(nodeID)
-			e.bm25Idx.Add(nodeID, full)
-		}
+	// Re-index the appropriate BM25 layer based on which content
+	// property changed.
+	switch key {
+	case "content_full":
+		e.bm25Full.Remove(nodeID)
+		e.bm25Full.Add(nodeID, content)
+	case "content_medium":
+		e.bm25Medium.Remove(nodeID)
+		e.bm25Medium.Add(nodeID, content)
+	case "content_short":
+		e.bm25Short.Remove(nodeID)
+		e.bm25Short.Add(nodeID, content)
 	}
 }
 
@@ -941,10 +1011,10 @@ func (e *Engine) EdgeCount() int {
 
 // rebuildIndexes populates indexes from graph state. Each *Loaded flag
 // indicates that the corresponding index was restored from a persisted
-// snapshot and should be skipped. When all three are true, this is a
+// snapshot and should be skipped. When all five are true, this is a
 // no-op (the target state for lazy loading).
-func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, bm25Loaded, vecLoaded, propLoaded bool) {
-	if bm25Loaded && vecLoaded && propLoaded {
+func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
+	if bm25FullLoaded && bm25MediumLoaded && bm25ShortLoaded && vecLoaded && propLoaded {
 		return
 	}
 	it := g.NodeIterator()
@@ -964,11 +1034,19 @@ func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx ind
 				}
 			}
 		}
-		if !bm25Loaded {
+		if !bm25FullLoaded {
 			if text, ok := n.Properties.GetString("content_full"); ok {
-				bm25Idx.Add(n.ID, text)
-			} else if text, ok := n.Properties.GetString("content_short"); ok {
-				bm25Idx.Add(n.ID, text)
+				bm25Full.Add(n.ID, text)
+			}
+		}
+		if !bm25MediumLoaded {
+			if text, ok := n.Properties.GetString("content_medium"); ok {
+				bm25Medium.Add(n.ID, text)
+			}
+		}
+		if !bm25ShortLoaded {
+			if text, ok := n.Properties.GetString("content_short"); ok {
+				bm25Short.Add(n.ID, text)
 			}
 		}
 	}

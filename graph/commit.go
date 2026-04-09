@@ -20,9 +20,12 @@ type Commit struct {
 	EdgeTreeRoot string    `json:"edge_tree_root,omitempty"`
 	// Persisted index roots (content-addressed chunks).
 	// Omitempty ensures backward compatibility with older commits.
-	BM25Root string `json:"bm25_root,omitempty"`
-	VecRoot  string `json:"vec_root,omitempty"`
-	PropRoot string `json:"prop_root,omitempty"`
+	BM25Root       string `json:"bm25_root,omitempty"`        // legacy single-index (read as bm25Full)
+	BM25FullRoot   string `json:"bm25_full_root,omitempty"`   // content_full BM25 index
+	BM25MediumRoot string `json:"bm25_medium_root,omitempty"` // content_medium BM25 index
+	BM25ShortRoot  string `json:"bm25_short_root,omitempty"`  // content_short BM25 index
+	VecRoot        string `json:"vec_root,omitempty"`
+	PropRoot       string `json:"prop_root,omitempty"`
 	// NodeHashes/EdgeHashes retained for reading v0 commits only.
 	NodeHashes []string `json:"node_hashes,omitempty"`
 	EdgeHashes []string `json:"edge_hashes,omitempty"`

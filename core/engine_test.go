@@ -468,7 +468,7 @@ func TestIndexNode(t *testing.T) {
 	}
 
 	// BM25 should find the content.
-	results := eng.BM25Idx().Search([]string{"memory"}, 10, nil)
+	results := eng.BM25Full().Search([]string{"memory"}, 10, nil)
 	if len(results) != 1 || results[0].NodeID != n.ID {
 		t.Fatalf("BM25 should find the node, got %v", results)
 	}
@@ -485,8 +485,8 @@ func TestIndexNodeSkipsEmptyContent(t *testing.T) {
 	eng.Unlock()
 
 	// BM25 should be empty (no content indexed).
-	if eng.BM25Idx().Len() != 0 {
-		t.Fatalf("BM25 should be empty for empty content, got %d", eng.BM25Idx().Len())
+	if eng.BM25Full().Len() != 0 {
+		t.Fatalf("BM25 should be empty for empty content, got %d", eng.BM25Full().Len())
 	}
 	// VecIdx should be empty.
 	if eng.VecIdx().Len() != 0 {
@@ -504,7 +504,7 @@ func TestSetContentPropUpdatesBM25(t *testing.T) {
 	eng.IndexNode(n.ID, "original content about cats", nil)
 
 	// Verify BM25 finds "cats".
-	results := eng.BM25Idx().Search([]string{"cats"}, 10, nil)
+	results := eng.BM25Full().Search([]string{"cats"}, 10, nil)
 	if len(results) != 1 {
 		t.Fatal("BM25 should find 'cats' initially")
 	}
@@ -513,11 +513,11 @@ func TestSetContentPropUpdatesBM25(t *testing.T) {
 	eng.SetContentProp(n.ID, "content_full", "updated content about dogs")
 
 	// BM25 should now find "dogs" but not "cats".
-	results = eng.BM25Idx().Search([]string{"dogs"}, 10, nil)
+	results = eng.BM25Full().Search([]string{"dogs"}, 10, nil)
 	if len(results) != 1 {
 		t.Fatal("BM25 should find 'dogs' after update")
 	}
-	results = eng.BM25Idx().Search([]string{"cats"}, 10, nil)
+	results = eng.BM25Full().Search([]string{"cats"}, 10, nil)
 	if len(results) != 0 {
 		t.Fatal("BM25 should not find 'cats' after content update")
 	}

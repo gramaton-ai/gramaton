@@ -15,27 +15,31 @@ import (
 
 // Tool implements the search command -- Tier 1 of the retrieval funnel.
 type Tool struct {
-	graph    graph.NodeReader
-	propIdx  *index.PropertyIndex
-	vecIdx   index.VectorIndex
-	bm25Idx  *index.BM25Index
-	embedder embedder
-	cfg      config.Config
+	graph      graph.NodeReader
+	propIdx    *index.PropertyIndex
+	vecIdx     index.VectorIndex
+	bm25Full   *index.BM25Index // content_full (detail match)
+	bm25Medium *index.BM25Index // content_medium (theme match)
+	bm25Short  *index.BM25Index // content_short (topic match)
+	embedder   embedder
+	cfg        config.Config
 }
 
 type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// New creates a search tool. embedder and bm25Idx may be nil.
-func New(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Idx *index.BM25Index, emb embedder, cfg config.Config) *Tool {
+// New creates a search tool. embedder and bm25 indexes may be nil.
+func New(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, emb embedder, cfg config.Config) *Tool {
 	return &Tool{
-		graph:    g,
-		propIdx:  propIdx,
-		vecIdx:   vecIdx,
-		bm25Idx:  bm25Idx,
-		embedder: emb,
-		cfg:      cfg,
+		graph:      g,
+		propIdx:    propIdx,
+		vecIdx:     vecIdx,
+		bm25Full:   bm25Full,
+		bm25Medium: bm25Medium,
+		bm25Short:  bm25Short,
+		embedder:   emb,
+		cfg:        cfg,
 	}
 }
 
@@ -384,13 +388,17 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 }
 
 // filterCandidates returns node IDs matching the query's metadata filters.
-// computeSimilarities runs vector search, BM25 search, or both with
-// RRF fusion. Returns nodeID -> normalized similarity score in [0, 1].
+// computeSimilarities runs vector search, BM25 search across three
+// indexes, or both with weighted RRF fusion. Returns nodeID ->
+// normalized similarity score in [0, 1].
 func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map[string]struct{}) map[string]float64 {
 	similarities := make(map[string]float64)
 
 	hasVec := queryVec != nil && t.vecIdx != nil
-	hasBM25 := t.bm25Idx != nil && q.Text != ""
+	hasBM25Full := t.bm25Full != nil && q.Text != ""
+	hasBM25Medium := t.bm25Medium != nil && q.Text != ""
+	hasBM25Short := t.bm25Short != nil && q.Text != ""
+	hasBM25 := hasBM25Full || hasBM25Medium || hasBM25Short
 
 	if !hasVec && !hasBM25 {
 		return similarities
@@ -406,27 +414,59 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		rrfK = 60
 	}
 
+	tokens := index.Tokenize(q.Text)
+
 	// Run vector search.
 	var vecResults []index.SearchResult
 	if hasVec {
 		vecResults = t.vecIdx.Search(queryVec, topK, candidateSet)
 	}
 
-	// Run BM25 search.
-	var bm25Results []index.SearchResult
-	if hasBM25 {
-		bm25Results = t.bm25Idx.Search(index.Tokenize(q.Text), topK, candidateSet)
+	// Run BM25 search on each index.
+	var bm25FullResults, bm25MediumResults, bm25ShortResults []index.SearchResult
+	if hasBM25Full {
+		bm25FullResults = t.bm25Full.Search(tokens, topK, candidateSet)
+	}
+	if hasBM25Medium {
+		bm25MediumResults = t.bm25Medium.Search(tokens, topK, candidateSet)
+	}
+	if hasBM25Short {
+		bm25ShortResults = t.bm25Short.Search(tokens, topK, candidateSet)
+	}
+
+	// RRF weights from config.
+	wFull := t.cfg.Search.BM25WeightFull
+	if wFull <= 0 {
+		wFull = 1.0
+	}
+	wMedium := t.cfg.Search.BM25WeightMedium
+	if wMedium <= 0 {
+		wMedium = 2.0
+	}
+	wShort := t.cfg.Search.BM25WeightShort
+	if wShort <= 0 {
+		wShort = 3.0
 	}
 
 	switch {
 	case hasVec && hasBM25:
-		// RRF: score(d) = 1/(k+rank_vec) + 1/(k+rank_bm25)
+		// Weighted RRF:
+		// score(d) = 1.0 * 1/(k+rank_vec)
+		//          + w_full * 1/(k+rank_full)
+		//          + w_medium * 1/(k+rank_medium)
+		//          + w_short * 1/(k+rank_short)
 		rrfScores := make(map[string]float64)
 		for rank, r := range vecResults {
 			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
 		}
-		for rank, r := range bm25Results {
-			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
+		for rank, r := range bm25FullResults {
+			rrfScores[r.NodeID] += wFull / float64(rrfK+rank+1)
+		}
+		for rank, r := range bm25MediumResults {
+			rrfScores[r.NodeID] += wMedium / float64(rrfK+rank+1)
+		}
+		for rank, r := range bm25ShortResults {
+			rrfScores[r.NodeID] += wShort / float64(rrfK+rank+1)
 		}
 		maxRRF := 0.0
 		for _, s := range rrfScores {
@@ -447,16 +487,27 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		}
 
 	default:
-		// BM25 only -- normalize to [0, 1].
-		maxBM25 := float32(0)
-		for _, r := range bm25Results {
-			if r.Similarity > maxBM25 {
-				maxBM25 = r.Similarity
+		// BM25 only -- weighted RRF across the three BM25 indexes,
+		// then normalize to [0, 1].
+		rrfScores := make(map[string]float64)
+		for rank, r := range bm25FullResults {
+			rrfScores[r.NodeID] += wFull / float64(rrfK+rank+1)
+		}
+		for rank, r := range bm25MediumResults {
+			rrfScores[r.NodeID] += wMedium / float64(rrfK+rank+1)
+		}
+		for rank, r := range bm25ShortResults {
+			rrfScores[r.NodeID] += wShort / float64(rrfK+rank+1)
+		}
+		maxRRF := 0.0
+		for _, s := range rrfScores {
+			if s > maxRRF {
+				maxRRF = s
 			}
 		}
-		if maxBM25 > 0 {
-			for _, r := range bm25Results {
-				similarities[r.NodeID] = float64(r.Similarity) / float64(maxBM25)
+		if maxRRF > 0 {
+			for id, s := range rrfScores {
+				similarities[id] = s / maxRRF
 			}
 		}
 	}
