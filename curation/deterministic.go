@@ -149,9 +149,16 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 
 		// Orphan detection: records with 0 non-chunk edges.
+		// Skip low-quality records to prevent creating edges on junk
+		// that blocks GC. Unclassified (captured) records should be
+		// classified first; low-confidence records are likely noise.
 		ec := nonChunkEdgeCount(g, id)
 		if ec == 0 {
-			orphanIDs = append(orphanIDs, id)
+			conf, hasConf := n.Properties.GetFloat64("confidence")
+			ps, _ := n.Properties.GetString("processing_status")
+			if ps != "captured" && (!hasConf || conf >= 0.3) {
+				orphanIDs = append(orphanIDs, id)
+			}
 		}
 	}
 
@@ -353,6 +360,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				continue
 			}
 			e.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
+			e.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
+			e.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
 			e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil)
 			result.DuplicatesSuperseded++
 		}

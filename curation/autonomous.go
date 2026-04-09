@@ -536,6 +536,11 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 			if !ok {
 				continue
 			}
+			// Exclude speculative records from concept evidence to
+			// prevent hallucination propagation into concept synthesis.
+			if es, ok := n.Properties.GetString("epistemic_status"); ok && es == "speculative" {
+				continue
+			}
 			if s, ok := n.Properties.GetString("content_short"); ok && s != "" {
 				memberSummaries = append(memberSummaries, "- "+s)
 			} else if s, ok := n.Properties.GetString("content_full"); ok && len(s) > 200 {
