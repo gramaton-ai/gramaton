@@ -71,7 +71,10 @@ func startForeground() error {
 		cfg.IdleTimeout = engineCfg.Server.IdleTimeout
 	}
 
-	logger, logWriter, err := logging.New(engineCfg.Logging, dir, true)
+	// Background children (started by startBackground) set GRAMATON_BG=1.
+	// Skip stderr logging to avoid duplicating lines into gramaton.stderr.
+	foreground := os.Getenv("GRAMATON_BG") == ""
+	logger, logWriter, err := logging.New(engineCfg.Logging, dir, foreground)
 	if err != nil {
 		return fmt.Errorf("setup logging: %w", err)
 	}
@@ -115,15 +118,17 @@ func startBackground() error {
 	child := exec.Command(executable, cmdArgs...)
 	child.Stdout = nil
 
-	// Redirect stderr to a separate file so panics are visible
-	// without duplicating structured log lines.
+	// Redirect stderr to a separate file so panics are visible.
+	// Set GRAMATON_BG=1 so the child skips stderr logging (avoids
+	// duplicating structured logs that already go to gramaton.log).
 	stderrPath := filepath.Join(dir, "gramaton.stderr")
 	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		child.Stderr = nil // fall back to discard
+		child.Stderr = nil
 	} else {
 		child.Stderr = stderrFile
 	}
+	child.Env = append(os.Environ(), "GRAMATON_BG=1")
 
 	// Detach the child process.
 	setSysProcAttr(child)
