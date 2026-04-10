@@ -91,6 +91,12 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 // classifyPending classifies records with processing_status="captured".
 func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
+
+	// Set system prompt for providers that support caching.
+	if setter, ok := llmProv.(llm.SystemPromptSetter); ok {
+		setter.SetSystemPrompt(ClassifySystemPrompt)
+		defer setter.SetSystemPrompt("") // clear after classification
+	}
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -156,6 +162,15 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		lightThreshold = 2000
 	}
 
+	// If the provider supports system prompts (caching), the taxonomy
+	// is in the system message and the user prompt is just the content.
+	// Otherwise, concatenate both into the user prompt.
+	_, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
+	promptTemplate := classifyPrompt
+	if !hasSystemPrompt {
+		promptTemplate = ClassifySystemPrompt + "\n\n" + classifyPrompt
+	}
+
 	work := make([]llmWork, len(batch))
 	for i, rec := range batch {
 		model := ""
@@ -164,7 +179,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		}
 		work[i] = llmWork{
 			id:     rec.id,
-			prompt: fmt.Sprintf(classifyPrompt, rec.content, rec.contextSignals),
+			prompt: fmt.Sprintf(promptTemplate, rec.content, rec.contextSignals),
 			model:  model,
 		}
 	}

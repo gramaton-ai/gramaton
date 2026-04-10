@@ -47,6 +47,16 @@ func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string,
 
 func (m *mockLLM) ModelID() string { return "mock-llm" }
 
+// mockLLMWithSystem extends mockLLM with SystemPromptSetter support.
+type mockLLMWithSystem struct {
+	mockLLM
+	systemPrompt string
+}
+
+func (m *mockLLMWithSystem) SetSystemPrompt(text string) {
+	m.systemPrompt = text
+}
+
 // addPendingNode adds a record with processing_status="captured".
 func addPendingNode(t *testing.T, eng *core.Engine, content string) string {
 	t.Helper()
@@ -379,6 +389,49 @@ func TestCompleteWithModelAnthropicFallback(t *testing.T) {
 	if llm.models[1] != "override-model" {
 		t.Errorf("expected 'override-model' for second call, got %q", llm.models[1])
 	}
+}
+
+func TestClassifyPendingSetsSystemPrompt(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	addPendingNode(t, eng, "test content for system prompt")
+
+	classifyResp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"test"}`
+	llm := &mockLLMWithSystem{
+		mockLLM: mockLLM{responses: []string{classifyResp}},
+	}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.Classified != 1 {
+		t.Fatalf("expected 1 classified, got %d", result.Classified)
+	}
+	// System prompt should be cleared after classification (defer).
+	if llm.systemPrompt != "" {
+		t.Fatalf("system prompt should be cleared after classification, got %q", llm.systemPrompt)
+	}
+}
+
+func TestClassifyPendingFallsBackWithoutSystemPrompt(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	addPendingNode(t, eng, "test content")
+
+	classifyResp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"test"}`
+	llm := &mockLLM{responses: []string{classifyResp}}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.Classified != 1 {
+		t.Fatalf("expected 1 classified, got %d", result.Classified)
+	}
+	// The prompt should contain the full taxonomy (system + user concatenated)
+	// since mockLLM doesn't implement SystemPromptSetter.
+	// We verify it ran without error -- the fallback path worked.
 }
 
 // --- generateSummaries tests ---

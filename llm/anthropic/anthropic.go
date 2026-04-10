@@ -19,10 +19,11 @@ const apiVersion = "2023-06-01"
 
 // Client calls the Anthropic Messages API.
 type Client struct {
-	baseURL string
-	model   string
-	apiKey  string
-	client  *http.Client
+	baseURL     string
+	model       string
+	apiKey      string
+	client      *http.Client
+	systemCache []systemBlock // cached system prompt, set via SetSystemPrompt
 }
 
 // New creates an Anthropic LLM client from config.
@@ -53,9 +54,22 @@ func New(cfg config.LLMConfig) (*Client, error) {
 
 // messagesRequest is the Anthropic Messages API request body.
 type messagesRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	Messages  []message `json:"messages"`
+	Model     string         `json:"model"`
+	MaxTokens int            `json:"max_tokens"`
+	System    []systemBlock  `json:"system,omitempty"`
+	Messages  []message      `json:"messages"`
+}
+
+// systemBlock is a content block in the system message array.
+// Using the array form (vs plain string) enables cache_control.
+type systemBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+type cacheControl struct {
+	Type string `json:"type"` // "ephemeral"
 }
 
 type message struct {
@@ -85,6 +99,22 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// SetSystemPrompt configures a system prompt that will be included
+// in all subsequent Complete/CompleteWithModel calls. The system
+// prompt is marked with cache_control for Anthropic prompt caching.
+// Pass empty string to clear.
+func (c *Client) SetSystemPrompt(text string) {
+	if text == "" {
+		c.systemCache = nil
+		return
+	}
+	c.systemCache = []systemBlock{{
+		Type:         "text",
+		Text:         text,
+		CacheControl: &cacheControl{Type: "ephemeral"},
+	}}
+}
+
 // CompleteWithModel sends a prompt using a specific model override.
 func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
 	if model == "" {
@@ -99,27 +129,31 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 }
 
 func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string, error) {
-	body, err := json.Marshal(messagesRequest{
+	req := messagesRequest{
 		Model:     model,
 		MaxTokens: 4096,
 		Messages: []message{
 			{Role: "user", Content: prompt},
 		},
-	})
+	}
+	if len(c.systemCache) > 0 {
+		req.System = c.systemCache
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return "", fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
 	url := c.baseURL + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("anthropic: create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", apiVersion)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	httpReq.Header.Set("anthropic-version", apiVersion)
 
-	resp, err := c.client.Do(req)
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("anthropic: request failed: %w", err)
 	}

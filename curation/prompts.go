@@ -1,16 +1,11 @@
 package curation
 
-// classifyPrompt is the LLM prompt for record classification.
-// It accepts two format arguments: content (%%s) and context signals (%%s).
-//
-// IMPORTANT: meta/object-level distinction. The prompt must distinguish
-// the RECORD's reliability from the TOPIC's philosophical status. An
-// article about contested topics is itself a well-established reference.
-const classifyPrompt = `Classify this knowledge record. Respond with JSON only, no other text.
+// ClassifySystemPrompt is the stable taxonomy and instructions for
+// classification. Separated from the per-record content so that API
+// providers can cache it (Anthropic prompt caching). ~2000 tokens.
+const ClassifySystemPrompt = `You are a knowledge record classifier. You classify records into a
+structured taxonomy. Respond with JSON only, no other text.
 
-Content:
-%s
-%s
 Respond with this exact JSON structure:
 {
   "temporality": "immutable|durable|temporal|ephemeral",
@@ -172,6 +167,16 @@ Do not start with "This record..." -- just state the content.
 summary_medium: For content longer than 500 characters, write a
 ~1500 character abstract covering the major themes and key details.
 For short content, omit this field entirely.`
+
+// classifyPrompt is the per-record user message for classification.
+// It accepts two format arguments: content (%s) and context signals (%s).
+// Used with ClassifySystemPrompt as the system message when the provider
+// supports it, or concatenated for providers that don't.
+const classifyPrompt = `Classify this knowledge record.
+
+Content:
+%s
+%s`
 
 const summarizePrompt = `Write a concise summary of the following content. Max 200 characters. Start with the key fact, decision, or concept. No quotes, no preamble.
 

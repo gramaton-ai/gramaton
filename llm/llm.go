@@ -23,6 +23,14 @@ type Provider interface {
 	ModelID() string
 }
 
+// SystemPromptSetter is an optional interface that providers can
+// implement to support a persistent system prompt with caching.
+// Curation sets this once before a classification batch so that
+// the taxonomy is cached across all calls.
+type SystemPromptSetter interface {
+	SetSystemPrompt(text string)
+}
+
 // New creates an LLM provider from the config. Returns nil if no
 // provider is configured (LLM is optional).
 func New(cfg config.LLMConfig) (Provider, error) {
