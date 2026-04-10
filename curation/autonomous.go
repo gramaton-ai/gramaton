@@ -24,6 +24,7 @@ type AutonomousResult struct {
 	ManifestSummary         string           `json:"manifest_summary,omitempty"`
 	Errors                  int              `json:"errors"`
 	LLMCalls                int              `json:"llm_calls"`
+	ModelCounts             map[string]int   `json:"model_counts,omitempty"` // per-model classification counts
 	DryRun                  bool             `json:"dry_run,omitempty"`
 	PlannedChanges          []PlannedChange  `json:"planned_changes,omitempty"`
 }
@@ -75,14 +76,22 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	}
 
 	if (result.Classified + result.SummariesGenerated + result.ConceptsCreated) > 0 {
-		logger.Info("autonomous curation complete",
+		logArgs := []any{
 			"component", "curation",
 			"classified", result.Classified,
 			"summaries", result.SummariesGenerated,
 			"concepts", result.ConceptsCreated,
 			"errors", result.Errors,
 			"llm_calls", result.LLMCalls,
-			"duration_ms", time.Since(start).Milliseconds())
+			"duration_ms", time.Since(start).Milliseconds(),
+		}
+		for model, count := range result.ModelCounts {
+			if model == "" {
+				model = "default"
+			}
+			logArgs = append(logArgs, "model:"+model, count)
+		}
+		logger.Info("autonomous curation complete", logArgs...)
 	}
 
 	return result
@@ -263,6 +272,10 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		}
 		e.SetProp(r.id, "processing_status", graph.StringProperty("processed"))
 		result.Classified++
+		if result.ModelCounts == nil {
+			result.ModelCounts = make(map[string]int)
+		}
+		result.ModelCounts[r.model]++
 	}
 	if result.Classified > 0 {
 		e.Save("curation: classify")

@@ -217,10 +217,14 @@ func (s *Server) Run() error {
 	// Start access flusher.
 	s.startAccessFlusher()
 
-	// Start curation runner.
+	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
-		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
+		curationLLM := s.engine.LLM()
+		if curationLLM != nil && s.usageTracker != nil {
+			curationLLM = llm.NewMetered(curationLLM, s.usageTracker)
+		}
+		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		defer curationCancel()
 		go s.runner.Start(curationCtx)
@@ -302,10 +306,14 @@ func (s *Server) StartHTTP() error {
 	// Start access flusher.
 	s.startAccessFlusher()
 
-	// Start curation runner.
+	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
-		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
+		curationLLM := s.engine.LLM()
+		if curationLLM != nil && s.usageTracker != nil {
+			curationLLM = llm.NewMetered(curationLLM, s.usageTracker)
+		}
+		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		go s.runner.Start(curationCtx)
 

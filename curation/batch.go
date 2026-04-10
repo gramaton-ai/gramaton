@@ -279,12 +279,16 @@ func applyClassification(e *core.Engine, id string, data *classificationResult, 
 	e.SetProp(id, "processing_status", graph.StringProperty("processed"))
 }
 
-// extractAnthropicClient unwraps rate-limited or other wrappers to
-// find an Anthropic client that supports the batch API.
+// extractAnthropicClient unwraps metered, rate-limited, or other
+// wrappers to find an Anthropic client that supports the batch API.
 func extractAnthropicClient(p llm.Provider) (*anthropic.Client, bool) {
 	// Direct Anthropic client.
 	if c, ok := p.(*anthropic.Client); ok {
 		return c, true
+	}
+	// Unwrap metered wrapper.
+	if m, ok := p.(*llm.Metered); ok {
+		return extractAnthropicClient(m.Inner())
 	}
 	// Unwrap rate-limited wrapper.
 	if rl, ok := p.(*llm.RateLimited); ok {
