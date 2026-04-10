@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,11 @@ var (
 	testCfgDir string
 )
 
+type noopTestLLM struct{}
+
+func (noopTestLLM) Complete(_ context.Context, _ string) (string, error) { return "", nil }
+func (noopTestLLM) ModelID() string                                      { return "test-noop" }
+
 func TestMain(m *testing.M) {
 	// Create engine without testutil.NewEngine (needs *testing.T).
 	dir, err := os.MkdirTemp("", "gramaton-cli-test-*")
@@ -40,7 +46,9 @@ func TestMain(m *testing.M) {
 	cfg.LLM.Provider = ""
 	config.Save(cfg, dir+"/config.yaml")
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopTestLLM{}),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "LoadEngine: %v\n", err)
 		os.Exit(1)
@@ -64,7 +72,11 @@ func TestMain(m *testing.M) {
 	srvCfg.IdleTimeout = 0
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	testSrv = server.New(eng, srvCfg, logger)
+	testSrv, err = server.New(eng, srvCfg, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "New server: %v\n", err)
+		os.Exit(1)
+	}
 
 	if err := testSrv.StartHTTP(); err != nil {
 		fmt.Fprintf(os.Stderr, "StartHTTP: %v\n", err)

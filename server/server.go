@@ -141,7 +141,13 @@ func (rt *retrievalTracker) pruneOldest() {
 }
 
 // New creates a new server wrapping the given engine.
-func New(engine *core.Engine, cfg Config, logger *slog.Logger) *Server {
+// New creates a server. Requires an engine with a configured LLM
+// provider -- the server performs classification on every record and
+// cannot operate without one. Returns an error if LLM is not configured.
+func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) {
+	if engine.LLM() == nil {
+		return nil, fmt.Errorf("LLM provider is required: configure llm.provider and llm.model in config")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -171,7 +177,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) *Server {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	return s
+	return s, nil
 }
 
 // Run starts the server and blocks until shutdown. It handles

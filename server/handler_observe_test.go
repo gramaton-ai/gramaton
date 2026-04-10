@@ -69,6 +69,8 @@ func setupTestServerWithProviders(t *testing.T, emb embed.Provider, llmProv llm.
 	}
 	if llmProv != nil {
 		opts = append(opts, core.WithLLM(llmProv))
+	} else {
+		opts = append(opts, core.WithLLM(noopLLM{}))
 	}
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, opts)
@@ -76,7 +78,10 @@ func setupTestServerWithProviders(t *testing.T, emb embed.Provider, llmProv llm.
 		t.Fatalf("LoadEngine: %v", err)
 	}
 
-	srv := New(eng, DefaultConfig(), nil)
+	srv, err := New(eng, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
 	return srv, eng
 }
 
@@ -155,11 +160,16 @@ func TestHandleObserveDisabled(t *testing.T) {
 	cfg.Observe.Enabled = false
 	config.Save(cfg, dir+"/config.yaml")
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopLLM{}),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
-	srv := New(eng, DefaultConfig(), nil)
+	srv, err := New(eng, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
 
 	body := `{"facts": ["test fact"]}`
 	req := httptest.NewRequest("POST", "/v1/observe", strings.NewReader(body))
@@ -185,22 +195,6 @@ func TestHandleObserveMissingFields(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for missing fields, got %d", w.Code)
-	}
-}
-
-func TestHandleObserveMessagesWithoutLLM(t *testing.T) {
-	srv, _ := setupTestServer(t)
-	// No LLM configured in test server.
-
-	body := `{"messages": [{"role": "user", "content": "hello"}]}`
-	req := httptest.NewRequest("POST", "/v1/observe", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	srv.handleObserve(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 without LLM for messages mode, got %d", w.Code)
 	}
 }
 
@@ -451,11 +445,16 @@ func TestProcessObservationMaxFactsCap(t *testing.T) {
 	cfg.Observe.MaxFactsPerCall = 2
 	config.Save(cfg, dir+"/config.yaml")
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopLLM{}),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
-	srv := New(eng, DefaultConfig(), nil)
+	srv, err := New(eng, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
 
 	facts := make([]string, 10)
 	for i := range facts {
@@ -516,21 +515,6 @@ func TestGCConfigDefaults(t *testing.T) {
 	}
 	if cfg.GC.MinAgeDays != 30 {
 		t.Fatalf("expected MinAgeDays=30, got %d", cfg.GC.MinAgeDays)
-	}
-}
-
-func TestExtractFactsNoLLM(t *testing.T) {
-	srv, _ := setupTestServer(t)
-
-	_, err := srv.extractFacts(context.Background(), []observeMessage{
-		{Role: "user", Content: "Hello"},
-	})
-
-	if err == nil {
-		t.Fatal("expected error when no LLM configured")
-	}
-	if !strings.Contains(err.Error(), "no LLM provider") {
-		t.Fatalf("expected 'no LLM provider' error, got: %v", err)
 	}
 }
 

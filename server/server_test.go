@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,12 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
+// noopLLM is a minimal LLM provider for tests that don't need real responses.
+type noopLLM struct{}
+
+func (noopLLM) Complete(_ context.Context, _ string) (string, error) { return "", nil }
+func (noopLLM) ModelID() string                                      { return "test-noop" }
+
 func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,7 +30,9 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	cfg.LLM.Provider = ""
 	config.Save(cfg, dir+"/config.yaml")
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopLLM{}),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
@@ -31,7 +40,10 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	serverCfg := DefaultConfig()
 	serverCfg.ConfigDir = dir
 	logger := slog.Default()
-	srv := New(eng, serverCfg, logger)
+	srv, err := New(eng, serverCfg, logger)
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
 	return srv, eng
 }
 

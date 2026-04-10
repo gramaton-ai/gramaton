@@ -80,7 +80,10 @@ func startForeground() error {
 	}
 	defer logWriter.Close()
 
-	srv := server.New(eng, cfg, logger)
+	srv, err := server.New(eng, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("create server: %w", err)
+	}
 	return srv.Run()
 }
 
