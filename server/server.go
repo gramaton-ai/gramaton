@@ -487,6 +487,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Curation
 	mux.HandleFunc("GET /v1/curation", s.handleCurationStatus)
 	mux.HandleFunc("POST /v1/curation/trigger", s.handleCurationTrigger)
+	mux.HandleFunc("POST /v1/curation/batch", s.handleCurationBatch)
 
 	// Observe
 	mux.HandleFunc("POST /v1/observe", s.handleObserve)

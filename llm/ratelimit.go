@@ -61,3 +61,8 @@ func (r *RateLimited) CompleteWithModel(ctx context.Context, model, prompt strin
 func (r *RateLimited) ModelID() string {
 	return r.inner.ModelID()
 }
+
+// Inner returns the wrapped provider for type assertion.
+func (r *RateLimited) Inner() Provider {
+	return r.inner
+}

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+
+	"github.com/gramaton-ai/gramaton/curation"
 )
 
 func (s *Server) handleCurationStatus(w http.ResponseWriter, _ *http.Request) {
@@ -64,5 +66,31 @@ func (s *Server) handleCurationTrigger(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"triggered": true,
 		"status":    s.runner.Status(),
+	})
+}
+
+func (s *Server) handleCurationBatch(w http.ResponseWriter, r *http.Request) {
+	if !isLoopback(r) {
+		s.writeError(w, http.StatusForbidden, "forbidden",
+			"batch curation is restricted to loopback connections", false)
+		return
+	}
+
+	if s.engine.LLM() == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "llm_required",
+			"LLM provider is required for batch curation", false)
+		return
+	}
+
+	cfg := s.engine.Config()
+	result, err := curation.RunBatchClassification(
+		r.Context(), s.engine, s.engine.LLM(), cfg, s.log)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "batch_error", err.Error(), false)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"data": result,
 	})
 }
