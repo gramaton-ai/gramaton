@@ -257,7 +257,7 @@ func (r *Runner) cycle(ctx context.Context) {
 		hasCandidates := len(result.ConceptCandidates) > 0
 		needsSummary := result.Manifest != nil && result.Manifest.QualitativeSummary == ""
 		if !llmPaused && (hasPending || hasCandidates || needsSummary) {
-			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger, result.ConceptCandidates)
+			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger)
 			r.state.mu.Lock()
 			r.state.LastAutonomous = aResult
 

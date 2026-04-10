@@ -678,7 +678,7 @@ func TestRunAutonomousIntegration(t *testing.T) {
 		},
 	}
 
-	result := RunAutonomous(context.Background(), eng, llm, cfg, nil, nil)
+	result := RunAutonomous(context.Background(), eng, llm, cfg, nil)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -1373,70 +1373,47 @@ func TestCreateConceptNodes(t *testing.T) {
 	id3 := addNode(t, eng, "Kafka partitioning strategies", "durable", 0.8,
 		[]string{"kafka", "partitioning"}, now)
 
-	candidates := []ConceptCandidate{
-		{
-			Keyword: "kafka",
-			Count:   3,
-			NodeIDs: []string{id1, id2, id3},
-		},
+	// Concept creation is now deterministic (in RunDeterministic).
+	// Run deterministic curation to create the concept node.
+	detResult := RunDeterministic(eng, cfg, nil)
+
+	if detResult.ConceptsCreated != 1 {
+		t.Fatalf("expected 1 concept created deterministically, got %d", detResult.ConceptsCreated)
 	}
 
-	llm := &mockLLM{
-		responses: []string{
-			"Kafka is a distributed event streaming platform used for microservices communication. " +
-				"Records cover event streaming, consumer group management, and partitioning strategies.",
-		},
-	}
-
-	result := &AutonomousResult{}
-	createConceptNodes(context.Background(), eng, llm, cfg, result, 20, nil, false, candidates)
-
-	if result.ConceptsCreated != 1 {
-		t.Fatalf("expected 1 concept created, got %d", result.ConceptsCreated)
-	}
-	if result.LLMCalls != 1 {
-		t.Fatalf("expected 1 LLM call, got %d", result.LLMCalls)
-	}
-
-	// Verify the concept node exists.
+	// Verify the concept node exists with template content.
 	eng.RLock()
-	defer eng.RUnlock()
-
 	g := eng.Graph()
-	conceptFound := false
 	var conceptID string
-	for _, id := range g.AllNodeIDs() {
-		n, ok := g.GetNode(id)
-		if !ok {
-			continue
-		}
+	conceptFound := false
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
 		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
 			if kw, ok := n.Properties.GetString("concept_keyword"); ok && kw == "kafka" {
 				conceptFound = true
-				conceptID = id
-				// Check properties.
-				if kt, ok := n.Properties.GetString("knowledge_type"); !ok || kt != "conceptual" {
+				conceptID = n.ID
+				if kt, _ := n.Properties.GetString("knowledge_type"); kt != "conceptual" {
 					t.Fatalf("expected knowledge_type=conceptual, got %q", kt)
 				}
-				if content, ok := n.Properties.GetString("content_full"); !ok || content == "" {
-					t.Fatal("concept node should have content_full")
+				if ss, _ := n.Properties.GetString("synthesis_status"); ss != "pending" {
+					t.Fatalf("expected synthesis_status=pending, got %q", ss)
 				}
-				// content_short should be a proper summary, not the keyword.
-				if cs, ok := n.Properties.GetString("content_short"); !ok || cs == "" {
-					t.Fatal("concept node should have content_short")
-				} else if cs == "kafka" {
-					t.Fatalf("content_short should be a summary, not the keyword; got %q", cs)
-				} else if len(cs) < 10 {
-					t.Fatalf("content_short too short to be a summary: %q", cs)
+				if ps, _ := n.Properties.GetString("processing_status"); ps != "processed" {
+					t.Fatalf("expected processing_status=processed, got %q", ps)
 				}
 			}
 		}
 	}
+	it.Close()
+	eng.RUnlock()
+
 	if !conceptFound {
 		t.Fatal("concept node not found")
 	}
 
 	// Verify instance_of edges from members to concept.
+	eng.RLock()
 	edgeCount := 0
 	for _, memberID := range []string{id1, id2, id3} {
 		for _, e := range g.EdgesFrom(memberID) {
@@ -1445,37 +1422,60 @@ func TestCreateConceptNodes(t *testing.T) {
 			}
 		}
 	}
+	eng.RUnlock()
 	if edgeCount != 3 {
 		t.Fatalf("expected 3 instance_of edges, got %d", edgeCount)
 	}
+
+	// Now test LLM enrichment of the pending concept.
+	llm := &mockLLM{
+		responses: []string{
+			`[{"keyword":"kafka","synthesis":"Kafka is a distributed event streaming platform used for microservices communication."}]`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.ConceptsCreated != 1 {
+		t.Fatalf("expected 1 concept enriched, got %d", result.ConceptsCreated)
+	}
+
+	// Verify synthesis was applied.
+	eng.RLock()
+	defer eng.RUnlock()
+	cn, ok := g.GetNode(conceptID)
+	if !ok {
+		t.Fatal("concept node gone after enrichment")
+	}
+	ss, _ := cn.Properties.GetString("synthesis_status")
+	if ss != "complete" {
+		t.Fatalf("expected synthesis_status=complete, got %q", ss)
+	}
+	content, _ := cn.Properties.GetString("content_full")
+	if !strings.Contains(content, "Kafka") {
+		t.Fatalf("content_full should contain synthesis, got %q", content)
+	}
 }
 
-func TestCreateConceptNodesIdempotent(t *testing.T) {
+func TestDeterministicConceptIdempotent(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
 
 	now := time.Now().UTC()
-	id1 := addNode(t, eng, "Redis caching strategies", "durable", 0.9,
-		[]string{"redis"}, now)
-
-	candidates := []ConceptCandidate{
-		{Keyword: "redis", Count: 1, NodeIDs: []string{id1}},
-	}
-
-	llm := &mockLLM{
-		responses: []string{"Redis is an in-memory data store used for caching."},
-	}
+	addNode(t, eng, "Redis caching strategies", "durable", 0.9, []string{"redis"}, now)
+	addNode(t, eng, "Redis cluster setup", "durable", 0.8, []string{"redis"}, now)
+	addNode(t, eng, "Redis pub/sub patterns", "durable", 0.7, []string{"redis"}, now)
 
 	// First run creates the concept.
-	result1 := &AutonomousResult{}
-	createConceptNodes(context.Background(), eng, llm, cfg, result1, 20, nil, false, candidates)
+	result1 := RunDeterministic(eng, cfg, nil)
 	if result1.ConceptsCreated != 1 {
 		t.Fatalf("first run: expected 1 concept, got %d", result1.ConceptsCreated)
 	}
 
 	// Second run should skip (concept already exists).
-	result2 := &AutonomousResult{}
-	createConceptNodes(context.Background(), eng, llm, cfg, result2, 20, nil, false, candidates)
+	result2 := RunDeterministic(eng, cfg, nil)
 	if result2.ConceptsCreated != 0 {
 		t.Fatalf("second run: expected 0 concepts (already exists), got %d", result2.ConceptsCreated)
 	}

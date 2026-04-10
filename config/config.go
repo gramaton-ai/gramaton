@@ -216,6 +216,8 @@ type LLMCurationConfig struct {
 	ContradictionMinSim    float64 `yaml:"contradiction_min_similarity"`
 	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
 	MaxConceptsPerRun      int     `yaml:"max_concepts_per_run"`
+	SynthesisBatchSize     int     `yaml:"synthesis_batch_size"`      // concepts per LLM call (default 5)
+	SynthesisMaxInputTokens int    `yaml:"synthesis_max_input_tokens"` // soft cap per batch (default 8000)
 	LightModel             string  `yaml:"light_model"`           // model for short content classification
 	LightModelThreshold    int     `yaml:"light_model_threshold"` // chars below which light_model is used
 }
@@ -376,12 +378,14 @@ func Defaults() Config {
 		},
 
 		LLMCuration: LLMCurationConfig{
-			BatchSize:              10,
-			MaxCallsPerRun:         20,
-			MaxContradictionChecks: 5,
-			ContradictionMinSim:    0.5,
-			ContradictionMaxSim:    0.85,
-			MaxConceptsPerRun:      5,
+			BatchSize:               10,
+			MaxCallsPerRun:          20,
+			MaxContradictionChecks:  5,
+			ContradictionMinSim:     0.5,
+			ContradictionMaxSim:     0.85,
+			MaxConceptsPerRun:       5,
+			SynthesisBatchSize:      5,
+			SynthesisMaxInputTokens: 8000,
 		},
 
 		Observe: ObserveConfig{

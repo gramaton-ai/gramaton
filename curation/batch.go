@@ -226,7 +226,7 @@ func runSequentialBatch(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	cfg.LLMCuration.BatchSize = 100000
 	cfg.LLMCuration.MaxCallsPerRun = 100000
 
-	ar := runAutonomousInner(ctx, e, llmProv, cfg, logger, false, nil)
+	ar := runAutonomousInner(ctx, e, llmProv, cfg, logger, false)
 
 	cfg.LLMCuration.BatchSize = savedBatch
 	cfg.LLMCuration.MaxCallsPerRun = savedMax

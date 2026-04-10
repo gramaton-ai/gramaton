@@ -4,6 +4,7 @@
 package curation
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"sort"
@@ -31,6 +32,7 @@ type DeterministicResult struct {
 	OrphansLinked        int
 	DuplicatesSuperseded int
 	SectionsLinked       int
+	ConceptsCreated      int // new concept nodes created (template content)
 	GCCollected          int
 	GCDryRun             bool
 	QualityRepairs       int // deterministic quality fixes applied
@@ -330,10 +332,39 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	it2.Close()
 
+	// Find existing concept nodes to avoid creating duplicates.
+	existingConcepts := make(map[string]struct{})
+	cnIt := g.NodeIterator()
+	for cnIt.Next() {
+		n := cnIt.Node()
+		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
+			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
+				existingConcepts[kw] = struct{}{}
+			}
+		}
+	}
+	cnIt.Close()
+
+	// Filter candidates to only new concepts.
+	var newConcepts []ConceptCandidate
+	maxNewConcepts := cfg.LLMCuration.MaxConceptsPerRun // reuse as deterministic budget
+	if maxNewConcepts <= 0 {
+		maxNewConcepts = 5
+	}
+	for _, c := range candidates {
+		if _, exists := existingConcepts[c.Keyword]; exists {
+			continue
+		}
+		newConcepts = append(newConcepts, c)
+		if len(newConcepts) >= maxNewConcepts {
+			break
+		}
+	}
+
 	e.RUnlock()
 
 	// --- Write phase ---
-	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues)
+	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts)
 	if mutations > 0 {
 		e.Lock()
 
@@ -415,7 +446,122 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			}
 		}
 
-		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded+result.QualityRepairs > 0 {
+		// Deterministic concept creation: create concept nodes with
+		// template content and computed metadata. LLM synthesis is
+		// deferred to the autonomous enrichment phase.
+		for _, c := range newConcepts {
+			// Compute metadata from member records.
+			var confSum float64
+			var confCount int
+			var coKeywords []string
+			coKWCounts := make(map[string]int)
+			hasSpeculative := false
+			allWellEstablished := true
+
+			for _, memberID := range c.NodeIDs {
+				mn, ok := e.Graph().GetNode(memberID)
+				if !ok {
+					continue
+				}
+				if conf, ok := mn.Properties.GetFloat64("confidence"); ok && conf > 0 {
+					confSum += conf
+					confCount++
+				}
+				if es, ok := mn.Properties.GetString("epistemic_status"); ok {
+					if es == "speculative" {
+						hasSpeculative = true
+					}
+					if es != "well_established" {
+						allWellEstablished = false
+					}
+				}
+				if kws, ok := mn.Properties.GetStringList("content_keywords"); ok {
+					for _, mk := range kws {
+						if mk != c.Keyword {
+							coKWCounts[mk]++
+						}
+					}
+				}
+			}
+
+			// Derived confidence: average of member confidence.
+			derivedConf := 0.7 // default
+			if confCount > 0 {
+				derivedConf = confSum / float64(confCount)
+			}
+
+			// Derived epistemic status.
+			derivedES := "probable"
+			if allWellEstablished {
+				derivedES = "well_established"
+			} else if hasSpeculative {
+				derivedES = "probable" // mixed -> probable
+			}
+
+			// Top co-occurring keywords (up to 5).
+			type kwE struct {
+				kw    string
+				count int
+			}
+			var coKWList []kwE
+			for kw, cnt := range coKWCounts {
+				coKWList = append(coKWList, kwE{kw, cnt})
+			}
+			sort.Slice(coKWList, func(i, j int) bool { return coKWList[i].count > coKWList[j].count })
+			topCoKW := 5
+			if len(coKWList) < topCoKW {
+				topCoKW = len(coKWList)
+			}
+			for i := 0; i < topCoKW; i++ {
+				coKeywords = append(coKeywords, coKWList[i].kw)
+			}
+
+			// Template content.
+			templateFull := fmt.Sprintf("Concept: %s. Connects %d records.", c.Keyword, c.Count)
+			if len(coKeywords) > 0 {
+				templateFull += fmt.Sprintf(" Related terms: %s.", strings.Join(coKeywords, ", "))
+			}
+			templateShort := fmt.Sprintf("%s (%d records)", c.Keyword, c.Count)
+			if len(templateShort) > 200 {
+				templateShort = templateShort[:200]
+			}
+
+			allKeywords := append([]string{c.Keyword}, coKeywords...)
+
+			props := graph.Properties{
+				"content_full":      graph.StringProperty(templateFull),
+				"content_short":     graph.StringProperty(templateShort),
+				"content_keywords":  graph.StringListProperty(allKeywords),
+				"processing_status": graph.StringProperty("processed"),
+				"synthesis_status":  graph.StringProperty("pending"),
+				"node_type":         graph.StringProperty("concept"),
+				"concept_keyword":   graph.StringProperty(c.Keyword),
+				"temporality":       graph.StringProperty("durable"),
+				"knowledge_type":    graph.StringProperty("conceptual"),
+				"epistemic_status":  graph.StringProperty(derivedES),
+				"confidence":        graph.Float64Property(derivedConf),
+				"evidence_count":    graph.Int64Property(int64(c.Count)),
+				"created_at":        graph.TimestampProperty(now),
+				"access_count":      graph.Int64Property(0),
+			}
+
+			cn := e.Graph().AddNode(props)
+			for k, v := range cn.Properties {
+				e.PropIdx().Add(cn.ID, k, v)
+			}
+			e.IndexNode(cn.ID, templateFull, nil)
+
+			// Create instance_of edges from member records.
+			for _, memberID := range c.NodeIDs {
+				if _, ok := e.Graph().GetNode(memberID); ok {
+					e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil)
+				}
+			}
+
+			result.ConceptsCreated++
+		}
+
+		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded+result.QualityRepairs+result.ConceptsCreated > 0 {
 			e.Save("curation: deterministic")
 		}
 
@@ -451,6 +597,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"quality_repairs", result.QualityRepairs,
 			"quality_flags", result.QualityFlags,
 			"gc_collected", result.GCCollected,
+			"concepts_created", result.ConceptsCreated,
 			"concept_candidates", len(candidates),
 			"duration_ms", time.Since(start).Milliseconds())
 	}

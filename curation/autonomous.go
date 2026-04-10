@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,18 +42,17 @@ type PlannedChange struct {
 // RunAutonomous performs LLM-powered curation tasks.
 // Caller must NOT hold any lock. When dryRun is true, LLM calls are
 // made and results returned in PlannedChanges but no mutations are applied.
-// conceptCandidates from the deterministic layer are used to create concept nodes.
-func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, conceptCandidates []ConceptCandidate) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, false, conceptCandidates)
+func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
+	return runAutonomousInner(ctx, e, llmProv, cfg, logger, false)
 }
 
 // RunAutonomousDryRun is like RunAutonomous but does not apply changes.
 // The LLM is still called so you can see what would be classified.
 func RunAutonomousDryRun(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, true, nil)
+	return runAutonomousInner(ctx, e, llmProv, cfg, logger, true)
 }
 
-func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool, conceptCandidates []ConceptCandidate) *AutonomousResult {
+func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool) *AutonomousResult {
 	start := time.Now()
 	logger = ensureLogger(logger)
 	result := &AutonomousResult{DryRun: dryRun}
@@ -65,7 +65,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	runtime.Gosched() // yield so other goroutines can acquire the lock
 	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 	runtime.Gosched()
-	createConceptNodes(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun, conceptCandidates)
+	enrichConceptSyntheses(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 	runtime.Gosched()
 	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 
@@ -534,208 +534,247 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	result.ManifestSummary = summary
 }
 
-// createConceptNodes converts concept candidates into searchable concept
-// nodes with LLM-generated summaries. Each concept node links to its
-// constituent records, acting as a retrieval hub (RAPTOR-inspired).
-func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool, candidates []ConceptCandidate) {
+// enrichConceptSyntheses finds concept nodes with synthesis_status=pending
+// and upgrades their template content with LLM-generated synthesis.
+// Prioritizes by access_count (most-accessed first). Batches multiple
+// concepts per LLM call for efficiency. Uses leftover LLM budget only.
+func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
-	if len(candidates) == 0 || result.LLMCalls >= maxCalls {
+	if result.LLMCalls >= maxCalls {
 		return
 	}
 
+	batchSize := cfg.LLMCuration.SynthesisBatchSize
+	if batchSize <= 0 {
+		batchSize = 5
+	}
+	maxInputTokens := cfg.LLMCuration.SynthesisMaxInputTokens
+	if maxInputTokens <= 0 {
+		maxInputTokens = 8000
+	}
+
+	// Cap to remaining LLM budget.
+	remaining := maxCalls - result.LLMCalls
 	maxConcepts := cfg.LLMCuration.MaxConceptsPerRun
 	if maxConcepts <= 0 {
 		maxConcepts = 5
 	}
-	// Cap concept creation to remaining LLM budget. Concepts should
-	// never starve classification -- they use leftover budget only.
-	remaining := maxCalls - result.LLMCalls
 	if maxConcepts > remaining {
 		maxConcepts = remaining
 	}
 
-	// Filter out candidates that already have a concept node.
+	// Find pending concept nodes, sorted by access_count descending.
+	type pendingConcept struct {
+		id          string
+		keyword     string
+		accessCount int64
+		memberIDs   []string
+	}
+	var pending []pendingConcept
+
 	e.RLock()
 	g := e.Graph()
-
-	// Find existing concept nodes by checking node_type.
-	existingConcepts := make(map[string]struct{})
-	cnIt := g.NodeIterator()
-	for cnIt.Next() {
-		n := cnIt.Node()
-		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
-			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
-				existingConcepts[kw] = struct{}{}
-			}
-		}
-	}
-	cnIt.Close()
-
-	// Filter and sort candidates by count (most connected first).
-	var eligible []ConceptCandidate
-	for _, c := range candidates {
-		if _, exists := existingConcepts[c.Keyword]; exists {
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		nt, _ := n.Properties.GetString("node_type")
+		ss, _ := n.Properties.GetString("synthesis_status")
+		if nt != "concept" || ss != "pending" {
 			continue
 		}
-		eligible = append(eligible, c)
-	}
-	e.RUnlock()
+		kw, _ := n.Properties.GetString("concept_keyword")
+		ac, _ := n.Properties.GetInt64("access_count")
 
-	if len(eligible) == 0 {
-		return
-	}
-	if len(eligible) > maxConcepts {
-		eligible = eligible[:maxConcepts]
-	}
-
-	for _, candidate := range eligible {
-		if result.LLMCalls >= maxCalls {
-			break
+		// Get member IDs from instance_of edges.
+		var memberIDs []string
+		for _, edge := range g.EdgesTo(n.ID) {
+			if edge.Type == "instance_of" {
+				memberIDs = append(memberIDs, edge.SourceID)
+			}
 		}
 
-		// Gather summaries from member records.
-		e.RLock()
+		pending = append(pending, pendingConcept{
+			id:          n.ID,
+			keyword:     kw,
+			accessCount: ac,
+			memberIDs:   memberIDs,
+		})
+	}
+	it.Close()
+
+	if len(pending) == 0 {
+		e.RUnlock()
+		return
+	}
+
+	// Sort by access_count descending (most-accessed first).
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].accessCount > pending[j].accessCount
+	})
+	if len(pending) > maxConcepts {
+		pending = pending[:maxConcepts]
+	}
+
+	// Build batched synthesis prompts.
+	type conceptBatch struct {
+		concepts []pendingConcept
+		prompt   string
+	}
+	var batches []conceptBatch
+	var currentBatch []pendingConcept
+	var currentPrompt strings.Builder
+	estimatedTokens := 0
+
+	currentPrompt.WriteString("Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {\"keyword\": \"...\", \"synthesis\": \"2-4 sentence summary\"}\n\n")
+	baseTokens := currentPrompt.Len() / 4
+
+	for _, pc := range pending {
+		// Gather member summaries.
 		var memberSummaries []string
-		for _, id := range candidate.NodeIDs {
-			n, ok := g.GetNode(id)
+		for _, mid := range pc.memberIDs {
+			mn, ok := g.GetNode(mid)
 			if !ok {
 				continue
 			}
-			// Exclude speculative records from concept evidence to
-			// prevent hallucination propagation into concept synthesis.
-			if es, ok := n.Properties.GetString("epistemic_status"); ok && es == "speculative" {
+			if es, ok := mn.Properties.GetString("epistemic_status"); ok && es == "speculative" {
 				continue
 			}
-			if s, ok := n.Properties.GetString("content_short"); ok && s != "" {
+			if s, ok := mn.Properties.GetString("content_short"); ok && s != "" {
 				memberSummaries = append(memberSummaries, "- "+s)
-			} else if s, ok := n.Properties.GetString("content_full"); ok && len(s) > 200 {
+			} else if s, ok := mn.Properties.GetString("content_full"); ok && len(s) > 200 {
 				memberSummaries = append(memberSummaries, "- "+s[:200])
-			} else if s, ok := n.Properties.GetString("content_full"); ok {
+			} else if s, ok := mn.Properties.GetString("content_full"); ok {
 				memberSummaries = append(memberSummaries, "- "+s)
 			}
 		}
-		e.RUnlock()
-
 		if len(memberSummaries) == 0 {
 			continue
 		}
-
-		// Cap member summaries to avoid exceeding context.
 		if len(memberSummaries) > 20 {
 			memberSummaries = memberSummaries[:20]
 		}
 
-		summaryText := ""
-		for _, s := range memberSummaries {
-			summaryText += s + "\n"
+		conceptSection := fmt.Sprintf("Concept: %q (%d records)\nMembers:\n%s\n\n",
+			pc.keyword, len(pc.memberIDs), strings.Join(memberSummaries, "\n"))
+		sectionTokens := len(conceptSection) / 4
+
+		// Check if adding this concept would exceed limits.
+		if len(currentBatch) > 0 && (len(currentBatch) >= batchSize || estimatedTokens+sectionTokens > maxInputTokens) {
+			batches = append(batches, conceptBatch{
+				concepts: currentBatch,
+				prompt:   currentPrompt.String(),
+			})
+			currentBatch = nil
+			currentPrompt.Reset()
+			currentPrompt.WriteString("Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {\"keyword\": \"...\", \"synthesis\": \"2-4 sentence summary\"}\n\n")
+			estimatedTokens = baseTokens
 		}
 
-		// LLM call to synthesize.
-		prompt := fmt.Sprintf(conceptSynthesisPrompt,
-			candidate.Keyword, candidate.Count, summaryText)
+		currentPrompt.WriteString(conceptSection)
+		currentBatch = append(currentBatch, pc)
+		estimatedTokens += sectionTokens
+	}
+	if len(currentBatch) > 0 {
+		batches = append(batches, conceptBatch{
+			concepts: currentBatch,
+			prompt:   currentPrompt.String(),
+		})
+	}
 
-		synthesis, err := llmProv.Complete(ctx, prompt)
+	e.RUnlock()
+
+	// Execute batched LLM calls.
+	for _, batch := range batches {
+		if result.LLMCalls >= maxCalls {
+			break
+		}
+
+		if dryRun {
+			for _, pc := range batch.concepts {
+				result.PlannedChanges = append(result.PlannedChanges, PlannedChange{
+					Action:      "enrich_concept",
+					RecordID:    pc.id,
+					ContentSnip: pc.keyword,
+				})
+			}
+			result.LLMCalls++
+			result.ConceptsCreated += len(batch.concepts)
+			continue
+		}
+
+		resp, err := llmProv.Complete(ctx, batch.prompt)
 		result.LLMCalls++
 		if err != nil {
 			result.Errors++
-			logger.Warn("concept synthesis failed",
+			logger.Warn("concept synthesis batch failed",
 				"component", "curation",
-				"keyword", candidate.Keyword,
+				"batch_size", len(batch.concepts),
 				"err", err)
 			continue
 		}
 
-		// Truncate synthesis.
-		runes := []rune(synthesis)
-		if len(runes) > 500 {
-			synthesis = string(runes[:500])
-		}
+		// Parse JSON array response.
+		syntheses := parseBatchSynthesis(resp)
 
-		if dryRun {
-			result.PlannedChanges = append(result.PlannedChanges, PlannedChange{
-				Action:      "create_concept",
-				ContentSnip: candidate.Keyword,
-				Details:     synthesis,
-			})
-			result.ConceptsCreated++
-			continue
-		}
-
-		// Build content_short from synthesis: first sentence, capped
-		// at 200 chars. The keyword is preserved in concept_keyword.
-		shortSummary := conceptShortSummary(synthesis, 200)
-
-		// Pre-embed outside the lock (I/O can be slow).
-		// Embed both content_full (synthesis) and content_short
-		// to populate embedding_full and embedding_short.
-		var conceptVecFull, conceptVecShort []float32
-		var conceptModel string
-		if e.Embedder() != nil {
-			texts := []string{synthesis}
-			if shortSummary != synthesis {
-				texts = append(texts, shortSummary)
-			}
-			vecs, err := e.Embedder().Embed(ctx, texts)
-			if err == nil && len(vecs) > 0 {
-				conceptVecFull = vecs[0]
-				conceptModel = e.Embedder().ModelID()
-				if len(vecs) > 1 {
-					conceptVecShort = vecs[1]
-				}
-			}
-		}
-
-		// Create concept node under write lock.
+		// Apply syntheses to concept nodes.
 		e.Lock()
-
-		props := graph.Properties{
-			"content_full":      graph.StringProperty(synthesis),
-			"content_short":     graph.StringProperty(shortSummary),
-			"node_type":         graph.StringProperty("concept"),
-			"concept_keyword":   graph.StringProperty(candidate.Keyword),
-			"knowledge_type":    graph.StringProperty("conceptual"),
-			"temporality":       graph.StringProperty("durable"),
-			"confidence":        graph.Float64Property(0.7),
-			"epistemic_status":  graph.StringProperty("probable"),
-			"processing_status": graph.StringProperty("processed"),
-			"created_at":        graph.TimestampProperty(time.Now().UTC()),
-			"access_count":      graph.Int64Property(0),
-			"evidence_count":    graph.Int64Property(int64(candidate.Count)),
-		}
-
-		node := e.Graph().AddNode(props)
-		e.IndexNode(node.ID, synthesis, conceptVecFull)
-
-		// Apply embedding_short if we generated it.
-		if conceptVecShort != nil {
-			e.Graph().SetNodeProperty(node.ID, "embedding_short", graph.VectorProperty(conceptVecShort))
-			e.PropIdx().Add(node.ID, "embedding_short", graph.VectorProperty(conceptVecShort))
-		}
-
-		// Set embedding model property if we embedded.
-		if conceptVecFull != nil && conceptModel != "" {
-			e.SetProp(node.ID, "embedding_model", graph.StringProperty(conceptModel))
-		}
-
-		// Create instance_of edges from member records to concept node.
-		for _, memberID := range candidate.NodeIDs {
-			if _, ok := e.Graph().GetNode(memberID); ok {
-				e.Graph().AddEdge(memberID, node.ID, "instance_of", 0.8, nil)
+		for i, pc := range batch.concepts {
+			if i >= len(syntheses) {
+				break
 			}
+			synthesis := syntheses[i]
+			if synthesis == "" {
+				continue
+			}
+
+			// Truncate.
+			runes := []rune(synthesis)
+			if len(runes) > 500 {
+				synthesis = string(runes[:500])
+			}
+
+			shortSummary := conceptShortSummary(synthesis, 200)
+
+			e.SetContentProp(pc.id, "content_full", synthesis)
+			e.SetContentProp(pc.id, "content_short", shortSummary)
+			e.SetProp(pc.id, "synthesis_status", graph.StringProperty("complete"))
+			result.ConceptsCreated++
+
+			logger.Info("concept enriched",
+				"component", "curation",
+				"keyword", pc.keyword,
+				"node_id", pc.id)
 		}
-
-		e.Save("curation: concept node")
+		if result.ConceptsCreated > 0 {
+			e.Save("curation: enrich concepts")
+		}
 		e.Unlock()
-		runtime.Gosched() // yield between concept saves
-
-		result.ConceptsCreated++
-
-		logger.Info("concept node created",
-			"component", "curation",
-			"keyword", candidate.Keyword,
-			"members", candidate.Count,
-			"node_id", node.ID)
 	}
+}
+
+// parseBatchSynthesis extracts synthesis strings from a JSON array
+// response. Handles markdown code fences and partial JSON.
+func parseBatchSynthesis(resp string) []string {
+	text := strings.TrimSpace(resp)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	var results []struct {
+		Keyword   string `json:"keyword"`
+		Synthesis string `json:"synthesis"`
+	}
+	if err := json.Unmarshal([]byte(text), &results); err != nil {
+		// Try to extract any synthesis we can.
+		return nil
+	}
+
+	syntheses := make([]string, len(results))
+	for i, r := range results {
+		syntheses[i] = r.Synthesis
+	}
+	return syntheses
 }
 
 // conceptShortSummary extracts a short summary from a synthesis text.
