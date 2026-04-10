@@ -31,6 +31,8 @@ type searchRequest struct {
 	ExpiresBefore       string   `json:"expires_before,omitempty"`
 	Match               string   `json:"match,omitempty"`
 	SimilarTo           string   `json:"similar_to,omitempty"`
+	NearNode            string   `json:"near_node,omitempty"`
+	MaxHops             int      `json:"max_hops,omitempty"`
 	MinEdges            *int     `json:"min_edges,omitempty"`
 	MaxEdges            *int     `json:"max_edges,omitempty"`
 	Random              bool              `json:"random,omitempty"`

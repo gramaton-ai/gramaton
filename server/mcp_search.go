@@ -32,6 +32,8 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		ExpiresBefore       string   `json:"expires_before,omitempty" jsonschema:"filter: valid_until before date (find records expiring before X)"`
 		Match               string   `json:"match,omitempty" jsonschema:"literal substring search across content fields (case-insensitive). Distinct from text (vector similarity)"`
 		SimilarTo           string   `json:"similar_to,omitempty" jsonschema:"record ID -- find records similar to this one using its stored embedding"`
+		NearNode            string   `json:"near_node,omitempty" jsonschema:"record ID -- only return records within max_hops graph distance of this node"`
+		MaxHops             int      `json:"max_hops,omitempty" jsonschema:"integer, max graph hops from near_node (default 2)"`
 		MinEdges            *int     `json:"min_edges,omitempty" jsonschema:"integer, minimum total edge count (orphan detection: max_edges=0)"`
 		MaxEdges            *int     `json:"max_edges,omitempty" jsonschema:"integer, maximum total edge count"`
 		Random              bool     `json:"random,omitempty" jsonschema:"return random results (ignores sort/score). Useful for serendipitous discovery or review"`
@@ -70,6 +72,8 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 			ExpiresBefore:      args.ExpiresBefore,
 			Match:              args.Match,
 			SimilarTo:          args.SimilarTo,
+			NearNode:           args.NearNode,
+			MaxHops:            args.MaxHops,
 			MinEdges:           args.MinEdges,
 			MaxEdges:           args.MaxEdges,
 			Random:             args.Random,

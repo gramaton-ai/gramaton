@@ -79,6 +79,8 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		AccessCountMax:    req.AccessCountMax,
 		Match:             req.Match,
 		SimilarTo:         req.SimilarTo,
+		NearNode:          req.NearNode,
+		MaxHops:           req.MaxHops,
 		MinEdges:          req.MinEdges,
 		MaxEdges:          req.MaxEdges,
 		Random:            req.Random,

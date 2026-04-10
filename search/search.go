@@ -90,6 +90,8 @@ type Query struct {
 	ExpiresBefore      *time.Time // valid_until before this time
 	Match              string     // literal substring match across content fields (case-insensitive)
 	SimilarTo          string     // record ID -- use its stored embedding as query vector
+	NearNode           string     // graph filter: only return nodes within MaxHops of this node
+	MaxHops            int        // max graph distance from NearNode (default 2)
 	Since              *time.Time
 	IncludeHistorical bool
 	Top             int
@@ -624,6 +626,16 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 		}
 	}
 
+	// Graph proximity filter: restrict to nodes within MaxHops of NearNode.
+	if q.NearNode != "" {
+		maxHops := q.MaxHops
+		if maxHops <= 0 {
+			maxHops = 2
+		}
+		nearby := bfsReachable(t.graph, q.NearNode, maxHops)
+		candidateSet = intersect(candidateSet, nearby)
+	}
+
 	// Apply remaining filters that require property reads.
 	var result []string
 	for id := range candidateSet {
@@ -1001,6 +1013,36 @@ func isLegacyChunk(g graph.NodeReader, id string) bool {
 		}
 	}
 	return false
+}
+
+// bfsReachable returns all node IDs reachable from startID within maxHops
+// via any edge direction. The start node itself is excluded.
+func bfsReachable(g graph.NodeReader, startID string, maxHops int) map[string]struct{} {
+	visited := map[string]struct{}{startID: {}}
+	frontier := []string{startID}
+
+	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
+		var next []string
+		for _, id := range frontier {
+			for _, e := range g.EdgesFrom(id) {
+				if _, seen := visited[e.TargetID]; !seen {
+					visited[e.TargetID] = struct{}{}
+					next = append(next, e.TargetID)
+				}
+			}
+			for _, e := range g.EdgesTo(id) {
+				if _, seen := visited[e.SourceID]; !seen {
+					visited[e.SourceID] = struct{}{}
+					next = append(next, e.SourceID)
+				}
+			}
+		}
+		frontier = next
+	}
+
+	// Remove start node -- we want neighbors, not the node itself.
+	delete(visited, startID)
+	return visited
 }
 
 // isCollectionItem checks if a node has a member_of edge (collection membership).
