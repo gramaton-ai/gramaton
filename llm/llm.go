@@ -3,10 +3,13 @@ package llm
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/llm/anthropic"
 	"github.com/gramaton-ai/gramaton/llm/bedrock"
+	"github.com/gramaton-ai/gramaton/llm/claudecli"
+	"github.com/gramaton-ai/gramaton/llm/kirocli"
 	"github.com/gramaton-ai/gramaton/llm/openai"
 )
 
@@ -31,9 +34,22 @@ type SystemPromptSetter interface {
 	SetSystemPrompt(text string)
 }
 
+// defaultCLIRateInterval is the minimum time between CLI provider
+// calls to avoid hitting subscription rate limits.
+const defaultCLIRateInterval = 2 * time.Second
+
+// isCLIProvider returns true for providers backed by CLI tools.
+func isCLIProvider(provider string) bool {
+	return provider == "kiro-cli" || provider == "claude-cli"
+}
+
 // New creates an LLM provider from the config. Returns nil if no
-// provider is configured (LLM is optional).
+// provider is configured (LLM is optional). CLI providers are
+// automatically wrapped with rate limiting.
 func New(cfg config.LLMConfig) (Provider, error) {
+	var p Provider
+	var err error
+
 	switch cfg.Provider {
 	case "anthropic":
 		return anthropic.New(cfg)
@@ -41,9 +57,27 @@ func New(cfg config.LLMConfig) (Provider, error) {
 		return bedrock.New(cfg)
 	case "openai":
 		return openai.New(cfg)
+	case "kiro-cli":
+		p, err = kirocli.New(cfg.Model)
+	case "claude-cli":
+		p, err = claudecli.New(cfg.Model)
 	case "":
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("llm: unknown provider %q", cfg.Provider)
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap CLI providers with rate limiting.
+	if isCLIProvider(cfg.Provider) {
+		interval := defaultCLIRateInterval
+		if cfg.RateLimitInterval > 0 {
+			interval = cfg.RateLimitInterval
+		}
+		p = NewRateLimited(p, interval)
+	}
+
+	return p, nil
 }

@@ -203,8 +203,9 @@ type LLMConfig struct {
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 
 	// Usage caps (0 = no cap).
-	MaxCallsPerDay     int `yaml:"max_calls_per_day,omitempty"`
-	MaxCallsPerSession int `yaml:"max_calls_per_session,omitempty"`
+	MaxCallsPerDay     int           `yaml:"max_calls_per_day,omitempty"`
+	MaxCallsPerSession int           `yaml:"max_calls_per_session,omitempty"`
+	RateLimitInterval  time.Duration `yaml:"rate_limit_interval,omitempty"`
 }
 
 type LLMCurationConfig struct {
