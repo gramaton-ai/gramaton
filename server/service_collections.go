@@ -414,6 +414,23 @@ func (s *Server) serviceCollectionAdd(collectionID string, req *collectionAddReq
 		return nil, errMissing("fields are required")
 	}
 
+	// Pre-embed field text for graph connectivity (outside lock).
+	var itemVec []float32
+	if s.engine.Embedder() != nil {
+		var textParts []string
+		for _, v := range req.Fields {
+			if str, ok := v.(string); ok && str != "" {
+				textParts = append(textParts, str)
+			}
+		}
+		if len(textParts) > 0 {
+			embedText := strings.Join(textParts, " ")
+			if vecs, err := s.engine.Embedder().Embed(context.Background(), []string{embedText}); err == nil && len(vecs) > 0 {
+				itemVec = vecs[0]
+			}
+		}
+	}
+
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
@@ -471,7 +488,10 @@ func (s *Server) serviceCollectionAdd(collectionID string, req *collectionAddReq
 			bm25Parts = append(bm25Parts, s)
 		}
 	}
-	s.engine.IndexNode(n.ID, strings.Join(bm25Parts, " "), nil)
+	s.engine.IndexNode(n.ID, strings.Join(bm25Parts, " "), itemVec)
+	if itemVec != nil && s.engine.Embedder() != nil {
+		s.engine.SetProp(n.ID, "embedding_model", graph.StringProperty(s.engine.Embedder().ModelID()))
+	}
 
 	// Create member_of edge.
 	if _, err := s.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
