@@ -26,7 +26,7 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 		s.engine.RLock()
 		defer s.engine.RUnlock()
 
-		curation := computeCuration(s.engine, s.runner)
+		curation := computeCuration(s.engine, s.runner, s.usageTracker)
 		return mcpJSONResult(map[string]any{
 			"nodes":     s.engine.Graph().NodeCount(),
 			"edges":     s.engine.Graph().EdgeCount(),

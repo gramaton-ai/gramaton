@@ -24,6 +24,7 @@ import (
 	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/version"
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 // Config holds server configuration.
@@ -58,8 +59,9 @@ type Server struct {
 	curationCancel context.CancelFunc
 	accessCancel   context.CancelFunc
 
-	retrieval  *retrievalTracker
-	observeSem chan struct{} // bounded semaphore for observe goroutines
+	retrieval    *retrievalTracker
+	observeSem   chan struct{} // bounded semaphore for observe goroutines
+	usageTracker *llm.UsageTracker
 }
 
 // retrievalTracker records which node IDs were served to agents via
@@ -151,13 +153,15 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	engineCfg := engine.Config()
 	s := &Server{
-		engine:      engine,
-		cfg:         cfg,
-		log:         logger,
-		lastRequest: time.Now(),
-		retrieval:   newRetrievalTracker(),
-		observeSem:  make(chan struct{}, 3), // max 3 concurrent observe goroutines
+		engine:       engine,
+		cfg:          cfg,
+		log:          logger,
+		lastRequest:  time.Now(),
+		retrieval:    newRetrievalTracker(),
+		observeSem:   make(chan struct{}, 3), // max 3 concurrent observe goroutines
+		usageTracker: llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession),
 	}
 
 	mux := http.NewServeMux()
@@ -265,6 +269,11 @@ func (s *Server) Run() error {
 	defer cancel()
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		s.log.Error("shutdown error", "err", err)
+	}
+
+	// Persist LLM usage tracking.
+	if s.usageTracker != nil {
+		s.usageTracker.Persist()
 	}
 
 	s.log.Info("server stopped")
@@ -464,6 +473,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("GET /v1/stats", s.handleStats)
+	mux.HandleFunc("GET /v1/stats/llm", s.handleLLMStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
 
@@ -606,7 +616,7 @@ func (r *statusRecorder) WriteHeader(code int) {
 // to avoid deadlock (RWMutex is not reentrant).
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	s.engine.RLock()
-	curation := computeCuration(s.engine, s.runner)
+	curation := computeCuration(s.engine, s.runner, s.usageTracker)
 	s.engine.RUnlock()
 
 	s.writeJSONRaw(w, status, data, curation)
@@ -615,7 +625,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 // writeJSONLocked writes a JSON response when the caller already holds
 // a lock. Computes curation without acquiring a separate lock.
 func (s *Server) writeJSONLocked(w http.ResponseWriter, status int, data any) {
-	curation := computeCuration(s.engine, s.runner)
+	curation := computeCuration(s.engine, s.runner, s.usageTracker)
 	s.writeJSONRaw(w, status, data, curation)
 }
 
@@ -670,6 +680,11 @@ type CurationStatus struct {
 	OrphanCount       int        `json:"orphan_count,omitempty"`
 	LastCurated       *time.Time `json:"last_curated,omitempty"`
 	Autonomous        bool       `json:"autonomous,omitempty"`
+	LLMCallsToday    int        `json:"llm_calls_today,omitempty"`
+	LLMDailyCap      int        `json:"llm_daily_cap,omitempty"`
+	LLMCapPct        int        `json:"llm_cap_pct,omitempty"`
+	Paused           bool       `json:"paused,omitempty"`
+	PauseReason      string     `json:"pause_reason,omitempty"`
 }
 
 // ErrorResponse is the standard error wrapper.
@@ -688,7 +703,7 @@ type ErrorDetail struct {
 // at least a read lock on the engine. If a runner is provided,
 // enriches with curation state (uses runner's own mutex, not the
 // engine lock, so no deadlock risk).
-func computeCuration(e *core.Engine, runner *curation.Runner) CurationStatus {
+func computeCuration(e *core.Engine, runner *curation.Runner, usage *llm.UsageTracker) CurationStatus {
 	captured := e.PropIdx().Lookup("processing_status",
 		graph.StringProperty("captured"))
 	status := CurationStatus{
@@ -703,6 +718,15 @@ func computeCuration(e *core.Engine, runner *curation.Runner) CurationStatus {
 		status.OrphanCount = enhanced.OrphanCount
 		status.LastCurated = enhanced.LastCurated
 		status.Autonomous = enhanced.Autonomous
+	}
+
+	if usage != nil {
+		status.LLMCallsToday = usage.TodayCalls()
+		status.LLMDailyCap = usage.DailyCap()
+		status.LLMCapPct = usage.DailyCapPct()
+		paused, reason := usage.IsPaused()
+		status.Paused = paused
+		status.PauseReason = reason
 	}
 
 	return status

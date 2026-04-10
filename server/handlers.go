@@ -82,6 +82,15 @@ func (s *Server) handleDebugGoroutines(w http.ResponseWriter, r *http.Request) {
 	w.Write(buf[:n])
 }
 
+// handleLLMStats returns LLM usage metrics.
+func (s *Server) handleLLMStats(w http.ResponseWriter, _ *http.Request) {
+	if s.usageTracker == nil {
+		s.writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{}})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"data": s.usageTracker.Summary()})
+}
+
 // isLoopback checks if the request originates from a loopback address.
 func isLoopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

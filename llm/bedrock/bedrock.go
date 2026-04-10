@@ -38,6 +38,12 @@ func New(cfg config.LLMConfig) (*Client, error) {
 	}, nil
 }
 
+// CompleteWithModel ignores the model override (Bedrock uses a fixed
+// endpoint per model). Falls back to the configured model.
+func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	return c.Complete(ctx, prompt)
+}
+
 // Complete sends a prompt via the Converse API and returns the text.
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	out, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{

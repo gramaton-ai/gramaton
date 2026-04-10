@@ -16,11 +16,26 @@ type mockLLM struct {
 	responses []string // returned in order, cycles if exhausted
 	errors    []error  // if non-nil at index, return error instead
 	calls     int
+	models    []string // model requested per call (for tiering tests)
 }
 
 func (m *mockLLM) Complete(_ context.Context, _ string) (string, error) {
 	idx := m.calls
 	m.calls++
+	m.models = append(m.models, "") // no model override
+	if idx < len(m.errors) && m.errors[idx] != nil {
+		return "", m.errors[idx]
+	}
+	if len(m.responses) == 0 {
+		return "", fmt.Errorf("no responses configured")
+	}
+	return m.responses[idx%len(m.responses)], nil
+}
+
+func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string, error) {
+	idx := m.calls
+	m.calls++
+	m.models = append(m.models, model)
 	if idx < len(m.errors) && m.errors[idx] != nil {
 		return "", m.errors[idx]
 	}
@@ -273,6 +288,96 @@ func TestClassifyPendingSkipsEmptyContent(t *testing.T) {
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (empty content), got %d", result.LLMCalls)
+	}
+}
+
+func TestClassifyPendingModelTiering(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.LightModel = "claude-haiku-4-5"
+	cfg.LLMCuration.LightModelThreshold = 100
+
+	// Short content (below threshold) -> light model.
+	shortID := addPendingNode(t, eng, "short fact")
+	// Long content (above threshold) -> default model.
+	longContent := strings.Repeat("a", 200)
+	longID := addPendingNode(t, eng, longContent)
+
+	classifyResp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"test"}`
+	llm := &mockLLM{responses: []string{classifyResp, classifyResp}}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.Classified != 2 {
+		t.Fatalf("expected 2 classified, got %d", result.Classified)
+	}
+	if len(llm.models) != 2 {
+		t.Fatalf("expected 2 model entries, got %d", len(llm.models))
+	}
+
+	// Check which model was used for each. Order depends on iteration
+	// over the pending set, so check by matching content length.
+	eng.RLock()
+	defer eng.RUnlock()
+
+	shortNode, _ := eng.Graph().GetNode(shortID)
+	longNode, _ := eng.Graph().GetNode(longID)
+
+	shortClassifiedBy, _ := shortNode.Properties.GetString("classified_by")
+	longClassifiedBy, _ := longNode.Properties.GetString("classified_by")
+
+	if shortClassifiedBy != "claude-haiku-4-5" {
+		t.Errorf("short record should be classified by haiku, got %q", shortClassifiedBy)
+	}
+	if longClassifiedBy != "mock-llm" {
+		t.Errorf("long record should be classified by default model, got %q", longClassifiedBy)
+	}
+}
+
+func TestClassifyPendingNoTieringWhenLightModelEmpty(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.LightModel = "" // no tiering
+
+	addPendingNode(t, eng, "short fact")
+
+	classifyResp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"test"}`
+	llm := &mockLLM{responses: []string{classifyResp}}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.Classified != 1 {
+		t.Fatalf("expected 1 classified, got %d", result.Classified)
+	}
+	// Should use Complete (no model override), not CompleteWithModel.
+	if len(llm.models) != 1 || llm.models[0] != "" {
+		t.Errorf("expected no model override, got %v", llm.models)
+	}
+}
+
+func TestCompleteWithModelAnthropicFallback(t *testing.T) {
+	// Verify that CompleteWithModel with empty model uses the default.
+	// This is a unit test of the Anthropic client interface contract --
+	// we can't call the real API, but we verify the parallel.go routing.
+	work := []llmWork{
+		{id: "a", prompt: "hello", model: ""},
+		{id: "b", prompt: "hello", model: "override-model"},
+	}
+	llm := &mockLLM{responses: []string{"r1", "r2"}}
+	results := parallelLLM(context.Background(), llm, work, 2)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	// First should have used Complete (empty model).
+	if llm.models[0] != "" {
+		t.Errorf("expected empty model for first call, got %q", llm.models[0])
+	}
+	// Second should have used CompleteWithModel.
+	if llm.models[1] != "override-model" {
+		t.Errorf("expected 'override-model' for second call, got %q", llm.models[1])
 	}
 }
 

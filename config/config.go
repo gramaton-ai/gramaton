@@ -201,6 +201,10 @@ type LLMConfig struct {
 	// Bedrock credential env vars (alternative to aws_profile).
 	AWSAccessKeyIDEnv     string `yaml:"aws_access_key_id_env,omitempty"`
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
+
+	// Usage caps (0 = no cap).
+	MaxCallsPerDay     int `yaml:"max_calls_per_day,omitempty"`
+	MaxCallsPerSession int `yaml:"max_calls_per_session,omitempty"`
 }
 
 type LLMCurationConfig struct {
@@ -210,6 +214,8 @@ type LLMCurationConfig struct {
 	ContradictionMinSim    float64 `yaml:"contradiction_min_similarity"`
 	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
 	MaxConceptsPerRun      int     `yaml:"max_concepts_per_run"`
+	LightModel             string  `yaml:"light_model"`           // model for short content classification
+	LightModelThreshold    int     `yaml:"light_model_threshold"` // chars below which light_model is used
 }
 
 type GCConfig struct {

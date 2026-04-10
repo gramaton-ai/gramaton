@@ -15,7 +15,11 @@ type Provider interface {
 	// Complete sends a prompt and returns the completion text.
 	Complete(ctx context.Context, prompt string) (string, error)
 
-	// ModelID returns the identifier of the model being used.
+	// CompleteWithModel sends a prompt using a specific model override.
+	// If model is empty or unsupported, falls back to the default model.
+	CompleteWithModel(ctx context.Context, model, prompt string) (string, error)
+
+	// ModelID returns the identifier of the default model.
 	ModelID() string
 }
 

@@ -11,6 +11,7 @@ import (
 type llmWork struct {
 	id     string // record ID or identifier for logging
 	prompt string
+	model  string // model override; empty = use provider default
 }
 
 // llmResult pairs a work item with its LLM response.
@@ -36,7 +37,13 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 
 	// For single item, skip the goroutine overhead.
 	if len(work) == 1 {
-		resp, err := llmProv.Complete(ctx, work[0].prompt)
+		var resp string
+		var err error
+		if work[0].model != "" {
+			resp, err = llmProv.CompleteWithModel(ctx, work[0].model, work[0].prompt)
+		} else {
+			resp, err = llmProv.Complete(ctx, work[0].prompt)
+		}
 		return []llmResult{{id: work[0].id, response: resp, err: err}}
 	}
 
@@ -58,7 +65,13 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 					continue
 				default:
 				}
-				resp, err := llmProv.Complete(ctx, work[idx].prompt)
+				var resp string
+				var err error
+				if work[idx].model != "" {
+					resp, err = llmProv.CompleteWithModel(ctx, work[idx].model, work[idx].prompt)
+				} else {
+					resp, err = llmProv.Complete(ctx, work[idx].prompt)
+				}
 				results[idx] = llmResult{
 					id:       work[idx].id,
 					response: resp,

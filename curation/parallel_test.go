@@ -37,6 +37,10 @@ func (m *concurrentMockLLM) Complete(_ context.Context, prompt string) (string, 
 	return fmt.Sprintf("response for: %s", prompt[:20]), nil
 }
 
+func (m *concurrentMockLLM) CompleteWithModel(_ context.Context, _, prompt string) (string, error) {
+	return m.Complete(context.Background(), prompt)
+}
+
 func TestParallelLLMBasic(t *testing.T) {
 	llm := &concurrentMockLLM{delay: 10 * time.Millisecond}
 

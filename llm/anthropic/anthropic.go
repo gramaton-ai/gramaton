@@ -85,10 +85,22 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// CompleteWithModel sends a prompt using a specific model override.
+func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	if model == "" {
+		model = c.model
+	}
+	return c.completeImpl(ctx, model, prompt)
+}
+
 // Complete sends a prompt and returns the completion text.
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
+	return c.completeImpl(ctx, c.model, prompt)
+}
+
+func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string, error) {
 	body, err := json.Marshal(messagesRequest{
-		Model:     c.model,
+		Model:     model,
 		MaxTokens: 4096,
 		Messages: []message{
 			{Role: "user", Content: prompt},

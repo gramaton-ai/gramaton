@@ -144,13 +144,29 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	type classified struct {
 		id      string
 		content string
+		model   string // model that classified this record
 		data    *classificationResult
 	}
 	var ready []classified
 
+	// Assign model per record: light model for short content, default for long.
+	lightModel := cfg.LLMCuration.LightModel
+	lightThreshold := cfg.LLMCuration.LightModelThreshold
+	if lightThreshold <= 0 {
+		lightThreshold = 2000
+	}
+
 	work := make([]llmWork, len(batch))
 	for i, rec := range batch {
-		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(classifyPrompt, rec.content, rec.contextSignals)}
+		model := ""
+		if lightModel != "" && len(rec.content) < lightThreshold {
+			model = lightModel
+		}
+		work[i] = llmWork{
+			id:     rec.id,
+			prompt: fmt.Sprintf(classifyPrompt, rec.content, rec.contextSignals),
+			model:  model,
+		}
 	}
 
 	llmResults := parallelLLM(ctx, llmProv, work, 4)
@@ -170,7 +186,11 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			continue
 		}
 
-		ready = append(ready, classified{id: batch[i].id, content: batch[i].content, data: classification})
+		usedModel := work[i].model
+		if usedModel == "" {
+			usedModel = llmProv.ModelID()
+		}
+		ready = append(ready, classified{id: batch[i].id, content: batch[i].content, model: usedModel, data: classification})
 	}
 
 	if len(ready) == 0 {
@@ -222,6 +242,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		}
 		if r.data.SummaryMedium != "" {
 			e.SetContentProp(r.id, "content_medium", r.data.SummaryMedium)
+		}
+		if r.model != "" {
+			e.SetProp(r.id, "classified_by", graph.StringProperty(r.model))
 		}
 		e.SetProp(r.id, "processing_status", graph.StringProperty("processed"))
 		result.Classified++

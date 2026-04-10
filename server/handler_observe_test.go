@@ -33,6 +33,10 @@ func (m *mockLLMProvider) Complete(_ context.Context, _ string) (string, error) 
 	return resp, nil
 }
 
+func (m *mockLLMProvider) CompleteWithModel(_ context.Context, _, prompt string) (string, error) {
+	return m.Complete(context.Background(), prompt)
+}
+
 func (m *mockLLMProvider) ModelID() string { return "mock" }
 
 // mockEmbedProvider returns fixed vectors for testing quality gates.

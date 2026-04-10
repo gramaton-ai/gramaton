@@ -76,6 +76,12 @@ type apiError struct {
 	Type    string `json:"type"`
 }
 
+// CompleteWithModel ignores the model override (OpenAI client uses
+// the configured model). Falls back to the configured model.
+func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	return c.Complete(ctx, prompt)
+}
+
 // Complete sends a prompt via /v1/chat/completions and returns the text.
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	body, err := json.Marshal(chatRequest{
