@@ -207,6 +207,11 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 				}
 			}
 		}
+		if headCommit.EdgeAdjRoot != "" {
+			if adjData, err := s.Read(headCommit.EdgeAdjRoot); err == nil {
+				g.UnmarshalEdgeAdjacency(adjData)
+			}
+		}
 	}
 
 	rebuildIndexes(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, bloomFull, bloomMedium, bloomShort, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded)
@@ -377,12 +382,24 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		return nil, fmt.Errorf("save commit: %w", err)
 	}
 
+	// Persist edge adjacency maps.
+	var edgeAdjRoot string
+	edgeAdjData, err := e.graph.MarshalEdgeAdjacency()
+	if err != nil {
+		return nil, fmt.Errorf("marshal edge adjacency: %w", err)
+	}
+	edgeAdjRoot, err = e.store.Write(edgeAdjData)
+	if err != nil {
+		return nil, fmt.Errorf("write edge adjacency: %w", err)
+	}
+
 	// Attach index roots and re-serialize the commit.
 	commit.BM25FullRoot = bm25FullRoot
 	commit.BM25MediumRoot = bm25MediumRoot
 	commit.BM25ShortRoot = bm25ShortRoot
 	commit.VecRoot = vecRoot
 	commit.PropRoot = propRoot
+	commit.EdgeAdjRoot = edgeAdjRoot
 	commit, err = graph.RewriteCommit(e.store, commit)
 	if err != nil {
 		return nil, fmt.Errorf("rewrite commit with indexes: %w", err)

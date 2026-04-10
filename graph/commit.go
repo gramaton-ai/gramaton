@@ -26,6 +26,7 @@ type Commit struct {
 	BM25ShortRoot  string `json:"bm25_short_root,omitempty"`  // content_short BM25 index
 	VecRoot        string `json:"vec_root,omitempty"`
 	PropRoot       string `json:"prop_root,omitempty"`
+	EdgeAdjRoot    string `json:"edge_adj_root,omitempty"`
 	// NodeHashes/EdgeHashes retained for reading v0 commits only.
 	NodeHashes []string `json:"node_hashes,omitempty"`
 	EdgeHashes []string `json:"edge_hashes,omitempty"`

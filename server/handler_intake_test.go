@@ -66,7 +66,7 @@ func TestIntakeObservedMode(t *testing.T) {
 	}
 
 	// Let the background goroutine complete before TempDir cleanup.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 }
 
 func TestIntakeRequiresContentOrFacts(t *testing.T) {
