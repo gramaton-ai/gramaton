@@ -638,6 +638,15 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 			continue
 		}
 
+		// Exclude collection items and collection containers -- they're
+		// accessed via gramaton_collection_items, not search.
+		if isCollectionItem(t.graph, id) {
+			continue
+		}
+		if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "collection" {
+			continue
+		}
+
 		if q.ConfidenceMin != nil {
 			if c, ok := n.Properties.GetFloat64("confidence"); ok {
 				if c < *q.ConfidenceMin {
@@ -988,6 +997,16 @@ func edgeCount(g graph.NodeReader, id string) int {
 func isLegacyChunk(g graph.NodeReader, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
 		if e.Type == "chunk_of" {
+			return true
+		}
+	}
+	return false
+}
+
+// isCollectionItem checks if a node has a member_of edge (collection membership).
+func isCollectionItem(g graph.NodeReader, id string) bool {
+	for _, e := range g.EdgesFrom(id) {
+		if e.Type == "member_of" {
 			return true
 		}
 	}
