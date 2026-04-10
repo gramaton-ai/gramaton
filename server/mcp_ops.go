@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -37,12 +39,16 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_stats",
-		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution.",
+		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution, and LLM usage.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_stats")
 		defer done(nil)
 		result, _ := s.serviceStats()
-		return mcpJSONResult(result)
+		resp := map[string]any{"stats": result}
+		if s.usageTracker != nil {
+			resp["llm_usage"] = s.usageTracker.Summary()
+		}
+		return mcpJSONResult(resp)
 	})
 
 	type reembedInput struct {
@@ -87,11 +93,11 @@ Extracted knowledge enters the knowledge graph as ephemeral, low-confidence reco
 	})
 
 	type curationInput struct {
-		Action string `json:"action" jsonschema:"status|trigger|dry_run"`
+		Action string `json:"action" jsonschema:"status|trigger|dry_run|batch"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_curation",
-		Description: "View curation status, trigger a curation cycle, or dry-run to see what autonomous curation would change without applying.",
+		Description: "View curation status, trigger a curation cycle, dry-run to preview changes, or batch-classify all pending records.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args curationInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_curation")
 		defer done(nil)
@@ -116,6 +122,16 @@ Extracted knowledge enters the knowledge graph as ephemeral, low-confidence reco
 				"llm_calls":       result.LLMCalls,
 				"errors":          result.Errors,
 			})
+		case "batch":
+			if s.engine.LLM() == nil {
+				return mcpErr("LLM provider is required for batch curation")
+			}
+			cfg := s.engine.Config()
+			result, err := curation.RunBatchClassification(ctx, s.engine, s.engine.LLM(), cfg, s.log)
+			if err != nil {
+				return mcpErr(fmt.Sprintf("batch failed: %v", err))
+			}
+			return mcpJSONResult(result)
 		default:
 			return mcpJSONResult(map[string]any{
 				"status":   s.runner.Status(),
