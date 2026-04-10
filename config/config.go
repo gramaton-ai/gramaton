@@ -111,8 +111,9 @@ type ChunkingConfig struct {
 }
 
 type ConceptsConfig struct {
-	EmergenceThreshold    int `yaml:"emergence_threshold"`
-	MinContentLengthDirect int `yaml:"min_content_length_direct"`
+	EmergenceThreshold     int     `yaml:"emergence_threshold"`
+	MinContentLengthDirect int     `yaml:"min_content_length_direct"`
+	MaxKeywordPct          float64 `yaml:"max_keyword_pct"` // skip keywords in > this % of records (0-1.0, default 0.2)
 }
 
 type DedupConfig struct {
@@ -305,6 +306,7 @@ func Defaults() Config {
 
 		Concepts: ConceptsConfig{
 			EmergenceThreshold:    3,
+		MaxKeywordPct:         0.2,
 			MinContentLengthDirect: 50,
 		},
 

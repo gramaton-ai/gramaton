@@ -168,13 +168,23 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	manifest.OrphanCount = len(orphanIDs)
 	manifest.StaleCount = staleCount
 
-	// Concept candidates: keywords above emergence threshold.
+	// Concept candidates: keywords above emergence threshold but below
+	// specificity ceiling. Keywords that appear in too many records are
+	// corpus-wide vocabulary, not useful concepts.
 	kwCounts := e.PropIdx().KeywordCounts("content_keywords")
 	threshold := cfg.Concepts.EmergenceThreshold
+	maxPct := cfg.Concepts.MaxKeywordPct
+	if maxPct <= 0 {
+		maxPct = 0.2
+	}
+	maxCount := int(float64(manifest.TotalRecords) * maxPct)
+	if maxCount < threshold {
+		maxCount = manifest.TotalRecords // don't filter if store is tiny
+	}
+
 	var candidates []ConceptCandidate
 	for kw, count := range kwCounts {
-		if count >= threshold {
-			// Get node IDs for this keyword.
+		if count >= threshold && count <= maxCount {
 			ids := e.PropIdx().LookupKeyword("content_keywords", kw)
 			candidates = append(candidates, ConceptCandidate{
 				Keyword: kw,
