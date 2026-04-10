@@ -195,6 +195,18 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			continue
 		}
 
+		// Quality gate: skip proper names. A keyword like "Thomas Bayes"
+		// is useful for search but not a concept to synthesize.
+		if isLikelyProperName(kw) {
+			continue
+		}
+
+		// Quality gate: skip weak/meta keywords that don't represent
+		// real concepts ("article", "section", "overview", etc.).
+		if isWeakConceptKeyword(kw) {
+			continue
+		}
+
 		ids := e.PropIdx().LookupKeyword("content_keywords", kw)
 		candidates = append(candidates, ConceptCandidate{
 			Keyword: kw,
@@ -845,3 +857,35 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 }
 
 func nonChunkEdgeCount(g graph.NodeReader, id string) int { return g.SemanticEdgeCount(id) }
+
+// isLikelyProperName returns true if a keyword looks like a person
+// or place name: 2-3 words where every word starts with uppercase.
+// "Thomas Bayes" -> true, "Bayesian epistemology" -> false (second
+// word lowercase), "kafka" -> false (single word).
+func isLikelyProperName(kw string) bool {
+	words := strings.Fields(kw)
+	if len(words) < 2 || len(words) > 3 {
+		return false
+	}
+	for _, w := range words {
+		if len(w) == 0 || w[0] < 'A' || w[0] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// isWeakConceptKeyword returns true if a keyword is too short, too
+// generic, or is a meta-term that doesn't represent a real concept.
+func isWeakConceptKeyword(kw string) bool {
+	if len(kw) < 3 {
+		return true
+	}
+	// Meta-terms that describe the source, not the content.
+	weak := map[string]bool{
+		"article": true, "section": true, "overview": true,
+		"summary": true, "reference": true, "document": true,
+		"note": true, "notes": true, "todo": true,
+	}
+	return weak[strings.ToLower(kw)]
+}
