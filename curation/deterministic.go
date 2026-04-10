@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -184,14 +185,22 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 
 	var candidates []ConceptCandidate
 	for kw, count := range kwCounts {
-		if count >= threshold && count <= maxCount {
-			ids := e.PropIdx().LookupKeyword("content_keywords", kw)
-			candidates = append(candidates, ConceptCandidate{
-				Keyword: kw,
-				Count:   count,
-				NodeIDs: ids,
-			})
+		if count < threshold || count > maxCount {
+			continue
 		}
+
+		// Quality gate: skip keywords with too many words (likely
+		// garbage from bad classification, e.g., concatenated tag dumps).
+		if strings.Count(kw, " ") > 3 {
+			continue
+		}
+
+		ids := e.PropIdx().LookupKeyword("content_keywords", kw)
+		candidates = append(candidates, ConceptCandidate{
+			Keyword: kw,
+			Count:   count,
+			NodeIDs: ids,
+		})
 	}
 
 	// Top keywords for manifest (sorted by count, top 20).

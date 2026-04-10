@@ -547,6 +547,12 @@ func createConceptNodes(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	if maxConcepts <= 0 {
 		maxConcepts = 5
 	}
+	// Cap concept creation to remaining LLM budget. Concepts should
+	// never starve classification -- they use leftover budget only.
+	remaining := maxCalls - result.LLMCalls
+	if maxConcepts > remaining {
+		maxConcepts = remaining
+	}
 
 	// Filter out candidates that already have a concept node.
 	e.RLock()
