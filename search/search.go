@@ -317,6 +317,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 
 		inputs := t.buildScoreInputs(n, similarities[id])
+		inputs.HasTextQuery = q.Text != ""
 		score := ComputeScore(inputs, now, t.cfg)
 		sr := scored{id: id, score: score}
 
@@ -452,23 +453,31 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 
 	switch {
 	case hasVec && hasBM25:
-		// Weighted RRF:
+		// Weighted RRF with BM25 gate:
 		// score(d) = 1.0 * 1/(k+rank_vec)
 		//          + w_full * 1/(k+rank_full)
 		//          + w_medium * 1/(k+rank_medium)
 		//          + w_short * 1/(k+rank_short)
+		//
+		// Records that appear ONLY in vector results (no BM25 term
+		// overlap) are penalized: their score is reduced to 10% to
+		// prevent high-cosine but irrelevant results from ranking.
 		rrfScores := make(map[string]float64)
+		bm25Hits := make(map[string]struct{})
 		for rank, r := range vecResults {
 			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
 		}
 		for rank, r := range bm25FullResults {
 			rrfScores[r.NodeID] += wFull / float64(rrfK+rank+1)
+			bm25Hits[r.NodeID] = struct{}{}
 		}
 		for rank, r := range bm25MediumResults {
 			rrfScores[r.NodeID] += wMedium / float64(rrfK+rank+1)
+			bm25Hits[r.NodeID] = struct{}{}
 		}
 		for rank, r := range bm25ShortResults {
 			rrfScores[r.NodeID] += wShort / float64(rrfK+rank+1)
+			bm25Hits[r.NodeID] = struct{}{}
 		}
 		maxRRF := 0.0
 		for _, s := range rrfScores {
@@ -478,12 +487,17 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		}
 		if maxRRF > 0 {
 			for id, s := range rrfScores {
-				similarities[id] = s / maxRRF
+				norm := s / maxRRF
+				// Penalize vector-only matches (no term overlap).
+				if _, hasBM25Match := bm25Hits[id]; !hasBM25Match {
+					norm *= 0.1
+				}
+				similarities[id] = norm
 			}
 		}
 
 	case hasVec:
-		// Vector only -- use cosine similarity directly.
+		// Vector only (no BM25 indexes) -- use cosine similarity directly.
 		for _, r := range vecResults {
 			similarities[r.NodeID] = float64(r.Similarity)
 		}

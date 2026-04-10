@@ -210,9 +210,10 @@ func TestComputeScoreHighSimilarityWins(t *testing.T) {
 	now := time.Now().UTC()
 
 	base := ScoreInputs{
-		Temporality: "durable",
-		Confidence:  0.5,
-		CreatedAt:   now,
+		HasTextQuery: true,
+		Temporality:  "durable",
+		Confidence:   0.5,
+		CreatedAt:    now,
 	}
 
 	highSim := base
@@ -226,5 +227,82 @@ func TestComputeScoreHighSimilarityWins(t *testing.T) {
 
 	if scoreHigh <= scoreLow {
 		t.Fatalf("higher similarity should score higher: high=%f, low=%f", scoreHigh, scoreLow)
+	}
+}
+
+func TestComputeScoreSimilarityGatesMetadata(t *testing.T) {
+	cfg := defaultCfg()
+	now := time.Now().UTC()
+
+	// A record with zero similarity but great metadata should score
+	// near zero when a text query is present.
+	irrelevant := ScoreInputs{
+		HasTextQuery: true,
+		Similarity:   0.0,
+		Temporality:  "durable",
+		Confidence:   0.95,
+		AccessCount:  100,
+		CreatedAt:    now,
+	}
+	scoreIrrelevant := ComputeScore(irrelevant, now, cfg)
+	if scoreIrrelevant > 0.05 {
+		t.Fatalf("irrelevant record (sim=0) should score near 0 with text query, got %f", scoreIrrelevant)
+	}
+
+	// Same metadata but with some similarity should score much higher.
+	relevant := irrelevant
+	relevant.Similarity = 0.7
+	scoreRelevant := ComputeScore(relevant, now, cfg)
+	if scoreRelevant <= scoreIrrelevant*5 {
+		t.Fatalf("relevant record should score much higher than irrelevant: relevant=%f, irrelevant=%f", scoreRelevant, scoreIrrelevant)
+	}
+}
+
+func TestComputeScoreFilterOnlyIgnoresSimilarity(t *testing.T) {
+	cfg := defaultCfg()
+	now := time.Now().UTC()
+
+	// Without text query, similarity is not used.
+	inputs := ScoreInputs{
+		HasTextQuery: false,
+		Similarity:   0.0,
+		Temporality:  "durable",
+		Confidence:   0.9,
+		AccessCount:  10,
+		CreatedAt:    now,
+	}
+	score := ComputeScore(inputs, now, cfg)
+	if score < 0.1 {
+		t.Fatalf("filter-only query with good metadata should score reasonably, got %f", score)
+	}
+}
+
+func TestComputeScoreMetadataBoostsRelevant(t *testing.T) {
+	cfg := defaultCfg()
+	now := time.Now().UTC()
+
+	// Two records with same similarity but different metadata.
+	// Better metadata should rank higher.
+	good := ScoreInputs{
+		HasTextQuery: true,
+		Similarity:   0.8,
+		Temporality:  "durable",
+		Confidence:   0.95,
+		AccessCount:  50,
+		CreatedAt:    now,
+	}
+	poor := ScoreInputs{
+		HasTextQuery: true,
+		Similarity:   0.8,
+		Temporality:  "ephemeral",
+		Confidence:   0.2,
+		AccessCount:  0,
+		CreatedAt:    now.Add(-365 * 24 * time.Hour),
+	}
+
+	scoreGood := ComputeScore(good, now, cfg)
+	scorePoor := ComputeScore(poor, now, cfg)
+	if scoreGood <= scorePoor {
+		t.Fatalf("better metadata should boost score: good=%f, poor=%f", scoreGood, scorePoor)
 	}
 }

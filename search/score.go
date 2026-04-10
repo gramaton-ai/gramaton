@@ -11,6 +11,7 @@ import (
 // All values are read from the node's properties at query time.
 type ScoreInputs struct {
 	Similarity      float64 // cosine similarity to query (0.0-1.0)
+	HasTextQuery    bool    // true when the search includes a text query
 	Temporality     string  // immutable, durable, temporal, ephemeral
 	Confidence      float64 // 0.0-1.0
 	Importance      float64 // 0.0-1.0
@@ -24,6 +25,12 @@ type ScoreInputs struct {
 // ComputeScore calculates the effective_score for a node using the
 // scoring model defined in retrieval.md. All scoring is computed at
 // query time -- no scoring values are stored.
+//
+// When a text query is present (HasTextQuery=true), similarity acts
+// as a gate: low similarity drags down the entire score. This prevents
+// freshness, activation, and confidence from propping up irrelevant
+// results. When no text query is present (filter-only searches),
+// the score is purely metadata-based.
 func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 {
 	sc := cfg.Scoring
 
@@ -37,12 +44,45 @@ func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 
 	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.CreatedAt, now, cfg.Freshness)
 	activation := actrActivation(inputs.AccessCount, inputs.CreatedAt, inputs.ActivationBoost, now)
 
-	score := validityMult * (sc.WeightSimilarity*inputs.Similarity +
-		sc.WeightFreshness*freshness +
+	if inputs.HasTextQuery {
+		// Text query present: similarity gates the metadata signals.
+		//
+		// The score is similarity * (weighted metadata blend). When
+		// similarity is near 0, the whole score approaches 0 regardless
+		// of how fresh, active, or confident the record is. When
+		// similarity is high, metadata signals boost the best matches.
+		//
+		// The metadata blend is normalized to [0, 1]: freshness,
+		// activation, and confidence each contribute proportionally.
+		metaWeight := sc.WeightFreshness + sc.WeightActivation + sc.WeightConfidence
+		metaScore := 0.0
+		if metaWeight > 0 {
+			metaScore = (sc.WeightFreshness*freshness +
+				sc.WeightActivation*activation +
+				sc.WeightConfidence*inputs.Confidence) / metaWeight
+		}
+
+		// Blend: similarity dominates, metadata adjusts within the
+		// relevance band. At sim=1.0, full metadata boost. At sim=0.0,
+		// score is 0 regardless of metadata.
+		score := validityMult * inputs.Similarity * (sc.WeightSimilarity + (1-sc.WeightSimilarity)*metaScore)
+
+		// Step 3: Importance floor.
+		if inputs.Importance > sc.ImportanceThreshold {
+			floor := inputs.Importance * sc.ImportanceFloor
+			if floor > score {
+				score = floor
+			}
+		}
+		return score
+	}
+
+	// No text query (filter-only): purely metadata-based score.
+	// Distribute weight equally across available signals.
+	score := validityMult * (sc.WeightFreshness*freshness +
 		sc.WeightActivation*activation +
 		sc.WeightConfidence*inputs.Confidence)
 
-	// Step 3: Importance floor.
 	if inputs.Importance > sc.ImportanceThreshold {
 		floor := inputs.Importance * sc.ImportanceFloor
 		if floor > score {
