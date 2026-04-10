@@ -86,7 +86,8 @@ func (s *Server) handleCurationBatch(w http.ResponseWriter, r *http.Request) {
 	result, err := curation.RunBatchClassification(
 		r.Context(), s.engine, s.engine.LLM(), cfg, s.log)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "batch_error", err.Error(), false)
+		s.log.Error("batch curation failed", "err", err)
+		s.writeError(w, http.StatusInternalServerError, "batch_error", "batch processing failed", false)
 		return
 	}
 

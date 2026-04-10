@@ -52,6 +52,7 @@ type UsageTracker struct {
 
 	session  UsageStats
 	today    UsageStats
+	todayStr string // "2006-01-02" for day boundary detection
 	lifetime UsageStats
 
 	// Cap enforcement.
@@ -77,6 +78,7 @@ func NewUsageTracker(dataDir string, maxPerDay, maxPerSession int) *UsageTracker
 			ByTask:    make(map[string]int),
 			ByModel:   make(map[string]int),
 		},
+		todayStr: time.Now().UTC().Format("2006-01-02"),
 		lifetime: UsageStats{
 			ByTask:  make(map[string]int),
 			ByModel: make(map[string]int),
@@ -93,6 +95,22 @@ func NewUsageTracker(dataDir string, maxPerDay, maxPerSession int) *UsageTracker
 func (t *UsageTracker) Record(m CallMetrics) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Reset daily stats on day boundary.
+	todayStr := time.Now().UTC().Format("2006-01-02")
+	if t.todayStr != todayStr {
+		t.today = UsageStats{
+			StartedAt: time.Now().UTC(),
+			ByTask:    make(map[string]int),
+			ByModel:   make(map[string]int),
+		}
+		t.todayStr = todayStr
+		// Clear daily cap pause on new day.
+		if t.paused && t.maxCallsPerDay > 0 {
+			t.paused = false
+			t.pauseReason = ""
+		}
+	}
 
 	t.addToStats(&t.session, m)
 	t.addToStats(&t.today, m)

@@ -124,9 +124,13 @@ func (c *Client) FetchResults(batchID string) ([]BatchResult, error) {
 	}
 
 	// Results come as JSONL (one JSON object per line).
+	const maxBatchResults = 100_000
 	var results []BatchResult
 	dec := json.NewDecoder(bytes.NewReader(resp))
 	for dec.More() {
+		if len(results) >= maxBatchResults {
+			return results, fmt.Errorf("anthropic batch: results exceeded maximum (%d)", maxBatchResults)
+		}
 		var r BatchResult
 		if err := dec.Decode(&r); err != nil {
 			return results, fmt.Errorf("anthropic batch: parse result line: %w", err)

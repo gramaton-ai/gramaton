@@ -115,23 +115,37 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	}
 	logger.Info("batch: submitted", "batch_id", batchID, "records", len(requests))
 
-	// Poll for completion.
+	// Poll for completion with exponential backoff on errors.
 	result := &BatchResult{
 		Submitted: len(requests),
 		BatchID:   batchID,
 	}
+	pollInterval := 10 * time.Second
+	pollErrors := 0
+	const maxPollErrors = 10
 	for {
 		select {
 		case <-ctx.Done():
 			return result, ctx.Err()
-		case <-time.After(10 * time.Second):
+		case <-time.After(pollInterval):
 		}
 
 		status, err := anthClient.PollBatch(batchID)
 		if err != nil {
-			logger.Warn("batch: poll error", "err", err)
+			pollErrors++
+			if pollErrors >= maxPollErrors {
+				return result, fmt.Errorf("batch poll: %d consecutive errors, last: %w", pollErrors, err)
+			}
+			// Exponential backoff: 10s, 20s, 40s, ...
+			pollInterval = time.Duration(10<<uint(pollErrors)) * time.Second
+			if pollInterval > 5*time.Minute {
+				pollInterval = 5 * time.Minute
+			}
+			logger.Warn("batch: poll error, backing off", "err", err, "retry_in", pollInterval)
 			continue
 		}
+		pollErrors = 0
+		pollInterval = 10 * time.Second
 
 		done := status.RequestCounts.Succeeded + status.RequestCounts.Errored +
 			status.RequestCounts.Expired + status.RequestCounts.Canceled
