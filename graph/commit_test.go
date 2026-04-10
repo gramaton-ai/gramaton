@@ -219,6 +219,52 @@ func TestLazyNodeLoading(t *testing.T) {
 	}
 }
 
+func TestLRUEviction(t *testing.T) {
+	// Create graph with capacity 2.
+	g := NewWithCapacity(2)
+	s := tempStorage(t)
+
+	n1 := g.AddNode(Properties{"x": StringProperty("one")})
+	n2 := g.AddNode(Properties{"x": StringProperty("two")})
+	n3 := g.AddNode(Properties{"x": StringProperty("three")})
+	commit, _ := g.Save(s, "", "test")
+
+	// Load into a fresh graph with capacity 2.
+	g2 := NewWithCapacity(2)
+	g2.Load(s, commit.Hash)
+
+	// Access n1 and n2 -- fills cache to capacity.
+	g2.GetNode(n1.ID)
+	g2.GetNode(n2.ID)
+	if len(g2.nodes) != 2 {
+		t.Fatalf("expected 2 cached nodes, got %d", len(g2.nodes))
+	}
+
+	// Access n3 -- should evict n1 (least recently used).
+	g2.GetNode(n3.ID)
+	if len(g2.nodes) != 2 {
+		t.Fatalf("expected 2 cached nodes after eviction, got %d", len(g2.nodes))
+	}
+
+	// n1 should be evicted from cache but still loadable.
+	if _, ok := g2.nodes[n1.ID]; ok {
+		t.Fatal("n1 should have been evicted from cache")
+	}
+	loaded, ok := g2.GetNode(n1.ID)
+	if !ok || loaded.Properties["x"].String() != "one" {
+		t.Fatal("n1 should still be loadable after eviction")
+	}
+
+	// Dirty nodes should NOT be evicted.
+	g2.SetNodeProperty(n1.ID, "y", StringProperty("dirty"))
+	g2.GetNode(n2.ID) // promote n2
+	g2.GetNode(n3.ID) // promote n3
+	// n1 is LRU but dirty -- should survive.
+	if _, ok := g2.nodes[n1.ID]; !ok {
+		t.Fatal("dirty node n1 should not be evicted")
+	}
+}
+
 func TestLazyNodeIterator(t *testing.T) {
 	g := New()
 	s := tempStorage(t)

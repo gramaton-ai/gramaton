@@ -33,9 +33,11 @@ func (g *Graph) AddNode(props Properties) *Node {
 
 // GetNode returns the node with the given ID, or nil and false if not found.
 // When the graph has a backing store (after Load), cache misses trigger a
-// lazy load from the prolly tree.
+// lazy load from the prolly tree. Accessed nodes are promoted in the LRU;
+// eviction may remove a clean (non-dirty) node from the cache.
 func (g *Graph) GetNode(id string) (*Node, bool) {
 	if n, ok := g.nodes[id]; ok {
+		g.evictLRU(id)
 		return n, true
 	}
 	// Lazy load from prolly tree if we have a backing store.
@@ -45,9 +47,30 @@ func (g *Graph) GetNode(id string) (*Node, bool) {
 			return nil, false
 		}
 		g.nodes[id] = n
+		g.evictLRU(id)
 		return n, true
 	}
 	return nil, false
+}
+
+// evictLRU promotes id in the LRU tracker and evicts the least recently
+// used clean node if the cache exceeds capacity. Dirty nodes are never
+// evicted (they must be written first).
+func (g *Graph) evictLRU(id string) {
+	if g.lru == nil {
+		return
+	}
+	evictedID, evicted := g.lru.touch(id)
+	if !evicted {
+		return
+	}
+	// Don't evict dirty nodes -- they haven't been saved yet.
+	if _, dirty := g.dirtyNodes[evictedID]; dirty {
+		// Put it back in the tracker so it's not lost.
+		g.lru.touch(evictedID)
+		return
+	}
+	delete(g.nodes, evictedID)
 }
 
 // loadNode fetches a single node from the prolly tree by ID.
@@ -125,6 +148,9 @@ func (g *Graph) DeleteNode(id string) error {
 	delete(g.dirtyNodes, id)
 	g.deletedNodes[id] = struct{}{}
 	g.nodeTotal--
+	if g.lru != nil {
+		g.lru.removeID(id)
+	}
 	return nil
 }
 

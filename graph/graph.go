@@ -54,13 +54,26 @@ type Graph struct {
 	// from the prolly tree (set during Load).
 	store     *storage.Store
 	nodeTotal int // total node count (prolly tree entries)
+	lru       *lruTracker // LRU eviction for node cache
 
 	entropy *ulid.MonotonicEntropy
 	mu      sync.Mutex // protects entropy only
 }
 
-// New creates an empty graph.
+// DefaultCacheCapacity is the default maximum number of nodes held in
+// the in-memory cache. Nodes beyond this limit are evicted LRU. Set to
+// 0 for unlimited (all accessed nodes stay cached). Dirty nodes are
+// never evicted.
+const DefaultCacheCapacity = 10000
+
+// New creates an empty graph with the default cache capacity.
 func New() *Graph {
+	return NewWithCapacity(DefaultCacheCapacity)
+}
+
+// NewWithCapacity creates a graph with a specific node cache capacity.
+// 0 means unlimited.
+func NewWithCapacity(cacheCapacity int) *Graph {
 	return &Graph{
 		nodes:        make(map[string]*Node),
 		edges:        make(map[string]*Edge),
@@ -73,6 +86,7 @@ func New() *Graph {
 		deletedEdges: make(map[string]struct{}),
 		nodeHashes:   make(map[string]string),
 		edgeHashes:   make(map[string]string),
+		lru:          newLRUTracker(cacheCapacity),
 		entropy:      ulid.Monotonic(rand.Reader, 0),
 	}
 }
