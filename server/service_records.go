@@ -453,6 +453,9 @@ func (s *Server) serviceLink(sourceID string, req *edgeRequest) (map[string]any,
 	if req.EdgeType == "" {
 		return nil, errMissing("edge_type is required")
 	}
+	if len(req.EdgeType) > maxEdgeTypeLen {
+		return nil, errInvalid(fmt.Sprintf("edge_type exceeds maximum length of %d", maxEdgeTypeLen))
+	}
 	if err := validateFloat64Range("edge_weight", req.EdgeWeight, 0.0, 1.0); err != nil {
 		return nil, errInvalid(err.Error())
 	}

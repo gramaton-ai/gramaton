@@ -29,6 +29,10 @@ const (
 	maxLogTraversal   = 5000
 	maxTopicLength    = 1024
 	maxExportTop      = 10000
+	maxSearchHops     = 10
+	maxExploreNodes   = 10000
+	maxEdgeTypeLen    = 256
+	maxFactLen        = 10000
 )
 
 // Per-field length limits.

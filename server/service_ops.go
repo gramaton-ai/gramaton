@@ -382,7 +382,6 @@ func (s *Server) serviceObserve(req observeRequest) (map[string]any, *serviceErr
 	const maxMessages = 100
 	const maxFacts = 100
 	const maxMessageContentLen = 50000
-	const maxFactLen = 10000
 
 	if len(req.Messages) > maxMessages {
 		return nil, errInvalid(fmt.Sprintf("maximum %d messages allowed", maxMessages))
@@ -412,7 +411,12 @@ func (s *Server) serviceObserve(req observeRequest) (map[string]any, *serviceErr
 	select {
 	case s.observeSem <- struct{}{}:
 		go func() {
-			defer func() { <-s.observeSem }()
+			defer func() {
+				if r := recover(); r != nil {
+					s.log.Error("processObservation panic", "err", r)
+				}
+				<-s.observeSem
+			}()
 			s.processObservation(req)
 		}()
 		return map[string]any{"accepted": true}, nil

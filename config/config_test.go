@@ -226,11 +226,11 @@ curation:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.LLMCuration.MaxCallsPerRun > 1000 {
-		t.Fatalf("MaxCallsPerRun should be capped at 1000, got %d", cfg.LLMCuration.MaxCallsPerRun)
+	if cfg.LLMCuration.MaxCallsPerRun > 10000 {
+		t.Fatalf("MaxCallsPerRun should be capped at 10000, got %d", cfg.LLMCuration.MaxCallsPerRun)
 	}
-	if cfg.LLMCuration.BatchSize > 100 {
-		t.Fatalf("BatchSize should be capped at 100, got %d", cfg.LLMCuration.BatchSize)
+	if cfg.LLMCuration.BatchSize > 5000 {
+		t.Fatalf("BatchSize should be capped at 5000, got %d", cfg.LLMCuration.BatchSize)
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		t.Fatalf("MaxOrphansPerRun should be capped, got %d", cfg.Curation.MaxOrphansPerRun)

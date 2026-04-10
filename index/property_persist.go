@@ -85,6 +85,10 @@ func (idx *PropertyIndex) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("property index: unsupported version %d", version)
 	}
 	numEntries := binary.LittleEndian.Uint32(data[6:10])
+	const maxPropEntries = 10_000_000
+	if numEntries > maxPropEntries {
+		return fmt.Errorf("property index: numEntries %d exceeds maximum %d", numEntries, maxPropEntries)
+	}
 
 	// Reset state.
 	idx.exact = make(map[string]map[string]map[string]struct{})

@@ -40,9 +40,10 @@ type hnswNode struct {
 
 // Safety limits for deserialization to prevent OOM from malicious input.
 const (
-	maxNodes  = 10_000_000 // 10M nodes max
-	maxDim    = 65_536     // 64K dimensions max (dim*4 fits in int)
-	maxLayers = 100        // HNSW layers (typical max is ~20 for 1M nodes)
+	maxNodes         = 10_000_000 // 10M nodes max
+	maxDim           = 65_536     // 64K dimensions max (dim*4 fits in int)
+	maxLayers        = 100        // HNSW layers (typical max is ~20 for 1M nodes)
+	maxConnsPerLayer = 10_000     // upper bound on connections per node per layer
 )
 
 // distNode pairs a node ID with its distance (1 - cosine similarity)
@@ -610,6 +611,9 @@ func (h *HNSWIndex) UnmarshalBinary(data []byte) error {
 			}
 			numConns := int(binary.LittleEndian.Uint16(data[pos : pos+2]))
 			pos += 2
+			if numConns > maxConnsPerLayer {
+				return fmt.Errorf("hnsw: node %d layer %d has %d connections, max %d", i, l, numConns, maxConnsPerLayer)
+			}
 			conns[l] = make([]string, numConns)
 			for c := 0; c < numConns; c++ {
 				if pos+2 > len(data) {

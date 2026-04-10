@@ -67,9 +67,10 @@ func startForeground() error {
 	if engineCfg.Server.Port > 0 {
 		cfg.Port = engineCfg.Server.Port
 	}
-	if engineCfg.Server.IdleTimeout > 0 {
-		cfg.IdleTimeout = engineCfg.Server.IdleTimeout
-	}
+	// IdleTimeout: 0 means no timeout, >0 overrides default.
+	// Only skip override when the YAML field was absent (defaults
+	// set it to 30m, which we already have from DefaultConfig).
+	cfg.IdleTimeout = engineCfg.Server.IdleTimeout
 
 	// Background children (started by startBackground) set GRAMATON_BG=1.
 	// Skip stderr logging to avoid duplicating lines into gramaton.stderr.

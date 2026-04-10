@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -133,6 +134,13 @@ func (s *Server) intakeObserved(req *intakeRequest) (map[string]any, *serviceErr
 		facts = []string{req.Content}
 	}
 
+	// Validate per-fact length.
+	for i, f := range facts {
+		if len(f) > maxFactLen {
+			return nil, errInvalid(fmt.Sprintf("facts[%d] exceeds %d bytes", i, maxFactLen))
+		}
+	}
+
 	maxFacts := cfg.Observe.MaxFactsPerCall
 	if maxFacts <= 0 {
 		maxFacts = 20
@@ -145,7 +153,12 @@ func (s *Server) intakeObserved(req *intakeRequest) (map[string]any, *serviceErr
 	select {
 	case s.observeSem <- struct{}{}:
 		go func() {
-			defer func() { <-s.observeSem }()
+			defer func() {
+				if r := recover(); r != nil {
+					s.log.Error("intakeObserved panic", "err", r)
+				}
+				<-s.observeSem
+			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			s.applyQualityGates(ctx, facts, cfg)

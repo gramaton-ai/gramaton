@@ -59,6 +59,9 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 	if req.MaxEdges != nil && *req.MaxEdges < 0 {
 		return nil, errInvalid("max_edges must be >= 0")
 	}
+	if req.MaxHops > maxSearchHops {
+		return nil, errInvalid(fmt.Sprintf("max_hops must be <= %d", maxSearchHops))
+	}
 
 	// Build search query.
 	q := search.Query{
@@ -252,6 +255,9 @@ func (s *Server) serviceExplore(req *exploreRequest) (map[string]any, *serviceEr
 	maxNodes := req.MaxNodes
 	if maxNodes <= 0 {
 		maxNodes = 100
+	}
+	if maxNodes > maxExploreNodes {
+		maxNodes = maxExploreNodes
 	}
 	truncated := false
 	if len(sub.Nodes) > maxNodes {

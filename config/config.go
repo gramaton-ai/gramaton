@@ -438,11 +438,11 @@ func Load(path string) (Config, error) {
 	}
 
 	// Enforce bounds on configurable limits.
-	if cfg.LLMCuration.MaxCallsPerRun > 1000 {
-		cfg.LLMCuration.MaxCallsPerRun = 1000
+	if cfg.LLMCuration.MaxCallsPerRun > 10000 {
+		cfg.LLMCuration.MaxCallsPerRun = 10000
 	}
-	if cfg.LLMCuration.BatchSize > 100 {
-		cfg.LLMCuration.BatchSize = 100
+	if cfg.LLMCuration.BatchSize > 5000 {
+		cfg.LLMCuration.BatchSize = 5000
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		cfg.Curation.MaxOrphansPerRun = 200

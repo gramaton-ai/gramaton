@@ -1,6 +1,9 @@
 package index
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestBloomFilterBasic(t *testing.T) {
 	bf := NewBloomFilter(100, 0.01)
@@ -46,6 +49,48 @@ func TestBloomFilterRoundTrip(t *testing.T) {
 	}
 	if bf2.Count() != 4 {
 		t.Fatalf("expected count 4, got %d", bf2.Count())
+	}
+}
+
+func TestBloomFilterUnmarshalExcessiveBits(t *testing.T) {
+	// Craft a bloom filter claiming 2 billion bits.
+	buf := []byte("BLOM")
+	buf = binary.LittleEndian.AppendUint16(buf, 1)      // version
+	buf = binary.LittleEndian.AppendUint16(buf, 3)      // k
+	buf = binary.LittleEndian.AppendUint32(buf, 2_000_000_000) // m (exceeds max)
+	buf = binary.LittleEndian.AppendUint32(buf, 0)      // n
+
+	bf := &BloomFilter{}
+	if err := bf.UnmarshalBinary(buf); err == nil {
+		t.Fatal("expected error for excessive m")
+	}
+}
+
+func TestBloomFilterUnmarshalExcessiveK(t *testing.T) {
+	buf := []byte("BLOM")
+	buf = binary.LittleEndian.AppendUint16(buf, 1)   // version
+	buf = binary.LittleEndian.AppendUint16(buf, 200)  // k (exceeds max 100)
+	buf = binary.LittleEndian.AppendUint32(buf, 64)   // m
+	buf = binary.LittleEndian.AppendUint32(buf, 0)    // n
+
+	bf := &BloomFilter{}
+	if err := bf.UnmarshalBinary(buf); err == nil {
+		t.Fatal("expected error for excessive k")
+	}
+}
+
+func TestBloomFilterUnmarshalTruncated(t *testing.T) {
+	// Craft a valid header claiming 128 bits (2 words) but provide only 1 word.
+	buf := []byte("BLOM")
+	buf = binary.LittleEndian.AppendUint16(buf, 1)  // version
+	buf = binary.LittleEndian.AppendUint16(buf, 3)  // k
+	buf = binary.LittleEndian.AppendUint32(buf, 128) // m = 128 bits = 2 words
+	buf = binary.LittleEndian.AppendUint32(buf, 0)  // n
+	buf = binary.LittleEndian.AppendUint64(buf, 0)  // only 1 word (need 2)
+
+	bf := &BloomFilter{}
+	if err := bf.UnmarshalBinary(buf); err == nil {
+		t.Fatal("expected error for truncated bits data")
 	}
 }
 

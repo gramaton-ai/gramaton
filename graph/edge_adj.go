@@ -75,12 +75,20 @@ func marshalAdjMap(buf []byte, m map[string]map[string]struct{}) []byte {
 	return buf
 }
 
+const (
+	maxAdjKeys = 1_000_000 // upper bound on keys per adjacency map
+	maxAdjVals = 1_000_000 // upper bound on values per key
+)
+
 func unmarshalAdjMap(data []byte, pos int) (map[string]map[string]struct{}, int, error) {
 	if pos+4 > len(data) {
 		return nil, pos, fmt.Errorf("truncated map header")
 	}
 	numKeys := int(binary.LittleEndian.Uint32(data[pos:]))
 	pos += 4
+	if numKeys > maxAdjKeys {
+		return nil, pos, fmt.Errorf("numKeys %d exceeds maximum %d", numKeys, maxAdjKeys)
+	}
 
 	m := make(map[string]map[string]struct{}, numKeys)
 	for i := 0; i < numKeys; i++ {
@@ -100,6 +108,9 @@ func unmarshalAdjMap(data []byte, pos int) (map[string]map[string]struct{}, int,
 		}
 		numVals := int(binary.LittleEndian.Uint32(data[pos:]))
 		pos += 4
+		if numVals > maxAdjVals {
+			return nil, pos, fmt.Errorf("numVals %d at key %d exceeds maximum %d", numVals, i, maxAdjVals)
+		}
 
 		vals := make(map[string]struct{}, numVals)
 		for j := 0; j < numVals; j++ {

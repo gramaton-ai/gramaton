@@ -2,6 +2,7 @@ package index
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"math"
 )
@@ -103,6 +104,11 @@ func (bf *BloomFilter) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
+const (
+	maxBloomBits = 1_000_000_000 // ~125MB maximum bloom filter size
+	maxBloomK    = 100           // reasonable hash function limit
+)
+
 // UnmarshalBinary restores a bloom filter from binary data.
 func (bf *BloomFilter) UnmarshalBinary(data []byte) error {
 	if len(data) < 16 || string(data[:4]) != "BLOM" {
@@ -113,13 +119,21 @@ func (bf *BloomFilter) UnmarshalBinary(data []byte) error {
 	bf.m = int(binary.LittleEndian.Uint32(data[8:12]))
 	bf.n = int(binary.LittleEndian.Uint32(data[12:16]))
 
+	if bf.m > maxBloomBits {
+		return fmt.Errorf("bloom: m %d exceeds maximum %d", bf.m, maxBloomBits)
+	}
+	if bf.k > maxBloomK {
+		return fmt.Errorf("bloom: k %d exceeds maximum %d", bf.k, maxBloomK)
+	}
+
 	words := (bf.m + 63) / 64
+	expected := 16 + words*8
+	if len(data) < expected {
+		return fmt.Errorf("bloom: data truncated: have %d bytes, need %d", len(data), expected)
+	}
 	bf.bits = make([]uint64, words)
 	pos := 16
 	for i := range bf.bits {
-		if pos+8 > len(data) {
-			break
-		}
 		bf.bits[i] = binary.LittleEndian.Uint64(data[pos:])
 		pos += 8
 	}

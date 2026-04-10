@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"encoding/binary"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +130,45 @@ func TestEdgeAdjacencyInvalidData(t *testing.T) {
 	}
 	if err := g.UnmarshalEdgeAdjacency([]byte("EADJ\x01\x00")); err == nil {
 		t.Fatal("expected error for truncated data after header")
+	}
+}
+
+func TestEdgeAdjacencyExcessiveKeys(t *testing.T) {
+	// Craft binary data with numKeys exceeding the safety cap.
+	buf := []byte("EADJ")
+	buf = binary.LittleEndian.AppendUint16(buf, 1)
+	// outEdges map with numKeys = 2,000,000 (exceeds maxAdjKeys = 1,000,000)
+	buf = binary.LittleEndian.AppendUint32(buf, 2_000_000)
+
+	g := New()
+	err := g.UnmarshalEdgeAdjacency(buf)
+	if err == nil {
+		t.Fatal("expected error for excessive numKeys")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEdgeAdjacencyExcessiveVals(t *testing.T) {
+	// Craft binary data with one key whose numVals exceeds the cap.
+	buf := []byte("EADJ")
+	buf = binary.LittleEndian.AppendUint16(buf, 1)
+	// outEdges: 1 key
+	buf = binary.LittleEndian.AppendUint32(buf, 1)
+	// key: "k"
+	buf = binary.LittleEndian.AppendUint16(buf, 1)
+	buf = append(buf, 'k')
+	// numVals = 2,000,000 (exceeds maxAdjVals)
+	buf = binary.LittleEndian.AppendUint32(buf, 2_000_000)
+
+	g := New()
+	err := g.UnmarshalEdgeAdjacency(buf)
+	if err == nil {
+		t.Fatal("expected error for excessive numVals")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

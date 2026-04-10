@@ -159,16 +159,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 	if cfg.Observe.RetrievalTracking {
 		retrievedIDs := s.retrieval.RetrievedIDs()
 		if len(retrievedIDs) > 0 {
-			retrievedEmbeddings = make(map[string][]float32, len(retrievedIDs))
-			s.engine.RLock()
-			for _, id := range retrievedIDs {
-				if n, ok := s.engine.Graph().GetNode(id); ok {
-					if emb, ok := n.Properties.GetVector("embedding_full"); ok {
-						retrievedEmbeddings[id] = emb
-					}
-				}
-			}
-			s.engine.RUnlock()
+			retrievedEmbeddings = s.gatherRetrievedEmbeddings(retrievedIDs)
 		}
 	}
 
@@ -204,9 +195,7 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 		factVec := vecs[0]
 
 		// Gate 1: Store-wide dedup (0.92 threshold).
-		s.engine.RLock()
-		similar := s.engine.VecIdx().Search(factVec, 5, nil)
-		s.engine.RUnlock()
+		similar := s.searchSimilarFacts(factVec, 5)
 
 		skipFact := false
 		skipGate := 0 // which gate caused the skip
@@ -228,17 +217,9 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 
 			// Gate 2: recency check.
 			if sim >= cfg.Observe.FeedbackLoopSimilarity {
-				s.engine.RLock()
-				if n, ok := s.engine.Graph().GetNode(sr.NodeID); ok {
-					if la, ok := n.Properties.GetTimestamp("last_accessed"); ok {
-						if la.After(recencyCutoff) {
-							skipFact = true
-							skipGate = 2
-						}
-					}
-				}
-				s.engine.RUnlock()
-				if skipFact {
+				if s.nodeAccessedAfter(sr.NodeID, recencyCutoff) {
+					skipFact = true
+					skipGate = 2
 					break
 				}
 			}
@@ -286,6 +267,45 @@ func (s *Server) applyQualityGates(ctx context.Context, facts []string, cfg conf
 	}
 
 	return stored
+}
+
+// gatherRetrievedEmbeddings reads embeddings for the given node IDs
+// under a single read lock with defer.
+func (s *Server) gatherRetrievedEmbeddings(ids []string) map[string][]float32 {
+	s.engine.RLock()
+	defer s.engine.RUnlock()
+	out := make(map[string][]float32, len(ids))
+	for _, id := range ids {
+		if n, ok := s.engine.Graph().GetNode(id); ok {
+			if emb, ok := n.Properties.GetVector("embedding_full"); ok {
+				out[id] = emb
+			}
+		}
+	}
+	return out
+}
+
+// searchSimilarFacts searches the vector index under a read lock with defer.
+func (s *Server) searchSimilarFacts(vec []float32, top int) []index.SearchResult {
+	s.engine.RLock()
+	defer s.engine.RUnlock()
+	return s.engine.VecIdx().Search(vec, top, nil)
+}
+
+// nodeAccessedAfter checks if a node's last_accessed is after cutoff,
+// under a read lock with defer.
+func (s *Server) nodeAccessedAfter(nodeID string, cutoff time.Time) bool {
+	s.engine.RLock()
+	defer s.engine.RUnlock()
+	n, ok := s.engine.Graph().GetNode(nodeID)
+	if !ok {
+		return false
+	}
+	la, ok := n.Properties.GetTimestamp("last_accessed")
+	if !ok {
+		return false
+	}
+	return la.After(cutoff)
 }
 
 // storeDeferredCapture stores a fact as a deferred capture with

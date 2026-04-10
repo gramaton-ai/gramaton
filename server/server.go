@@ -350,10 +350,13 @@ func (s *Server) Shutdown() {
 // RequestShutdown triggers a graceful shutdown from an API call.
 func (s *Server) RequestShutdown() {
 	go func() {
+		defer func() { recover() }()
 		// Give the response time to send.
 		time.Sleep(100 * time.Millisecond)
-		p, _ := os.FindProcess(os.Getpid())
-		p.Signal(syscall.SIGTERM)
+		p, err := os.FindProcess(os.Getpid())
+		if err == nil && p != nil {
+			p.Signal(syscall.SIGTERM)
+		}
 	}()
 }
 
