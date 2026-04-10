@@ -3,6 +3,7 @@ package curation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1067,6 +1068,80 @@ func TestValidateEnum(t *testing.T) {
 	}
 	if v := validateEnum("", allowed); v != "" {
 		t.Fatalf("expected empty for empty, got %q", v)
+	}
+}
+
+func TestBuildContextSignals(t *testing.T) {
+	// Node with all context signals and agent hints.
+	n := &graph.Node{
+		ID: "test",
+		Properties: graph.Properties{
+			"context_source_type":      graph.StringProperty("published academic article"),
+			"context_time_sensitivity": graph.StringProperty("stable reference"),
+			"context_reliability":      graph.StringProperty("peer-reviewed"),
+			"context_capture_reason":   graph.StringProperty("building reference corpus"),
+			"context_about":            graph.StringProperty("epistemology"),
+			"temporality":              graph.StringProperty("immutable"),
+			"confidence":               graph.Float64Property(0.95),
+		},
+	}
+
+	result := buildContextSignals(n)
+	if result == "" {
+		t.Fatal("expected non-empty context signals")
+	}
+
+	// Should contain all the signal labels.
+	for _, expected := range []string{
+		"Source type: published academic article",
+		"Time sensitivity: stable reference",
+		"Reliability: peer-reviewed",
+		"Capture reason: building reference corpus",
+		"About: epistemology",
+		"Agent hint (temporality): immutable",
+		"Agent hint (confidence): 0.95",
+	} {
+		if !strings.Contains(result, expected) {
+			t.Errorf("missing expected signal %q in:\n%s", expected, result)
+		}
+	}
+}
+
+func TestBuildContextSignalsEmpty(t *testing.T) {
+	// Node with no context signals -- should return empty string.
+	n := &graph.Node{
+		ID: "test",
+		Properties: graph.Properties{
+			"content_full": graph.StringProperty("just content, no signals"),
+		},
+	}
+
+	result := buildContextSignals(n)
+	if result != "" {
+		t.Fatalf("expected empty string for node without signals, got %q", result)
+	}
+}
+
+func TestBuildContextSignalsPartial(t *testing.T) {
+	// Node with only some signals -- should include what's present.
+	n := &graph.Node{
+		ID: "test",
+		Properties: graph.Properties{
+			"context_capture_reason": graph.StringProperty("recording a decision"),
+			"knowledge_type":         graph.StringProperty("episodic"),
+		},
+	}
+
+	result := buildContextSignals(n)
+	if !strings.Contains(result, "Capture reason: recording a decision") {
+		t.Errorf("missing capture reason in:\n%s", result)
+	}
+	if !strings.Contains(result, "Agent hint (knowledge_type): episodic") {
+		t.Errorf("missing knowledge_type hint in:\n%s", result)
+	}
+	// Should NOT contain labels for missing signals.
+	if strings.Contains(result, "Source type") {
+		t.Error("should not contain Source type when not set")
 	}
 }
 
