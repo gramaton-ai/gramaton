@@ -715,6 +715,14 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 		// Parse JSON array response.
 		syntheses := parseBatchSynthesis(resp)
+		if syntheses == nil {
+			result.Errors++
+			logger.Warn("concept synthesis parse failed",
+				"component", "curation",
+				"batch_size", len(batch.concepts),
+				"response_len", len(resp))
+			continue
+		}
 
 		// Apply syntheses to concept nodes.
 		e.Lock()
@@ -766,8 +774,7 @@ func parseBatchSynthesis(resp string) []string {
 		Synthesis string `json:"synthesis"`
 	}
 	if err := json.Unmarshal([]byte(text), &results); err != nil {
-		// Try to extract any synthesis we can.
-		return nil
+		return nil // caller logs the batch error; individual parse failures are expected
 	}
 
 	syntheses := make([]string, len(results))

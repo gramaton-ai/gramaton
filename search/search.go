@@ -490,7 +490,11 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 				norm := s / maxRRF
 				// Penalize vector-only matches (no term overlap).
 				if _, hasBM25Match := bm25Hits[id]; !hasBM25Match {
-					norm *= 0.1
+					penalty := t.cfg.Search.VectorOnlyPenalty
+					if penalty <= 0 {
+						penalty = 0.1
+					}
+					norm *= penalty
 				}
 				similarities[id] = norm
 			}

@@ -41,7 +41,7 @@ func (r *RateLimited) wait(ctx context.Context) error {
 	}
 	r.lastCall = time.Now()
 	r.mu.Unlock()
-	return nil
+	return nil // context not cancelled; lastCall updated
 }
 
 func (r *RateLimited) Complete(ctx context.Context, prompt string) (string, error) {

@@ -133,6 +133,7 @@ type SearchConfig struct {
 	HNSWM               int     `yaml:"hnsw_m"`               // HNSW max connections per layer (default 16)
 	HNSWEfConstruction  int     `yaml:"hnsw_ef_construction"` // HNSW build quality (default 200)
 	HNSWEfSearch        int     `yaml:"hnsw_ef_search"`       // HNSW search width (default 100)
+	VectorOnlyPenalty   float64 `yaml:"vector_only_penalty"`  // score multiplier for results with no BM25 match (default 0.1)
 }
 
 type GraphConfig struct {
@@ -333,6 +334,7 @@ func Defaults() Config {
 			HNSWM:               16,
 			HNSWEfConstruction:  200,
 			HNSWEfSearch:        100,
+			VectorOnlyPenalty:   0.1,
 		},
 
 		Storage: StorageConfig{

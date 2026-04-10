@@ -41,6 +41,7 @@ type State struct {
 	ConsecutiveErrorCycles int
 	LLMPaused              bool
 	LLMPauseReason         string
+	LLMPausedAt            time.Time
 }
 
 // EnhancedStatus is the curation info included in the response envelope.
@@ -248,6 +249,14 @@ func (r *Runner) cycle(ctx context.Context) {
 		// Check circuit breaker.
 		r.state.mu.Lock()
 		llmPaused := r.state.LLMPaused
+		// Auto-reset circuit breaker after 30 minutes.
+		if llmPaused && !r.state.LLMPausedAt.IsZero() && time.Since(r.state.LLMPausedAt) > 30*time.Minute {
+			r.state.LLMPaused = false
+			r.state.LLMPauseReason = ""
+			r.state.ConsecutiveErrorCycles = 0
+			llmPaused = false
+			r.logger.Info("circuit breaker auto-reset after 30m", "component", "curation")
+		}
 		r.state.mu.Unlock()
 		if llmPaused {
 			r.logger.Debug("LLM curation paused (circuit breaker)", "component", "curation")
@@ -269,6 +278,7 @@ func (r *Runner) cycle(ctx context.Context) {
 					r.state.ConsecutiveErrorCycles++
 					if r.state.ConsecutiveErrorCycles >= 3 {
 						r.state.LLMPaused = true
+						r.state.LLMPausedAt = time.Now()
 						r.state.LLMPauseReason = fmt.Sprintf("circuit breaker: %d consecutive high-error cycles (last: %d/%d errors)",
 							r.state.ConsecutiveErrorCycles, aResult.Errors, aResult.LLMCalls)
 						r.logger.Warn("LLM curation paused by circuit breaker",

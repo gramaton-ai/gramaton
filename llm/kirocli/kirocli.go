@@ -22,7 +22,15 @@ var modelAliases = map[string]string{
 }
 
 // ansiRe strips ANSI escape sequences from kiro-cli output.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?25[hl]`)
+// Covers CSI (7-bit and 8-bit), OSC, DCS, APC, and PM sequences.
+var ansiRe = regexp.MustCompile(
+	`\x1b\[[0-9;]*[a-zA-Z]` + // CSI sequences (e.g., colors, cursor)
+		`|\x1b\[\?[0-9;]*[a-zA-Z]` + // CSI private mode (e.g., ?25h/l)
+		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)` + // OSC sequences (terminated by BEL or ST)
+		`|\x1b[P_^][^\x1b]*\x1b\\` + // DCS, APC, PM sequences
+		`|\x9b[0-9;]*[a-zA-Z]` + // 8-bit CSI (C1 control)
+		`|\x1b[()][0-9A-B]`, // Character set selection
+)
 
 // Client wraps the Kiro CLI for LLM completions.
 type Client struct {

@@ -180,7 +180,7 @@ func (c *Client) doBatchRequest(method, path string, body []byte) ([]byte, error
 			Error apiError `json:"error"`
 		}
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("anthropic batch: %s: %s", errResp.Error.Type, errResp.Error.Message)
+			return nil, fmt.Errorf("anthropic batch: %s: %s", errResp.Error.Type, truncate(errResp.Error.Message, 200))
 		}
 		return nil, fmt.Errorf("anthropic batch: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
