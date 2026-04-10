@@ -2,11 +2,17 @@ package curation
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
 )
+
+func testLogger() *slog.Logger {
+	return slog.Default()
+}
 
 func TestRunnerStatus(t *testing.T) {
 	eng := setupEngine(t)
@@ -287,6 +293,106 @@ func TestOrphanLinkerSkipsLowQuality(t *testing.T) {
 	// Neither low-confidence nor captured orphans should be linked.
 	if result.OrphansLinked != 0 {
 		t.Fatalf("expected 0 orphans linked (quality filter), got %d", result.OrphansLinked)
+	}
+}
+
+func TestCircuitBreakerTripsOnConsecutiveErrors(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 5
+	cfg.LLMCuration.MaxCallsPerRun = 10
+
+	// Add pending records.
+	for i := 0; i < 5; i++ {
+		addPendingNode(t, eng, "test content for circuit breaker")
+	}
+
+	// LLM that always errors.
+	llm := &mockLLM{
+		errors: []error{
+			fmt.Errorf("billing error"), fmt.Errorf("billing error"),
+			fmt.Errorf("billing error"), fmt.Errorf("billing error"),
+			fmt.Errorf("billing error"),
+		},
+	}
+
+	runner := NewRunner(eng, llm, cfg, testLogger())
+
+	// Run 3 cycles -- should trip the circuit breaker.
+	for i := 0; i < 3; i++ {
+		runner.state.mu.Lock()
+		runner.state.inProgress = false
+		runner.state.mu.Unlock()
+		runner.cycle(context.Background())
+	}
+
+	status := runner.Status()
+	if !status.LLMPaused {
+		t.Fatal("circuit breaker should be tripped after 3 error cycles")
+	}
+	if status.LLMPauseReason == "" {
+		t.Fatal("pause reason should be set")
+	}
+
+	// 4th cycle should skip LLM work.
+	llm.calls = 0
+	runner.state.mu.Lock()
+	runner.state.inProgress = false
+	runner.state.mu.Unlock()
+	runner.cycle(context.Background())
+	if llm.calls > 0 {
+		t.Fatalf("LLM should not be called when paused, got %d calls", llm.calls)
+	}
+}
+
+func TestCircuitBreakerResetOnManualTrigger(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	runner := NewRunner(eng, &mockLLM{}, cfg, nil)
+
+	// Manually set circuit breaker.
+	runner.state.mu.Lock()
+	runner.state.LLMPaused = true
+	runner.state.LLMPauseReason = "test"
+	runner.state.ConsecutiveErrorCycles = 5
+	runner.state.mu.Unlock()
+
+	// Trigger should reset it.
+	runner.Trigger(context.Background())
+
+	status := runner.Status()
+	if status.LLMPaused {
+		t.Fatal("manual trigger should reset circuit breaker")
+	}
+}
+
+func TestCircuitBreakerResetsOnSuccessfulCycle(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 1
+	cfg.LLMCuration.MaxCallsPerRun = 5
+
+	addPendingNode(t, eng, "test content")
+
+	classifyResp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"test"}`
+	llm := &mockLLM{responses: []string{classifyResp}}
+
+	runner := NewRunner(eng, llm, cfg, nil)
+
+	// Set a non-zero error count.
+	runner.state.mu.Lock()
+	runner.state.ConsecutiveErrorCycles = 2
+	runner.state.mu.Unlock()
+
+	runner.Trigger(context.Background())
+
+	runner.state.mu.Lock()
+	count := runner.state.ConsecutiveErrorCycles
+	runner.state.mu.Unlock()
+
+	if count != 0 {
+		t.Fatalf("successful cycle should reset error count, got %d", count)
 	}
 }
 

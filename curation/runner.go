@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -33,6 +34,13 @@ type State struct {
 	LastRun           time.Time
 	LastDeterministic *DeterministicResult
 	LastAutonomous    *AutonomousResult
+
+	// Circuit breaker: pause LLM curation after consecutive
+	// high-error cycles to avoid burning credits on persistent
+	// failures (billing errors, auth failures, etc.).
+	ConsecutiveErrorCycles int
+	LLMPaused              bool
+	LLMPauseReason         string
 }
 
 // EnhancedStatus is the curation info included in the response envelope.
@@ -44,6 +52,8 @@ type EnhancedStatus struct {
 	OrphanCount       int        `json:"orphan_count,omitempty"`
 	LastCurated       *time.Time `json:"last_curated,omitempty"`
 	Autonomous        bool       `json:"autonomous"`
+	LLMPaused         bool       `json:"llm_paused,omitempty"`
+	LLMPauseReason    string     `json:"llm_pause_reason,omitempty"`
 }
 
 // NewRunner creates a curation runner.
@@ -118,6 +128,9 @@ func (r *Runner) Status() EnhancedStatus {
 		status.LastCurated = &t
 	}
 
+	status.LLMPaused = r.state.LLMPaused
+	status.LLMPauseReason = r.state.LLMPauseReason
+
 	return status
 }
 
@@ -147,8 +160,19 @@ func (r *Runner) SetPostCycleHook(hook func()) {
 	r.postCycleHook = hook
 }
 
+// ResetCircuitBreaker clears the LLM pause state, allowing
+// autonomous curation to resume. Called by manual triggers.
+func (r *Runner) ResetCircuitBreaker() {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	r.state.LLMPaused = false
+	r.state.LLMPauseReason = ""
+	r.state.ConsecutiveErrorCycles = 0
+}
+
 // Trigger runs a curation cycle immediately. Returns false if a
-// cycle is already in progress.
+// cycle is already in progress. Resets the circuit breaker so that
+// manual triggers always attempt LLM work.
 func (r *Runner) Trigger(ctx context.Context) bool {
 	r.state.mu.Lock()
 	if r.state.inProgress {
@@ -156,6 +180,10 @@ func (r *Runner) Trigger(ctx context.Context) bool {
 		return false
 	}
 	r.state.inProgress = true
+	// Reset circuit breaker on manual trigger.
+	r.state.LLMPaused = false
+	r.state.LLMPauseReason = ""
+	r.state.ConsecutiveErrorCycles = 0
 	r.state.mu.Unlock()
 
 	defer func() {
@@ -217,13 +245,43 @@ func (r *Runner) cycle(ctx context.Context) {
 
 	// 2. Run LLM curation if configured and there's work to do.
 	if r.llm != nil {
+		// Check circuit breaker.
+		r.state.mu.Lock()
+		llmPaused := r.state.LLMPaused
+		r.state.mu.Unlock()
+		if llmPaused {
+			r.logger.Debug("LLM curation paused (circuit breaker)", "component", "curation")
+		}
+
 		hasPending := result.Manifest != nil && result.Manifest.PendingCount > 0
 		hasCandidates := len(result.ConceptCandidates) > 0
 		needsSummary := result.Manifest != nil && result.Manifest.QualitativeSummary == ""
-		if hasPending || hasCandidates || needsSummary {
+		if !llmPaused && (hasPending || hasCandidates || needsSummary) {
 			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger, result.ConceptCandidates)
 			r.state.mu.Lock()
 			r.state.LastAutonomous = aResult
+
+			// Circuit breaker: if >80% of LLM calls errored, count as
+			// an error cycle. After 3 consecutive error cycles, pause.
+			if aResult.LLMCalls > 0 {
+				errorRate := float64(aResult.Errors) / float64(aResult.LLMCalls)
+				if errorRate > 0.8 {
+					r.state.ConsecutiveErrorCycles++
+					if r.state.ConsecutiveErrorCycles >= 3 {
+						r.state.LLMPaused = true
+						r.state.LLMPauseReason = fmt.Sprintf("circuit breaker: %d consecutive high-error cycles (last: %d/%d errors)",
+							r.state.ConsecutiveErrorCycles, aResult.Errors, aResult.LLMCalls)
+						r.logger.Warn("LLM curation paused by circuit breaker",
+							"component", "curation",
+							"consecutive_error_cycles", r.state.ConsecutiveErrorCycles,
+							"last_errors", aResult.Errors,
+							"last_calls", aResult.LLMCalls)
+					}
+				} else {
+					r.state.ConsecutiveErrorCycles = 0
+				}
+			}
+
 			// Refresh pending count after autonomous classification.
 			if aResult.Classified > 0 && r.state.LastDeterministic != nil && r.state.LastDeterministic.Manifest != nil {
 				r.engine.RLock()
