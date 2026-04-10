@@ -100,8 +100,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	e.RLock()
 	pendingIDs := e.PropIdx().Lookup("processing_status", graph.StringProperty("captured"))
 	type pending struct {
-		id      string
-		content string
+		id             string
+		content        string
+		contextSignals string
 	}
 	var batch []pending
 	for _, id := range pendingIDs {
@@ -116,7 +117,11 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if !ok || content == "" {
 			continue
 		}
-		batch = append(batch, pending{id: id, content: content})
+		batch = append(batch, pending{
+			id:             id,
+			content:        content,
+			contextSignals: buildContextSignals(n),
+		})
 	}
 	e.RUnlock()
 
@@ -145,7 +150,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 
 	work := make([]llmWork, len(batch))
 	for i, rec := range batch {
-		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(classifyPrompt, rec.content)}
+		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(classifyPrompt, rec.content, rec.contextSignals)}
 	}
 
 	llmResults := parallelLLM(ctx, llmProv, work, 4)
@@ -214,6 +219,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		}
 		if r.data.SummaryShort != "" {
 			e.SetContentProp(r.id, "content_short", r.data.SummaryShort)
+		}
+		if r.data.SummaryMedium != "" {
+			e.SetContentProp(r.id, "content_medium", r.data.SummaryMedium)
 		}
 		e.SetProp(r.id, "processing_status", graph.StringProperty("processed"))
 		result.Classified++
@@ -969,6 +977,42 @@ type classificationResult struct {
 	EpistemicStatus string   `json:"epistemic_status"`
 	Keywords        []string `json:"keywords"`
 	SummaryShort    string   `json:"summary_short"`
+	SummaryMedium   string   `json:"summary_medium,omitempty"`
+}
+
+// buildContextSignals extracts context signal properties from a node
+// and formats them for the classification prompt. Returns an empty
+// string if no signals are present.
+func buildContextSignals(n *graph.Node) string {
+	signals := []struct {
+		key, label string
+	}{
+		{"context_source_type", "Source type"},
+		{"context_time_sensitivity", "Time sensitivity"},
+		{"context_reliability", "Reliability"},
+		{"context_capture_reason", "Capture reason"},
+		{"context_about", "About"},
+		{"context_who", "Entities"},
+	}
+	var parts []string
+	for _, s := range signals {
+		if v, ok := n.Properties.GetString(s.key); ok && v != "" {
+			parts = append(parts, s.label+": "+v)
+		}
+	}
+	// Also pass agent-provided enum hints if present.
+	for _, hint := range []string{"temporality", "knowledge_type", "epistemic_status"} {
+		if v, ok := n.Properties.GetString(hint); ok && v != "" {
+			parts = append(parts, "Agent hint ("+hint+"): "+v)
+		}
+	}
+	if conf, ok := n.Properties.GetFloat64("confidence"); ok {
+		parts = append(parts, fmt.Sprintf("Agent hint (confidence): %.2f", conf))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\nContext signals:\n- " + strings.Join(parts, "\n- ") + "\n"
 }
 
 // parseClassification extracts JSON from an LLM response. Handles
