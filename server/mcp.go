@@ -42,6 +42,7 @@ func (s *Server) MCPServer() *mcp.Server {
 func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPSearchTools(mcpServer)
 	s.registerMCPRecordTools(mcpServer)
+	s.registerMCPIntakeTools(mcpServer)
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
 	s.registerMCPCollectionTools(mcpServer)

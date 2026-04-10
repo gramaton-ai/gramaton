@@ -448,6 +448,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/log", s.handleLog)
 	mux.HandleFunc("GET /v1/diff", s.handleDiff)
 
+	// Intake (unified write endpoint)
+	mux.HandleFunc("POST /v1/intake", s.handleIntake)
+
 	// Operations
 	mux.HandleFunc("POST /v1/revert", s.handleRevert)
 	mux.HandleFunc("POST /v1/reembed", s.handleReembed)

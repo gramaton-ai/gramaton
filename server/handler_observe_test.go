@@ -213,7 +213,7 @@ func TestHandleObserveFactsAccepted(t *testing.T) {
 	}
 
 	// Wait for async processing to complete before test cleanup.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	var resp map[string]any
 	json.Unmarshal(w.Body.Bytes(), &resp)
