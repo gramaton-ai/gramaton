@@ -168,8 +168,12 @@ type proxyCaptureInput struct {
 	SourceCredibility *float64 `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
 	ContextAbout      string   `json:"context_about,omitempty" jsonschema:"topic/domain"`
 	ContextWho        string   `json:"context_who,omitempty" jsonschema:"entities involved"`
-	ContextFindable   string         `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
-	AssertedAsOf      string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+	ContextFindable        string         `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
+	ContextSourceType      string         `json:"context_source_type,omitempty" jsonschema:"what kind of source (e.g. published academic article, personal observation)"`
+	ContextTimeSensitivity string         `json:"context_time_sensitivity,omitempty" jsonschema:"how time-sensitive (e.g. stable reference, changes quarterly)"`
+	ContextReliability     string         `json:"context_reliability,omitempty" jsonschema:"reliability signals (e.g. peer-reviewed, unverified)"`
+	ContextCaptureReason   string         `json:"context_capture_reason,omitempty" jsonschema:"why being captured (e.g. recording a decision)"`
+	AssertedAsOf           string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
 	Meta              map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems (e.g. {assignee: Sarah, priority: P1})"`
 }
 

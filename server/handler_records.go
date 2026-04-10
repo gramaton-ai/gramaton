@@ -24,11 +24,15 @@ type captureRequest struct {
 	SourceRef         string         `json:"source_ref,omitempty"`
 	SourceCredibility *float64       `json:"source_credibility,omitempty"`
 	TestimonyHops     *int64         `json:"testimony_hops,omitempty"`
-	ContextAbout      string         `json:"context_about,omitempty"`
-	ContextWho        string         `json:"context_who,omitempty"`
-	ContextPrompted   string         `json:"context_prompted,omitempty"`
-	ContextFindable   string         `json:"context_findable_by,omitempty"`
-	ContextRelated    string         `json:"context_related,omitempty"`
+	ContextAbout           string         `json:"context_about,omitempty"`
+	ContextWho             string         `json:"context_who,omitempty"`
+	ContextPrompted        string         `json:"context_prompted,omitempty"`
+	ContextFindable        string         `json:"context_findable_by,omitempty"`
+	ContextRelated         string         `json:"context_related,omitempty"`
+	ContextSourceType      string         `json:"context_source_type,omitempty"`
+	ContextTimeSensitivity string         `json:"context_time_sensitivity,omitempty"`
+	ContextReliability     string         `json:"context_reliability,omitempty"`
+	ContextCaptureReason   string         `json:"context_capture_reason,omitempty"`
 	ValidFrom         string         `json:"valid_from,omitempty"`
 	ValidUntil        string         `json:"valid_until,omitempty"`
 	AssertedAsOf      string         `json:"asserted_as_of,omitempty"`
@@ -356,6 +360,18 @@ func validateCaptureRequest(req *captureRequest) error {
 	if len(req.ContextRelated) > maxContextFieldLen {
 		return fmt.Errorf("context_related exceeds maximum length of %d", maxContextFieldLen)
 	}
+	if len(req.ContextSourceType) > maxContextFieldLen {
+		return fmt.Errorf("context_source_type exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextTimeSensitivity) > maxContextFieldLen {
+		return fmt.Errorf("context_time_sensitivity exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextReliability) > maxContextFieldLen {
+		return fmt.Errorf("context_reliability exceeds maximum length of %d", maxContextFieldLen)
+	}
+	if len(req.ContextCaptureReason) > maxContextFieldLen {
+		return fmt.Errorf("context_capture_reason exceeds maximum length of %d", maxContextFieldLen)
+	}
 	return nil
 }
 
@@ -460,6 +476,18 @@ func setOptionalProps(props graph.Properties, req *captureRequest) {
 	}
 	if req.ContextRelated != "" {
 		props["context_related"] = graph.StringProperty(req.ContextRelated)
+	}
+	if req.ContextSourceType != "" {
+		props["context_source_type"] = graph.StringProperty(req.ContextSourceType)
+	}
+	if req.ContextTimeSensitivity != "" {
+		props["context_time_sensitivity"] = graph.StringProperty(req.ContextTimeSensitivity)
+	}
+	if req.ContextReliability != "" {
+		props["context_reliability"] = graph.StringProperty(req.ContextReliability)
+	}
+	if req.ContextCaptureReason != "" {
+		props["context_capture_reason"] = graph.StringProperty(req.ContextCaptureReason)
 	}
 	if req.ValidFrom != "" {
 		if t, err := time.Parse(time.RFC3339, req.ValidFrom); err == nil {
