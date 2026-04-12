@@ -14,8 +14,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Server.AutoStart != true {
 		t.Fatal("server.auto_start should default to true")
 	}
-	if cfg.Server.IdleTimeout != 30*time.Minute {
-		t.Fatalf("server.idle_timeout: expected 30m, got %v", cfg.Server.IdleTimeout)
+	if cfg.Server.IdleTimeout != 4*time.Hour {
+		t.Fatalf("server.idle_timeout: expected 4h, got %v", cfg.Server.IdleTimeout)
 	}
 	if cfg.Scoring.WeightSimilarity != 0.55 {
 		t.Fatalf("scoring.weight_similarity: expected 0.55, got %f", cfg.Scoring.WeightSimilarity)

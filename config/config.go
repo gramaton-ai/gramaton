@@ -262,7 +262,7 @@ func Defaults() Config {
 		Server: ServerConfig{
 			Port:        0,
 			AutoStart:   true,
-			IdleTimeout: 30 * time.Minute,
+			IdleTimeout: 4 * time.Hour, // D15: increase from 30m to hours
 		},
 
 		Embedding: EmbeddingConfig{
