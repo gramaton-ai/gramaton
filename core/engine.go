@@ -36,6 +36,7 @@ type Engine struct {
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Full   index.BM25Index // content_full BM25 (D12: single layer)
+	secIdx   *index.BboltSecondaryIndex // time, edge count, field existence (D16)
 	embedder embed.Provider
 	llmProv  llm.Provider
 	searcher *search.Tool
@@ -142,6 +143,12 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("create bbolt BM25 index: %w", err)
 	}
 
+	secIdx, err := index.NewBboltSecondaryIndex(boltDB)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("create secondary index: %w", err)
+	}
+
 	// Load HEAD commit if it exists.
 	var headHash string
 	var headCommit *graph.Commit
@@ -175,6 +182,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		boltDB:   boltDB,
 		propIdx:  propIdx,
 		bm25Full: bm25Full,
+		secIdx:   secIdx,
 		embedder: emb,
 		llmProv:  llmProv,
 		headHash: headHash,
@@ -419,6 +427,10 @@ func (e *Engine) RebuildAllIndexes() {
 
 // BM25Full returns the BM25 index for content_full.
 func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
+
+// SecIdx returns the secondary index (time, edge counts, field existence).
+// May be nil in tests that don't create one.
+func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.secIdx }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
 // Flushes buffered vectors and closes the bbolt database.
