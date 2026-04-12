@@ -310,6 +310,13 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // Persists indexes (BM25, vector, property) alongside the commit
 // so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
+	// Flush buffered vector writes to disk before committing.
+	if f, ok := e.vecIdx.(interface{ Flush() error }); ok {
+		if err := f.Flush(); err != nil {
+			return nil, fmt.Errorf("flush vector index: %w", err)
+		}
+	}
+
 	// BM25: BboltBM25Index persists to bbolt, not CAS. This block
 	// is kept for backward compat with BinaryMarshaler implementations.
 	var bm25FullRoot string

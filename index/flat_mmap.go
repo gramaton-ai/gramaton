@@ -38,8 +38,19 @@ type MmapFlatIndex struct {
 
 	// In-memory ID-to-offset map for filtered scans and Remove.
 	// offset points to the start of the entry (id_len field).
+	// Negative offsets indicate the vector is in the write buffer
+	// (buffer index = -(offset+1)).
 	offsets map[string]int
 	count   int
+
+	// Write buffer: new vectors accumulate here until Flush.
+	// Avoids remap+fsync on every Add.
+	buffer []bufferedEntry
+}
+
+type bufferedEntry struct {
+	nodeID string
+	vec    []byte // uint8 quantized
 }
 
 const (
@@ -159,50 +170,42 @@ func (idx *MmapFlatIndex) buildOffsetMap() error {
 	return nil
 }
 
-// Add quantizes a float32 vector to uint8 and appends it to the file.
-// If the node already exists, it is replaced (old entry marked as
-// tombstone via zero-length ID, reclaimed on next compaction).
+// Add quantizes a float32 vector to uint8 and buffers it. The vector
+// becomes immediately searchable (buffer is checked during Search).
+// Call Flush to write buffered vectors to disk.
 func (idx *MmapFlatIndex) Add(nodeID string, vec []float32) {
 	if len(vec) != idx.dim {
-		return // dimension mismatch, skip silently
+		return
 	}
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// If node exists, mark old entry as tombstone (overwrite id_len=0).
-	if oldOff, exists := idx.offsets[nodeID]; exists {
+	// If node exists in mmap'd data, mark as tombstone.
+	if oldOff, exists := idx.offsets[nodeID]; exists && oldOff >= 0 {
 		idx.file.WriteAt([]byte{0, 0}, int64(oldOff))
-		delete(idx.offsets, nodeID)
+	}
+
+	// If node exists in buffer, remove old entry.
+	if oldOff, exists := idx.offsets[nodeID]; exists && oldOff < 0 {
+		bufIdx := -(oldOff + 1)
+		if bufIdx < len(idx.buffer) {
+			idx.buffer[bufIdx].nodeID = "" // mark as dead
+		}
+	}
+
+	if _, exists := idx.offsets[nodeID]; exists {
 		idx.count--
 	}
 
-	// Quantize float32 -> uint8.
+	// Buffer the new vector.
 	qvec := quantizeF32ToU8(vec)
-
-	// Build entry: id_len(2) + id + vector.
-	entry := make([]byte, 2+len(nodeID)+idx.dim)
-	binary.LittleEndian.PutUint16(entry[:2], uint16(len(nodeID)))
-	copy(entry[2:], nodeID)
-	copy(entry[2+len(nodeID):], qvec)
-
-	// Append to file.
-	info, _ := idx.file.Stat()
-	offset := info.Size()
-	if _, err := idx.file.WriteAt(entry, offset); err != nil {
-		return
-	}
-
+	idx.buffer = append(idx.buffer, bufferedEntry{nodeID: nodeID, vec: qvec})
+	idx.offsets[nodeID] = -(len(idx.buffer)) // negative: -(bufferIndex+1)
 	idx.count++
-	idx.writeHeader(idx.count)
-	idx.file.Sync()
-
-	// Remap to include the new data.
-	idx.remap()
-	idx.offsets[nodeID] = int(offset)
 }
 
-// Remove marks an entry as a tombstone (zero id_len).
+// Remove marks an entry as a tombstone or removes it from the buffer.
 func (idx *MmapFlatIndex) Remove(nodeID string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -211,15 +214,83 @@ func (idx *MmapFlatIndex) Remove(nodeID string) {
 	if !exists {
 		return
 	}
-	idx.file.WriteAt([]byte{0, 0}, int64(off))
+
+	if off >= 0 {
+		// In mmap'd data: tombstone it.
+		idx.file.WriteAt([]byte{0, 0}, int64(off))
+	} else {
+		// In buffer: mark dead.
+		bufIdx := -(off + 1)
+		if bufIdx < len(idx.buffer) {
+			idx.buffer[bufIdx].nodeID = ""
+		}
+	}
+
 	delete(idx.offsets, nodeID)
 	idx.count--
+}
+
+// Flush writes all buffered vectors to disk, updates the header,
+// syncs, and remaps. Call this from Engine.Save and Engine.Close.
+func (idx *MmapFlatIndex) Flush() error {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	if len(idx.buffer) == 0 {
+		return nil
+	}
+
+	// Collect live entries (skip dead entries from Remove/Replace).
+	var live []bufferedEntry
+	for _, e := range idx.buffer {
+		if e.nodeID != "" {
+			live = append(live, e)
+		}
+	}
+
+	if len(live) == 0 {
+		idx.buffer = nil
+		// Still need to update header for tombstoned entries.
+		idx.writeHeader(idx.count)
+		idx.file.Sync()
+		idx.remap()
+		return nil
+	}
+
+	// Build a single write buffer for all entries.
+	entrySize := 2 + 26 + idx.dim // typical ULID is 26 bytes
+	buf := make([]byte, 0, len(live)*entrySize)
+	info, _ := idx.file.Stat()
+	baseOffset := info.Size()
+
+	for _, e := range live {
+		entry := make([]byte, 2+len(e.nodeID)+idx.dim)
+		binary.LittleEndian.PutUint16(entry[:2], uint16(len(e.nodeID)))
+		copy(entry[2:], e.nodeID)
+		copy(entry[2+len(e.nodeID):], e.vec)
+		buf = append(buf, entry...)
+	}
+
+	// Single write for all entries.
+	if _, err := idx.file.WriteAt(buf, baseOffset); err != nil {
+		return fmt.Errorf("flat index: flush write: %w", err)
+	}
+
+	// Update offsets to point to mmap'd positions.
+	pos := int(baseOffset)
+	for _, e := range live {
+		idx.offsets[e.nodeID] = pos
+		pos += 2 + len(e.nodeID) + idx.dim
+	}
+
+	idx.buffer = nil
 	idx.writeHeader(idx.count)
 	idx.file.Sync()
-	idx.remap()
+	return idx.remap()
 }
 
 // Search performs a brute-force scan using uint8 cosine similarity.
+// Checks both mmap'd data and the write buffer.
 // If candidates is non-nil, only those IDs are checked (filtered scan).
 func (idx *MmapFlatIndex) Search(query []float32, k int, candidates map[string]struct{}) []SearchResult {
 	if k <= 0 {
@@ -232,34 +303,37 @@ func (idx *MmapFlatIndex) Search(query []float32, k int, candidates map[string]s
 		return nil
 	}
 
-	// Quantize query.
 	qquery := quantizeF32ToU8(query)
-
 	var results []SearchResult
 
+	search := func(id string) {
+		off, ok := idx.offsets[id]
+		if !ok {
+			return
+		}
+		var vec []byte
+		if off >= 0 {
+			vec = idx.readVecAt(off)
+		} else {
+			bufIdx := -(off + 1)
+			if bufIdx < len(idx.buffer) && idx.buffer[bufIdx].nodeID != "" {
+				vec = idx.buffer[bufIdx].vec
+			}
+		}
+		if vec == nil {
+			return
+		}
+		sim := cosineSimU8(qquery, vec)
+		results = append(results, SearchResult{NodeID: id, Similarity: sim})
+	}
+
 	if candidates != nil {
-		// Filtered scan: only check matching IDs.
 		for id := range candidates {
-			off, ok := idx.offsets[id]
-			if !ok {
-				continue
-			}
-			vec := idx.readVecAt(off)
-			if vec == nil {
-				continue
-			}
-			sim := cosineSimU8(qquery, vec)
-			results = append(results, SearchResult{NodeID: id, Similarity: sim})
+			search(id)
 		}
 	} else {
-		// Full sequential scan.
-		for id, off := range idx.offsets {
-			vec := idx.readVecAt(off)
-			if vec == nil {
-				continue
-			}
-			sim := cosineSimU8(qquery, vec)
-			results = append(results, SearchResult{NodeID: id, Similarity: sim})
+		for id := range idx.offsets {
+			search(id)
 		}
 	}
 
@@ -278,8 +352,11 @@ func (idx *MmapFlatIndex) Len() int {
 	return len(idx.offsets)
 }
 
-// Close unmaps and closes the underlying file.
+// Close flushes buffered vectors, unmaps, and closes the file.
 func (idx *MmapFlatIndex) Close() error {
+	// Flush outside the lock (Flush takes its own lock).
+	idx.Flush()
+
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if idx.data != nil {

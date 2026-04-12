@@ -142,6 +142,66 @@ func TestMmapFlatEmpty(t *testing.T) {
 	}
 }
 
+func TestMmapFlatBufferAndFlush(t *testing.T) {
+	idx := newTestMmapIndex(t, 4)
+
+	// Add vectors (goes to buffer, not disk).
+	idx.Add("n1", []float32{1, 0, 0, 0})
+	idx.Add("n2", []float32{0, 1, 0, 0})
+
+	// Should be searchable from buffer before flush.
+	results := idx.Search([]float32{1, 0, 0, 0}, 1, nil)
+	if len(results) != 1 || results[0].NodeID != "n1" {
+		t.Fatalf("expected n1 from buffer search, got %v", results)
+	}
+
+	// Flush to disk.
+	if err := idx.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should still be searchable from mmap'd data.
+	results = idx.Search([]float32{1, 0, 0, 0}, 1, nil)
+	if len(results) != 1 || results[0].NodeID != "n1" {
+		t.Fatalf("expected n1 from mmap search after flush, got %v", results)
+	}
+
+	if idx.Len() != 2 {
+		t.Fatalf("expected 2 after flush, got %d", idx.Len())
+	}
+
+	// Add another after flush (goes to new buffer).
+	idx.Add("n3", []float32{0, 0, 1, 0})
+	if idx.Len() != 3 {
+		t.Fatalf("expected 3, got %d", idx.Len())
+	}
+}
+
+func TestMmapFlatBufferRemove(t *testing.T) {
+	idx := newTestMmapIndex(t, 4)
+
+	idx.Add("n1", []float32{1, 0, 0, 0})
+	idx.Add("n2", []float32{0, 1, 0, 0})
+
+	// Remove from buffer (before flush).
+	idx.Remove("n1")
+	if idx.Len() != 1 {
+		t.Fatalf("expected 1 after buffer remove, got %d", idx.Len())
+	}
+
+	results := idx.Search([]float32{1, 0, 0, 0}, 10, nil)
+	if len(results) != 1 || results[0].NodeID != "n2" {
+		t.Fatalf("expected only n2 after remove, got %v", results)
+	}
+
+	// Flush and verify.
+	idx.Flush()
+	results = idx.Search([]float32{0, 1, 0, 0}, 1, nil)
+	if len(results) != 1 || results[0].NodeID != "n2" {
+		t.Fatalf("expected n2 after flush, got %v", results)
+	}
+}
+
 func TestMmapFlatDimensionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vec.flat")
