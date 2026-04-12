@@ -23,7 +23,7 @@ func openTestBolt(t *testing.T) *bolt.DB {
 func newTestBboltPropIdx(t *testing.T) *BboltPropertyIndex {
 	t.Helper()
 	db := openTestBolt(t)
-	idx, err := NewBboltPropertyIndex(db)
+	idx, err := NewBboltPropertyIndex(db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestBboltPropertyPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx1, err := NewBboltPropertyIndex(db1)
+	idx1, err := NewBboltPropertyIndex(db1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestBboltPropertyPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db2.Close()
-	idx2, err := NewBboltPropertyIndex(db2)
+	idx2, err := NewBboltPropertyIndex(db2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +231,34 @@ func TestBboltPropertyDuplicateAdd(t *testing.T) {
 	reds := idx.Lookup("color", graph.StringProperty("red"))
 	if len(reds) != 1 {
 		t.Fatalf("expected 1 red node (no dupes), got %d", len(reds))
+	}
+}
+
+func TestBboltPropertySelectiveIndexing(t *testing.T) {
+	db := openTestBolt(t)
+	// Only index "status" and "tags", not "color".
+	idx, err := NewBboltPropertyIndex(db, []string{"status", "tags"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idx.Add("n1", "status", graph.StringProperty("active"))
+	idx.Add("n1", "color", graph.StringProperty("red"))       // NOT indexed
+	idx.Add("n1", "meta.project", graph.StringProperty("foo")) // meta.* always indexed
+
+	// status should be findable.
+	if len(idx.Lookup("status", graph.StringProperty("active"))) != 1 {
+		t.Fatal("expected to find status=active")
+	}
+
+	// color should NOT be findable (not in indexed fields).
+	if len(idx.Lookup("color", graph.StringProperty("red"))) != 0 {
+		t.Fatal("color should not be indexed")
+	}
+
+	// meta.* should always be findable.
+	if len(idx.Lookup("meta.project", graph.StringProperty("foo"))) != 1 {
+		t.Fatal("expected to find meta.project=foo")
 	}
 }
 

@@ -134,7 +134,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
 
-	propIdx, err := index.NewBboltPropertyIndex(boltDB)
+	propIdx, err := index.NewBboltPropertyIndex(boltDB, index.DefaultIndexedFields)
 	if err != nil {
 		boltDB.Close()
 		return nil, fmt.Errorf("create bbolt property index: %w", err)

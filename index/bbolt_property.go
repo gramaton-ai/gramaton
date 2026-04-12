@@ -31,10 +31,29 @@ import (
 type BboltPropertyIndex struct {
 	db    *bolt.DB
 	batch *bolt.Tx // non-nil during Batch() call
+
+	// indexedFields controls selective property indexing (D6).
+	// If non-nil, only these fields (plus meta.* prefixed keys) are
+	// indexed. If nil, all fields are indexed (backward compat).
+	indexedFields map[string]struct{}
+}
+
+// DefaultIndexedFields is the set of fields indexed by default (D6).
+// All meta.* keys are also indexed regardless of this list.
+var DefaultIndexedFields = []string{
+	"temporality",
+	"knowledge_type",
+	"epistemic_status",
+	"resolution",
+	"processing_status",
+	"synthesis_status",
+	"content_keywords",
 }
 
 // NewBboltPropertyIndex opens or creates a bbolt-backed property index.
-func NewBboltPropertyIndex(db *bolt.DB) (*BboltPropertyIndex, error) {
+// Only the fields in indexedFields (plus meta.* keys) are indexed.
+// Pass nil for indexedFields to use DefaultIndexedFields.
+func NewBboltPropertyIndex(db *bolt.DB, indexedFields []string) (*BboltPropertyIndex, error) {
 	// Pre-create the nodekeys bucket.
 	err := db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("nodekeys"))
@@ -43,7 +62,16 @@ func NewBboltPropertyIndex(db *bolt.DB) (*BboltPropertyIndex, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bbolt property index: create nodekeys bucket: %w", err)
 	}
-	return &BboltPropertyIndex{db: db}, nil
+	var fm map[string]struct{}
+	if indexedFields != nil {
+		fm = make(map[string]struct{}, len(indexedFields))
+		for _, f := range indexedFields {
+			fm[f] = struct{}{}
+		}
+	}
+	// nil indexedFields = index everything (for tests).
+	// Non-nil = selective indexing (production).
+	return &BboltPropertyIndex{db: db, indexedFields: fm}, nil
 }
 
 // Batch executes fn within a single bbolt write transaction. All Add
@@ -87,11 +115,26 @@ func (idx *BboltPropertyIndex) view(fn func(tx *bolt.Tx) error) error {
 	return idx.db.View(fn)
 }
 
+// isIndexed returns true if the key should be indexed.
+func (idx *BboltPropertyIndex) isIndexed(key string) bool {
+	if idx.indexedFields == nil {
+		return true // no filter, index everything
+	}
+	if _, ok := idx.indexedFields[key]; ok {
+		return true
+	}
+	// Always index meta.* keys.
+	return len(key) > 5 && key[:5] == "meta."
+}
+
 func exactBucket(key string) []byte { return []byte("exact:" + key) }
 func kwBucket(key string) []byte    { return []byte("kw:" + key) }
 func strBucket(key string) []byte   { return []byte("str:" + key) }
 
 func (idx *BboltPropertyIndex) Add(nodeID, key string, val graph.Property) {
+	if !idx.isIndexed(key) {
+		return
+	}
 	if err := idx.update(func(tx *bolt.Tx) error {
 		// Track which keys this node has indexed.
 		nk, err := tx.CreateBucketIfNotExists([]byte("nodekeys"))
@@ -135,6 +178,9 @@ func (idx *BboltPropertyIndex) Add(nodeID, key string, val graph.Property) {
 }
 
 func (idx *BboltPropertyIndex) Remove(nodeID, key string, val graph.Property) {
+	if !idx.isIndexed(key) {
+		return
+	}
 	if err := idx.update(func(tx *bolt.Tx) error {
 		// Exact match.
 		if eb := tx.Bucket(exactBucket(key)); eb != nil {
