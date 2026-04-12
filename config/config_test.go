@@ -186,8 +186,8 @@ func TestNewConfigDefaults(t *testing.T) {
 	}
 
 	// Backup.
-	if cfg.Backup.Enabled {
-		t.Fatal("backup should be disabled by default")
+	if !cfg.Backup.Enabled {
+		t.Fatal("backup should be enabled by default")
 	}
 	if cfg.Backup.Retain != 2 {
 		t.Fatalf("expected retain 2, got %d", cfg.Backup.Retain)

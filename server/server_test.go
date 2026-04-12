@@ -39,6 +39,7 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
+	t.Cleanup(func() { eng.Close() })
 
 	serverCfg := DefaultConfig()
 	serverCfg.ConfigDir = dir
