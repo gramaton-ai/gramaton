@@ -120,7 +120,7 @@ func TestServiceInspectRelatedHasEdgeID(t *testing.T) {
 	eng.Save("test-edge")
 	eng.Unlock()
 
-	result, svcErr := srv.serviceInspect(id1)
+	result, svcErr := srv.serviceInspect(id1, true)
 	if svcErr != nil {
 		t.Fatalf("serviceInspect: %v", svcErr)
 	}
@@ -140,7 +140,7 @@ func TestServiceInspectRelatedHasEdgeID(t *testing.T) {
 func TestServiceInspectNotFound(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	_, svcErr := srv.serviceInspect("nonexistent")
+	_, svcErr := srv.serviceInspect("nonexistent", true)
 	if svcErr == nil {
 		t.Fatal("expected error for nonexistent record")
 	}

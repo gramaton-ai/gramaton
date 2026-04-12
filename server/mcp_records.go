@@ -70,18 +70,20 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	})
 
 	type inspectInput struct {
-		ID string `json:"id" jsonschema:"record ID to inspect"`
+		ID             string `json:"id" jsonschema:"record ID to inspect"`
+		IncludeContent *bool  `json:"include_content,omitempty" jsonschema:"include content_full in response (default true)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_inspect",
-		Description: "Get full content, metadata, and related records for a specific record.",
+		Description: "Get full content, metadata, and related records for a specific record. Set include_content=false for lightweight mode (omits content_full).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args inspectInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_inspect")
 		defer done(nil)
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
-		result, svcErr := s.serviceInspect(args.ID)
+		includeContent := args.IncludeContent == nil || *args.IncludeContent
+		result, svcErr := s.serviceInspect(args.ID, includeContent)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
 		}

@@ -183,7 +183,10 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 // serviceInspect retrieves a record with full properties, metadata summary,
 // and related edges. Records access and spread activation. Fixes Bug 2:
 // includes edge_id in related entries (MCP previously omitted it).
-func (s *Server) serviceInspect(id string) (map[string]any, *serviceError) {
+// serviceInspect returns a record with its properties and related edges.
+// When includeContent is false, content_full is omitted from the response
+// (lightweight mode per D14). Defaults to true for backward compatibility.
+func (s *Server) serviceInspect(id string, includeContent bool) (map[string]any, *serviceError) {
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
@@ -206,6 +209,9 @@ func (s *Server) serviceInspect(id string) (map[string]any, *serviceError) {
 
 	props := make(map[string]any, len(n.Properties))
 	for k, v := range n.Properties {
+		if !includeContent && k == "content_full" {
+			continue
+		}
 		props[k] = v.FormatValue()
 	}
 

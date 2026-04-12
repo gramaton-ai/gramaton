@@ -201,8 +201,9 @@ func joinStrings(ss []string) string {
 
 func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	includeContent := r.URL.Query().Get("include_content") != "false"
 
-	result, svcErr := s.serviceInspect(id)
+	result, svcErr := s.serviceInspect(id, includeContent)
 	if svcErr != nil {
 		s.writeServiceError(w, svcErr)
 		return
