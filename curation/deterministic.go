@@ -32,6 +32,7 @@ type DeterministicResult struct {
 	OrphansLinked        int
 	DuplicatesSuperseded int
 	SectionsLinked       int
+	ObservationsCreated  int // observation child nodes extracted (D18, D23)
 	ConceptsCreated      int // new concept nodes created (template content)
 	GCCollected          int
 	GCDryRun             bool
@@ -577,6 +578,12 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// related_to edges. This connects knowledge that spans documents.
 	result.SectionsLinked = linkSections(e, cfg, logger)
 
+	// --- Observation extraction phase (D18, D23) ---
+	// Extract key sentences from processed records >500 chars that
+	// don't yet have observation children. Embeds inline via batched
+	// Ollama calls.
+	result.ObservationsCreated = extractAndCreateObservations(e, cfg, logger)
+
 	// --- Garbage collection phase ---
 	// Hard delete records that meet ALL junk criteria.
 	if cfg.GC.Enabled {
@@ -588,12 +595,13 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	result.ConceptCandidates = candidates
 	result.Manifest = manifest
 
-	if mutations > 0 {
+	if mutations > 0 || result.ObservationsCreated > 0 {
 		logger.Info("deterministic curation complete",
 			"component", "curation",
 			"lifecycle_transitions", result.LifecycleTransitions,
 			"orphans_linked", result.OrphansLinked,
 			"duplicates_superseded", result.DuplicatesSuperseded,
+			"observations_created", result.ObservationsCreated,
 			"quality_repairs", result.QualityRepairs,
 			"quality_flags", result.QualityFlags,
 			"gc_collected", result.GCCollected,
