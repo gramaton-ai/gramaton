@@ -10,7 +10,7 @@ import (
 )
 
 // setupCombinedGraph creates a diverse set of records for combined filter testing.
-func setupCombinedGraph() (*graph.Graph, *index.PropertyIndex, index.VectorIndex) {
+func setupCombinedGraph() (*graph.Graph, index.PropertyIndex, index.VectorIndex) {
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	vecIdx := index.NewFlatIndex()

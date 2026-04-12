@@ -28,7 +28,7 @@ func (m *mockEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 }
 
 // setupTestGraph creates a graph with several knowledge records for testing.
-func setupTestGraph() (*graph.Graph, *index.PropertyIndex, index.VectorIndex) {
+func setupTestGraph() (*graph.Graph, index.PropertyIndex, index.VectorIndex) {
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	vecIdx := index.NewFlatIndex()

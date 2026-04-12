@@ -29,7 +29,7 @@ var propMagic = [4]byte{'P', 'I', 'D', 'X'}
 // (key, property, nodeID) tuple. On unmarshal, Add is called for each
 // tuple, rebuilding all derived indexes (sorted, strings, keywords,
 // nodeKeys).
-func (idx *PropertyIndex) MarshalBinary() ([]byte, error) {
+func (idx *MemoryPropertyIndex) MarshalBinary() ([]byte, error) {
 	// Collect all tuples for deterministic output.
 	type tuple struct {
 		key, serializedVal, nodeID string
@@ -73,7 +73,7 @@ func (idx *PropertyIndex) MarshalBinary() ([]byte, error) {
 
 // UnmarshalBinary restores the property index from binary data.
 // Clears any existing state and replays Add for each stored tuple.
-func (idx *PropertyIndex) UnmarshalBinary(data []byte) error {
+func (idx *MemoryPropertyIndex) UnmarshalBinary(data []byte) error {
 	if len(data) < 10 {
 		return fmt.Errorf("property index: data too short (%d bytes)", len(data))
 	}

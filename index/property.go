@@ -8,11 +8,39 @@ import (
 )
 
 // PropertyIndex supports exact match, range, and substring queries over
-// node properties. It maintains internal data structures that must be
-// kept in sync with the graph via Add/Remove calls.
+// node properties. Implementations must be kept in sync with the graph
+// via Add/Remove calls.
 //
-// The index is not thread-safe. The server layer handles serialization.
-type PropertyIndex struct {
+// Implementations: MemoryPropertyIndex (in-memory maps, current default),
+// and future bbolt-backed implementation (D2, Phase 1).
+type PropertyIndex interface {
+	// Add indexes a property value for a node.
+	Add(nodeID, key string, val graph.Property)
+	// Remove removes a specific property value for a node from the index.
+	Remove(nodeID, key string, val graph.Property)
+	// RemoveNode removes all indexed properties for a node.
+	RemoveNode(nodeID string, props graph.Properties)
+	// Lookup returns all node IDs with an exact property match.
+	Lookup(key string, val graph.Property) []string
+	// Range returns all node IDs where the property value is between min and max (inclusive).
+	Range(key string, min, max graph.Property) []string
+	// Contains returns all node IDs where the string property contains the substring (case-sensitive).
+	Contains(key, substring string) []string
+	// ContainsFold returns all node IDs where the string property contains the substring (case-insensitive).
+	ContainsFold(key, substring string) []string
+	// LookupKeyword returns all node IDs where the StringList property contains the keyword.
+	LookupKeyword(key, keyword string) []string
+	// NodesWithKey returns all node IDs that have the given key indexed.
+	NodesWithKey(key string) map[string]struct{}
+	// KeywordCounts returns keyword -> count for all keywords under the given key.
+	KeywordCounts(key string) map[string]int
+	// Count returns the total number of indexed entries across all keys.
+	Count() int
+}
+
+// MemoryPropertyIndex is an in-memory implementation of PropertyIndex
+// using Go maps. Not thread-safe -- the server layer handles serialization.
+type MemoryPropertyIndex struct {
 	// Exact match: key → serialized value → set of node IDs.
 	exact map[string]map[string]map[string]struct{}
 
@@ -38,9 +66,16 @@ type rangeEntry struct {
 	NodeID string
 }
 
-// NewPropertyIndex creates an empty property index.
-func NewPropertyIndex() *PropertyIndex {
-	return &PropertyIndex{
+// NewPropertyIndex creates an empty in-memory property index.
+// Deprecated: Use NewMemoryPropertyIndex for clarity. This alias
+// exists for backward compatibility during the interface migration.
+func NewPropertyIndex() *MemoryPropertyIndex {
+	return NewMemoryPropertyIndex()
+}
+
+// NewMemoryPropertyIndex creates an empty in-memory property index.
+func NewMemoryPropertyIndex() *MemoryPropertyIndex {
+	return &MemoryPropertyIndex{
 		exact:    make(map[string]map[string]map[string]struct{}),
 		sorted:   make(map[string][]rangeEntry),
 		strings:  make(map[string]map[string]string),
@@ -51,7 +86,7 @@ func NewPropertyIndex() *PropertyIndex {
 
 // Add indexes a property value for a node. Call this when a node is
 // created or a property is set.
-func (idx *PropertyIndex) Add(nodeID, key string, val graph.Property) {
+func (idx *MemoryPropertyIndex) Add(nodeID, key string, val graph.Property) {
 	// Track which keys this node has indexed.
 	if _, ok := idx.nodeKeys[nodeID]; !ok {
 		idx.nodeKeys[nodeID] = make(map[string]struct{})
@@ -125,7 +160,7 @@ func (idx *PropertyIndex) Add(nodeID, key string, val graph.Property) {
 
 // Remove removes a specific property value for a node from the index.
 // Call this before updating a property (remove old value, then add new).
-func (idx *PropertyIndex) Remove(nodeID, key string, val graph.Property) {
+func (idx *MemoryPropertyIndex) Remove(nodeID, key string, val graph.Property) {
 	// Exact match.
 	serialized := serializeValue(val)
 	if byVal, ok := idx.exact[key]; ok {
@@ -192,14 +227,14 @@ func (idx *PropertyIndex) Remove(nodeID, key string, val graph.Property) {
 
 // RemoveNode removes all indexed properties for a node. Call this when
 // a node is deleted. Requires the node's current properties to clean up.
-func (idx *PropertyIndex) RemoveNode(nodeID string, props graph.Properties) {
+func (idx *MemoryPropertyIndex) RemoveNode(nodeID string, props graph.Properties) {
 	for key, val := range props {
 		idx.Remove(nodeID, key, val)
 	}
 }
 
 // Lookup returns all node IDs with an exact property match.
-func (idx *PropertyIndex) Lookup(key string, val graph.Property) []string {
+func (idx *MemoryPropertyIndex) Lookup(key string, val graph.Property) []string {
 	serialized := serializeValue(val)
 	byVal, ok := idx.exact[key]
 	if !ok {
@@ -219,7 +254,7 @@ func (idx *PropertyIndex) Lookup(key string, val graph.Property) []string {
 // Range returns all node IDs where the property value is between min
 // and max (inclusive). Only works for ordered types (String, Float64,
 // Int64, Timestamp). Panics if min and max have different types.
-func (idx *PropertyIndex) Range(key string, min, max graph.Property) []string {
+func (idx *MemoryPropertyIndex) Range(key string, min, max graph.Property) []string {
 	entries, ok := idx.sorted[key]
 	if !ok {
 		return nil
@@ -248,7 +283,7 @@ func (idx *PropertyIndex) Range(key string, min, max graph.Property) []string {
 
 // Contains returns all node IDs where the string property for the given
 // key contains the substring (case-sensitive).
-func (idx *PropertyIndex) Contains(key, substring string) []string {
+func (idx *MemoryPropertyIndex) Contains(key, substring string) []string {
 	byNode, ok := idx.strings[key]
 	if !ok {
 		return nil
@@ -264,7 +299,7 @@ func (idx *PropertyIndex) Contains(key, substring string) []string {
 
 // ContainsFold returns all node IDs where the string property for the
 // given key contains the substring (case-insensitive).
-func (idx *PropertyIndex) ContainsFold(key, substring string) []string {
+func (idx *MemoryPropertyIndex) ContainsFold(key, substring string) []string {
 	byNode, ok := idx.strings[key]
 	if !ok {
 		return nil
@@ -281,7 +316,7 @@ func (idx *PropertyIndex) ContainsFold(key, substring string) []string {
 
 // LookupKeyword returns all node IDs where the StringList property for
 // the given key contains the specified keyword (exact match).
-func (idx *PropertyIndex) LookupKeyword(key, keyword string) []string {
+func (idx *MemoryPropertyIndex) LookupKeyword(key, keyword string) []string {
 	byKW, ok := idx.keywords[key]
 	if !ok {
 		return nil
@@ -298,7 +333,7 @@ func (idx *PropertyIndex) LookupKeyword(key, keyword string) []string {
 }
 
 // NodesWithKey returns all node IDs that have the given key indexed.
-func (idx *PropertyIndex) NodesWithKey(key string) map[string]struct{} {
+func (idx *MemoryPropertyIndex) NodesWithKey(key string) map[string]struct{} {
 	byVal, ok := idx.exact[key]
 	if !ok {
 		return nil
@@ -314,7 +349,7 @@ func (idx *PropertyIndex) NodesWithKey(key string) map[string]struct{} {
 
 // KeywordCounts returns keyword -> count for all keywords under the
 // given key. Used by curation to find concept candidates.
-func (idx *PropertyIndex) KeywordCounts(key string) map[string]int {
+func (idx *MemoryPropertyIndex) KeywordCounts(key string) map[string]int {
 	byKW, ok := idx.keywords[key]
 	if !ok {
 		return nil
@@ -327,7 +362,7 @@ func (idx *PropertyIndex) KeywordCounts(key string) map[string]int {
 }
 
 // Count returns the total number of indexed entries across all keys.
-func (idx *PropertyIndex) Count() int {
+func (idx *MemoryPropertyIndex) Count() int {
 	total := 0
 	for _, byVal := range idx.exact {
 		for _, nodes := range byVal {

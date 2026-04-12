@@ -30,7 +30,7 @@ type Engine struct {
 	cfg      config.Config
 	store    *storage.Store
 	graph    *graph.Graph
-	propIdx  *index.PropertyIndex
+	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Full   *index.BM25Index // content_full (detail match, weight 1x)
 	bm25Medium *index.BM25Index // content_medium (theme match, weight 2x)
@@ -281,7 +281,7 @@ func (e *Engine) HeadHashLocked() string {
 func (e *Engine) Graph() *graph.Graph { return e.graph }
 
 // PropIdx returns the property index.
-func (e *Engine) PropIdx() *index.PropertyIndex { return e.propIdx }
+func (e *Engine) PropIdx() index.PropertyIndex { return e.propIdx }
 
 // VecIdx returns the vector index.
 func (e *Engine) VecIdx() index.VectorIndex { return e.vecIdx }
@@ -363,15 +363,17 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		}
 	}
 
-	// Persist the property index.
+	// Persist the property index (only for MemoryPropertyIndex).
 	var propRoot string
-	propData, err := e.propIdx.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshal property index: %w", err)
-	}
-	propRoot, err = e.store.Write(propData)
-	if err != nil {
-		return nil, fmt.Errorf("write property index: %w", err)
+	if memIdx, ok := e.propIdx.(*index.MemoryPropertyIndex); ok {
+		propData, err := memIdx.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("marshal property index: %w", err)
+		}
+		propRoot, err = e.store.Write(propData)
+		if err != nil {
+			return nil, fmt.Errorf("write property index: %w", err)
+		}
 	}
 
 	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
@@ -1071,7 +1073,7 @@ func (e *Engine) EdgeCount() int {
 // indicates that the corresponding index was restored from a persisted
 // snapshot and should be skipped. When all five are true, this is a
 // no-op (the target state for lazy loading).
-func rebuildIndexes(g graph.NodeReader, propIdx *index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, bloomFull, bloomMedium, bloomShort *index.BloomIndex, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
+func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, bloomFull, bloomMedium, bloomShort *index.BloomIndex, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
 	if bm25FullLoaded && bm25MediumLoaded && bm25ShortLoaded && vecLoaded && propLoaded {
 		return
 	}
