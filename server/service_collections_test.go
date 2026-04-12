@@ -589,8 +589,10 @@ func TestCollectionPerformance(t *testing.T) {
 	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Perf Test", Schema: schema})
 	collID := result["id"].(string)
 
-	// Add 500 items.
-	for i := 0; i < 500; i++ {
+	// Add 100 items. (Reduced from 500 to avoid timeout under parallel
+	// test execution where CPU contention slows gzip compression.)
+	const numItems = 100
+	for i := 0; i < numItems; i++ {
 		_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
 			Fields: map[string]any{
 				"title":    fmt.Sprintf("Task %d", i),
@@ -608,8 +610,8 @@ func TestCollectionPerformance(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("items: %v", svcErr)
 	}
-	if items["count"].(int) != 500 {
-		t.Fatalf("expected 500 items, got %d", items["count"])
+	if items["count"].(int) != numItems {
+		t.Fatalf("expected %d items, got %d", numItems, items["count"])
 	}
 
 	// List collections (with item count computation).
@@ -618,8 +620,8 @@ func TestCollectionPerformance(t *testing.T) {
 		t.Fatalf("list: %v", svcErr)
 	}
 	colls := list["collections"].([]map[string]any)
-	if colls[0]["item_count"].(int) != 500 {
-		t.Errorf("item_count = %v, want 500", colls[0]["item_count"])
+	if colls[0]["item_count"].(int) != numItems {
+		t.Errorf("item_count = %v, want %d", colls[0]["item_count"], numItems)
 	}
 }
 

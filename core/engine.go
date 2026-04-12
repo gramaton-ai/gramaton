@@ -480,17 +480,20 @@ func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
 // Flushes buffered vectors and closes the bbolt database.
+// Returns the first error encountered; all resources are closed regardless.
 func (e *Engine) Close() error {
-	var vecErr error
+	var firstErr error
 	if c, ok := e.vecIdx.(interface{ Close() error }); ok {
-		vecErr = c.Close()
-	}
-	if e.boltDB != nil {
-		if err := e.boltDB.Close(); err != nil {
-			return err
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return vecErr
+	if e.boltDB != nil {
+		if err := e.boltDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing

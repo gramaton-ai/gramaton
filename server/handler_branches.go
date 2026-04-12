@@ -151,7 +151,11 @@ func (s *Server) handleMergeBranch(w http.ResponseWriter, r *http.Request) {
 	dataDir := s.engine.Config().DataDir
 
 	// Ensure we're on main.
-	core.SetActiveBranch(dataDir, "main")
+	if err := core.SetActiveBranch(dataDir, "main"); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "branch_error",
+			fmt.Sprintf("failed to switch to main: %v", err), false)
+		return
+	}
 
 	branchHash, err := core.ReadRef(dataDir, name)
 	if err != nil {
@@ -174,9 +178,18 @@ func (s *Server) handleMergeBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	core.WriteRef(dataDir, "main", commit.Hash)
-	core.DeleteRef(dataDir, name)
+	if err := core.WriteRef(dataDir, "main", commit.Hash); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "ref_error",
+			fmt.Sprintf("failed to update main ref: %v", err), false)
+		s.log.Error("branch merge ref update failed", "component", "branch", "branch", name, "err", err)
+		return
+	}
+	if err := core.DeleteRef(dataDir, name); err != nil {
+		// Non-fatal: merge succeeded but branch ref cleanup failed.
+		s.log.Warn("branch ref cleanup failed after merge", "component", "branch", "branch", name, "err", err)
+	}
 
+	s.log.Info("branch merged", "component", "branch", "branch", name, "commit", core.TruncHash(commit.Hash))
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{
 		"merged":     name,
 		"new_commit": core.TruncHash(commit.Hash),
@@ -210,12 +223,19 @@ func (s *Server) handleDiscardBranch(w http.ResponseWriter, r *http.Request) {
 		mainHash, err := core.ReadRef(dataDir, "main")
 		if err == nil {
 			headPath := filepath.Join(dataDir, "HEAD")
-			core.AtomicWriteFile(headPath, []byte(mainHash), 0o600)
+			if err := core.AtomicWriteFile(headPath, []byte(mainHash), 0o600); err != nil {
+				s.log.Error("failed to write HEAD during branch discard", "component", "branch", "branch", name, "err", err)
+			}
 		}
-		core.SetActiveBranch(dataDir, "main")
+		if err := core.SetActiveBranch(dataDir, "main"); err != nil {
+			s.log.Error("failed to switch to main during branch discard", "component", "branch", "branch", name, "err", err)
+		}
 	}
 
-	core.DeleteRef(dataDir, name)
+	if err := core.DeleteRef(dataDir, name); err != nil {
+		s.log.Warn("branch ref cleanup failed during discard", "component", "branch", "branch", name, "err", err)
+	}
 
+	s.log.Info("branch discarded", "component", "branch", "branch", name)
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{"discarded": name})
 }

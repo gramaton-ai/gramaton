@@ -203,7 +203,10 @@ func (s *Server) serviceInspect(id string, includeContent bool) (map[string]any,
 		AttenuationFactor: cfg.Activation.AttenuationFactor,
 	})
 	s.engine.MarkAccessDirty()
-	n, _ = s.engine.Graph().GetNode(id)
+	n, ok = s.engine.Graph().GetNode(id)
+	if !ok {
+		return nil, errInternal("node disappeared after access update")
+	}
 
 	props := make(map[string]any, len(n.Properties))
 	for k, v := range n.Properties {

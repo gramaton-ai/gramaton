@@ -111,7 +111,9 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 			defer s.engine.Unlock()
 
 			dataDir := s.engine.Config().DataDir
-			core.SetActiveBranch(dataDir, "main")
+			if err := core.SetActiveBranch(dataDir, "main"); err != nil {
+				return mcpErr(fmt.Sprintf("failed to switch to main: %v", err))
+			}
 			branchHash, err := core.ReadRef(dataDir, args.Name)
 			if err != nil {
 				return mcpErr(fmt.Sprintf("branch %q not found", args.Name))
@@ -124,8 +126,13 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 			if err != nil {
 				return mcpErr("failed to save merge")
 			}
-			core.WriteRef(dataDir, "main", commit.Hash)
-			core.DeleteRef(dataDir, args.Name)
+			if err := core.WriteRef(dataDir, "main", commit.Hash); err != nil {
+				return mcpErr(fmt.Sprintf("failed to update main ref: %v", err))
+			}
+			if err := core.DeleteRef(dataDir, args.Name); err != nil {
+				s.log.Warn("branch ref cleanup failed after merge", "component", "branch", "branch", args.Name, "err", err)
+			}
+			s.log.Info("branch merged", "component", "branch", "branch", args.Name, "commit", core.TruncHash(commit.Hash))
 			return mcpJSONResult(map[string]any{"merged": args.Name, "new_commit": core.TruncHash(commit.Hash)})
 
 		case "discard":
@@ -147,11 +154,18 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 				mainHash, err := core.ReadRef(dataDir, "main")
 				if err == nil {
 					headPath := filepath.Join(dataDir, "HEAD")
-					core.AtomicWriteFile(headPath, []byte(mainHash), 0o600)
+					if err := core.AtomicWriteFile(headPath, []byte(mainHash), 0o600); err != nil {
+						s.log.Error("failed to write HEAD during branch discard", "component", "branch", "branch", args.Name, "err", err)
+					}
 				}
-				core.SetActiveBranch(dataDir, "main")
+				if err := core.SetActiveBranch(dataDir, "main"); err != nil {
+					s.log.Error("failed to switch to main during branch discard", "component", "branch", "branch", args.Name, "err", err)
+				}
 			}
-			core.DeleteRef(dataDir, args.Name)
+			if err := core.DeleteRef(dataDir, args.Name); err != nil {
+				s.log.Warn("branch ref cleanup failed during discard", "component", "branch", "branch", args.Name, "err", err)
+			}
+			s.log.Info("branch discarded", "component", "branch", "branch", args.Name)
 			return mcpJSONResult(map[string]any{"discarded": args.Name})
 
 		default:

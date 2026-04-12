@@ -2,6 +2,7 @@ package index
 
 import (
 	"encoding/binary"
+	"log/slog"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -52,10 +53,9 @@ func (c *BboltCollectionCache) view(fn func(tx *bolt.Tx) error) error {
 
 // AddMember adds an item ID to a collection's cached member list.
 func (c *BboltCollectionCache) AddMember(collectionID, itemID string) {
-	c.update(func(tx *bolt.Tx) error {
+	if err := c.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(collMembersBucket)
 		ids := decodeIDList(b.Get([]byte(collectionID)))
-		// Check for duplicate.
 		for _, id := range ids {
 			if id == itemID {
 				return nil
@@ -63,12 +63,14 @@ func (c *BboltCollectionCache) AddMember(collectionID, itemID string) {
 		}
 		ids = append(ids, itemID)
 		return b.Put([]byte(collectionID), encodeIDList(ids))
-	})
+	}); err != nil {
+		slog.Error("collection cache: add member failed", "collection", collectionID, "item", itemID, "err", err)
+	}
 }
 
 // RemoveMember removes an item ID from a collection's cached member list.
 func (c *BboltCollectionCache) RemoveMember(collectionID, itemID string) {
-	c.update(func(tx *bolt.Tx) error {
+	if err := c.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(collMembersBucket)
 		ids := decodeIDList(b.Get([]byte(collectionID)))
 		for i, id := range ids {
@@ -81,7 +83,9 @@ func (c *BboltCollectionCache) RemoveMember(collectionID, itemID string) {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Error("collection cache: remove member failed", "collection", collectionID, "item", itemID, "err", err)
+	}
 }
 
 // Members returns all cached item IDs for a collection.
@@ -112,9 +116,11 @@ func (c *BboltCollectionCache) MemberCount(collectionID string) int {
 
 // DeleteCollection removes the cache entry for a collection.
 func (c *BboltCollectionCache) DeleteCollection(collectionID string) {
-	c.update(func(tx *bolt.Tx) error {
+	if err := c.update(func(tx *bolt.Tx) error {
 		return tx.Bucket(collMembersBucket).Delete([]byte(collectionID))
-	})
+	}); err != nil {
+		slog.Error("collection cache: delete collection failed", "collection", collectionID, "err", err)
+	}
 }
 
 // --- Encoding: uint32(count) + for each: uint16(len) + []byte(id) ---

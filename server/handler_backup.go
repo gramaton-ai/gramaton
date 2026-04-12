@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -152,7 +153,12 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	headHash := strings.TrimSpace(string(headData))
 	if headHash != "" {
-		s.engine.Graph().Load(s.engine.Store(), headHash)
+		if _, err := s.engine.Graph().Load(s.engine.Store(), headHash); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "restore_error",
+				fmt.Sprintf("failed to load graph after restore: %v", err), false)
+			s.log.Error("graph load failed after restore", "component", "backup", "err", err)
+			return
+		}
 		s.engine.RebuildAllIndexes()
 	}
 

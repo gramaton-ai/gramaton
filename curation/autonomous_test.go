@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +13,11 @@ import (
 )
 
 // mockLLM is a controllable LLM provider for testing.
+// Thread-safe: guards mutable state with a mutex because
+// parallelLLM() calls Complete/CompleteWithModel from
+// multiple goroutines concurrently.
 type mockLLM struct {
+	mu        sync.Mutex
 	responses []string // returned in order, cycles if exhausted
 	errors    []error  // if non-nil at index, return error instead
 	calls     int
@@ -20,6 +25,8 @@ type mockLLM struct {
 }
 
 func (m *mockLLM) Complete(_ context.Context, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	idx := m.calls
 	m.calls++
 	m.models = append(m.models, "") // no model override
@@ -33,6 +40,8 @@ func (m *mockLLM) Complete(_ context.Context, _ string) (string, error) {
 }
 
 func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	idx := m.calls
 	m.calls++
 	m.models = append(m.models, model)
