@@ -120,7 +120,11 @@ func (s *Server) handleCheckoutBranch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reload graph from the branch's commit.
-	s.engine.Graph().Load(s.engine.Store(), hash)
+	if _, err := s.engine.Graph().Load(s.engine.Store(), hash); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "load_error",
+			fmt.Sprintf("failed to load branch state: %v", err), false)
+		return
+	}
 	s.engine.RebuildAllIndexes()
 
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{
@@ -157,7 +161,11 @@ func (s *Server) handleMergeBranch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fast-forward merge: adopt the branch's state.
-	s.engine.Graph().Load(s.engine.Store(), branchHash)
+	if _, err := s.engine.Graph().Load(s.engine.Store(), branchHash); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "load_error",
+			fmt.Sprintf("failed to load branch state: %v", err), false)
+		return
+	}
 	s.engine.RebuildAllIndexes()
 
 	commit, err := s.engine.Save(fmt.Sprintf("merge branch %q", name))

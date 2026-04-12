@@ -706,7 +706,11 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 			continue
 		}
 		e.PropIdx().RemoveNode(id, n.Properties)
+		e.BM25Full().Remove(id)
 		e.VecIdx().Remove(id)
+		if e.SecIdx() != nil {
+			e.SecIdx().RemoveNode(id)
+		}
 		e.Graph().DeleteNode(id)
 		deleted++
 	}

@@ -35,6 +35,23 @@ func (s *Server) collectionByName(name string) (string, bool) {
 // collectionItemEdges returns all member_of edges pointing to the collection.
 // Caller must hold at least RLock.
 func (s *Server) collectionItemEdges(collectionID string) []*graph.Edge {
+	// Use the collection cache for O(1) member lookup when available.
+	if cc := s.engine.CollCache(); cc != nil {
+		members := cc.Members(collectionID)
+		if len(members) > 0 {
+			var edges []*graph.Edge
+			for _, memberID := range members {
+				for _, e := range s.engine.Graph().EdgesFrom(memberID) {
+					if e.Type == "member_of" && e.TargetID == collectionID {
+						edges = append(edges, e)
+						break
+					}
+				}
+			}
+			return edges
+		}
+		// Cache is empty -- fall through to edge scan (cold start).
+	}
 	var edges []*graph.Edge
 	for _, e := range s.engine.Graph().EdgesTo(collectionID) {
 		if e.Type == "member_of" {
@@ -497,6 +514,9 @@ func (s *Server) serviceCollectionAdd(collectionID string, req *collectionAddReq
 	if _, err := s.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
 		return nil, errInternal(err.Error())
 	}
+	if cc := s.engine.CollCache(); cc != nil {
+		cc.AddMember(collectionID, n.ID)
+	}
 
 	if _, err := s.engine.Save("collection_add"); err != nil {
 		return nil, errInternal(err.Error())
@@ -519,6 +539,9 @@ func (s *Server) serviceCollectionRemove(collectionID, itemID string) (map[strin
 	}
 
 	s.engine.Graph().DeleteEdge(edge.ID)
+	if cc := s.engine.CollCache(); cc != nil {
+		cc.RemoveMember(collectionID, itemID)
+	}
 
 	if _, err := s.engine.Save("collection_remove"); err != nil {
 		return nil, errInternal(err.Error())
@@ -630,6 +653,10 @@ func (s *Server) serviceCollectionMove(collectionID, itemID string, req *collect
 	s.engine.Graph().DeleteEdge(edge.ID)
 	if _, err := s.engine.Graph().AddEdge(itemID, req.TargetCollectionID, "member_of", 1.0, nil); err != nil {
 		return nil, errInternal(err.Error())
+	}
+	if cc := s.engine.CollCache(); cc != nil {
+		cc.RemoveMember(collectionID, itemID)
+		cc.AddMember(req.TargetCollectionID, itemID)
 	}
 
 	if _, err := s.engine.Save("collection_move"); err != nil {
@@ -920,7 +947,11 @@ func compareAny(a, b any) bool {
 		return va < vb
 	case json.Number:
 		fa, _ := va.Float64()
-		fb, _ := b.(json.Number).Float64()
+		vb, ok := b.(json.Number)
+		if !ok {
+			return true
+		}
+		fb, _ := vb.Float64()
 		return fa < fb
 	default:
 		return fmt.Sprint(a) < fmt.Sprint(b)

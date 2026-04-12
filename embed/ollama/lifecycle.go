@@ -125,24 +125,3 @@ func PullModel(ctx context.Context, endpoint, model string, onProgress func(stri
 	}
 	return nil
 }
-
-// ListModels returns the names of all locally available models.
-func ListModels(endpoint string) ([]string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(endpoint + "/api/tags")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var tags tagsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return nil, err
-	}
-
-	var names []string
-	for _, m := range tags.Models {
-		names = append(names, m.Name)
-	}
-	return names, nil
-}

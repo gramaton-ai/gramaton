@@ -231,7 +231,7 @@ func (idx *BboltBM25Index) removeFromPostingsViaReverse(tx *bolt.Tx, nodeID stri
 }
 
 func (idx *BboltBM25Index) Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult {
-	if len(queryTokens) == 0 || idx.numDocs == 0 || k <= 0 {
+	if len(queryTokens) == 0 || idx.numDocs == 0 || k <= 0 || idx.avgDL == 0 {
 		return nil
 	}
 

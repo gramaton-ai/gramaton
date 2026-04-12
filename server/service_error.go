@@ -18,10 +18,6 @@ type serviceError struct {
 
 func (e *serviceError) Error() string { return e.Message }
 
-func errInput(msg string) *serviceError {
-	return &serviceError{Status: http.StatusBadRequest, Code: "input_error", Message: msg, Retryable: true}
-}
-
 func errMissing(msg string) *serviceError {
 	return &serviceError{Status: http.StatusBadRequest, Code: "missing_field", Message: msg, Retryable: true}
 }

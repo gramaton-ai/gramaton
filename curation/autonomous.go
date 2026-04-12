@@ -1078,7 +1078,6 @@ type classificationResult struct {
 	EpistemicStatus string   `json:"epistemic_status"`
 	Keywords        []string `json:"keywords"`
 	SummaryShort    string   `json:"summary_short"`
-	SummaryMedium   string   `json:"summary_medium,omitempty"`
 }
 
 // buildContextSignals extracts context signal properties from a node

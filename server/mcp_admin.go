@@ -93,7 +93,9 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 			if err := core.SetActiveBranch(dataDir, args.Name); err != nil {
 				return mcpErr("failed to set active branch")
 			}
-			s.engine.Graph().Load(s.engine.Store(), hash)
+			if _, err := s.engine.Graph().Load(s.engine.Store(), hash); err != nil {
+				return mcpErr(fmt.Sprintf("failed to load branch state: %v", err))
+			}
 			s.engine.RebuildAllIndexes()
 			return mcpJSONResult(map[string]any{"name": args.Name, "commit": core.TruncHash(hash), "checked_out": true})
 
@@ -114,7 +116,9 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 			if err != nil {
 				return mcpErr(fmt.Sprintf("branch %q not found", args.Name))
 			}
-			s.engine.Graph().Load(s.engine.Store(), branchHash)
+			if _, err := s.engine.Graph().Load(s.engine.Store(), branchHash); err != nil {
+				return mcpErr(fmt.Sprintf("failed to load branch state: %v", err))
+			}
 			s.engine.RebuildAllIndexes()
 			commit, err := s.engine.Save(fmt.Sprintf("merge branch %q", args.Name))
 			if err != nil {

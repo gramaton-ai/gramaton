@@ -3,10 +3,9 @@ package graph
 // NodeReader is the read interface for graph access. All read-side
 // consumers should accept this interface rather than *Graph directly.
 //
-// This exists to support lazy loading: the current *Graph loads
-// everything into memory, but a future implementation will load nodes
-// on demand from the prolly tree with LRU caching. Callers that go
-// through NodeReader work with either implementation unchanged.
+// The graph loads nodes lazily from the prolly tree with LRU caching.
+// Callers that go through NodeReader work with any implementation
+// unchanged.
 type NodeReader interface {
 	GetNode(id string) (*Node, bool)
 	NodeIterator() NodeIterator

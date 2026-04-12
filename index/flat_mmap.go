@@ -15,7 +15,7 @@ import (
 // File layout:
 //
 //	header (32 bytes):
-//	  magic    [4]byte   "VFLAT"[0:4]
+//	  magic    [4]byte   "VFLT"
 //	  version  uint16    1
 //	  dim      uint16    vector dimension (e.g., 384)
 //	  count    uint32    number of entries
@@ -27,7 +27,7 @@ import (
 //	  vector   [dim]byte      uint8 quantized vector
 //
 // Vectors are stored as uint8 (quantized from float32 on Add).
-// Search computes uint8 cosine similarity via dot product.
+// Search computes uint8 cosine similarity via dot product divided by norms (full cosine).
 // The file supports O(1) append (extend + write entry + update count).
 type MmapFlatIndex struct {
 	mu   sync.RWMutex

@@ -12,9 +12,9 @@ import (
 // HNSWIndex is a Hierarchical Navigable Small World graph for
 // approximate nearest neighbor search. Implements VectorIndex.
 //
-// At small scale (< HNSWThreshold vectors), a FlatIndex wrapper
-// provides exact results. Above the threshold, HNSW gives O(log N)
-// search with high recall.
+// At small scale, the engine uses FlatIndex or MmapFlatIndex instead
+// of HNSW. Above the threshold, HNSW gives O(log N) search with
+// high recall.
 type HNSWIndex struct {
 	nodes    map[string]*hnswNode
 	entryID  string // entry point node (highest layer)

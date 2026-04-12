@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"time"
 )
 
 // modelAliases maps short names to Claude CLI model identifiers.
@@ -77,11 +76,9 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	start := time.Now()
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("claudecli: command failed (%v): %s", err, stderr.String())
 	}
-	_ = time.Since(start)
 
 	var resp cliResponse
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {

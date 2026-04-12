@@ -32,11 +32,6 @@ type intakeRequest struct {
 	ContextWho      string `json:"context_who,omitempty"`
 	ContextFindable string `json:"context_findable_by,omitempty"`
 
-	// Collection routing hints. When present, the server checks if a
-	// matching collection/item exists and routes accordingly.
-	ContextRelatedCollection string `json:"context_related_collection,omitempty"`
-	ContextRelatedItem       string `json:"context_related_item,omitempty"`
-
 	// Agent-provided hints (passed to classifier, not stored as final).
 	Temporality   string   `json:"temporality,omitempty"`
 	Confidence    *float64 `json:"confidence,omitempty"`

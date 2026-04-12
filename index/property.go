@@ -11,8 +11,8 @@ import (
 // node properties. Implementations must be kept in sync with the graph
 // via Add/Remove calls.
 //
-// Implementations: MemoryPropertyIndex (in-memory maps, current default),
-// and future bbolt-backed implementation (D2, Phase 1).
+// Implementations: MemoryPropertyIndex (in-memory maps),
+// and BboltPropertyIndex (bbolt-backed).
 type PropertyIndex interface {
 	// Add indexes a property value for a node.
 	Add(nodeID, key string, val graph.Property)

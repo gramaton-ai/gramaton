@@ -21,9 +21,8 @@ type reembedRequest struct {
 }
 
 type ingestRequest struct {
-	Path      string        `json:"path,omitempty"`
-	Recursive bool          `json:"recursive,omitempty"`
-	Files     []ingestFile  `json:"files,omitempty"`
+	Path  string       `json:"path,omitempty"`
+	Files []ingestFile `json:"files,omitempty"`
 }
 
 type ingestFile struct {

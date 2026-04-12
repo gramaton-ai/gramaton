@@ -19,6 +19,7 @@ type Tool struct {
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Full index.BM25Index // content_full BM25 (D12: single layer)
+	secIdx   *index.BboltSecondaryIndex
 	embedder embedder
 	cfg      config.Config
 }
@@ -27,9 +28,9 @@ type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-// New creates a search tool. embedder and bm25Full may be nil.
-func New(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, emb embedder, cfg config.Config) *Tool {
-	return &Tool{
+// New creates a search tool. embedder, bm25Full, and secIdx may be nil.
+func New(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, emb embedder, cfg config.Config, opts ...ToolOption) *Tool {
+	t := &Tool{
 		graph:    g,
 		propIdx:  propIdx,
 		vecIdx:   vecIdx,
@@ -37,6 +38,19 @@ func New(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorInd
 		embedder: emb,
 		cfg:      cfg,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
+}
+
+// ToolOption configures optional search tool dependencies.
+type ToolOption func(*Tool)
+
+// WithSecondaryIndex provides the secondary index for optimized
+// edge-count and missing-field queries.
+func WithSecondaryIndex(idx *index.BboltSecondaryIndex) ToolOption {
+	return func(t *Tool) { t.secIdx = idx }
 }
 
 // Sort field constants.
@@ -355,7 +369,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		scoredResults = append(scoredResults, sr)
 	}
 
-	// Step 5: Sort.
+	// Step 4: Sort.
 	useTimeSort := sortField == SortCreatedAt || sortField == SortLastAccessed
 	sort.Slice(scoredResults, func(i, j int) bool {
 		var less bool
@@ -372,7 +386,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 		return !less
 	})
-	// Step 5.5: Parent dedup (D14). For observation nodes, resolve the
+	// Step 5: Parent dedup (D14). For observation nodes, resolve the
 	// parent ID. Keep only the highest-scoring result per parent.
 	// Results are already sorted by score (descending), so the first
 	// result for each parent is the best.
@@ -423,11 +437,8 @@ func (t *Tool) resolveParentID(nodeID string) string {
 	return ""
 }
 
-// filterCandidates returns node IDs matching the query's metadata filters.
 // computeSimilarities runs vector search, BM25 search, or both with
-// RRF fusion. Returns nodeID -> normalized similarity score in [0, 1].
-// D12: single BM25 layer (content_full only).
-// computeSimilarities returns nodeID -> normalized similarity score and
+// RRF fusion. Returns nodeID -> normalized similarity score and
 // nodeID -> match source ("vector", "bm25", or "both") for query tracing (D14).
 func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map[string]struct{}) (map[string]float64, map[string]string) {
 	similarities := make(map[string]float64)
@@ -535,6 +546,7 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 	return similarities, sources
 }
 
+// filterCandidates returns node IDs matching the query's metadata filters.
 func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Start with all nodes if no filters narrow the set via index.
 	var sets []map[string]struct{}
@@ -590,6 +602,10 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	}
 
 	// Missing filter: exclude nodes that have the specified properties.
+	// Uses the property index (authoritative) rather than the secondary
+	// field-existence index, since nodes created outside IndexNode
+	// (e.g., in tests or direct Graph().AddNode) won't have secondary
+	// index entries.
 	for _, field := range q.Missing {
 		have := t.propIdx.NodesWithKey(field)
 		result := make(map[string]struct{})
@@ -787,6 +803,7 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	return result
 }
 
+
 func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	inputs := ScoreInputs{
 		Similarity: similarity,
@@ -981,10 +998,9 @@ func capitalize(s string) string {
 	return string(r)
 }
 
-// computeStaleness returns 0.0-1.0 representing how stale a record is.
+// ComputeStaleness returns 0.0-1.0 representing how stale a record is.
 // Uses the same decay model as access recency but inverted: 1.0 = maximally
 // stale, 0.0 = just accessed. Immutable records always return 0.
-// ComputeStaleness returns 0.0-1.0 representing how stale a record is.
 // Exported for use by the curation layer.
 func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) float64 {
 	temp, _ := n.Properties.GetString("temporality")
@@ -1004,8 +1020,8 @@ func ComputeStaleness(n *graph.Node, now time.Time, cfg config.DecayConfig) floa
 }
 
 // edgeCount returns the total number of edges (in + out) for a node,
-// excluding chunk_of and section_of edges (structural, not semantic).
-// edgeCount returns semantic (non-structural) edge count via graph.IsStructuralEdge.
+// excluding structural edges (chunk_of, section_of, member_of,
+// observation_of) via graph.IsStructuralEdge.
 func edgeCount(g graph.NodeReader, id string) int {
 	count := 0
 	for _, e := range g.EdgesFrom(id) {

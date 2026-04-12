@@ -581,15 +581,6 @@ type requestIDKey struct{}
 // requestCounter generates monotonically increasing request IDs.
 var requestCounter atomic.Uint64
 
-// requestID extracts the correlation ID from a context. Returns ""
-// if no ID is set.
-func requestID(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey{}).(string); ok {
-		return id
-	}
-	return ""
-}
-
 // securityHeaders wraps a handler with security response headers
 // and request logging. Skips the /mcp path since MCP has its own
 // content types.

@@ -6,16 +6,15 @@ import (
 	"runtime"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
-// handleHealth is a lock-free liveness endpoint. It returns immediately
-// without acquiring any graph lock, so it stays responsive even when
-// curation or bulk writes are holding the write lock. Used by the CLI
-// to verify the server is alive (verifyServer).
+// handleHealth is a lightweight liveness endpoint used by the CLI to
+// verify the server is alive (verifyServer).
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "ok",
-		"version": s.cfg.StoreName,
+		"version": version.Version,
 	})
 }
 
@@ -53,8 +52,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSONLocked(w, http.StatusOK, status)
 }
 
-// handleShutdown triggers graceful server shutdown. Restricted to
-// loopback connections only.
+// handleShutdown triggers graceful server shutdown.
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if !isLoopback(r) {
 		s.writeError(w, http.StatusForbidden, "forbidden",
@@ -62,7 +60,7 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]string{
+	s.writeJSON(w, http.StatusOK, map[string]string{
 		"message": "shutting down",
 	})
 

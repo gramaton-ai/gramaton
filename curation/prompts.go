@@ -13,8 +13,7 @@ Respond with this exact JSON structure:
   "knowledge_type": "episodic|semantic|procedural|conceptual|reference",
   "epistemic_status": "well_established|probable|speculative|contested|refuted",
   "keywords": ["keyword1", "keyword2", ...],
-  "summary_short": "max 200 char summary",
-  "summary_medium": "max 1500 char abstract (only for content longer than 500 chars)"
+  "summary_short": "max 200 char summary"
 }
 
 === CRITICAL: META VS OBJECT LEVEL ===
@@ -164,9 +163,7 @@ summary_short: Under 200 characters. The essence of the record for
 search result display. Start with the key fact, decision, or topic.
 Do not start with "This record..." -- just state the content.
 
-summary_medium: For content longer than 500 characters, write a
-~1500 character abstract covering the major themes and key details.
-For short content, omit this field entirely.`
+Do NOT include summary_medium in the response -- it is no longer used.`
 
 // classifyPrompt is the per-record user message for classification.
 // It accepts two format arguments: content (%s) and context signals (%s).
@@ -217,15 +214,3 @@ Guide:
 - none: The records are not meaningfully related despite surface similarity. No action needed.
 
 Only use "contradicts" or "supersedes" when you are confident. When in doubt, use "related" or "none".`
-
-const conceptSynthesisPrompt = `Synthesize the following related knowledge records into a concept summary. This concept node will serve as a retrieval hub connecting related knowledge.
-
-Keyword: %s
-Number of records: %d
-
-Record summaries:
-%s
-
-Write a concise synthesis (2-4 sentences) that captures the essence of what these records collectively establish about this concept. Focus on what they have in common, key themes, and the most important insights. No preamble, no quotes.
-
-Synthesis:`

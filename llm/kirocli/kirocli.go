@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // modelAliases maps short names to Kiro CLI model identifiers.
@@ -80,11 +79,9 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	start := time.Now()
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("kirocli: command failed (%v): %s", err, truncate(stderr.String(), 200))
 	}
-	_ = time.Since(start)
 
 	return extractResponse(stdout.String())
 }

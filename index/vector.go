@@ -6,8 +6,9 @@ import (
 )
 
 // VectorIndex supports nearest-neighbor search over float32 vectors.
-// Implementations: FlatIndex (exact, brute-force) and HNSW (approximate,
-// added when scale demands it). Both behind this interface.
+// Implementations: FlatIndex (exact, brute-force), MmapFlatIndex
+// (disk-backed, quantized), and HNSW (approximate, added when scale
+// demands it). All behind this interface.
 type VectorIndex interface {
 	// Add inserts a vector for a node ID. If the node already exists
 	// in the index, its vector is replaced.

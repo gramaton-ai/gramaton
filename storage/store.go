@@ -238,12 +238,22 @@ func gzipCompress(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// gzipDecompress decompresses gzip data.
+// gzipDecompress decompresses gzip data. Limits decompressed size to
+// 100MB to prevent compression bomb attacks.
 func gzipDecompress(data []byte) ([]byte, error) {
 	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	return io.ReadAll(r)
+	const maxDecompressedSize = 100 * 1024 * 1024 // 100MB
+	lr := io.LimitReader(r, maxDecompressedSize+1)
+	out, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxDecompressedSize {
+		return nil, fmt.Errorf("decompressed data exceeds %d bytes limit", maxDecompressedSize)
+	}
+	return out, nil
 }

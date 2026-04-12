@@ -4,7 +4,7 @@ package graph
 // The Graph delegates edge CRUD and traversal queries to this interface.
 //
 // Implementations: MemoryEdgeStore (in-memory maps, current default),
-// and future bbolt-backed implementation (D25, Phase 1).
+// and BboltEdgeStore (bbolt-backed).
 type EdgeStore interface {
 	// Put stores an edge and updates adjacency indexes.
 	Put(e *Edge)

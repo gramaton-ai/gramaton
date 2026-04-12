@@ -2,8 +2,6 @@ package core
 
 import (
 	"fmt"
-
-	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // ValidationResult holds the outcome of a store integrity check.
@@ -196,5 +194,3 @@ func (r *ValidationResult) addWarning(format string, args ...any) {
 	r.Warnings = append(r.Warnings, fmt.Sprintf(format, args...))
 }
 
-// isChunkNode returns true if a node is a chunk or section child.
-func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }

@@ -125,7 +125,9 @@ func (e *Engine) Repair() *RepairResult {
 
 	// Save if we made changes.
 	if r.DanglingEdgesRemoved > 0 || r.OrphanChunksRemoved > 0 {
-		e.Save("repair")
+		if _, err := e.Save("repair"); err != nil {
+			r.Messages = append(r.Messages, fmt.Sprintf("save after repair failed: %v", err))
+		}
 	}
 
 	return r

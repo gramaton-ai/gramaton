@@ -161,16 +161,6 @@ func (r *Runner) SetPostCycleHook(hook func()) {
 	r.postCycleHook = hook
 }
 
-// ResetCircuitBreaker clears the LLM pause state, allowing
-// autonomous curation to resume. Called by manual triggers.
-func (r *Runner) ResetCircuitBreaker() {
-	r.state.mu.Lock()
-	defer r.state.mu.Unlock()
-	r.state.LLMPaused = false
-	r.state.LLMPauseReason = ""
-	r.state.ConsecutiveErrorCycles = 0
-}
-
 // Trigger runs a curation cycle immediately. Returns false if a
 // cycle is already in progress. Resets the circuit breaker so that
 // manual triggers always attempt LLM work.

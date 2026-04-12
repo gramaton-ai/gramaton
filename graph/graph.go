@@ -15,7 +15,8 @@ var ErrNotFound = errors.New("not found")
 
 // Graph is a property graph engine backed by a content-addressed store.
 // Nodes are lazily loaded from a prolly tree on first access and cached
-// in memory. Edges are fully loaded at startup (they're lightweight).
+// in memory. Edges are loaded at startup (MemoryEdgeStore) or on demand
+// (BboltEdgeStore).
 //
 // The graph tracks which nodes and edges have been modified since the
 // last save (dirty tracking), enabling incremental persistence. The

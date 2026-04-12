@@ -169,16 +169,27 @@ func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error 
 		return pre.err
 	}
 
-	var bestVec []float32
+	// Store all embedding vectors as node properties.
 	for key, vec := range pre.vectors {
 		prop := graph.VectorProperty(vec)
 		s.engine.Graph().SetNodeProperty(nodeID, key, prop)
 		s.engine.PropIdx().Add(nodeID, key, prop)
-		bestVec = vec // last one wins (full > abstract > short > keywords)
 	}
 
-	if bestVec != nil {
-		s.engine.VecIdx().Add(nodeID, bestVec)
+	// Pick the best vector for the search index with deterministic
+	// preference: full > abstract > short > keywords.
+	bestKey := ""
+	for _, candidate := range []string{
+		"embedding_full", "embedding_abstract",
+		"embedding_short", "embedding_keywords",
+	} {
+		if _, ok := pre.vectors[candidate]; ok {
+			bestKey = candidate
+			break
+		}
+	}
+	if bestKey != "" {
+		s.engine.VecIdx().Add(nodeID, pre.vectors[bestKey])
 	}
 
 	modelProp := graph.StringProperty(pre.model)

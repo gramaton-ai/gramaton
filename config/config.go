@@ -52,8 +52,8 @@ type EmbeddingConfig struct {
 	// Bedrock if the default (512) produces suboptimal chunk sizes.
 	MaxTokens int `yaml:"max_tokens,omitempty"`
 
-	// Dimension is the embedding vector dimension. Default 384 (MiniLM-L6
-	// per D3). Must match the model's output dimension. The flat vector
+	// Dimension is the embedding vector dimension. Default 384
+	// (mxbai-embed-large). Must match the model's output dimension. The flat vector
 	// index file records its dimension; changing this after initial setup
 	// requires re-embedding all records.
 	Dimension int `yaml:"dimension,omitempty"`
@@ -262,7 +262,7 @@ func Defaults() Config {
 		Server: ServerConfig{
 			Port:        0,
 			AutoStart:   true,
-			IdleTimeout: 4 * time.Hour, // D15: increase from 30m to hours
+			IdleTimeout: 4 * time.Hour, // Long idle timeout for async usage patterns (D15)
 		},
 
 		Embedding: EmbeddingConfig{

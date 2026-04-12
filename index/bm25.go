@@ -10,8 +10,8 @@ import (
 // BM25Index provides term-frequency / inverse-document-frequency based
 // scoring for keyword search alongside the vector index.
 //
-// Implementations: MemoryBM25Index (in-memory, current default), and
-// future disk-backed implementation with roaring bitmaps (D21, Phase 4).
+// Implementations: MemoryBM25Index (in-memory), and
+// BboltBM25Index (bbolt-backed).
 type BM25Index interface {
 	// Add indexes a document's content. Tokenizes the text and stores term frequencies.
 	Add(nodeID, text string)
@@ -145,7 +145,7 @@ func (idx *MemoryBM25Index) recomputeAvgDL() {
 // the query tokens using BM25. Returns the top-k results sorted by
 // descending score. If candidates is nil, all documents are scored.
 func (idx *MemoryBM25Index) Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult {
-	if len(queryTokens) == 0 || idx.numDocs == 0 {
+	if len(queryTokens) == 0 || idx.numDocs == 0 || idx.avgDL == 0 {
 		return nil
 	}
 

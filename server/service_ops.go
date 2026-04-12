@@ -365,8 +365,7 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 }
 
 // serviceObserve validates and fires off an asynchronous observation.
-// Fixes Bug 4: applies full input validation (message counts, content
-// lengths, roles) that MCP previously skipped.
+// Applies full input validation (message counts, content lengths, roles).
 func (s *Server) serviceObserve(req observeRequest) (map[string]any, *serviceError) {
 	cfg := s.engine.Config()
 	if !cfg.Observe.Enabled {

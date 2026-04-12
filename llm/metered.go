@@ -17,12 +17,6 @@ func NewMetered(inner Provider, tracker *UsageTracker) *Metered {
 	return &Metered{inner: inner, tracker: tracker}
 }
 
-// WithTask returns a shallow copy with a specific task label for
-// metrics attribution. Does not affect the underlying provider.
-func (m *Metered) WithTask(task string) *Metered {
-	return &Metered{inner: m.inner, tracker: m.tracker, task: task}
-}
-
 func (m *Metered) Complete(ctx context.Context, prompt string) (string, error) {
 	start := time.Now()
 	resp, err := m.inner.Complete(ctx, prompt)

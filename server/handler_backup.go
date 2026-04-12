@@ -10,10 +10,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/backup"
-	"github.com/gramaton-ai/gramaton/search"
 )
-
-type backupRequest struct{}
 
 type restoreRequest struct {
 	Path  string `json:"path"`
@@ -22,18 +19,6 @@ type restoreRequest struct {
 
 type exportRequest struct {
 	Format string `json:"format"` // json, csv, markdown
-
-	// Search filters (same as searchRequest).
-	Text              string   `json:"text"`
-	Top               int      `json:"top"`
-	Temporality       string   `json:"temporality,omitempty"`
-	KnowledgeType     string   `json:"knowledge_type,omitempty"`
-	EpistemicStatus   string   `json:"epistemic_status,omitempty"`
-	ConfidenceMin     *float64 `json:"confidence_min,omitempty"`
-	ConfidenceMax     *float64 `json:"confidence_max,omitempty"`
-	Keywords          []string `json:"keywords,omitempty"`
-	Since             string   `json:"since,omitempty"`
-	Match             string   `json:"match,omitempty"`
 }
 
 type importRequest struct {
@@ -131,6 +116,15 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	if req.Path == "" {
 		s.writeError(w, http.StatusBadRequest, "missing_field", "path is required", true)
+		return
+	}
+	// Validate restore path: must be absolute and end with .tar.gz.
+	if !filepath.IsAbs(req.Path) {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "path must be absolute", true)
+		return
+	}
+	if filepath.Ext(req.Path) != ".gz" {
+		s.writeError(w, http.StatusBadRequest, "invalid_field", "path must be a .tar.gz file", true)
 		return
 	}
 	if !req.Force {
@@ -263,27 +257,4 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", time.Since(start).Milliseconds())
 
 	s.writeJSON(w, http.StatusOK, result)
-}
-
-// buildExportQuery constructs a search.Query from an export request.
-// This allows export to use the same filtering as search.
-func buildExportQuery(req exportRequest) search.Query {
-	q := search.Query{
-		Text:          req.Text,
-		Top:           req.Top,
-		Temporality:   req.Temporality,
-		KnowledgeType: req.KnowledgeType,
-		EpistemicStatus: req.EpistemicStatus,
-		ConfidenceMin: req.ConfidenceMin,
-		ConfidenceMax: req.ConfidenceMax,
-		Keywords:      req.Keywords,
-		Match:         req.Match,
-	}
-	if q.Top <= 0 {
-		q.Top = maxExportTop
-	}
-	if q.Top > maxExportTop {
-		q.Top = maxExportTop
-	}
-	return q
 }

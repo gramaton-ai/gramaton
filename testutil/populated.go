@@ -1,8 +1,6 @@
 package testutil
 
 import (
-	"math"
-	"reflect"
 	"testing"
 	"time"
 
@@ -619,61 +617,3 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 	return eng, s
 }
 
-// PopulatedEngineWithEmbeddings creates a PopulatedEngine and replaces
-// the deterministic test embeddings with the provided real embeddings.
-// Keys in the embeddings map are PopulatedStore field names (e.g.
-// "WorkReorg", "HealthAllergy"). Records not in the map keep their
-// original toy embeddings.
-func PopulatedEngineWithEmbeddings(t *testing.T, embeddings map[string][]float32) (*core.Engine, *PopulatedStore) {
-	t.Helper()
-	eng, store := PopulatedEngine(t)
-
-	if len(embeddings) == 0 {
-		return eng, store
-	}
-
-	// Build field name -> record ID mapping via reflection.
-	idMap := storeFieldIDs(store)
-
-	eng.Lock()
-	defer eng.Unlock()
-
-	for fieldName, vec := range embeddings {
-		id, ok := idMap[fieldName]
-		if !ok || id == "" {
-			continue
-		}
-		eng.SetProp(id, "embedding_full", graph.BytesProperty(float32sToBytes(vec)))
-		eng.VecIdx().Remove(id)
-		eng.VecIdx().Add(id, vec)
-	}
-	eng.Save("eval: real embeddings")
-	return eng, store
-}
-
-// storeFieldIDs maps PopulatedStore field names to their string (ID) values.
-func storeFieldIDs(store *PopulatedStore) map[string]string {
-	m := make(map[string]string)
-	v := reflect.ValueOf(store).Elem()
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if f.Type.Kind() == reflect.String {
-			m[f.Name] = v.Field(i).String()
-		}
-	}
-	return m
-}
-
-// float32sToBytes converts a float32 slice to bytes for graph storage.
-func float32sToBytes(v []float32) []byte {
-	b := make([]byte, len(v)*4)
-	for i, f := range v {
-		bits := math.Float32bits(f)
-		b[i*4] = byte(bits)
-		b[i*4+1] = byte(bits >> 8)
-		b[i*4+2] = byte(bits >> 16)
-		b[i*4+3] = byte(bits >> 24)
-	}
-	return b
-}

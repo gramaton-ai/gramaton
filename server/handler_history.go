@@ -63,7 +63,11 @@ func (s *Server) handleRecordHistory(w http.ResponseWriter, recordID string, lim
 	var prevHash string
 
 	// Walk backwards through commits to find property changes.
-	for hash != "" && len(changes) < limit {
+	// Cap traversal depth to avoid holding the read lock too long.
+	const maxTraversal = 5000
+	traversed := 0
+	for hash != "" && len(changes) < limit && traversed < maxTraversal {
+		traversed++
 		commit, err := loadCommit(store, hash)
 		if err != nil {
 			break
@@ -128,7 +132,9 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		}
 
 		hash := headHash
-		for hash != "" {
+		traversed := 0
+		for hash != "" && traversed < 5000 {
+			traversed++
 			commit, err := loadCommit(store, hash)
 			if err != nil {
 				break

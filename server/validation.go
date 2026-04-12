@@ -28,7 +28,6 @@ const (
 	maxLogLimit       = 500
 	maxLogTraversal   = 5000
 	maxTopicLength    = 1024
-	maxExportTop      = 10000
 	maxSearchHops     = 10
 	maxExploreNodes   = 10000
 	maxEdgeTypeLen    = 256
@@ -39,9 +38,8 @@ const (
 const (
 	maxKeywordLength      = 256
 	maxReembedBatch       = 500
-	maxSummaryShortLen    = 500
-	maxSummaryMediumLen = 5000
-	maxSourceRefLen       = 2048
+	maxSummaryShortLen = 500
+	maxSourceRefLen    = 2048
 	maxContextFieldLen    = 2048
 )
 

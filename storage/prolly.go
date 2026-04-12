@@ -14,7 +14,7 @@ import (
 //
 // Leaf nodes contain sorted key-value entries. Internal nodes contain
 // the first key and chunk hash of each child. Split boundaries are
-// determined by a rolling hash over the key, producing
+// determined by a content hash (FNV-1a) over the key, producing
 // content-defined chunks that share structure across similar trees.
 type ProllyTree struct {
 	store          *Store
@@ -597,7 +597,7 @@ func SortedEntries(m map[string]string) []ProllyEntry {
 }
 
 func sortEntries(entries []ProllyEntry) {
-	// Insertion sort for small slices, stdlib sort for larger.
+	// Insertion sort for small slices, custom quickSort for larger.
 	if len(entries) <= 32 {
 		for i := 1; i < len(entries); i++ {
 			for j := i; j > 0 && entries[j].Key < entries[j-1].Key; j-- {
@@ -606,7 +606,6 @@ func sortEntries(entries []ProllyEntry) {
 		}
 		return
 	}
-	// Use bytes.Compare-based sort for stability.
 	n := len(entries)
 	quickSort(entries, 0, n-1)
 }
