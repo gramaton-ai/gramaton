@@ -159,6 +159,51 @@ func TestBboltBM25Empty(t *testing.T) {
 	}
 }
 
+func TestBboltBM25ReverseIndexRemove(t *testing.T) {
+	idx := newTestBboltBM25(t)
+
+	idx.Add("n1", "alpha beta gamma delta")
+	idx.Add("n2", "alpha epsilon zeta")
+
+	// n1 has 4 terms. Remove should clean up all 4 posting lists.
+	idx.Remove("n1")
+
+	// alpha should now only return n2.
+	results := idx.Search(Tokenize("alpha"), 10, nil)
+	if len(results) != 1 || results[0].NodeID != "n2" {
+		t.Fatalf("expected only n2 for alpha after remove, got %v", results)
+	}
+
+	// beta/gamma/delta should return nothing.
+	for _, term := range []string{"beta", "gamma", "delta"} {
+		results = idx.Search(Tokenize(term), 10, nil)
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results for %s after remove, got %d", term, len(results))
+		}
+	}
+}
+
+func TestBboltBM25IncrementalTotalLen(t *testing.T) {
+	idx := newTestBboltBM25(t)
+
+	idx.Add("n1", "one two three") // 3 tokens
+	idx.Add("n2", "four five")     // 2 tokens
+
+	if idx.totalLen != 5 {
+		t.Fatalf("expected totalLen 5, got %d", idx.totalLen)
+	}
+
+	idx.Remove("n1") // subtract 3
+	if idx.totalLen != 2 {
+		t.Fatalf("expected totalLen 2 after remove, got %d", idx.totalLen)
+	}
+
+	idx.Add("n2", "six seven eight nine") // replace: subtract 2, add 4
+	if idx.totalLen != 4 {
+		t.Fatalf("expected totalLen 4 after replace, got %d", idx.totalLen)
+	}
+}
+
 func TestBboltBM25Batch(t *testing.T) {
 	idx := newTestBboltBM25(t)
 

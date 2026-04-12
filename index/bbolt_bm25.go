@@ -29,14 +29,16 @@ type BboltBM25Index struct {
 	b  float64
 
 	// Cached metadata to avoid bbolt reads on every Search.
-	numDocs int
-	avgDL   float64
-	batch   *bolt.Tx // non-nil during Batch() call
+	numDocs  int
+	totalLen uint64  // sum of all doc lengths, maintained incrementally
+	avgDL    float64
+	batch    *bolt.Tx // non-nil during Batch() call
 }
 
 var (
 	bm25PostingsBucket = []byte("bm25:postings")
 	bm25DoclenBucket   = []byte("bm25:doclen")
+	bm25ReverseBucket  = []byte("bm25:reverse") // nodeID -> list of terms (for efficient Remove)
 	bm25MetaBucket     = []byte("bm25:meta")
 )
 
@@ -50,7 +52,7 @@ func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
 	}
 
 	err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bm25PostingsBucket, bm25DoclenBucket, bm25MetaBucket} {
+		for _, name := range [][]byte{bm25PostingsBucket, bm25DoclenBucket, bm25ReverseBucket, bm25MetaBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -73,25 +75,25 @@ func (idx *BboltBM25Index) loadMeta() {
 			idx.numDocs = int(binary.LittleEndian.Uint32(v))
 		}
 		if v := mb.Get([]byte("total_len")); len(v) >= 8 {
-			totalLen := binary.LittleEndian.Uint64(v)
-			if idx.numDocs > 0 {
-				idx.avgDL = float64(totalLen) / float64(idx.numDocs)
-			}
+			idx.totalLen = binary.LittleEndian.Uint64(v)
+		}
+		if idx.numDocs > 0 {
+			idx.avgDL = float64(idx.totalLen) / float64(idx.numDocs)
 		}
 		return nil
 	})
 }
 
-func (idx *BboltBM25Index) saveMeta(tx *bolt.Tx, totalLen uint64) {
+func (idx *BboltBM25Index) saveMeta(tx *bolt.Tx) {
 	mb := tx.Bucket(bm25MetaBucket)
 	var buf4 [4]byte
 	binary.LittleEndian.PutUint32(buf4[:], uint32(idx.numDocs))
 	mb.Put([]byte("num_docs"), buf4[:])
 	var buf8 [8]byte
-	binary.LittleEndian.PutUint64(buf8[:], totalLen)
+	binary.LittleEndian.PutUint64(buf8[:], idx.totalLen)
 	mb.Put([]byte("total_len"), buf8[:])
 	if idx.numDocs > 0 {
-		idx.avgDL = float64(totalLen) / float64(idx.numDocs)
+		idx.avgDL = float64(idx.totalLen) / float64(idx.numDocs)
 	} else {
 		idx.avgDL = 0
 	}
@@ -141,17 +143,25 @@ func (idx *BboltBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]i
 	if err := idx.update(func(tx *bolt.Tx) error {
 		pb := tx.Bucket(bm25PostingsBucket)
 		db := tx.Bucket(bm25DoclenBucket)
+		rb := tx.Bucket(bm25ReverseBucket)
 
-		// Remove old entry if exists.
-		if oldLen := db.Get([]byte(nodeID)); oldLen != nil {
-			idx.removeFromPostings(tx, nodeID)
+		// Remove old entry if exists (using reverse index for efficiency).
+		if oldLenBytes := db.Get([]byte(nodeID)); oldLenBytes != nil {
+			oldLen := int(binary.LittleEndian.Uint32(oldLenBytes))
+			idx.removeFromPostingsViaReverse(tx, nodeID)
 			idx.numDocs--
+			idx.totalLen -= uint64(oldLen)
 		}
 
 		// Add to posting lists.
+		terms := make([]string, 0, len(termFreqs))
 		for term, count := range termFreqs {
 			addToPostingList(pb, []byte(term), nodeID, count)
+			terms = append(terms, term)
 		}
+
+		// Store reverse index (nodeID -> list of terms).
+		rb.Put([]byte(nodeID), encodeTermList(terms))
 
 		// Store doc length.
 		var buf [4]byte
@@ -159,10 +169,8 @@ func (idx *BboltBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]i
 		db.Put([]byte(nodeID), buf[:])
 
 		idx.numDocs++
-
-		// Update total length.
-		totalLen := idx.computeTotalLen(tx)
-		idx.saveMeta(tx, totalLen)
+		idx.totalLen += uint64(docLength)
+		idx.saveMeta(tx)
 
 		return nil
 	}); err != nil {
@@ -173,16 +181,18 @@ func (idx *BboltBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]i
 func (idx *BboltBM25Index) Remove(nodeID string) {
 	if err := idx.update(func(tx *bolt.Tx) error {
 		db := tx.Bucket(bm25DoclenBucket)
-		if db.Get([]byte(nodeID)) == nil {
+		oldLenBytes := db.Get([]byte(nodeID))
+		if oldLenBytes == nil {
 			return nil // not indexed
 		}
+		oldLen := int(binary.LittleEndian.Uint32(oldLenBytes))
 
-		idx.removeFromPostings(tx, nodeID)
+		idx.removeFromPostingsViaReverse(tx, nodeID)
 		db.Delete([]byte(nodeID))
+		tx.Bucket(bm25ReverseBucket).Delete([]byte(nodeID))
 		idx.numDocs--
-
-		totalLen := idx.computeTotalLen(tx)
-		idx.saveMeta(tx, totalLen)
+		idx.totalLen -= uint64(oldLen)
+		idx.saveMeta(tx)
 
 		return nil
 	}); err != nil {
@@ -190,19 +200,22 @@ func (idx *BboltBM25Index) Remove(nodeID string) {
 	}
 }
 
-func (idx *BboltBM25Index) removeFromPostings(tx *bolt.Tx, nodeID string) {
+// removeFromPostingsViaReverse uses the reverse index (nodeID -> terms)
+// to efficiently remove a node from only the posting lists it appears in.
+// O(terms_per_doc) instead of O(vocabulary).
+func (idx *BboltBM25Index) removeFromPostingsViaReverse(tx *bolt.Tx, nodeID string) {
+	rb := tx.Bucket(bm25ReverseBucket)
 	pb := tx.Bucket(bm25PostingsBucket)
-	// Scan all posting lists and remove this nodeID.
-	// This is O(vocabulary) which is expensive. For bulk removes,
-	// rebuilding is faster. For single-record removes (the common
-	// case), it's acceptable.
-	c := pb.Cursor()
-	for k, v := c.First(); k != nil; k, v = c.Next() {
+
+	terms := decodeTermList(rb.Get([]byte(nodeID)))
+	for _, term := range terms {
+		key := []byte(term)
+		v := pb.Get(key)
 		newV := removeFromPostingList(v, nodeID)
 		if newV == nil {
-			c.Delete()
+			pb.Delete(key)
 		} else if len(newV) != len(v) {
-			pb.Put(k, newV)
+			pb.Put(key, newV)
 		}
 	}
 }
@@ -285,16 +298,44 @@ func (idx *BboltBM25Index) getDocLen(db *bolt.Bucket, nodeID string) int {
 	return int(binary.LittleEndian.Uint32(v))
 }
 
-func (idx *BboltBM25Index) computeTotalLen(tx *bolt.Tx) uint64 {
-	var total uint64
-	db := tx.Bucket(bm25DoclenBucket)
-	c := db.Cursor()
-	for k, v := c.First(); k != nil; k, v = c.Next() {
-		if len(v) >= 4 {
-			total += uint64(binary.LittleEndian.Uint32(v))
-		}
+// --- Term list encoding (for reverse index) ---
+//
+// A list of term strings: uint32(count) + for each: uint16(len) + []byte(term)
+
+func encodeTermList(terms []string) []byte {
+	size := 4
+	for _, t := range terms {
+		size += 2 + len(t)
 	}
-	return total
+	buf := make([]byte, 0, size)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(terms)))
+	for _, t := range terms {
+		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(t)))
+		buf = append(buf, t...)
+	}
+	return buf
+}
+
+func decodeTermList(data []byte) []string {
+	if len(data) < 4 {
+		return nil
+	}
+	count := int(binary.LittleEndian.Uint32(data[:4]))
+	terms := make([]string, 0, count)
+	pos := 4
+	for i := 0; i < count; i++ {
+		if pos+2 > len(data) {
+			break
+		}
+		l := int(binary.LittleEndian.Uint16(data[pos:]))
+		pos += 2
+		if pos+l > len(data) {
+			break
+		}
+		terms = append(terms, string(data[pos:pos+l]))
+		pos += l
+	}
+	return terms
 }
 
 // --- Posting list encoding ---
