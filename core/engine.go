@@ -169,9 +169,10 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	// Open mmap'd flat vector index (D1 revised: flat as v1 default).
-	// Dimension is 384 for MiniLM-L6 (D3 default). If the file already
-	// exists with a different dimension, NewMmapFlatIndex returns an error.
-	vecDim := 384
+	vecDim := cfg.Embedding.Dimension
+	if vecDim <= 0 {
+		vecDim = 384 // MiniLM-L6 default (D3)
+	}
 	vecPath := filepath.Join(cfg.DataDir, "vec.flat")
 	mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
 	if err != nil {

@@ -52,6 +52,12 @@ type EmbeddingConfig struct {
 	// Bedrock if the default (512) produces suboptimal chunk sizes.
 	MaxTokens int `yaml:"max_tokens,omitempty"`
 
+	// Dimension is the embedding vector dimension. Default 384 (MiniLM-L6
+	// per D3). Must match the model's output dimension. The flat vector
+	// index file records its dimension; changing this after initial setup
+	// requires re-embedding all records.
+	Dimension int `yaml:"dimension,omitempty"`
+
 	// OpenAI-compatible
 	BaseURL    string `yaml:"base_url,omitempty"`
 	APIKeyFile string `yaml:"api_key_file,omitempty"`
