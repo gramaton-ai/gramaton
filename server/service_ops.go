@@ -204,7 +204,6 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 		}{
 			{"content_keywords", "embedding_keywords"},
 			{"content_short", "embedding_short"},
-			{"content_medium", "embedding_medium"},
 		}
 		if !needsChunk {
 			embedSources = append(embedSources, struct {

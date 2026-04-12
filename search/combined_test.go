@@ -63,7 +63,7 @@ func setupCombinedGraph() (*graph.Graph, index.PropertyIndex, index.VectorIndex)
 
 func TestCombinedTemporalityAndConfidence(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := 0.8
 	results, err := tool.Execute(context.Background(), Query{
@@ -85,7 +85,7 @@ func TestCombinedTemporalityAndConfidence(t *testing.T) {
 
 func TestCombinedNegationAndKeyword(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Temporality: "!ephemeral",
@@ -103,7 +103,7 @@ func TestCombinedNegationAndKeyword(t *testing.T) {
 
 func TestCombinedMatchAndTemporality(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Match:       "caching",
@@ -120,7 +120,7 @@ func TestCombinedMatchAndTemporality(t *testing.T) {
 
 func TestCombinedKnowledgeTypeAndSort(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		KnowledgeType: "procedural",
@@ -142,7 +142,7 @@ func TestCombinedKnowledgeTypeAndSort(t *testing.T) {
 
 func TestCombinedMissingAndKnowledgeType(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// All records have temporality, so missing=["temporality"] returns 0.
 	results, err := tool.Execute(context.Background(), Query{
@@ -159,7 +159,7 @@ func TestCombinedMissingAndKnowledgeType(t *testing.T) {
 
 func TestCombinedAccessCountAndSort(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := int64(5)
 	results, err := tool.Execute(context.Background(), Query{
@@ -182,7 +182,7 @@ func TestCombinedAccessCountAndSort(t *testing.T) {
 
 func TestCombinedImportanceAndEpistemicStatus(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := 0.5
 	results, err := tool.Execute(context.Background(), Query{
@@ -207,7 +207,7 @@ func TestCombinedTextAndFilters(t *testing.T) {
 			"event streaming": {0.85, 0.15, 0.0},
 		},
 	}
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, emb, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, emb, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Text:          "event streaming",
@@ -229,7 +229,7 @@ func TestCombinedTextAndFilters(t *testing.T) {
 
 func TestCombinedRandomWithFilter(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Random:      true,
@@ -251,7 +251,7 @@ func TestCombinedRandomWithFilter(t *testing.T) {
 
 func TestContradictoryFiltersReturnEmpty(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// durable AND keyword=battery -- battery is ephemeral, not durable.
 	results, err := tool.Execute(context.Background(), Query{
@@ -269,7 +269,7 @@ func TestContradictoryFiltersReturnEmpty(t *testing.T) {
 
 func TestAllFiltersZeroResults(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := 0.99
 	results, err := tool.Execute(context.Background(), Query{
@@ -290,7 +290,7 @@ func TestAllFiltersZeroResults(t *testing.T) {
 
 func TestSortStaleness(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Sort:  SortStaleness,
@@ -311,7 +311,7 @@ func TestSortStaleness(t *testing.T) {
 
 func TestSortContentLength(t *testing.T) {
 	g, propIdx, vecIdx := setupCombinedGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Sort:  SortContentLength,

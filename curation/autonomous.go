@@ -264,9 +264,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if r.data.SummaryShort != "" {
 			e.SetContentProp(r.id, "content_short", r.data.SummaryShort)
 		}
-		if r.data.SummaryMedium != "" {
-			e.SetContentProp(r.id, "content_medium", r.data.SummaryMedium)
-		}
+		// content_medium generation removed (D12: single BM25 layer).
 		if r.model != "" {
 			e.SetProp(r.id, "classified_by", graph.StringProperty(r.model))
 		}

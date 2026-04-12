@@ -261,9 +261,7 @@ func applyClassification(e *core.Engine, id string, data *classificationResult, 
 	if data.SummaryShort != "" {
 		e.SetContentProp(id, "content_short", data.SummaryShort)
 	}
-	if data.SummaryMedium != "" {
-		e.SetContentProp(id, "content_medium", data.SummaryMedium)
-	}
+	// content_medium generation removed (D12: single BM25 layer).
 
 	// Determine which model classified this record.
 	n, ok := e.Graph().GetNode(id)

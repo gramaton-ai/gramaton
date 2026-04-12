@@ -75,8 +75,6 @@ func (e *Engine) Repair() *RepairResult {
 					e.PropIdx().RemoveNode(id, n.Properties)
 					e.VecIdx().Remove(id)
 					e.BM25Full().Remove(id)
-					e.BM25Medium().Remove(id)
-					e.BM25Short().Remove(id)
 				}
 				g.DeleteNode(id)
 				delete(nodeSet, id)

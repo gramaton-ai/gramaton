@@ -108,7 +108,7 @@ func setupTestGraph() (*graph.Graph, index.PropertyIndex, index.VectorIndex) {
 
 func TestSearchNoFilters(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
@@ -121,7 +121,7 @@ func TestSearchNoFilters(t *testing.T) {
 
 func TestSearchFilterByTemporality(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Temporality: "durable",
@@ -143,7 +143,7 @@ func TestSearchFilterByTemporality(t *testing.T) {
 
 func TestSearchFilterByConfidenceMin(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := 0.5
 	results, err := tool.Execute(context.Background(), Query{
@@ -166,7 +166,7 @@ func TestSearchFilterByConfidenceMin(t *testing.T) {
 
 func TestSearchFilterByKnowledgeType(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		KnowledgeType: "reference",
@@ -185,7 +185,7 @@ func TestSearchFilterByKnowledgeType(t *testing.T) {
 
 func TestSearchCombinedFilters(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	min := 0.5
 	results, err := tool.Execute(context.Background(), Query{
@@ -209,7 +209,7 @@ func TestSearchWithVectorSimilarity(t *testing.T) {
 			"kafka event pipeline": {0.95, 0.05, 0.0}, // close to n1
 		},
 	}
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, emb, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, emb, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Text: "kafka event pipeline",
@@ -229,7 +229,7 @@ func TestSearchWithVectorSimilarity(t *testing.T) {
 
 func TestSearchTopK(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 2})
 	if err != nil {
@@ -242,7 +242,7 @@ func TestSearchTopK(t *testing.T) {
 
 func TestSearchDefaultTop(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{})
 	if err != nil {
@@ -261,7 +261,7 @@ func TestSearchResultsDescendingScore(t *testing.T) {
 			"event pipeline": {0.8, 0.2, 0.0},
 		},
 	}
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, emb, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, emb, defaultCfg())
 
 	// With text, results should be sorted by effective_score descending.
 	results, err := tool.Execute(context.Background(), Query{Text: "event pipeline", Top: 10})
@@ -277,7 +277,7 @@ func TestSearchResultsDescendingScore(t *testing.T) {
 
 func TestSearchNoTextDefaultsToCreatedAtDesc(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// No text: should default to created_at descending (newest first).
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
@@ -297,7 +297,7 @@ func TestSearchNoTextDefaultsToCreatedAtDesc(t *testing.T) {
 
 func TestSearchSortByAccessCountAsc(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Top:   10,
@@ -319,7 +319,7 @@ func TestSearchSortByAccessCountAsc(t *testing.T) {
 
 func TestSearchSortByConfidenceDesc(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Top:  10,
@@ -340,7 +340,7 @@ func TestSearchSortByConfidenceDesc(t *testing.T) {
 
 func TestSearchFilterOnlyByKnowledgeType(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// No text, just filter -- should work and return filtered results.
 	results, err := tool.Execute(context.Background(), Query{
@@ -363,7 +363,7 @@ func TestSearchFilterOnlyByKnowledgeType(t *testing.T) {
 
 func TestSearchSortByContentLength(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Top:   10,
@@ -385,7 +385,7 @@ func TestSearchSortByContentLength(t *testing.T) {
 
 func TestSearchNegateTemporality(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// Exclude durable records (n1 and n4 are durable).
 	results, err := tool.Execute(context.Background(), Query{
@@ -432,7 +432,7 @@ func TestSearchMissingField(t *testing.T) {
 		}
 	}
 
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 	results, err := tool.Execute(context.Background(), Query{
 		Missing: []string{"temporality"},
 		Top:     10,
@@ -450,7 +450,7 @@ func TestSearchMissingField(t *testing.T) {
 
 func TestSearchKeywordExactMatch(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// "kafka" is a keyword on n1 only.
 	results, err := tool.Execute(context.Background(), Query{
@@ -470,7 +470,7 @@ func TestSearchKeywordExactMatch(t *testing.T) {
 
 func TestSearchKeywordMultiple(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// "event-pipeline" is on n1 and n2. Adding "kafka" narrows to n1 only.
 	results, err := tool.Execute(context.Background(), Query{
@@ -487,7 +487,7 @@ func TestSearchKeywordMultiple(t *testing.T) {
 
 func TestSearchKeywordNoMatch(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Keywords: []string{"nonexistent-keyword"},
@@ -527,7 +527,7 @@ func TestSearchFilterByImportanceMin(t *testing.T) {
 	}
 
 	min := 0.5
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 	results, err := tool.Execute(context.Background(), Query{
 		ImportanceMin: &min,
 		Top:           10,
@@ -545,7 +545,7 @@ func TestSearchFilterByImportanceMin(t *testing.T) {
 
 func TestSearchMatch(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// "RabbitMQ" appears only in n1's content.
 	results, err := tool.Execute(context.Background(), Query{
@@ -565,7 +565,7 @@ func TestSearchMatch(t *testing.T) {
 
 func TestSearchMatchCaseInsensitive(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// "HTTP" in content_full is uppercase; search lowercase.
 	results, err := tool.Execute(context.Background(), Query{
@@ -599,7 +599,7 @@ func TestSearchSimilarTo(t *testing.T) {
 	// Add embedding to n1 so similar_to can use it.
 	g.SetNodeProperty(kafkaID, "embedding_full", graph.VectorProperty([]float32{0.9, 0.1, 0.0}))
 
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 	results, err := tool.Execute(context.Background(), Query{
 		SimilarTo: kafkaID,
 		Top:       10,
@@ -625,7 +625,7 @@ func TestSearchSimilarTo(t *testing.T) {
 
 func TestSearchMatchNoHit(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Match: "zzznonexistent",
@@ -641,7 +641,7 @@ func TestSearchMatchNoHit(t *testing.T) {
 
 func TestSearchRandom(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Random: true,
@@ -663,7 +663,7 @@ func TestSearchRandom(t *testing.T) {
 
 func TestSearchRandomWithFilter(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
 		Random:      true,
@@ -686,7 +686,7 @@ func TestSearchRandomWithFilter(t *testing.T) {
 
 func TestComputeFacets(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
@@ -733,7 +733,7 @@ func TestValidSort(t *testing.T) {
 
 func TestSearchHistoricalPenalty(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
@@ -755,7 +755,7 @@ func TestSearchHistoricalPenalty(t *testing.T) {
 
 func TestSearchMetadataSummary(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
@@ -843,7 +843,7 @@ func findSubstring(s, substr string) bool {
 
 func TestSearchNoEmbedder(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg()) // nil embedder
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg()) // nil embedder
 
 	// Text query without embedder: should still work (no vector ranking).
 	results, err := tool.Execute(context.Background(), Query{
@@ -862,7 +862,7 @@ func TestSearchEmptyGraph(t *testing.T) {
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()
 	vecIdx := index.NewFlatIndex()
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{Top: 10})
 	if err != nil {
@@ -907,7 +907,7 @@ func TestSearchFilterByResolution(t *testing.T) {
 		propIdx.Add(unresolved.ID, k, v)
 	}
 
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// Filter for completed records.
 	results, err := tool.Execute(context.Background(), Query{
@@ -985,7 +985,7 @@ func TestSearchFilterByResolutionNegation(t *testing.T) {
 		propIdx.Add(abandoned.ID, k, v)
 	}
 
-	tool := New(g, propIdx, vecIdx, nil, nil, nil, nil, defaultCfg())
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
 
 	// Exclude completed -- should still find abandoned.
 	results, err := tool.Execute(context.Background(), Query{
@@ -1104,7 +1104,7 @@ func TestHybridSearchRRF(t *testing.T) {
 	bm25Idx.Add(doc3.ID, "consciousness and memory play interconnected roles in cognitive experience and narrative identity")
 
 	cfg := defaultCfg()
-	tool := New(g, propIdx, vecIdx, bm25Idx, nil, nil, nil, cfg)
+	tool := New(g, propIdx, vecIdx, bm25Idx, nil, cfg)
 
 	// Search for "consciousness memory" -- doc3 should rank first
 	// because it matches both BM25 terms, getting higher RRF score.
@@ -1180,7 +1180,7 @@ func TestSearchMetaFilter(t *testing.T) {
 	}
 
 	cfg := defaultCfg()
-	s := New(g, propIdx, vecIdx, bm25, nil, nil, nil, cfg)
+	s := New(g, propIdx, vecIdx, bm25, nil, cfg)
 
 	// Filter by assignee: should return only Sarah's ticket.
 	results, err := s.ExecuteWithVector(context.Background(), Query{

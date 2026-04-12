@@ -568,25 +568,12 @@ func TestSetContentPropUpdatesBM25Layers(t *testing.T) {
 	eng.SetContentProp(n.ID, "content_short", "databases")
 	eng.Unlock()
 
-	// All three BM25 indexes should have entries.
+	// BM25 index should have entries (single layer, D12).
 	if eng.BM25Full().Len() != 1 {
 		t.Fatalf("BM25Full should have 1 entry, got %d", eng.BM25Full().Len())
 	}
-	if eng.BM25Medium().Len() != 1 {
-		t.Fatalf("BM25Medium should have 1 entry, got %d", eng.BM25Medium().Len())
-	}
-	if eng.BM25Short().Len() != 1 {
-		t.Fatalf("BM25Short should have 1 entry, got %d", eng.BM25Short().Len())
-	}
 
-	// Each should find its respective content.
 	if len(eng.BM25Full().Search([]string{"databases"}, 10, nil)) != 1 {
 		t.Fatal("BM25Full should find 'databases'")
-	}
-	if len(eng.BM25Medium().Search([]string{"overview"}, 10, nil)) != 1 {
-		t.Fatal("BM25Medium should find 'overview'")
-	}
-	if len(eng.BM25Short().Search([]string{"databases"}, 10, nil)) != 1 {
-		t.Fatal("BM25Short should find 'databases'")
 	}
 }

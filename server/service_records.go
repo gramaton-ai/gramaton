@@ -86,7 +86,7 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 
 	// Pre-embed and pre-chunk outside the lock.
 	preEmbedded := s.preEmbedContent(req)
-	preChunked := s.engine.PreChunk(ctx, req.Content, req.SummaryMedium, req.SummaryShort)
+	preChunked := s.engine.PreChunk(ctx, req.Content, "", req.SummaryShort)
 
 	s.engine.Lock()
 	defer s.engine.Unlock()
@@ -382,9 +382,6 @@ func (s *Server) serviceClassify(id string, req *classifyRequest) (map[string]an
 	}
 	if req.SummaryShort != "" {
 		s.engine.SetProp(id, "content_short", graph.StringProperty(req.SummaryShort))
-	}
-	if req.SummaryMedium != "" {
-		s.engine.SetProp(id, "content_medium", graph.StringProperty(req.SummaryMedium))
 	}
 
 	s.engine.SetProp(id, "processing_status", graph.StringProperty("processed"))

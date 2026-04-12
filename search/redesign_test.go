@@ -121,7 +121,7 @@ func TestNearNodeSearchFilter(t *testing.T) {
 	}
 
 	cfg := defaultCfg()
-	tool := New(g, propIdx, nil, bm25, nil, nil, nil, cfg)
+	tool := New(g, propIdx, nil, bm25, nil, cfg)
 
 	// Search for "kafka" near node A with 1 hop: should find B but not C.
 	results, err := tool.ExecuteWithVector(context.Background(), Query{
@@ -152,181 +152,14 @@ func TestNearNodeSearchFilter(t *testing.T) {
 	}
 }
 
-// --- Multi-layer BM25 weighted RRF ---
-
-func TestMultiLayerBM25Ranking(t *testing.T) {
-	// Two records about "database". Record A mentions "database" in all
-	// three layers. Record B only mentions it in content_full.
-	// A should rank higher because content_short (3x weight) and
-	// content_medium (2x weight) boost its RRF score.
-	g := graph.New()
-	propIdx := index.NewPropertyIndex()
-	bm25Full := index.NewBM25Index(1.2, 0.75)
-	bm25Medium := index.NewBM25Index(1.2, 0.75)
-	bm25Short := index.NewBM25Index(1.2, 0.75)
-	now := time.Now().UTC()
-
-	a := g.AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("We chose a database solution for the project"),
-		"content_medium":    graph.StringProperty("Database selection for the project"),
-		"content_short":     graph.StringProperty("database selection"),
-		"processing_status": graph.StringProperty("processed"),
-		"temporality":       graph.StringProperty("durable"),
-		"confidence":        graph.Float64Property(0.9),
-		"created_at":        graph.TimestampProperty(now),
-	})
-	b := g.AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("The database was mentioned briefly in passing during a long discussion about infrastructure and cloud services and other things"),
-		"content_medium":    graph.StringProperty("Infrastructure and cloud discussion"),
-		"content_short":     graph.StringProperty("infrastructure overview"),
-		"processing_status": graph.StringProperty("processed"),
-		"temporality":       graph.StringProperty("durable"),
-		"confidence":        graph.Float64Property(0.9),
-		"created_at":        graph.TimestampProperty(now),
-	})
-
-	for _, n := range []*graph.Node{a, b} {
-		for k, v := range n.Properties {
-			propIdx.Add(n.ID, k, v)
-		}
-		full, _ := n.Properties.GetString("content_full")
-		medium, _ := n.Properties.GetString("content_medium")
-		short, _ := n.Properties.GetString("content_short")
-		bm25Full.Add(n.ID, full)
-		bm25Medium.Add(n.ID, medium)
-		bm25Short.Add(n.ID, short)
-	}
-
-	cfg := defaultCfg()
-	cfg.Search.BM25WeightFull = 1.0
-	cfg.Search.BM25WeightMedium = 2.0
-	cfg.Search.BM25WeightShort = 3.0
-
-	tool := New(g, propIdx, nil, bm25Full, bm25Medium, bm25Short, nil, cfg)
-
-	results, err := tool.ExecuteWithVector(context.Background(), Query{
-		Text: "database",
-		Top:  10,
-	}, nil)
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-
-	if len(results) < 2 {
-		t.Fatalf("expected at least 2 results, got %d", len(results))
-	}
-
-	// Record A should rank first because "database" appears in all three
-	// layers, getting weighted RRF contributions from full(1x) + medium(2x)
-	// + short(3x). Record B only has it in full(1x).
-	if results[0].ID != a.ID {
-		t.Errorf("expected record A (all-layer match) to rank first, got %s", results[0].ID)
-	}
-	if results[1].ID != b.ID {
-		t.Errorf("expected record B (full-only match) to rank second, got %s", results[1].ID)
-	}
-
-	// A's score should be meaningfully higher than B's.
-	if results[0].EffectiveScore <= results[1].EffectiveScore {
-		t.Errorf("A's score (%.4f) should be higher than B's (%.4f)",
-			results[0].EffectiveScore, results[1].EffectiveScore)
-	}
-}
-
-func TestMultiLayerBM25EmptyLayers(t *testing.T) {
-	// When medium and short layers are empty, search should still work
-	// using only the full layer.
-	g := graph.New()
-	propIdx := index.NewPropertyIndex()
-	bm25Full := index.NewBM25Index(1.2, 0.75)
-	bm25Medium := index.NewBM25Index(1.2, 0.75) // empty
-	bm25Short := index.NewBM25Index(1.2, 0.75)  // empty
-	now := time.Now().UTC()
-
-	n := g.AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("kafka event pipeline for real-time processing"),
-		"processing_status": graph.StringProperty("processed"),
-		"temporality":       graph.StringProperty("durable"),
-		"created_at":        graph.TimestampProperty(now),
-	})
-	for k, v := range n.Properties {
-		propIdx.Add(n.ID, k, v)
-	}
-	bm25Full.Add(n.ID, "kafka event pipeline for real-time processing")
-	// Medium and short are intentionally empty.
-
-	cfg := defaultCfg()
-	tool := New(g, propIdx, nil, bm25Full, bm25Medium, bm25Short, nil, cfg)
-
-	results, err := tool.ExecuteWithVector(context.Background(), Query{
-		Text: "kafka",
-		Top:  10,
-	}, nil)
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result from full layer only, got %d", len(results))
-	}
-}
-
-func TestMultiLayerBM25WeightConfig(t *testing.T) {
-	// Verify that changing weights actually changes ranking.
-	// With equal weights, the record that matches in all layers still
-	// wins (more RRF contributions), but the margin should be smaller.
-	g := graph.New()
-	propIdx := index.NewPropertyIndex()
-	bm25Full := index.NewBM25Index(1.2, 0.75)
-	bm25Medium := index.NewBM25Index(1.2, 0.75)
-	bm25Short := index.NewBM25Index(1.2, 0.75)
-	now := time.Now().UTC()
-
-	a := g.AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("redis caching strategy"),
-		"content_medium":    graph.StringProperty("redis caching"),
-		"content_short":     graph.StringProperty("redis"),
-		"processing_status": graph.StringProperty("processed"),
-		"temporality":       graph.StringProperty("durable"),
-		"confidence":        graph.Float64Property(0.9),
-		"created_at":        graph.TimestampProperty(now),
-	})
-	b := g.AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("redis was considered but we went with memcached"),
-		"content_medium":    graph.StringProperty("caching evaluation"),
-		"content_short":     graph.StringProperty("caching decision"),
-		"processing_status": graph.StringProperty("processed"),
-		"temporality":       graph.StringProperty("durable"),
-		"confidence":        graph.Float64Property(0.9),
-		"created_at":        graph.TimestampProperty(now),
-	})
-
-	for _, n := range []*graph.Node{a, b} {
-		for k, v := range n.Properties {
-			propIdx.Add(n.ID, k, v)
-		}
-		full, _ := n.Properties.GetString("content_full")
-		medium, _ := n.Properties.GetString("content_medium")
-		short, _ := n.Properties.GetString("content_short")
-		bm25Full.Add(n.ID, full)
-		bm25Medium.Add(n.ID, medium)
-		bm25Short.Add(n.ID, short)
-	}
-
-	// With high short weight (3x), A should win because "redis" is in its short layer.
-	cfg := defaultCfg()
-	cfg.Search.BM25WeightFull = 1.0
-	cfg.Search.BM25WeightMedium = 2.0
-	cfg.Search.BM25WeightShort = 3.0
-	tool := New(g, propIdx, nil, bm25Full, bm25Medium, bm25Short, nil, cfg)
-
-	results, _ := tool.ExecuteWithVector(context.Background(), Query{Text: "redis", Top: 10}, nil)
-	if len(results) < 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-	if results[0].ID != a.ID {
-		t.Errorf("with 3x short weight, A (redis in short) should rank first")
-	}
-}
+// Multi-layer BM25 tests removed (D12: extra layers measured as harmful,
+// NDCG dropped from 0.296 to 0.182 with 3 layers). Single-layer BM25
+// is tested via the standard search tests.
+//
+// The following tests were removed:
+// - TestMultiLayerBM25Ranking
+// - TestMultiLayerBM25EmptyLayers
+// - TestMultiLayerBM25WeightConfig
 
 // --- helpers ---
 
