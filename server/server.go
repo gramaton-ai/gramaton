@@ -377,6 +377,12 @@ func (s *Server) RequestShutdown() {
 	}()
 }
 
+// Handler returns the HTTP handler for use with httptest.NewServer
+// or other test infrastructure.
+func (s *Server) Handler() http.Handler {
+	return s.httpServer.Handler
+}
+
 // recordActivity updates the last request timestamp for idle tracking.
 func (s *Server) recordActivity() {
 	s.mu.Lock()
