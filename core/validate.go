@@ -15,12 +15,13 @@ type ValidationResult struct {
 
 // ValidateStats reports counts checked during validation.
 type ValidateStats struct {
-	Nodes       int `json:"nodes"`
-	Edges       int `json:"edges"`
-	Collections int `json:"collections"`
-	Chunks      int `json:"chunks"`
-	BM25Docs    int `json:"bm25_docs"`
-	VecDocs     int `json:"vec_docs"`
+	Nodes        int `json:"nodes"`
+	Edges        int `json:"edges"`
+	Collections  int `json:"collections"`
+	Chunks       int `json:"chunks"`
+	Observations int `json:"observations"`
+	BM25Docs     int `json:"bm25_docs"`
+	VecDocs      int `json:"vec_docs"`
 }
 
 // Validate checks the store for integrity issues. Caller must hold
@@ -84,6 +85,7 @@ func (e *Engine) Validate() *ValidationResult {
 	// --- Structural integrity ---
 	collections := make(map[string]struct{})
 	chunks := 0
+	observations := 0
 	for _, id := range allIDs {
 		n, ok := g.GetNode(id)
 		if !ok {
@@ -96,13 +98,18 @@ func (e *Engine) Validate() *ValidationResult {
 			collections[id] = struct{}{}
 		}
 
-		// Check chunk/section parents.
+		// Check structural parents (chunk/section/observation).
 		for _, edge := range g.EdgesFrom(id) {
 			switch edge.Type {
 			case "chunk_of", "section_of":
 				chunks++
 				if _, ok := nodeSet[edge.TargetID]; !ok {
 					r.addError("node %s: %s edge points to missing parent %s", id, edge.Type, edge.TargetID)
+				}
+			case "observation_of":
+				observations++
+				if _, ok := nodeSet[edge.TargetID]; !ok {
+					r.addError("node %s: observation_of edge points to missing parent %s", id, edge.TargetID)
 				}
 			case "member_of":
 				if _, ok := collections[edge.TargetID]; !ok {
@@ -119,6 +126,7 @@ func (e *Engine) Validate() *ValidationResult {
 	}
 	r.Stats.Collections = len(collections)
 	r.Stats.Chunks = chunks
+	r.Stats.Observations = observations
 
 	// --- Embedding dimension consistency ---
 	var expectedDim int

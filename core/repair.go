@@ -6,6 +6,7 @@ import "fmt"
 type RepairResult struct {
 	DanglingEdgesRemoved int      `json:"dangling_edges_removed,omitempty"`
 	OrphanChunksRemoved  int      `json:"orphan_chunks_removed,omitempty"`
+	IndexesRebuilt       bool     `json:"indexes_rebuilt,omitempty"`
 	StaleEmbeddings      int      `json:"stale_embeddings,omitempty"`
 	Messages             []string `json:"messages,omitempty"`
 }
@@ -85,6 +86,15 @@ func (e *Engine) Repair() *RepairResult {
 	}
 	if r.OrphanChunksRemoved > 0 {
 		r.Messages = append(r.Messages, fmt.Sprintf("removed %d orphaned chunk/section nodes", r.OrphanChunksRemoved))
+	}
+
+	// --- Rebuild indexes if any structural changes were made ---
+	// After removing dangling edges and orphan nodes, the BM25 and
+	// property indexes may be inconsistent. Rebuild from the graph.
+	if r.DanglingEdgesRemoved > 0 || r.OrphanChunksRemoved > 0 {
+		e.RebuildAllIndexes()
+		r.IndexesRebuilt = true
+		r.Messages = append(r.Messages, "rebuilt all indexes from graph")
 	}
 
 	// --- Count stale embeddings ---
