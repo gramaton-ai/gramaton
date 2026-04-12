@@ -20,7 +20,6 @@ type captureRequest struct {
 	Importance        *float64       `json:"importance,omitempty"`
 	Keywords          []string       `json:"keywords,omitempty"`
 	SummaryShort      string         `json:"summary_short,omitempty"`
-	SummaryMedium   string         `json:"summary_medium,omitempty"`
 	SourceRef         string         `json:"source_ref,omitempty"`
 	SourceCredibility *float64       `json:"source_credibility,omitempty"`
 	TestimonyHops     *int64         `json:"testimony_hops,omitempty"`
@@ -60,7 +59,6 @@ type classifyRequest struct {
 	Importance      *float64 `json:"importance,omitempty"`
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string   `json:"summary_short,omitempty"`
-	SummaryMedium string   `json:"summary_medium,omitempty"`
 }
 
 type resolveRequest struct {

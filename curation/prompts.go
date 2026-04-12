@@ -161,9 +161,7 @@ specific technical concepts mentioned in the content.
 
 summary_short: Under 200 characters. The essence of the record for
 search result display. Start with the key fact, decision, or topic.
-Do not start with "This record..." -- just state the content.
-
-Do NOT include summary_medium in the response -- it is no longer used.`
+Do not start with "This record..." -- just state the content.`
 
 // classifyPrompt is the per-record user message for classification.
 // It accepts two format arguments: content (%s) and context signals (%s).

@@ -26,12 +26,14 @@ func (s *Server) registerMCPIntakeTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_intake",
-		Description: `Unified write endpoint for the knowledge store. The server classifies and routes automatically.
+		Description: `Write endpoint for the knowledge graph. Routes to capture or observe based on mode.
 
-For deliberate storage: provide content and optional context signals. The server LLM classifies the record.
+For deliberate storage: provide content and optional context signals. If the server has an LLM, it classifies the record automatically. Otherwise the record is stored as "captured" and classified later (via gramaton_classify or curation).
 For ambient extraction: set mode="observed" and provide facts=[...]. Quality gates filter noise.
 
-You do NOT need to classify records (temporality, confidence, etc.) -- provide context signals instead and let the server decide. Context signals describe the source; the server maps them to the metadata taxonomy.
+This tool stores records in the knowledge graph (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those.
+
+You can provide classification metadata (temporality, confidence, etc.) OR provide context signals and let the server classify. Both work.
 
 Examples:
   gramaton_intake(content="We decided to use PostgreSQL", context_capture_reason="recording architecture decision")

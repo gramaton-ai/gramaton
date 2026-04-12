@@ -152,7 +152,6 @@ type LimitsConfig struct {
 	MaxContentLength   int           `yaml:"max_content_length"`
 	MaxKeywords        int           `yaml:"max_keywords"`
 	MaxSummaryShort    int           `yaml:"max_summary_short"`
-	MaxSummaryMedium int           `yaml:"max_summary_medium"`
 	StdinTimeout       time.Duration `yaml:"stdin_timeout"`
 	MaxWritesPerSecond int           `yaml:"max_writes_per_second"`
 }
@@ -355,7 +354,6 @@ func Defaults() Config {
 			MaxContentLength:   1024 * 1024,
 			MaxKeywords:        100,
 			MaxSummaryShort:    500,
-			MaxSummaryMedium: 5000,
 			StdinTimeout:       30 * time.Second,
 			MaxWritesPerSecond: 100,
 		},

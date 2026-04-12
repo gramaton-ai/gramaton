@@ -20,11 +20,11 @@ Required fields:
 
 Optional fields:
   temporality, confidence, knowledge_type, epistemic_status,
-  importance, keywords, summary_short, summary_medium,
-  source_ref, source_credibility, testimony_hops,
-  context_about, context_who, context_prompted,
-  context_findable_by, context_related,
-  valid_from, valid_until`,
+  importance, keywords, summary_short, source_ref,
+  context_about, context_who, context_findable_by,
+  context_source_type, context_time_sensitivity,
+  context_reliability, context_capture_reason,
+  asserted_as_of, meta, valid_from, valid_until`,
 	RunE: runCapture,
 }
 
