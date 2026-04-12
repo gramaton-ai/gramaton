@@ -185,6 +185,8 @@ func ComputeFacets(results []Result) Facets {
 // Result is a single search result.
 type Result struct {
 	ID              string  `json:"id"`
+	ParentID        string  `json:"parent_id,omitempty"`  // non-empty for observations (D14)
+	MatchedBy       string  `json:"matched_by,omitempty"` // "vector", "bm25", or "both" (D14)
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string  `json:"summary_short,omitempty"`
 	MetadataSummary string  `json:"metadata_summary"`
@@ -295,14 +297,15 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	for _, id := range candidates {
 		candidateSet[id] = struct{}{}
 	}
-	similarities := t.computeSimilarities(q, queryVec, candidateSet)
+	similarities, matchSources := t.computeSimilarities(q, queryVec, candidateSet)
 
 	// Step 3: Score each candidate and collect sort values.
 	type scored struct {
-		id       string
-		score    float64
-		sortVal  float64 // numeric sort key when using field sort
-		sortTime time.Time // time sort key
+		id        string
+		score     float64
+		matchedBy string    // "vector", "bm25", "both", or "" (D14)
+		sortVal   float64   // numeric sort key when using field sort
+		sortTime  time.Time // time sort key
 	}
 	var scoredResults []scored
 
@@ -315,7 +318,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		inputs := t.buildScoreInputs(n, similarities[id])
 		inputs.HasTextQuery = q.Text != ""
 		score := ComputeScore(inputs, now, t.cfg)
-		sr := scored{id: id, score: score}
+		sr := scored{id: id, score: score, matchedBy: matchSources[id]}
 
 		// Extract sort key if sorting by a field.
 		switch sortField {
@@ -369,6 +372,26 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 		return !less
 	})
+	// Step 5.5: Parent dedup (D14). For observation nodes, resolve the
+	// parent ID. Keep only the highest-scoring result per parent.
+	// Results are already sorted by score (descending), so the first
+	// result for each parent is the best.
+	seenParents := make(map[string]struct{})
+	var deduped []scored
+	for _, sr := range scoredResults {
+		parentID := t.resolveParentID(sr.id)
+		key := sr.id
+		if parentID != "" {
+			key = parentID
+		}
+		if _, seen := seenParents[key]; seen {
+			continue // already have a higher-scoring result for this parent
+		}
+		seenParents[key] = struct{}{}
+		deduped = append(deduped, sr)
+	}
+	scoredResults = deduped
+
 	if q.Top < len(scoredResults) {
 		scoredResults = scoredResults[:q.Top]
 	}
@@ -380,24 +403,41 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		if !ok {
 			continue // node deleted between search and result assembly
 		}
-		results = append(results, t.buildResult(n, sr.score))
+		r := t.buildResult(n, sr.score)
+		r.MatchedBy = sr.matchedBy
+		r.ParentID = t.resolveParentID(sr.id)
+		results = append(results, r)
 	}
 
 	return results, nil
+}
+
+// resolveParentID returns the parent record ID for an observation or
+// section node, or "" for a direct (top-level) record.
+func (t *Tool) resolveParentID(nodeID string) string {
+	for _, e := range t.graph.EdgesFrom(nodeID) {
+		if e.Type == "observation_of" || e.Type == "section_of" {
+			return e.TargetID
+		}
+	}
+	return ""
 }
 
 // filterCandidates returns node IDs matching the query's metadata filters.
 // computeSimilarities runs vector search, BM25 search, or both with
 // RRF fusion. Returns nodeID -> normalized similarity score in [0, 1].
 // D12: single BM25 layer (content_full only).
-func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map[string]struct{}) map[string]float64 {
+// computeSimilarities returns nodeID -> normalized similarity score and
+// nodeID -> match source ("vector", "bm25", or "both") for query tracing (D14).
+func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map[string]struct{}) (map[string]float64, map[string]string) {
 	similarities := make(map[string]float64)
+	sources := make(map[string]string)
 
 	hasVec := queryVec != nil && t.vecIdx != nil
 	hasBM25 := t.bm25Full != nil && q.Text != ""
 
 	if !hasVec && !hasBM25 {
-		return similarities
+		return similarities, sources
 	}
 
 	topK := q.Top * 3
@@ -431,9 +471,11 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		// overlap) are penalized to prevent high-cosine but irrelevant
 		// results from ranking.
 		rrfScores := make(map[string]float64)
+		vecHits := make(map[string]struct{})
 		bm25Hits := make(map[string]struct{})
 		for rank, r := range vecResults {
 			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
+			vecHits[r.NodeID] = struct{}{}
 		}
 		for rank, r := range bm25Results {
 			rrfScores[r.NodeID] += 1.0 / float64(rrfK+rank+1)
@@ -448,8 +490,15 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		if maxRRF > 0 {
 			for id, s := range rrfScores {
 				norm := s / maxRRF
-				// Penalize vector-only matches (no term overlap).
-				if _, hasBM25Match := bm25Hits[id]; !hasBM25Match {
+				_, inVec := vecHits[id]
+				_, inBM25 := bm25Hits[id]
+				if inVec && inBM25 {
+					sources[id] = "both"
+				} else if inBM25 {
+					sources[id] = "bm25"
+				} else {
+					sources[id] = "vector"
+					// Penalize vector-only matches (no term overlap).
 					penalty := t.cfg.Search.VectorOnlyPenalty
 					if penalty <= 0 {
 						penalty = 0.1
@@ -464,6 +513,7 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		// Vector only (no BM25 index) -- use cosine similarity directly.
 		for _, r := range vecResults {
 			similarities[r.NodeID] = float64(r.Similarity)
+			sources[r.NodeID] = "vector"
 		}
 
 	default:
@@ -477,11 +527,12 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		if maxScore > 0 {
 			for _, r := range bm25Results {
 				similarities[r.NodeID] = float64(r.Similarity) / maxScore
+				sources[r.NodeID] = "bm25"
 			}
 		}
 	}
 
-	return similarities
+	return similarities, sources
 }
 
 func (t *Tool) filterCandidates(q Query, now time.Time) []string {
