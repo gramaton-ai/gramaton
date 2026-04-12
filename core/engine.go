@@ -147,7 +147,11 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(edgeStore))
-	bm25Full := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
+	bm25Full, err := index.NewBboltBM25Index(boltDB, cfg.Search.BM25K1, cfg.Search.BM25B)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("create bbolt BM25 index: %w", err)
+	}
 
 	// Load HEAD commit if it exists.
 	var headHash string
@@ -178,7 +182,8 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// Try to load persisted indexes from commit. Each index that loads
 	// successfully is skipped during rebuildIndexes.
-	bm25FullLoaded := false
+	// BM25 is bbolt-backed -- if it has data, it's already loaded.
+	bm25FullLoaded := bm25Full.Len() > 0
 	// Vector index is file-backed -- if it has data, it's already loaded.
 	vecLoaded := mmapVec.Len() > 0
 
@@ -196,20 +201,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	// inconsistencies.
 
 	if headCommit != nil {
-		// Load per-layer BM25 indexes. Fall back to legacy single
-		// BM25Root as bm25Full for backward compatibility.
-		bm25FullRoot := headCommit.BM25FullRoot
-		if bm25FullRoot == "" {
-			bm25FullRoot = headCommit.BM25Root // legacy compat
-		}
-		if bm25FullRoot != "" {
-			if bm25Data, err := s.Read(bm25FullRoot); err == nil {
-				if err := bm25Full.UnmarshalBinary(bm25Data); err == nil {
-					bm25FullLoaded = true
-				}
-			}
-		}
-		// BM25MediumRoot and BM25ShortRoot are ignored (D12: single BM25 layer).
+		// BM25: skip CAS loading (bbolt is authoritative).
 		// VecRoot: skip CAS loading (mmap flat file is authoritative).
 		// Property index: skip CAS loading (bbolt is authoritative).
 		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
@@ -318,7 +310,8 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // Persists indexes (BM25, vector, property) alongside the commit
 // so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
-	// Persist the BM25 index as a content-addressed chunk.
+	// BM25: BboltBM25Index persists to bbolt, not CAS. This block
+	// is kept for backward compat with BinaryMarshaler implementations.
 	var bm25FullRoot string
 	if m, ok := e.bm25Full.(encoding.BinaryMarshaler); ok {
 		data, err := m.MarshalBinary()
@@ -429,13 +422,10 @@ func (e *Engine) FlushAccess() {
 // Caller must hold the write lock.
 func (e *Engine) RebuildAllIndexes() {
 	// BM25 is still in-memory, so we can replace it.
-	e.bm25Full = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
-	// Property index and vector index are disk-backed. We can't replace
-	// them but we need to repopulate. For now, we pass propLoaded=false
-	// and vecLoaded=false to force rebuild into the existing indexes.
-	// TODO: add Clear() to PropertyIndex and VectorIndex interfaces for
-	// clean rebuild. Currently this adds on top of existing data, which
-	// is fine for repair (idempotent adds) but not for branch switch.
+	// All indexes are now disk-backed (bbolt + mmap). Rebuild adds
+	// on top of existing data (idempotent). For a clean rebuild, the
+	// caller should clear the indexes first (e.g., delete indexes.db
+	// and vec.flat, then re-init).
 	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Full, false, false, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.embedder, e.cfg)
 }
@@ -1011,16 +1001,9 @@ func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx inde
 		return
 	}
 
-	// Wrap in property index batch to amortize fsync for disk-backed
-	// implementations. No-op for in-memory.
-	if !propLoaded {
-		propIdx.Batch(func() {
-			rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-		})
-		return
-	}
 	rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
 }
+
 
 func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
 	it := g.NodeIterator()

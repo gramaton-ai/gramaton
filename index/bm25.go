@@ -23,6 +23,8 @@ type BM25Index interface {
 	Len() int
 	// AddPreTokenized indexes a document from pre-computed term frequencies.
 	AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int)
+	// Batch executes fn with all writes batched in a single transaction.
+	Batch(fn func()) error
 }
 
 // MemoryBM25Index is an in-memory BM25 implementation using Go maps.
@@ -209,6 +211,12 @@ func (idx *MemoryBM25Index) Search(queryTokens []string, k int, candidates map[s
 // Len returns the number of indexed documents.
 func (idx *MemoryBM25Index) Len() int {
 	return idx.numDocs
+}
+
+// Batch is a no-op for the in-memory implementation.
+func (idx *MemoryBM25Index) Batch(fn func()) error {
+	fn()
+	return nil
 }
 
 // AddPreTokenized indexes a document from pre-computed term frequencies,
