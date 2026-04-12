@@ -32,9 +32,9 @@ type Engine struct {
 	graph    *graph.Graph
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
-	bm25Full   *index.BM25Index // content_full (detail match, weight 1x)
-	bm25Medium *index.BM25Index // content_medium (theme match, weight 2x)
-	bm25Short  *index.BM25Index // content_short (topic match, weight 3x)
+	bm25Full   index.BM25Index // content_full (detail match, weight 1x)
+	bm25Medium index.BM25Index // content_medium (theme match, weight 2x)
+	bm25Short  index.BM25Index // content_short (topic match, weight 3x)
 	bloomFull   *index.BloomIndex // per-node bloom filter over content_full terms
 	bloomMedium *index.BloomIndex // per-node bloom filter over content_medium terms
 	bloomShort  *index.BloomIndex // per-node bloom filter over content_short terms
@@ -322,31 +322,26 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
 	// Persist the three BM25 indexes as content-addressed chunks.
-	bm25FullData, err := e.bm25Full.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshal BM25 full index: %w", err)
-	}
-	bm25FullRoot, err := e.store.Write(bm25FullData)
-	if err != nil {
-		return nil, fmt.Errorf("write BM25 full index: %w", err)
-	}
-
-	bm25MediumData, err := e.bm25Medium.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshal BM25 medium index: %w", err)
-	}
-	bm25MediumRoot, err := e.store.Write(bm25MediumData)
-	if err != nil {
-		return nil, fmt.Errorf("write BM25 medium index: %w", err)
-	}
-
-	bm25ShortData, err := e.bm25Short.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshal BM25 short index: %w", err)
-	}
-	bm25ShortRoot, err := e.store.Write(bm25ShortData)
-	if err != nil {
-		return nil, fmt.Errorf("write BM25 short index: %w", err)
+	var bm25FullRoot, bm25MediumRoot, bm25ShortRoot string
+	for _, entry := range []struct {
+		idx  index.BM25Index
+		name string
+		root *string
+	}{
+		{e.bm25Full, "full", &bm25FullRoot},
+		{e.bm25Medium, "medium", &bm25MediumRoot},
+		{e.bm25Short, "short", &bm25ShortRoot},
+	} {
+		if m, ok := entry.idx.(encoding.BinaryMarshaler); ok {
+			data, err := m.MarshalBinary()
+			if err != nil {
+				return nil, fmt.Errorf("marshal BM25 %s index: %w", entry.name, err)
+			}
+			*entry.root, err = e.store.Write(data)
+			if err != nil {
+				return nil, fmt.Errorf("write BM25 %s index: %w", entry.name, err)
+			}
+		}
 	}
 
 	// Persist the vector index if it supports binary marshaling (HNSW
@@ -477,13 +472,13 @@ func (e *Engine) newVectorIndex() index.VectorIndex {
 }
 
 // BM25Full returns the BM25 index for content_full.
-func (e *Engine) BM25Full() *index.BM25Index { return e.bm25Full }
+func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
 
 // BM25Medium returns the BM25 index for content_medium.
-func (e *Engine) BM25Medium() *index.BM25Index { return e.bm25Medium }
+func (e *Engine) BM25Medium() index.BM25Index { return e.bm25Medium }
 
 // BM25Short returns the BM25 index for content_short.
-func (e *Engine) BM25Short() *index.BM25Index { return e.bm25Short }
+func (e *Engine) BM25Short() index.BM25Index { return e.bm25Short }
 
 // BloomFull returns the bloom filter index for content_full terms.
 func (e *Engine) BloomFull() *index.BloomIndex { return e.bloomFull }
@@ -1073,7 +1068,7 @@ func (e *Engine) EdgeCount() int {
 // indicates that the corresponding index was restored from a persisted
 // snapshot and should be skipped. When all five are true, this is a
 // no-op (the target state for lazy loading).
-func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, bloomFull, bloomMedium, bloomShort *index.BloomIndex, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
+func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short index.BM25Index, bloomFull, bloomMedium, bloomShort *index.BloomIndex, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
 	if bm25FullLoaded && bm25MediumLoaded && bm25ShortLoaded && vecLoaded && propLoaded {
 		return
 	}

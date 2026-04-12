@@ -18,9 +18,9 @@ type Tool struct {
 	graph      graph.NodeReader
 	propIdx    index.PropertyIndex
 	vecIdx     index.VectorIndex
-	bm25Full   *index.BM25Index // content_full (detail match)
-	bm25Medium *index.BM25Index // content_medium (theme match)
-	bm25Short  *index.BM25Index // content_short (topic match)
+	bm25Full   index.BM25Index // content_full (detail match)
+	bm25Medium index.BM25Index // content_medium (theme match)
+	bm25Short  index.BM25Index // content_short (topic match)
 	embedder   embedder
 	cfg        config.Config
 }
@@ -30,7 +30,7 @@ type embedder interface {
 }
 
 // New creates a search tool. embedder and bm25 indexes may be nil.
-func New(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short *index.BM25Index, emb embedder, cfg config.Config) *Tool {
+func New(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short index.BM25Index, emb embedder, cfg config.Config) *Tool {
 	return &Tool{
 		graph:      g,
 		propIdx:    propIdx,

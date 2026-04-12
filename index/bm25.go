@@ -8,11 +8,26 @@ import (
 )
 
 // BM25Index provides term-frequency / inverse-document-frequency based
-// scoring using the Okapi BM25 algorithm. It runs alongside the vector
-// index to enable hybrid search (vector + keyword).
+// scoring for keyword search alongside the vector index.
 //
+// Implementations: MemoryBM25Index (in-memory, current default), and
+// future disk-backed implementation with roaring bitmaps (D21, Phase 4).
+type BM25Index interface {
+	// Add indexes a document's content. Tokenizes the text and stores term frequencies.
+	Add(nodeID, text string)
+	// Remove deletes a document from the index.
+	Remove(nodeID string)
+	// Search scores documents against query tokens using BM25. Returns top-k results.
+	Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult
+	// Len returns the number of indexed documents.
+	Len() int
+	// AddPreTokenized indexes a document from pre-computed term frequencies.
+	AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int)
+}
+
+// MemoryBM25Index is an in-memory BM25 implementation using Go maps.
 // Not thread-safe -- the server layer handles serialization.
-type BM25Index struct {
+type MemoryBM25Index struct {
 	// Term frequency: nodeID -> token -> count.
 	tf map[string]map[string]int
 
@@ -33,16 +48,22 @@ type BM25Index struct {
 	b  float64 // length normalization (default 0.75)
 }
 
-// NewBM25Index creates a new empty BM25 index with the given parameters.
-// Use k1=0 and b=0 for defaults (1.2 and 0.75 respectively).
-func NewBM25Index(k1, b float64) *BM25Index {
+// NewBM25Index creates a new empty in-memory BM25 index.
+// Deprecated: Use NewMemoryBM25Index for clarity.
+func NewBM25Index(k1, b float64) *MemoryBM25Index {
+	return NewMemoryBM25Index(k1, b)
+}
+
+// NewMemoryBM25Index creates a new empty in-memory BM25 index with the
+// given parameters. Use k1=0 and b=0 for defaults (1.2 and 0.75).
+func NewMemoryBM25Index(k1, b float64) *MemoryBM25Index {
 	if k1 == 0 {
 		k1 = 1.2
 	}
 	if b == 0 {
 		b = 0.75
 	}
-	return &BM25Index{
+	return &MemoryBM25Index{
 		tf:       make(map[string]map[string]int),
 		docLen:   make(map[string]int),
 		inverted: make(map[string]map[string]struct{}),
@@ -53,7 +74,7 @@ func NewBM25Index(k1, b float64) *BM25Index {
 
 // Add indexes a document's content. Tokenizes the text and stores term
 // frequencies. If the nodeID already exists, it is replaced.
-func (idx *BM25Index) Add(nodeID, text string) {
+func (idx *MemoryBM25Index) Add(nodeID, text string) {
 	// Remove old entry if exists.
 	if _, exists := idx.tf[nodeID]; exists {
 		idx.removeInternal(nodeID)
@@ -84,7 +105,7 @@ func (idx *BM25Index) Add(nodeID, text string) {
 }
 
 // Remove deletes a document from the index.
-func (idx *BM25Index) Remove(nodeID string) {
+func (idx *MemoryBM25Index) Remove(nodeID string) {
 	if _, exists := idx.tf[nodeID]; !exists {
 		return
 	}
@@ -92,7 +113,7 @@ func (idx *BM25Index) Remove(nodeID string) {
 	idx.recomputeAvgDL()
 }
 
-func (idx *BM25Index) removeInternal(nodeID string) {
+func (idx *MemoryBM25Index) removeInternal(nodeID string) {
 	for token := range idx.tf[nodeID] {
 		if set, ok := idx.inverted[token]; ok {
 			delete(set, nodeID)
@@ -106,7 +127,7 @@ func (idx *BM25Index) removeInternal(nodeID string) {
 	idx.numDocs--
 }
 
-func (idx *BM25Index) recomputeAvgDL() {
+func (idx *MemoryBM25Index) recomputeAvgDL() {
 	if idx.numDocs == 0 {
 		idx.avgDL = 0
 		return
@@ -121,7 +142,7 @@ func (idx *BM25Index) recomputeAvgDL() {
 // Search scores all documents in the optional candidate set against
 // the query tokens using BM25. Returns the top-k results sorted by
 // descending score. If candidates is nil, all documents are scored.
-func (idx *BM25Index) Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult {
+func (idx *MemoryBM25Index) Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult {
 	if len(queryTokens) == 0 || idx.numDocs == 0 {
 		return nil
 	}
@@ -186,14 +207,14 @@ func (idx *BM25Index) Search(queryTokens []string, k int, candidates map[string]
 }
 
 // Len returns the number of indexed documents.
-func (idx *BM25Index) Len() int {
+func (idx *MemoryBM25Index) Len() int {
 	return idx.numDocs
 }
 
 // AddPreTokenized indexes a document from pre-computed term frequencies,
 // skipping tokenization entirely. Used when restoring from a persisted
 // index where tokenization was already done at capture time.
-func (idx *BM25Index) AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int) {
+func (idx *MemoryBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int) {
 	if _, exists := idx.tf[nodeID]; exists {
 		idx.removeInternal(nodeID)
 	}
@@ -238,7 +259,7 @@ func (idx *BM25Index) AddPreTokenized(nodeID string, termFreqs map[string]int, d
 // Persists term frequencies and document lengths per document. The
 // inverted index is rebuilt from this data on unmarshal (O(N), no
 // tokenization needed).
-func (idx *BM25Index) MarshalBinary() ([]byte, error) {
+func (idx *MemoryBM25Index) MarshalBinary() ([]byte, error) {
 	// Estimate size: header + per-doc overhead.
 	buf := make([]byte, 0, 128+idx.numDocs*256)
 
@@ -285,7 +306,7 @@ func (idx *BM25Index) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary restores a BM25 index from binary data produced by
 // MarshalBinary. Rebuilds the inverted index from term frequencies
 // without re-tokenizing any text.
-func (idx *BM25Index) UnmarshalBinary(data []byte) error {
+func (idx *MemoryBM25Index) UnmarshalBinary(data []byte) error {
 	if len(data) < 26 { // minimum header size
 		return fmt.Errorf("bm25: data too short")
 	}
