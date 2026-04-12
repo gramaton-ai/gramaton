@@ -36,6 +36,10 @@ type PropertyIndex interface {
 	KeywordCounts(key string) map[string]int
 	// Count returns the total number of indexed entries across all keys.
 	Count() int
+	// Batch executes fn with all writes batched in a single transaction.
+	// For disk-backed implementations this amortizes fsync. For in-memory
+	// implementations this is a no-op wrapper.
+	Batch(fn func()) error
 }
 
 // MemoryPropertyIndex is an in-memory implementation of PropertyIndex
@@ -359,6 +363,12 @@ func (idx *MemoryPropertyIndex) KeywordCounts(key string) map[string]int {
 		counts[kw] = len(nodes)
 	}
 	return counts
+}
+
+// Batch is a no-op for the in-memory implementation.
+func (idx *MemoryPropertyIndex) Batch(fn func()) error {
+	fn()
+	return nil
 }
 
 // Count returns the total number of indexed entries across all keys.

@@ -29,7 +29,8 @@ import (
 // (keys are serialized Property values which sort correctly for
 // same-type comparisons).
 type BboltPropertyIndex struct {
-	db *bolt.DB
+	db    *bolt.DB
+	batch *bolt.Tx // non-nil during Batch() call
 }
 
 // NewBboltPropertyIndex opens or creates a bbolt-backed property index.
@@ -45,12 +46,40 @@ func NewBboltPropertyIndex(db *bolt.DB) (*BboltPropertyIndex, error) {
 	return &BboltPropertyIndex{db: db}, nil
 }
 
+// Batch executes fn within a single bbolt write transaction. All Add
+// and Remove calls within fn share one transaction, amortizing fsync.
+// Critical for bulk operations (import, rebuild).
+func (idx *BboltPropertyIndex) Batch(fn func()) error {
+	return idx.db.Update(func(tx *bolt.Tx) error {
+		idx.batch = tx
+		defer func() { idx.batch = nil }()
+		fn()
+		return nil
+	})
+}
+
+// update runs fn in the current batch transaction or a new one.
+func (idx *BboltPropertyIndex) update(fn func(tx *bolt.Tx) error) error {
+	if idx.batch != nil {
+		return fn(idx.batch)
+	}
+	return idx.db.Update(fn)
+}
+
+// view runs fn in the current batch transaction (read) or a new one.
+func (idx *BboltPropertyIndex) view(fn func(tx *bolt.Tx) error) error {
+	if idx.batch != nil {
+		return fn(idx.batch)
+	}
+	return idx.db.View(fn)
+}
+
 func exactBucket(key string) []byte { return []byte("exact:" + key) }
 func kwBucket(key string) []byte    { return []byte("kw:" + key) }
 func strBucket(key string) []byte   { return []byte("str:" + key) }
 
 func (idx *BboltPropertyIndex) Add(nodeID, key string, val graph.Property) {
-	if err := idx.db.Update(func(tx *bolt.Tx) error {
+	if err := idx.update(func(tx *bolt.Tx) error {
 		// Track which keys this node has indexed.
 		nk, err := tx.CreateBucketIfNotExists([]byte("nodekeys"))
 		if err != nil {
@@ -93,7 +122,7 @@ func (idx *BboltPropertyIndex) Add(nodeID, key string, val graph.Property) {
 }
 
 func (idx *BboltPropertyIndex) Remove(nodeID, key string, val graph.Property) {
-	if err := idx.db.Update(func(tx *bolt.Tx) error {
+	if err := idx.update(func(tx *bolt.Tx) error {
 		// Exact match.
 		if eb := tx.Bucket(exactBucket(key)); eb != nil {
 			serialized := serializeValue(val)
@@ -135,7 +164,7 @@ func (idx *BboltPropertyIndex) RemoveNode(nodeID string, props graph.Properties)
 
 func (idx *BboltPropertyIndex) Lookup(key string, val graph.Property) []string {
 	var result []string
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -149,7 +178,7 @@ func (idx *BboltPropertyIndex) Lookup(key string, val graph.Property) []string {
 
 func (idx *BboltPropertyIndex) Range(key string, min, max graph.Property) []string {
 	var result []string
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -179,7 +208,7 @@ func (idx *BboltPropertyIndex) Range(key string, min, max graph.Property) []stri
 
 func (idx *BboltPropertyIndex) Contains(key, substring string) []string {
 	var result []string
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		sb := tx.Bucket(strBucket(key))
 		if sb == nil {
 			return nil
@@ -198,7 +227,7 @@ func (idx *BboltPropertyIndex) Contains(key, substring string) []string {
 func (idx *BboltPropertyIndex) ContainsFold(key, substring string) []string {
 	var result []string
 	lowerSub := strings.ToLower(substring)
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		sb := tx.Bucket(strBucket(key))
 		if sb == nil {
 			return nil
@@ -216,7 +245,7 @@ func (idx *BboltPropertyIndex) ContainsFold(key, substring string) []string {
 
 func (idx *BboltPropertyIndex) LookupKeyword(key, keyword string) []string {
 	var result []string
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		kb := tx.Bucket(kwBucket(key))
 		if kb == nil {
 			return nil
@@ -229,7 +258,7 @@ func (idx *BboltPropertyIndex) LookupKeyword(key, keyword string) []string {
 
 func (idx *BboltPropertyIndex) NodesWithKey(key string) map[string]struct{} {
 	result := make(map[string]struct{})
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -250,7 +279,7 @@ func (idx *BboltPropertyIndex) NodesWithKey(key string) map[string]struct{} {
 
 func (idx *BboltPropertyIndex) KeywordCounts(key string) map[string]int {
 	counts := make(map[string]int)
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		kb := tx.Bucket(kwBucket(key))
 		if kb == nil {
 			return nil
@@ -272,7 +301,7 @@ func (idx *BboltPropertyIndex) KeywordCounts(key string) map[string]int {
 
 func (idx *BboltPropertyIndex) Count() int {
 	total := 0
-	idx.db.View(func(tx *bolt.Tx) error {
+	idx.view(func(tx *bolt.Tx) error {
 		tx.ForEach(func(name []byte, b *bolt.Bucket) error {
 			if bytes.HasPrefix(name, []byte("exact:")) {
 				c := b.Cursor()

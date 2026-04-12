@@ -66,10 +66,21 @@ func New() *Graph {
 	return NewWithCapacity(DefaultCacheCapacity)
 }
 
+// GraphOption configures graph creation.
+type GraphOption func(*Graph)
+
+// WithEdgeStore injects an external EdgeStore. If not provided,
+// a MemoryEdgeStore is used (the default for backward compatibility).
+func WithEdgeStore(es EdgeStore) GraphOption {
+	return func(g *Graph) {
+		g.edgeStore = es
+	}
+}
+
 // NewWithCapacity creates a graph with a specific node cache capacity.
 // 0 means unlimited.
-func NewWithCapacity(cacheCapacity int) *Graph {
-	return &Graph{
+func NewWithCapacity(cacheCapacity int, opts ...GraphOption) *Graph {
+	g := &Graph{
 		nodes:        make(map[string]*Node),
 		edgeStore:    NewMemoryEdgeStore(),
 		dirtyNodes:   make(map[string]struct{}),
@@ -81,6 +92,10 @@ func NewWithCapacity(cacheCapacity int) *Graph {
 		lru:          newLRUTracker(cacheCapacity),
 		entropy:      ulid.Monotonic(rand.Reader, 0),
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // markNodeDirty marks a node as modified since the last save.

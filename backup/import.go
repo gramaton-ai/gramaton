@@ -121,28 +121,31 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 	defer e.Unlock()
 
 	// Pass 1: create nodes, build old-to-new ID map.
+	// Batch property index writes to amortize fsync for disk-backed indexes.
 	idMap := make(map[string]string, len(records))
-	for _, rec := range records {
-		props := buildSafeProps(rec.Properties)
-		props["processing_status"] = graph.StringProperty("captured")
-		props["access_count"] = graph.Int64Property(0)
-		if _, ok := props["created_at"]; !ok {
-			props["created_at"] = graph.TimestampProperty(time.Now().UTC())
-		}
-		if rec.ID != "" {
-			props["imported_from_id"] = graph.StringProperty(rec.ID)
-		}
+	e.PropIdx().Batch(func() {
+		for _, rec := range records {
+			props := buildSafeProps(rec.Properties)
+			props["processing_status"] = graph.StringProperty("captured")
+			props["access_count"] = graph.Int64Property(0)
+			if _, ok := props["created_at"]; !ok {
+				props["created_at"] = graph.TimestampProperty(time.Now().UTC())
+			}
+			if rec.ID != "" {
+				props["imported_from_id"] = graph.StringProperty(rec.ID)
+			}
 
-		n := e.Graph().AddNode(props)
-		for k, v := range n.Properties {
-			e.PropIdx().Add(n.ID, k, v)
-		}
+			n := e.Graph().AddNode(props)
+			for k, v := range n.Properties {
+				e.PropIdx().Add(n.ID, k, v)
+			}
 
-		if rec.ID != "" {
-			idMap[rec.ID] = n.ID
+			if rec.ID != "" {
+				idMap[rec.ID] = n.ID
+			}
+			result.Imported++
 		}
-		result.Imported++
-	}
+	})
 
 	// Pass 2: create edges between imported records only.
 	for _, rec := range records {

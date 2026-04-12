@@ -316,5 +316,22 @@ func (c *edgeLRU) evict() {
 	delete(c.edges, oldest)
 }
 
+func (s *BboltEdgeStore) Clear() {
+	s.cache = newEdgeLRU(s.cache.capacity)
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		for _, name := range [][]byte{edgesBucket, adjOutBucket, adjInBucket, adjTypBucket} {
+			if err := tx.DeleteBucket(name); err != nil {
+				return err
+			}
+			if _, err := tx.CreateBucket(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		slog.Error("bbolt edge store: clear", "err", err)
+	}
+}
+
 // Verify interface compliance.
 var _ EdgeStore = (*BboltEdgeStore)(nil)

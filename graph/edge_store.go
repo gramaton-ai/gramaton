@@ -22,6 +22,9 @@ type EdgeStore interface {
 	Count() int
 	// ForEach iterates all edges in unspecified order.
 	ForEach(fn func(e *Edge))
+	// Clear removes all edges and adjacency data. Used during Load
+	// to reset state before repopulating from the prolly tree.
+	Clear()
 }
 
 // MemoryEdgeStore is an in-memory EdgeStore using Go maps.
@@ -109,6 +112,13 @@ func (s *MemoryEdgeStore) ForEach(fn func(e *Edge)) {
 	for _, e := range s.edges {
 		fn(e)
 	}
+}
+
+func (s *MemoryEdgeStore) Clear() {
+	s.edges = make(map[string]*Edge)
+	s.outEdges = make(map[string]map[string]struct{})
+	s.inEdges = make(map[string]map[string]struct{})
+	s.typeEdges = make(map[string]map[string]struct{})
 }
 
 // OutEdgeIDs returns the raw set of edge IDs from a source node.

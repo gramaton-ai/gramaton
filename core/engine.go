@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
@@ -30,6 +32,7 @@ type Engine struct {
 	cfg      config.Config
 	store    *storage.Store
 	graph    *graph.Graph
+	boltDB   *bolt.DB // shared bbolt database for property index + edge store
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Full   index.BM25Index // content_full (detail match, weight 1x)
@@ -115,8 +118,26 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("store format: %w", err)
 	}
 
-	g := graph.New()
-	propIdx := index.NewPropertyIndex()
+	// Open the shared bbolt database for property index and edge store.
+	boltPath := filepath.Join(cfg.DataDir, "indexes.db")
+	boltDB, err := bolt.Open(boltPath, 0600, nil)
+	if err != nil {
+		return nil, fmt.Errorf("open bbolt: %w", err)
+	}
+
+	propIdx, err := index.NewBboltPropertyIndex(boltDB)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("create bbolt property index: %w", err)
+	}
+
+	edgeStore, err := graph.NewBboltEdgeStore(boltDB, graph.DefaultEdgeCacheCapacity)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("create bbolt edge store: %w", err)
+	}
+
+	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(edgeStore))
 	var vecIdx index.VectorIndex // set after graph load (need node count)
 	bm25Full := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
 	bm25Medium := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
@@ -161,7 +182,19 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	bm25MediumLoaded := false
 	bm25ShortLoaded := false
 	vecLoaded := false
-	propLoaded := false
+
+	// Property index is bbolt-backed -- if the bbolt file has data,
+	// it's already loaded (propLoaded=true). If the bbolt file is new
+	// (first migration from an old store), rebuildIndexes will populate it.
+	propLoaded := propIdx.Count() > 0
+
+	// Edge store is bbolt-backed -- if edges exist in bbolt, they're
+	// already available. Otherwise they'll be loaded from the prolly
+	// tree during graph.Load and Put into the bbolt edge store.
+	// However, if bbolt edges exist but the prolly tree was updated
+	// externally (e.g., branch switch), we need to reload. For now,
+	// if bbolt has edges, trust them. Repair/validate catches
+	// inconsistencies.
 
 	if headCommit != nil {
 		// Load per-layer BM25 indexes. Fall back to legacy single
@@ -200,18 +233,8 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 				}
 			}
 		}
-		if headCommit.PropRoot != "" {
-			if propData, err := s.Read(headCommit.PropRoot); err == nil {
-				if err := propIdx.UnmarshalBinary(propData); err == nil {
-					propLoaded = true
-				}
-			}
-		}
-		if headCommit.EdgeAdjRoot != "" {
-			if adjData, err := s.Read(headCommit.EdgeAdjRoot); err == nil {
-				g.UnmarshalEdgeAdjacency(adjData)
-			}
-		}
+		// Property index: skip CAS loading (bbolt is authoritative).
+		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
 	}
 
 	rebuildIndexes(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, bloomFull, bloomMedium, bloomShort, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded)
@@ -233,6 +256,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		cfg:         cfg,
 		store:       s,
 		graph:       g,
+		boltDB:      boltDB,
 		propIdx:     propIdx,
 		vecIdx:      vecIdx,
 		bm25Full:    bm25Full,
@@ -379,15 +403,14 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		return nil, fmt.Errorf("save commit: %w", err)
 	}
 
-	// Persist edge adjacency maps.
+	// Persist edge adjacency maps (only for MemoryEdgeStore).
+	// BboltEdgeStore persists adjacency directly, no CAS snapshot needed.
 	var edgeAdjRoot string
-	edgeAdjData, err := e.graph.MarshalEdgeAdjacency()
-	if err != nil {
-		return nil, fmt.Errorf("marshal edge adjacency: %w", err)
-	}
-	edgeAdjRoot, err = e.store.Write(edgeAdjData)
-	if err != nil {
-		return nil, fmt.Errorf("write edge adjacency: %w", err)
+	if edgeAdjData, err := e.graph.MarshalEdgeAdjacency(); err == nil {
+		edgeAdjRoot, err = e.store.Write(edgeAdjData)
+		if err != nil {
+			return nil, fmt.Errorf("write edge adjacency: %w", err)
+		}
 	}
 
 	// Attach index roots and re-serialize the commit.
@@ -1072,6 +1095,19 @@ func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx inde
 	if bm25FullLoaded && bm25MediumLoaded && bm25ShortLoaded && vecLoaded && propLoaded {
 		return
 	}
+
+	// Wrap in property index batch to amortize fsync for disk-backed
+	// implementations. No-op for in-memory.
+	if !propLoaded {
+		propIdx.Batch(func() {
+			rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, bloomFull, bloomMedium, bloomShort, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded)
+		})
+		return
+	}
+	rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25Medium, bm25Short, bloomFull, bloomMedium, bloomShort, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded)
+}
+
+func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full, bm25Medium, bm25Short index.BM25Index, bloomFull, bloomMedium, bloomShort *index.BloomIndex, bm25FullLoaded, bm25MediumLoaded, bm25ShortLoaded, vecLoaded, propLoaded bool) {
 	it := g.NodeIterator()
 	defer it.Close()
 	for it.Next() {

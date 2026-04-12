@@ -242,7 +242,7 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 
 	// Clear current state.
 	g.nodes = make(map[string]*Node)
-	g.edgeStore = NewMemoryEdgeStore()
+	g.edgeStore.Clear()
 	g.nodeHashes = make(map[string]string)
 	g.edgeHashes = make(map[string]string)
 	g.store = s
