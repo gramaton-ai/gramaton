@@ -30,11 +30,12 @@ import (
 // Search computes uint8 cosine similarity via dot product divided by norms (full cosine).
 // The file supports O(1) append (extend + write entry + update count).
 type MmapFlatIndex struct {
-	mu   sync.RWMutex
-	path string
-	file *os.File
-	data []byte // mmap'd region (nil if empty file)
-	dim  int
+	mu    sync.RWMutex
+	path  string
+	file  *os.File
+	data  []byte // mmap'd region (nil if empty file)
+	dim   int
+	qscale float32 // quantization scale for this dimension
 
 	// In-memory ID-to-offset map for filtered scans and Remove.
 	// offset points to the start of the entry (id_len field).
@@ -65,6 +66,7 @@ func NewMmapFlatIndex(path string, dim int) (*MmapFlatIndex, error) {
 	idx := &MmapFlatIndex{
 		path:    path,
 		dim:     dim,
+		qscale:  quantizationScale(dim),
 		offsets: make(map[string]int),
 	}
 
@@ -199,7 +201,7 @@ func (idx *MmapFlatIndex) Add(nodeID string, vec []float32) {
 	}
 
 	// Buffer the new vector.
-	qvec := quantizeF32ToU8(vec)
+	qvec := quantizeF32ToU8(vec, idx.qscale)
 	idx.buffer = append(idx.buffer, bufferedEntry{nodeID: nodeID, vec: qvec})
 	idx.offsets[nodeID] = -(len(idx.buffer)) // negative: -(bufferIndex+1)
 	idx.count++
@@ -303,7 +305,7 @@ func (idx *MmapFlatIndex) Search(query []float32, k int, candidates map[string]s
 		return nil
 	}
 
-	qquery := quantizeF32ToU8(query)
+	qquery := quantizeF32ToU8(query, idx.qscale)
 	var results []SearchResult
 
 	search := func(id string) {
@@ -389,34 +391,47 @@ func (idx *MmapFlatIndex) readVecAt(entryOffset int) []byte {
 
 // --- Quantization ---
 
-// quantizeF32ToU8 maps float32 values to [0, 255] using min-max scaling.
-// This preserves relative distances for cosine similarity.
-func quantizeF32ToU8(vec []float32) []byte {
+// quantizationScale returns the symmetric quantization range [-s, s]
+// appropriate for L2-normalized vectors of the given dimension.
+// For high-dimensional normalized embeddings, individual components
+// are small (~1/sqrt(dim)); the scale ensures full uint8 resolution
+// across the meaningful signal range. Low-dimensional vectors (tests)
+// get the full [-1, 1] range.
+func quantizationScale(dim int) float32 {
+	if dim <= 16 {
+		return 1.0
+	}
+	// 4/sqrt(dim) covers ~4 standard deviations of L2-normalized components.
+	s := float32(4.0 / math.Sqrt(float64(dim)))
+	if s > 1.0 {
+		s = 1.0
+	}
+	return s
+}
+
+// quantizeF32ToU8 maps float32 values from [-scale, scale] to [0, 255].
+// Values outside the range are clamped. The scale is dimension-aware:
+// tight for high-dimensional normalized embeddings (full uint8 resolution),
+// wide for low-dimensional vectors (testing, general use).
+//
+// Using a fixed range (not per-vector min-max) is critical for cosine
+// similarity: per-vector scaling destroys magnitude information, causing
+// vectors with similar shapes but different scales to appear identical.
+func quantizeF32ToU8(vec []float32, scale float32) []byte {
 	if len(vec) == 0 {
 		return nil
 	}
-	min, max := vec[0], vec[0]
-	for _, v := range vec[1:] {
-		if v < min {
-			min = v
-		}
-		if v > max {
-			max = v
-		}
-	}
-	span := max - min
-	if span == 0 {
-		// All values identical -- map to 128.
-		out := make([]byte, len(vec))
-		for i := range out {
-			out[i] = 128
-		}
-		return out
-	}
+	invScale := 1.0 / scale
 	out := make([]byte, len(vec))
 	for i, v := range vec {
-		normalized := (v - min) / span // [0, 1]
-		out[i] = byte(normalized * 255)
+		// Clamp to [-scale, scale], map to [0, 255].
+		normalized := v * invScale // [-1, 1]
+		if normalized < -1 {
+			normalized = -1
+		} else if normalized > 1 {
+			normalized = 1
+		}
+		out[i] = byte((normalized + 1) * 0.5 * 255)
 	}
 	return out
 }

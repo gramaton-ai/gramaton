@@ -497,8 +497,10 @@ func (e *Engine) Close() error {
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing
-// records. A Jaccard verification step prevents false positives on
-// long documents with similar structure but different content.
+// records. Uses the vector index (uint8 quantized) for candidate
+// retrieval, then recomputes similarity with float32 embeddings for
+// the threshold decision. A Jaccard verification step prevents false
+// positives on long documents with similar structure but different content.
 // Caller must hold at least a read lock.
 func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	if e.vecIdx.Len() < 2 {
@@ -521,18 +523,36 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 		return "", 0
 	}
 
+	// Use vector index for candidate retrieval (uint8, approximate).
 	// Request extra candidates since one will be self (skipped) and
-	// others may fail the Jaccard guard.
-	results := e.vecIdx.Search(vec, 5, nil)
+	// others may fail verification.
+	results := e.vecIdx.Search(vec, 10, nil)
 	for _, r := range results {
 		if r.NodeID == nodeID {
 			continue
 		}
-		if float64(r.Similarity) >= e.cfg.Dedup.SimilarityThreshold {
+
+		// Recompute similarity with float32 embeddings for accurate
+		// threshold comparison. The uint8 quantized similarity from
+		// the vector index is too coarse for the 0.92 dedup threshold.
+		// Fall back to the uint8 similarity if float32 is unavailable
+		// (legacy records added directly to the vector index).
+		sim := float64(r.Similarity)
+		candidate, ok := e.graph.GetNode(r.NodeID)
+		if ok {
+			for _, key := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
+				if candidateVec, ok := candidate.Properties.GetVector(key); ok {
+					sim = float64(index.CosineSimilarity(vec, candidateVec))
+					break
+				}
+			}
+		}
+
+		if sim >= e.cfg.Dedup.SimilarityThreshold {
 			if !e.verifyJaccard(n, r.NodeID) {
 				continue
 			}
-			return r.NodeID, float64(r.Similarity)
+			return r.NodeID, sim
 		}
 	}
 	return "", 0
