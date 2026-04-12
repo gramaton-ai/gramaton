@@ -7,6 +7,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 func setupTestEngine(t *testing.T) *Engine {
@@ -19,7 +20,9 @@ func setupTestEngine(t *testing.T) *Engine {
 	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
 		t.Fatal(err)
 	}
-	eng, err := LoadEngine(dir)
+	eng, err := LoadEngineWithOptions(dir, nil, []EngineOption{
+		WithVectorIndex(index.NewFlatIndex()),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}

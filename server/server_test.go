@@ -13,6 +13,7 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // noopLLM is a minimal LLM provider for tests that don't need real responses.
@@ -33,6 +34,7 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
+		core.WithVectorIndex(index.NewFlatIndex()),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

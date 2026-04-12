@@ -70,6 +70,20 @@ func WithLLM(p llm.Provider) EngineOption {
 	return func(e *Engine) { e.llmProv = p }
 }
 
+// WithVectorIndex overrides the vector index. Use in tests to inject
+// an in-memory FlatIndex instead of the disk-backed MmapFlatIndex.
+// When set, the engine skips creating/opening the mmap vector file.
+func WithVectorIndex(v index.VectorIndex) EngineOption {
+	return func(e *Engine) {
+		// Close the mmap index if one was created.
+		if c, ok := e.vecIdx.(interface{ Close() error }); ok {
+			c.Close()
+		}
+		e.vecIdx = v
+		e.searcher = search.New(e.graph, e.propIdx, v, e.bm25Full, e.embedder, e.cfg)
+	}
+}
+
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
 // The embedder may be nil if no embedding provider is configured.
 // Ollama auto-start is NOT performed -- the caller is responsible
@@ -133,7 +147,6 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(edgeStore))
-	var vecIdx index.VectorIndex // set after graph load (need node count)
 	bm25Full := index.NewBM25Index(cfg.Search.BM25K1, cfg.Search.BM25B)
 
 	// Load HEAD commit if it exists.
@@ -151,25 +164,23 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}
 
-	// Select vector index type based on graph size.
-	hnswThreshold := cfg.Search.HNSWThreshold
-	if hnswThreshold <= 0 {
-		hnswThreshold = 5000
+	// Open mmap'd flat vector index (D1 revised: flat as v1 default).
+	// Dimension is 384 for MiniLM-L6 (D3 default). If the file already
+	// exists with a different dimension, NewMmapFlatIndex returns an error.
+	vecDim := 384
+	vecPath := filepath.Join(cfg.DataDir, "vec.flat")
+	mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("open vector index: %w", err)
 	}
-	if g.NodeCount() >= hnswThreshold {
-		vecIdx = index.NewHNSWIndex(
-			cfg.Search.HNSWM,
-			cfg.Search.HNSWEfConstruction,
-			cfg.Search.HNSWEfSearch,
-		)
-	} else {
-		vecIdx = index.NewFlatIndex()
-	}
+	var vecIdx index.VectorIndex = mmapVec
 
 	// Try to load persisted indexes from commit. Each index that loads
 	// successfully is skipped during rebuildIndexes.
 	bm25FullLoaded := false
-	vecLoaded := false
+	// Vector index is file-backed -- if it has data, it's already loaded.
+	vecLoaded := mmapVec.Len() > 0
 
 	// Property index is bbolt-backed -- if the bbolt file has data,
 	// it's already loaded (propLoaded=true). If the bbolt file is new
@@ -199,15 +210,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 			}
 		}
 		// BM25MediumRoot and BM25ShortRoot are ignored (D12: single BM25 layer).
-		if headCommit.VecRoot != "" {
-			if u, ok := vecIdx.(encoding.BinaryUnmarshaler); ok {
-				if vecData, err := s.Read(headCommit.VecRoot); err == nil {
-					if err := u.UnmarshalBinary(vecData); err == nil {
-						vecLoaded = true
-					}
-				}
-			}
-		}
+		// VecRoot: skip CAS loading (mmap flat file is authoritative).
 		// Property index: skip CAS loading (bbolt is authoritative).
 		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
 	}
@@ -328,8 +331,9 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		}
 	}
 
-	// Persist the vector index if it supports binary marshaling (HNSW
-	// does, FlatIndex does not -- and doesn't need to, it's cheap to rebuild).
+	// Vector index: MmapFlatIndex persists to its own file, not CAS.
+	// This block is kept for backward compat with implementations that
+	// support BinaryMarshaler (none currently active in v1).
 	var vecRoot string
 	if m, ok := e.vecIdx.(encoding.BinaryMarshaler); ok {
 		vecData, err := m.MarshalBinary()
@@ -424,32 +428,31 @@ func (e *Engine) FlushAccess() {
 // RebuildAllIndexes clears and rebuilds all indexes from graph state.
 // Caller must hold the write lock.
 func (e *Engine) RebuildAllIndexes() {
-	e.propIdx = index.NewPropertyIndex()
-	e.vecIdx = e.newVectorIndex()
+	// BM25 is still in-memory, so we can replace it.
 	e.bm25Full = index.NewBM25Index(e.cfg.Search.BM25K1, e.cfg.Search.BM25B)
+	// Property index and vector index are disk-backed. We can't replace
+	// them but we need to repopulate. For now, we pass propLoaded=false
+	// and vecLoaded=false to force rebuild into the existing indexes.
+	// TODO: add Clear() to PropertyIndex and VectorIndex interfaces for
+	// clean rebuild. Currently this adds on top of existing data, which
+	// is fine for repair (idempotent adds) but not for branch switch.
 	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Full, false, false, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.embedder, e.cfg)
 }
 
-// newVectorIndex creates the appropriate vector index based on config
-// and current node count. Uses HNSW above the threshold, FlatIndex below.
-func (e *Engine) newVectorIndex() index.VectorIndex {
-	threshold := e.cfg.Search.HNSWThreshold
-	if threshold <= 0 {
-		threshold = 5000
-	}
-	if e.graph.NodeCount() >= threshold {
-		return index.NewHNSWIndex(
-			e.cfg.Search.HNSWM,
-			e.cfg.Search.HNSWEfConstruction,
-			e.cfg.Search.HNSWEfSearch,
-		)
-	}
-	return index.NewFlatIndex()
-}
-
 // BM25Full returns the BM25 index for content_full.
 func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
+
+// Close releases resources held by the engine (bbolt DB, mmap files).
+func (e *Engine) Close() error {
+	if c, ok := e.vecIdx.(interface{ Close() error }); ok {
+		c.Close()
+	}
+	if e.boltDB != nil {
+		return e.boltDB.Close()
+	}
+	return nil
+}
 
 
 // GenerateEmbeddings creates embeddings for a node's content properties.

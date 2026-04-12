@@ -27,7 +27,9 @@ func setupTestEngine(t *testing.T) *core.Engine {
 		t.Fatal(err)
 	}
 
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithVectorIndex(index.NewFlatIndex()),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // NewEngine creates a minimal engine backed by a temp directory.
@@ -25,7 +26,9 @@ func NewEngine(t *testing.T) *core.Engine {
 	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
 		t.Fatal(err)
 	}
-	eng, err := core.LoadEngine(dir)
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithVectorIndex(index.NewFlatIndex()),
+	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 	"github.com/gramaton-ai/gramaton/llm"
 )
 
@@ -68,6 +69,7 @@ func setupTestServerWithProviders(t *testing.T, emb embed.Provider, llmProv llm.
 	config.Save(cfg, dir+"/config.yaml")
 
 	var opts []core.EngineOption
+	opts = append(opts, core.WithVectorIndex(index.NewFlatIndex()))
 	if emb != nil {
 		opts = append(opts, core.WithEmbedder(emb))
 	}
@@ -166,6 +168,7 @@ func TestHandleObserveDisabled(t *testing.T) {
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
+		core.WithVectorIndex(index.NewFlatIndex()),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
@@ -451,6 +454,7 @@ func TestProcessObservationMaxFactsCap(t *testing.T) {
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
+		core.WithVectorIndex(index.NewFlatIndex()),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
