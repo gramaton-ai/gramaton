@@ -36,7 +36,8 @@ type Engine struct {
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
 	bm25Full   index.BM25Index // content_full BM25 (D12: single layer)
-	secIdx   *index.BboltSecondaryIndex // time, edge count, field existence (D16)
+	secIdx   *index.BboltSecondaryIndex    // time, edge count, field existence (D16)
+	collCache *index.BboltCollectionCache  // collection member cache (D24)
 	embedder embed.Provider
 	llmProv  llm.Provider
 	searcher *search.Tool
@@ -149,6 +150,12 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("create secondary index: %w", err)
 	}
 
+	collCache, err := index.NewBboltCollectionCache(boltDB)
+	if err != nil {
+		boltDB.Close()
+		return nil, fmt.Errorf("create collection cache: %w", err)
+	}
+
 	// Load HEAD commit if it exists.
 	var headHash string
 	var headCommit *graph.Commit
@@ -182,8 +189,9 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		boltDB:   boltDB,
 		propIdx:  propIdx,
 		bm25Full: bm25Full,
-		secIdx:   secIdx,
-		embedder: emb,
+		secIdx:    secIdx,
+		collCache: collCache,
+		embedder:  emb,
 		llmProv:  llmProv,
 		headHash: headHash,
 	}
@@ -431,6 +439,10 @@ func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
 // SecIdx returns the secondary index (time, edge counts, field existence).
 // May be nil in tests that don't create one.
 func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.secIdx }
+
+// CollCache returns the collection membership cache.
+// May be nil in tests that don't create one.
+func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
 // Flushes buffered vectors and closes the bbolt database.
