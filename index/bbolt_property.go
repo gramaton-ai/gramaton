@@ -50,6 +50,11 @@ func NewBboltPropertyIndex(db *bolt.DB) (*BboltPropertyIndex, error) {
 // and Remove calls within fn share one transaction, amortizing fsync.
 // Critical for bulk operations (import, rebuild).
 func (idx *BboltPropertyIndex) Batch(fn func()) error {
+	if idx.batch != nil {
+		// Already in a batch (e.g., external transaction via SetBatch).
+		fn()
+		return nil
+	}
 	return idx.db.Update(func(tx *bolt.Tx) error {
 		idx.batch = tx
 		defer func() { idx.batch = nil }()
@@ -57,6 +62,14 @@ func (idx *BboltPropertyIndex) Batch(fn func()) error {
 		return nil
 	})
 }
+
+// SetBatch sets an external bbolt transaction for batching. This allows
+// the engine to open one transaction shared across multiple indexes
+// (property + BM25) on the same bbolt DB.
+func (idx *BboltPropertyIndex) SetBatch(tx *bolt.Tx) { idx.batch = tx }
+
+// ClearBatch clears the external batch transaction.
+func (idx *BboltPropertyIndex) ClearBatch() { idx.batch = nil }
 
 // update runs fn in the current batch transaction or a new one.
 func (idx *BboltPropertyIndex) update(fn func(tx *bolt.Tx) error) error {

@@ -207,7 +207,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
 	}
 
-	rebuildIndexes(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
+	rebuildIndexes(boltDB, g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
 
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
@@ -433,7 +433,7 @@ func (e *Engine) RebuildAllIndexes() {
 	// on top of existing data (idempotent). For a clean rebuild, the
 	// caller should clear the indexes first (e.g., delete indexes.db
 	// and vec.flat, then re-init).
-	rebuildIndexes(e.graph, e.propIdx, e.vecIdx, e.bm25Full, false, false, false)
+	rebuildIndexes(e.boltDB, e.graph, e.propIdx, e.vecIdx, e.bm25Full, false, false, false)
 	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.embedder, e.cfg)
 }
 
@@ -1003,11 +1003,40 @@ func (e *Engine) EdgeCount() int {
 // rebuildIndexes populates indexes from graph state. Each *Loaded flag
 // indicates that the corresponding index was restored from a persisted
 // snapshot and should be skipped. When all are true, this is a no-op.
-func rebuildIndexes(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
+func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
 	if bm25FullLoaded && vecLoaded && propLoaded {
 		return
 	}
 
+	// Batch all bbolt writes in a single transaction. Both propIdx and
+	// bm25Full may share the same bbolt DB; opening separate write
+	// transactions would deadlock. Open one transaction and share it.
+	type batchSetter interface {
+		SetBatch(tx *bolt.Tx)
+		ClearBatch()
+	}
+	var setters []batchSetter
+	if ps, ok := propIdx.(batchSetter); ok && !propLoaded {
+		setters = append(setters, ps)
+	}
+	if bs, ok := bm25Full.(batchSetter); ok && !bm25FullLoaded {
+		setters = append(setters, bs)
+	}
+	if len(setters) > 0 && db != nil {
+		db.Update(func(tx *bolt.Tx) error {
+			for _, s := range setters {
+				s.SetBatch(tx)
+			}
+			defer func() {
+				for _, s := range setters {
+					s.ClearBatch()
+				}
+			}()
+			rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
+			return nil
+		})
+		return
+	}
 	rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
 }
 

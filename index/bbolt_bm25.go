@@ -115,6 +115,10 @@ func (idx *BboltBM25Index) view(fn func(tx *bolt.Tx) error) error {
 
 // Batch executes fn within a single bbolt write transaction.
 func (idx *BboltBM25Index) Batch(fn func()) error {
+	if idx.batch != nil {
+		fn()
+		return nil
+	}
 	return idx.db.Update(func(tx *bolt.Tx) error {
 		idx.batch = tx
 		defer func() { idx.batch = nil }()
@@ -122,6 +126,12 @@ func (idx *BboltBM25Index) Batch(fn func()) error {
 		return nil
 	})
 }
+
+// SetBatch sets an external bbolt transaction for batching.
+func (idx *BboltBM25Index) SetBatch(tx *bolt.Tx) { idx.batch = tx }
+
+// ClearBatch clears the external batch transaction.
+func (idx *BboltBM25Index) ClearBatch() { idx.batch = nil }
 
 func (idx *BboltBM25Index) Add(nodeID, text string) {
 	tokens := Tokenize(text)
