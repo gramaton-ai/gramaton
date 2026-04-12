@@ -57,11 +57,7 @@ type EngineOption func(*Engine)
 // WithEmbedder overrides the embedding provider. Use in tests to inject
 // a mock embedder without requiring a real Ollama/API endpoint.
 func WithEmbedder(p embed.Provider) EngineOption {
-	return func(e *Engine) {
-		e.embedder = p
-		// Rebuild searcher with the new embedder.
-		e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, p, e.cfg)
-	}
+	return func(e *Engine) { e.embedder = p }
 }
 
 // WithLLM overrides the LLM provider. Use in tests to inject a mock
@@ -74,14 +70,7 @@ func WithLLM(p llm.Provider) EngineOption {
 // an in-memory FlatIndex instead of the disk-backed MmapFlatIndex.
 // When set, the engine skips creating/opening the mmap vector file.
 func WithVectorIndex(v index.VectorIndex) EngineOption {
-	return func(e *Engine) {
-		// Close the mmap index if one was created.
-		if c, ok := e.vecIdx.(interface{ Close() error }); ok {
-			c.Close()
-		}
-		e.vecIdx = v
-		e.searcher = search.New(e.graph, e.propIdx, v, e.bm25Full, e.embedder, e.cfg)
-	}
+	return func(e *Engine) { e.vecIdx = v }
 }
 
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
@@ -168,54 +157,10 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}
 
-	// Open mmap'd flat vector index (D1 revised: flat as v1 default).
-	vecDim := cfg.Embedding.Dimension
-	if vecDim <= 0 {
-		vecDim = 384 // MiniLM-L6 default (D3)
-	}
-	vecPath := filepath.Join(cfg.DataDir, "vec.flat")
-	mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
-	if err != nil {
-		boltDB.Close()
-		return nil, fmt.Errorf("open vector index: %w", err)
-	}
-	var vecIdx index.VectorIndex = mmapVec
-
-	// Try to load persisted indexes from commit. Each index that loads
-	// successfully is skipped during rebuildIndexes.
-	// BM25 is bbolt-backed -- if it has data, it's already loaded.
-	bm25FullLoaded := bm25Full.Len() > 0
-	// Vector index is file-backed -- if it has data, it's already loaded.
-	vecLoaded := mmapVec.Len() > 0
-
-	// Property index is bbolt-backed -- if the bbolt file has data,
-	// it's already loaded (propLoaded=true). If the bbolt file is new
-	// (first migration from an old store), rebuildIndexes will populate it.
-	propLoaded := propIdx.Count() > 0
-
-	// Edge store is bbolt-backed -- if edges exist in bbolt, they're
-	// already available. Otherwise they'll be loaded from the prolly
-	// tree during graph.Load and Put into the bbolt edge store.
-	// However, if bbolt edges exist but the prolly tree was updated
-	// externally (e.g., branch switch), we need to reload. For now,
-	// if bbolt has edges, trust them. Repair/validate catches
-	// inconsistencies.
-
-	if headCommit != nil {
-		// BM25: skip CAS loading (bbolt is authoritative).
-		// VecRoot: skip CAS loading (mmap flat file is authoritative).
-		// Property index: skip CAS loading (bbolt is authoritative).
-		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
-	}
-
-	rebuildIndexes(boltDB, g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-
 	emb, err := embed.New(cfg.Embedding)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
-
-	searcher := search.New(g, propIdx, vecIdx, bm25Full, emb, cfg)
 
 	llmProv, err := llm.New(cfg.LLM)
 	if err != nil {
@@ -224,25 +169,59 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	e := &Engine{
-		cfg:         cfg,
-		store:       s,
-		graph:       g,
-		boltDB:      boltDB,
-		propIdx:     propIdx,
-		vecIdx:      vecIdx,
-		bm25Full:    bm25Full,
-		embedder:    emb,
-		llmProv:     llmProv,
-		searcher:    searcher,
-		headHash:    headHash,
+		cfg:      cfg,
+		store:    s,
+		graph:    g,
+		boltDB:   boltDB,
+		propIdx:  propIdx,
+		bm25Full: bm25Full,
+		embedder: emb,
+		llmProv:  llmProv,
+		headHash: headHash,
 	}
 
-	// Apply options after all default initialization.
+	// Apply options before creating the vector index. This lets
+	// WithVectorIndex inject an in-memory index for tests,
+	// avoiding the disk I/O of MmapFlatIndex creation.
 	for _, opt := range opts {
 		if opt != nil {
 			opt(e)
 		}
 	}
+
+	// If no option provided a vector index, open the mmap'd flat
+	// vector index (D1 revised: flat as v1 default).
+	if e.vecIdx == nil {
+		vecDim := cfg.Embedding.Dimension
+		if vecDim <= 0 {
+			vecDim = 384 // MiniLM-L6 default (D3)
+		}
+		vecPath := filepath.Join(cfg.DataDir, "vec.flat")
+		mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
+		if err != nil {
+			boltDB.Close()
+			return nil, fmt.Errorf("open vector index: %w", err)
+		}
+		e.vecIdx = mmapVec
+	}
+
+	// Try to load persisted indexes from commit. Each index that loads
+	// successfully is skipped during rebuildIndexes.
+	bm25FullLoaded := bm25Full.Len() > 0
+	vecLoaded := e.vecIdx.Len() > 0
+	propLoaded := propIdx.Count() > 0
+
+	if headCommit != nil {
+		// BM25: skip CAS loading (bbolt is authoritative).
+		// VecRoot: skip CAS loading (mmap flat file is authoritative).
+		// Property index: skip CAS loading (bbolt is authoritative).
+		// Edge adjacency: skip CAS loading (bbolt edge store is authoritative).
+	}
+
+	rebuildIndexes(boltDB, g, propIdx, e.vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
+
+	// Build searcher after all indexes are finalized.
+	e.searcher = search.New(g, propIdx, e.vecIdx, bm25Full, emb, cfg)
 
 	return e, nil
 }

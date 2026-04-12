@@ -75,6 +75,11 @@ func TestSaveAndReload(t *testing.T) {
 
 	nodeID := n.ID
 
+	// Close first engine to release bbolt file lock before reload.
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close first engine: %v", err)
+	}
+
 	// Reload engine from same directory.
 	eng2, err := LoadEngine(dir)
 	if err != nil {

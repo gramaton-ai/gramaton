@@ -40,7 +40,11 @@ type BboltPropertyIndex struct {
 
 // DefaultIndexedFields is the set of fields indexed by default (D6).
 // All meta.* keys are also indexed regardless of this list.
+// content_full and content_short must be included because the search
+// "match" feature uses the substring index (str: bucket) on them.
 var DefaultIndexedFields = []string{
+	"content_full",
+	"content_short",
 	"temporality",
 	"knowledge_type",
 	"epistemic_status",

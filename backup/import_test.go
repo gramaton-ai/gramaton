@@ -101,6 +101,9 @@ func TestImportJSONPropertyAllowlist(t *testing.T) {
 }
 
 func TestImportJSONMaxRecords(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: imports 10k records through bbolt (~40s)")
+	}
 	eng := setupTestEngine(t)
 
 	// Build input with more than maxImportRecords.
