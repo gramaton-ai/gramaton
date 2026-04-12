@@ -32,19 +32,13 @@ func (g *Graph) RecordAccess(nodeID string, now time.Time, cfg ActivationConfig)
 	g.markNodeDirty(nodeID)
 
 	// Spread activation to neighbors via outbound edges.
-	if outs, ok := g.outEdges[nodeID]; ok {
-		for eid := range outs {
-			e := g.edges[eid]
-			boostNeighbor(g, e.TargetID, cfg.BaseAmount*e.Weight*cfg.AttenuationFactor)
-		}
+	for _, e := range g.edgeStore.From(nodeID) {
+		boostNeighbor(g, e.TargetID, cfg.BaseAmount*e.Weight*cfg.AttenuationFactor)
 	}
 
 	// Spread activation to neighbors via inbound edges.
-	if ins, ok := g.inEdges[nodeID]; ok {
-		for eid := range ins {
-			e := g.edges[eid]
-			boostNeighbor(g, e.SourceID, cfg.BaseAmount*e.Weight*cfg.AttenuationFactor)
-		}
+	for _, e := range g.edgeStore.To(nodeID) {
+		boostNeighbor(g, e.SourceID, cfg.BaseAmount*e.Weight*cfg.AttenuationFactor)
 	}
 }
 

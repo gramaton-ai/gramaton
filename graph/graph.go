@@ -25,12 +25,7 @@ var ErrNotFound = errors.New("not found")
 // The graph is not thread-safe. The server layer handles write serialization.
 type Graph struct {
 	nodes map[string]*Node // in-memory node cache (lazy-loaded)
-	edges map[string]*Edge
-
-	// Edge indexes for efficient traversal.
-	outEdges  map[string]map[string]struct{} // source node ID → set of edge IDs
-	inEdges   map[string]map[string]struct{} // target node ID → set of edge IDs
-	typeEdges map[string]map[string]struct{} // edge type → set of edge IDs
+	edgeStore EdgeStore     // edge storage and adjacency indexes
 
 	// Dirty tracking for incremental saves.
 	dirtyNodes   map[string]struct{} // node IDs modified since last save
@@ -76,10 +71,7 @@ func New() *Graph {
 func NewWithCapacity(cacheCapacity int) *Graph {
 	return &Graph{
 		nodes:        make(map[string]*Node),
-		edges:        make(map[string]*Edge),
-		outEdges:     make(map[string]map[string]struct{}),
-		inEdges:      make(map[string]map[string]struct{}),
-		typeEdges:    make(map[string]map[string]struct{}),
+		edgeStore:    NewMemoryEdgeStore(),
 		dirtyNodes:   make(map[string]struct{}),
 		dirtyEdges:   make(map[string]struct{}),
 		deletedNodes: make(map[string]struct{}),

@@ -12,13 +12,17 @@ import (
 func (g *Graph) MarshalEdgeAdjacency() ([]byte, error) {
 	// Format: magic(4) + version(2) + 3 maps (out, in, type)
 	// Each map: numKeys(uint32) + for each key: keyLen(uint16) + key + numVals(uint32) + for each val: valLen(uint16) + val
+	mem, ok := g.edgeStore.(*MemoryEdgeStore)
+	if !ok {
+		return nil, fmt.Errorf("edge adjacency: marshal requires MemoryEdgeStore")
+	}
 	buf := make([]byte, 0, 1024)
 	buf = append(buf, 'E', 'A', 'D', 'J')
 	buf = binary.LittleEndian.AppendUint16(buf, 1)
 
-	buf = marshalAdjMap(buf, g.outEdges)
-	buf = marshalAdjMap(buf, g.inEdges)
-	buf = marshalAdjMap(buf, g.typeEdges)
+	buf = marshalAdjMap(buf, mem.OutEdgeIDs())
+	buf = marshalAdjMap(buf, mem.InEdgeIDs())
+	buf = marshalAdjMap(buf, mem.TypeEdgeIDs())
 
 	return buf, nil
 }
@@ -33,17 +37,28 @@ func (g *Graph) UnmarshalEdgeAdjacency(data []byte) error {
 	pos := 6
 
 	var err error
-	g.outEdges, pos, err = unmarshalAdjMap(data, pos)
+	var outEdges, inEdges, typeEdges map[string]map[string]struct{}
+	outEdges, pos, err = unmarshalAdjMap(data, pos)
 	if err != nil {
 		return fmt.Errorf("edge adjacency: outEdges: %w", err)
 	}
-	g.inEdges, pos, err = unmarshalAdjMap(data, pos)
+	inEdges, pos, err = unmarshalAdjMap(data, pos)
 	if err != nil {
 		return fmt.Errorf("edge adjacency: inEdges: %w", err)
 	}
-	g.typeEdges, _, err = unmarshalAdjMap(data, pos)
+	typeEdges, _, err = unmarshalAdjMap(data, pos)
 	if err != nil {
 		return fmt.Errorf("edge adjacency: typeEdges: %w", err)
+	}
+
+	// Apply to the MemoryEdgeStore if that's the implementation.
+	if mem, ok := g.edgeStore.(*MemoryEdgeStore); ok {
+		*mem = MemoryEdgeStore{
+			edges:     mem.edges, // preserve existing edges
+			outEdges:  outEdges,
+			inEdges:   inEdges,
+			typeEdges: typeEdges,
+		}
 	}
 	return nil
 }

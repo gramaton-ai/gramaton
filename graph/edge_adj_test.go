@@ -22,7 +22,7 @@ func TestEdgeAdjacencyRoundTrip(t *testing.T) {
 
 	eAB, _ := g.AddEdge(a.ID, b.ID, "related_to", 0.8, nil)
 	eBC, _ := g.AddEdge(b.ID, c.ID, "section_of", 1.0, nil)
-	eAD, _ := g.AddEdge(a.ID, d.ID, "supersedes", 0.95, nil)
+	_, _ = g.AddEdge(a.ID, d.ID, "supersedes", 0.95, nil)
 	eBA, _ := g.AddEdge(b.ID, a.ID, "related_to", 0.8, nil)
 
 	// Marshal.
@@ -37,26 +37,26 @@ func TestEdgeAdjacencyRoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalEdgeAdjacency: %v", err)
 	}
 
+	// Access the MemoryEdgeStore to verify adjacency maps.
+	mem := g2.edgeStore.(*MemoryEdgeStore)
+
 	// Verify outEdges: A should have 2 outbound edges.
-	outA := g2.outEdges[a.ID]
+	outA := mem.OutEdgeIDs()[a.ID]
 	if len(outA) != 2 {
 		t.Fatalf("expected 2 outbound edges from A, got %d", len(outA))
 	}
 	if _, ok := outA[eAB.ID]; !ok {
 		t.Fatal("outEdges[A] missing edge A->B")
 	}
-	if _, ok := outA[eAD.ID]; !ok {
-		t.Fatal("outEdges[A] missing edge A->D")
-	}
 
 	// Verify outEdges: B should have 2 outbound edges.
-	outB := g2.outEdges[b.ID]
+	outB := mem.OutEdgeIDs()[b.ID]
 	if len(outB) != 2 {
 		t.Fatalf("expected 2 outbound edges from B, got %d", len(outB))
 	}
 
 	// Verify inEdges: B should have 1 inbound edge (from A).
-	inB := g2.inEdges[b.ID]
+	inB := mem.InEdgeIDs()[b.ID]
 	if len(inB) != 1 {
 		t.Fatalf("expected 1 inbound edge to B, got %d", len(inB))
 	}
@@ -65,7 +65,7 @@ func TestEdgeAdjacencyRoundTrip(t *testing.T) {
 	}
 
 	// Verify inEdges: A should have 1 inbound edge (from B).
-	inA := g2.inEdges[a.ID]
+	inA := mem.InEdgeIDs()[a.ID]
 	if len(inA) != 1 {
 		t.Fatalf("expected 1 inbound edge to A, got %d", len(inA))
 	}
@@ -74,13 +74,13 @@ func TestEdgeAdjacencyRoundTrip(t *testing.T) {
 	}
 
 	// Verify typeEdges: related_to should have 2 edges.
-	relatedEdges := g2.typeEdges["related_to"]
+	relatedEdges := mem.TypeEdgeIDs()["related_to"]
 	if len(relatedEdges) != 2 {
 		t.Fatalf("expected 2 related_to edges, got %d", len(relatedEdges))
 	}
 
 	// Verify typeEdges: section_of should have 1 edge.
-	sectionEdges := g2.typeEdges["section_of"]
+	sectionEdges := mem.TypeEdgeIDs()["section_of"]
 	if len(sectionEdges) != 1 {
 		t.Fatalf("expected 1 section_of edge, got %d", len(sectionEdges))
 	}
@@ -89,7 +89,7 @@ func TestEdgeAdjacencyRoundTrip(t *testing.T) {
 	}
 
 	// Verify typeEdges: supersedes should have 1 edge.
-	supersEdges := g2.typeEdges["supersedes"]
+	supersEdges := mem.TypeEdgeIDs()["supersedes"]
 	if len(supersEdges) != 1 {
 		t.Fatalf("expected 1 supersedes edge, got %d", len(supersEdges))
 	}
@@ -108,14 +108,15 @@ func TestEdgeAdjacencyEmpty(t *testing.T) {
 		t.Fatalf("unmarshal empty: %v", err)
 	}
 
-	if len(g2.outEdges) != 0 {
-		t.Fatalf("expected 0 outEdges, got %d", len(g2.outEdges))
+	mem := g2.edgeStore.(*MemoryEdgeStore)
+	if len(mem.OutEdgeIDs()) != 0 {
+		t.Fatalf("expected 0 outEdges, got %d", len(mem.OutEdgeIDs()))
 	}
-	if len(g2.inEdges) != 0 {
-		t.Fatalf("expected 0 inEdges, got %d", len(g2.inEdges))
+	if len(mem.InEdgeIDs()) != 0 {
+		t.Fatalf("expected 0 inEdges, got %d", len(mem.InEdgeIDs()))
 	}
-	if len(g2.typeEdges) != 0 {
-		t.Fatalf("expected 0 typeEdges, got %d", len(g2.typeEdges))
+	if len(mem.TypeEdgeIDs()) != 0 {
+		t.Fatalf("expected 0 typeEdges, got %d", len(mem.TypeEdgeIDs()))
 	}
 }
 

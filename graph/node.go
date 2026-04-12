@@ -128,15 +128,11 @@ func (g *Graph) DeleteNode(id string) error {
 	// Collect unique edge IDs to delete (outbound + inbound).
 	// A self-edge appears in both sets, so we deduplicate.
 	edgeSet := make(map[string]struct{})
-	if out, ok := g.outEdges[id]; ok {
-		for eid := range out {
-			edgeSet[eid] = struct{}{}
-		}
+	for _, e := range g.edgeStore.From(id) {
+		edgeSet[e.ID] = struct{}{}
 	}
-	if in, ok := g.inEdges[id]; ok {
-		for eid := range in {
-			edgeSet[eid] = struct{}{}
-		}
+	for _, e := range g.edgeStore.To(id) {
+		edgeSet[e.ID] = struct{}{}
 	}
 
 	// Delete edges first (updates all indexes).

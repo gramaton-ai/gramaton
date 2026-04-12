@@ -36,10 +36,7 @@ func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, pro
 		e.Properties = make(Properties)
 	}
 
-	g.edges[e.ID] = e
-	addToIndex(g.outEdges, sourceID, e.ID)
-	addToIndex(g.inEdges, targetID, e.ID)
-	addToIndex(g.typeEdges, edgeType, e.ID)
+	g.edgeStore.Put(e)
 	g.markEdgeDirty(e.ID)
 
 	return e, nil
@@ -47,13 +44,12 @@ func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, pro
 
 // GetEdge returns the edge with the given ID, or nil and false if not found.
 func (g *Graph) GetEdge(id string) (*Edge, bool) {
-	e, ok := g.edges[id]
-	return e, ok
+	return g.edgeStore.Get(id)
 }
 
 // SetEdgeWeight updates an edge's weight.
 func (g *Graph) SetEdgeWeight(id string, weight float64) error {
-	e, ok := g.edges[id]
+	e, ok := g.edgeStore.Get(id)
 	if !ok {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
@@ -64,7 +60,7 @@ func (g *Graph) SetEdgeWeight(id string, weight float64) error {
 
 // SetEdgeProperty sets a single property on an edge.
 func (g *Graph) SetEdgeProperty(id, key string, val Property) error {
-	e, ok := g.edges[id]
+	e, ok := g.edgeStore.Get(id)
 	if !ok {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
@@ -75,7 +71,7 @@ func (g *Graph) SetEdgeProperty(id, key string, val Property) error {
 
 // RemoveEdgeProperty removes a property from an edge.
 func (g *Graph) RemoveEdgeProperty(id, key string) error {
-	e, ok := g.edges[id]
+	e, ok := g.edgeStore.Get(id)
 	if !ok {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
@@ -86,7 +82,7 @@ func (g *Graph) RemoveEdgeProperty(id, key string) error {
 
 // DeleteEdge removes an edge and updates all indexes.
 func (g *Graph) DeleteEdge(id string) error {
-	if _, ok := g.edges[id]; !ok {
+	if _, ok := g.edgeStore.Get(id); !ok {
 		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
 	}
 	g.deleteEdge(id)
@@ -96,57 +92,29 @@ func (g *Graph) DeleteEdge(id string) error {
 // deleteEdge is the internal edge deletion that updates indexes.
 // Caller must ensure the edge exists.
 func (g *Graph) deleteEdge(id string) {
-	e := g.edges[id]
-	removeFromIndex(g.outEdges, e.SourceID, id)
-	removeFromIndex(g.inEdges, e.TargetID, id)
-	removeFromIndex(g.typeEdges, e.Type, id)
-	delete(g.edges, id)
+	g.edgeStore.Delete(id)
 	delete(g.dirtyEdges, id)
 	g.deletedEdges[id] = struct{}{}
 }
 
 // EdgesFrom returns all outbound edges from a node.
 func (g *Graph) EdgesFrom(nodeID string) []*Edge {
-	ids, ok := g.outEdges[nodeID]
-	if !ok {
-		return nil
-	}
-	edges := make([]*Edge, 0, len(ids))
-	for eid := range ids {
-		edges = append(edges, g.edges[eid])
-	}
-	return edges
+	return g.edgeStore.From(nodeID)
 }
 
 // EdgesTo returns all inbound edges to a node.
 func (g *Graph) EdgesTo(nodeID string) []*Edge {
-	ids, ok := g.inEdges[nodeID]
-	if !ok {
-		return nil
-	}
-	edges := make([]*Edge, 0, len(ids))
-	for eid := range ids {
-		edges = append(edges, g.edges[eid])
-	}
-	return edges
+	return g.edgeStore.To(nodeID)
 }
 
 // EdgesByType returns all edges of the given type.
 func (g *Graph) EdgesByType(edgeType string) []*Edge {
-	ids, ok := g.typeEdges[edgeType]
-	if !ok {
-		return nil
-	}
-	edges := make([]*Edge, 0, len(ids))
-	for eid := range ids {
-		edges = append(edges, g.edges[eid])
-	}
-	return edges
+	return g.edgeStore.ByType(edgeType)
 }
 
 // EdgeCount returns the number of edges in the graph.
 func (g *Graph) EdgeCount() int {
-	return len(g.edges)
+	return g.edgeStore.Count()
 }
 
 // IsStructuralEdge returns true for edge types that represent structural

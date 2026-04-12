@@ -70,7 +70,7 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 
 		// Same for edges.
 		for id := range g.dirtyEdges {
-			e, ok := g.edges[id]
+			e, ok := g.edgeStore.Get(id)
 			if !ok {
 				continue
 			}
@@ -105,9 +105,9 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 			g.nodeHashes[id] = hash
 		}
 
-		g.edgeHashes = make(map[string]string, len(g.edges))
+		g.edgeHashes = make(map[string]string, g.edgeStore.Count())
 		for _, id := range sortedEdgeIDs(g) {
-			e := g.edges[id]
+			e, _ := g.edgeStore.Get(id)
 			data, err := MarshalEdge(e)
 			if err != nil {
 				return nil, fmt.Errorf("save: marshal edge %s: %w", id, err)
@@ -242,10 +242,7 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 
 	// Clear current state.
 	g.nodes = make(map[string]*Node)
-	g.edges = make(map[string]*Edge)
-	g.outEdges = make(map[string]map[string]struct{})
-	g.inEdges = make(map[string]map[string]struct{})
-	g.typeEdges = make(map[string]map[string]struct{})
+	g.edgeStore = NewMemoryEdgeStore()
 	g.nodeHashes = make(map[string]string)
 	g.edgeHashes = make(map[string]string)
 	g.store = s
@@ -321,11 +318,8 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load: unmarshal edge: %w", err)
 		}
-		g.edges[e.ID] = e
+		g.edgeStore.Put(e)
 		g.edgeHashes[e.ID] = eh.hash
-		addToIndex(g.outEdges, e.SourceID, e.ID)
-		addToIndex(g.inEdges, e.TargetID, e.ID)
-		addToIndex(g.typeEdges, e.Type, e.ID)
 	}
 
 	return &commit, nil
@@ -418,10 +412,10 @@ func sortedNodeIDs(g *Graph) []string {
 }
 
 func sortedEdgeIDs(g *Graph) []string {
-	ids := make([]string, 0, len(g.edges))
-	for id := range g.edges {
-		ids = append(ids, id)
-	}
+	ids := make([]string, 0, g.edgeStore.Count())
+	g.edgeStore.ForEach(func(e *Edge) {
+		ids = append(ids, e.ID)
+	})
 	sort.Strings(ids)
 	return ids
 }
