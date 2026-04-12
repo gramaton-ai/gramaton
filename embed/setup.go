@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/embed/bert"
 	"github.com/gramaton-ai/gramaton/embed/ollama"
 )
 
@@ -18,9 +19,53 @@ type SetupResult struct {
 
 // SetupEmbedding detects and configures an embedding provider. Modifies
 // cfg in place. Returns a result with status messages for display.
+//
+// Priority: if provider is already set (e.g., from config), use it.
+// Otherwise try built-in BERT first (always available, just needs model
+// download), then fall back to Ollama detection.
 func SetupEmbedding(ctx context.Context, cfg *config.Config) SetupResult {
-	result := SetupResult{}
+	// If provider is explicitly configured and not "bert", use it as-is.
+	if cfg.Embedding.Provider != "" && cfg.Embedding.Provider != "bert" {
+		return setupOllama(ctx, cfg)
+	}
 
+	// Default: built-in BERT provider.
+	return setupBERT(ctx, cfg)
+}
+
+func setupBERT(ctx context.Context, cfg *config.Config) SetupResult {
+	result := SetupResult{}
+	model := cfg.Embedding.Model
+	if model == "" {
+		model = bert.DefaultModel
+	}
+
+	repo := bert.DefaultModelRepo
+	if model != bert.DefaultModel {
+		repo = model
+	}
+
+	result.Messages = append(result.Messages, fmt.Sprintf("Setting up built-in BERT embedder (%s)...", model))
+
+	if err := bert.EnsureModel(ctx, repo, model, func(msg string) {
+		result.Messages = append(result.Messages, msg)
+	}); err != nil {
+		result.Messages = append(result.Messages, fmt.Sprintf("BERT setup failed: %s", err))
+		result.Messages = append(result.Messages, "Falling back to Ollama...")
+		return setupOllama(ctx, cfg)
+	}
+
+	result.Messages = append(result.Messages, fmt.Sprintf("Model %s ready", model))
+	cfg.Embedding.Provider = "bert"
+	cfg.Embedding.Model = model
+	result.Configured = true
+	result.Provider = "bert"
+	result.Model = model
+	return result
+}
+
+func setupOllama(ctx context.Context, cfg *config.Config) SetupResult {
+	result := SetupResult{}
 	endpoint := cfg.Embedding.Endpoint
 	model := cfg.Embedding.Model
 

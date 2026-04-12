@@ -6,6 +6,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/embed/bedrock"
+	"github.com/gramaton-ai/gramaton/embed/bert"
 	"github.com/gramaton-ai/gramaton/embed/ollama"
 	"github.com/gramaton-ai/gramaton/embed/openai"
 )
@@ -38,6 +39,8 @@ type Provider interface {
 // no provider is configured (embedding is optional).
 func New(cfg config.EmbeddingConfig) (Provider, error) {
 	switch cfg.Provider {
+	case "bert":
+		return bert.New(cfg)
 	case "ollama":
 		return ollama.New(cfg.Endpoint, cfg.Model), nil
 	case "bedrock":

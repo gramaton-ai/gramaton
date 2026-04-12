@@ -266,9 +266,9 @@ func Defaults() Config {
 		},
 
 		Embedding: EmbeddingConfig{
-			Provider:  "",
-			Endpoint:  "http://localhost:11434",
-			Model:     "mxbai-embed-large",
+			Provider:  "bert",
+			Endpoint:  "http://localhost:11434", // for ollama fallback
+			Model:     "bge-small-en-v1.5",
 			Dimension: 384,
 		},
 
@@ -416,7 +416,7 @@ func Defaults() Config {
 		},
 
 		Backup: BackupConfig{
-			Enabled:  false,
+			Enabled:  true,
 			Retain:   2,
 			Schedule: 24 * time.Hour,
 		},
