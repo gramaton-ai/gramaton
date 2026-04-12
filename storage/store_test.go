@@ -508,3 +508,156 @@ func TestReadVerifiesContentIntact(t *testing.T) {
 		t.Fatal("data on disk does not match its hash")
 	}
 }
+
+// --- Compression (D11: CAS chunk compression) ---
+
+func TestWriteCompressesOnDisk(t *testing.T) {
+	s := tempStore(t)
+	data := []byte("compressible content that should be gzipped on disk")
+
+	hash, err := s.Write(data)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Read raw bytes from disk (bypassing Store.Read decompression).
+	raw, err := os.ReadFile(filepath.Join(s.Root(), hash[:2], hash))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// Must have gzip magic bytes.
+	if len(raw) < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
+		t.Fatal("chunk on disk is not gzip-compressed")
+	}
+
+	// Compressed size should differ from original.
+	if len(raw) == len(data) {
+		t.Fatal("compressed size equals original -- compression not applied?")
+	}
+}
+
+func TestReadDecompressesTransparently(t *testing.T) {
+	s := tempStore(t)
+	data := []byte("round-trip through gzip compression")
+
+	hash, _ := s.Write(data)
+	got, err := s.Read(hash)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("decompressed data mismatch: got %q, want %q", got, data)
+	}
+}
+
+func TestReadUncompressedChunk(t *testing.T) {
+	s := tempStore(t)
+	data := []byte("written without compression")
+	hash := Hash(data)
+
+	// Write directly to disk without compression (simulating old format).
+	dir := filepath.Join(s.Root(), hash[:2])
+	os.MkdirAll(dir, 0o700)
+	if err := os.WriteFile(filepath.Join(dir, hash), data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Read should return the data as-is (no decompression needed).
+	got, err := s.Read(hash)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("uncompressed read mismatch: got %q, want %q", got, data)
+	}
+}
+
+func TestMixedCompressedAndUncompressed(t *testing.T) {
+	s := tempStore(t)
+
+	// Write an uncompressed chunk directly (old format).
+	oldData := []byte("old uncompressed chunk from before Phase 5")
+	oldHash := Hash(oldData)
+	dir := filepath.Join(s.Root(), oldHash[:2])
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, oldHash), oldData, 0o600)
+
+	// Write a new compressed chunk through the normal path.
+	newData := []byte("new compressed chunk from Phase 5")
+	newHash, _ := s.Write(newData)
+
+	// Both should be readable.
+	gotOld, err := s.Read(oldHash)
+	if err != nil {
+		t.Fatalf("Read old: %v", err)
+	}
+	if !bytes.Equal(gotOld, oldData) {
+		t.Fatal("old uncompressed chunk mismatch")
+	}
+
+	gotNew, err := s.Read(newHash)
+	if err != nil {
+		t.Fatalf("Read new: %v", err)
+	}
+	if !bytes.Equal(gotNew, newData) {
+		t.Fatal("new compressed chunk mismatch")
+	}
+}
+
+func TestHashStabilityWithCompression(t *testing.T) {
+	// Hash must be computed on UNCOMPRESSED data (D11 requirement).
+	data := []byte("hash stability test")
+	hashDirect := Hash(data)
+
+	s := tempStore(t)
+	hashFromWrite, _ := s.Write(data)
+
+	if hashDirect != hashFromWrite {
+		t.Fatalf("Write returned different hash than Hash(): %q vs %q", hashFromWrite, hashDirect)
+	}
+}
+
+func TestCompressionSavesSpace(t *testing.T) {
+	s := tempStore(t)
+
+	// Highly compressible data (repeated pattern).
+	data := bytes.Repeat([]byte("knowledge graph data "), 1000)
+	hash, _ := s.Write(data)
+
+	raw, _ := os.ReadFile(filepath.Join(s.Root(), hash[:2], hash))
+
+	ratio := float64(len(raw)) / float64(len(data))
+	if ratio > 0.5 {
+		t.Fatalf("compression ratio too high: %.1f%% (expected <50%% for repetitive data)", ratio*100)
+	}
+}
+
+func TestDeduplicationAcrossFormats(t *testing.T) {
+	s := tempStore(t)
+	data := []byte("dedup across formats")
+	hash := Hash(data)
+
+	// Write uncompressed directly (old format).
+	dir := filepath.Join(s.Root(), hash[:2])
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, hash), data, 0o600)
+
+	// Write through Store (would compress) -- should be a no-op
+	// because the chunk already exists.
+	h2, err := s.Write(data)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if h2 != hash {
+		t.Fatal("hash mismatch")
+	}
+
+	// The file on disk should still be uncompressed (dedup skipped write).
+	raw, _ := os.ReadFile(filepath.Join(dir, hash))
+	if bytes.Equal(raw, data) {
+		// Still uncompressed -- dedup correctly skipped rewriting.
+	} else if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+		t.Fatal("dedup should not have rewritten the chunk")
+	}
+}

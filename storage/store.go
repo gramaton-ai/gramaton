@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,6 +47,10 @@ func (s *Store) Root() string {
 // Write stores data and returns its content hash. If a chunk with the
 // same hash already exists, the write is a no-op (content-addressed
 // deduplication). The write is atomic: temp file + rename.
+//
+// Data is hashed before compression (hash stability), then gzip
+// compressed on disk. Read auto-detects the format via magic bytes.
+// Old uncompressed chunks coexist with new compressed chunks.
 func (s *Store) Write(data []byte) (string, error) {
 	hash := Hash(data)
 
@@ -52,9 +59,15 @@ func (s *Store) Write(data []byte) (string, error) {
 		return "", err
 	}
 
-	// Fast path: chunk already exists.
+	// Fast path: chunk already exists (possibly in old uncompressed format).
 	if _, err := os.Stat(path); err == nil {
 		return hash, nil
+	}
+
+	// Compress the data for storage.
+	compressed, err := gzipCompress(data)
+	if err != nil {
+		return "", fmt.Errorf("storage: compress chunk: %w", err)
 	}
 
 	// Ensure prefix directory exists.
@@ -79,7 +92,7 @@ func (s *Store) Write(data []byte) (string, error) {
 		}
 	}()
 
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := tmp.Write(compressed); err != nil {
 		return "", fmt.Errorf("storage: write temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
@@ -98,20 +111,28 @@ func (s *Store) Write(data []byte) (string, error) {
 }
 
 // Read returns the data for the given content hash. Returns an error
-// wrapping ErrNotFound if the chunk does not exist.
+// wrapping ErrNotFound if the chunk does not exist. Transparently
+// decompresses gzip-compressed chunks (detected via magic bytes).
 func (s *Store) Read(hash string) ([]byte, error) {
 	path, err := s.chunkPath(hash)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("storage: chunk %s: %w", hash, ErrNotFound)
 		}
 		return nil, fmt.Errorf("storage: read chunk %s: %w", hash, err)
 	}
-	return data, nil
+	if isGzipped(raw) {
+		data, err := gzipDecompress(raw)
+		if err != nil {
+			return nil, fmt.Errorf("storage: decompress chunk %s: %w", hash, err)
+		}
+		return data, nil
+	}
+	return raw, nil
 }
 
 // Has reports whether a chunk with the given hash exists.
@@ -192,3 +213,37 @@ func isValidHex(s string) bool {
 
 // ErrNotFound is returned when a chunk does not exist in the store.
 var ErrNotFound = errors.New("not found")
+
+// --- Compression helpers (D11: CAS chunk compression) ---
+
+// isGzipped checks for the gzip magic bytes (0x1f 0x8b) at the start
+// of data. Used to auto-detect compressed vs uncompressed chunks on read.
+func isGzipped(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+// gzipCompress compresses data using gzip with default compression level.
+func gzipCompress(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(data); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// gzipDecompress decompresses gzip data.
+func gzipDecompress(data []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return io.ReadAll(r)
+}
