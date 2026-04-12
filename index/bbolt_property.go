@@ -56,7 +56,7 @@ var DefaultIndexedFields = []string{
 
 // NewBboltPropertyIndex opens or creates a bbolt-backed property index.
 // Only the fields in indexedFields (plus meta.* keys) are indexed.
-// Pass nil for indexedFields to use DefaultIndexedFields.
+// Pass nil for indexedFields to index ALL fields (test/compat mode).
 func NewBboltPropertyIndex(db *bolt.DB, indexedFields []string) (*BboltPropertyIndex, error) {
 	// Pre-create the nodekeys bucket.
 	err := db.Update(func(tx *bolt.Tx) error {

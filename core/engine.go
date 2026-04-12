@@ -421,14 +421,18 @@ func (e *Engine) RebuildAllIndexes() {
 func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
+// Flushes buffered vectors and closes the bbolt database.
 func (e *Engine) Close() error {
+	var vecErr error
 	if c, ok := e.vecIdx.(interface{ Close() error }); ok {
-		c.Close()
+		vecErr = c.Close()
 	}
 	if e.boltDB != nil {
-		return e.boltDB.Close()
+		if err := e.boltDB.Close(); err != nil {
+			return err
+		}
 	}
-	return nil
+	return vecErr
 }
 
 

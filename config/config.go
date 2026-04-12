@@ -266,9 +266,10 @@ func Defaults() Config {
 		},
 
 		Embedding: EmbeddingConfig{
-			Provider: "",
-			Endpoint: "http://localhost:11434",
-			Model:    "mxbai-embed-large",
+			Provider:  "",
+			Endpoint:  "http://localhost:11434",
+			Model:     "mxbai-embed-large",
+			Dimension: 384,
 		},
 
 		Scoring: ScoringConfig{

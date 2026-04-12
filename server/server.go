@@ -280,6 +280,11 @@ func (s *Server) Run() error {
 		s.usageTracker.Persist()
 	}
 
+	// Close the engine (flushes mmap vectors, closes bbolt DB).
+	if err := s.engine.Close(); err != nil {
+		s.log.Warn("engine close error", "err", err)
+	}
+
 	s.log.Info("server stopped")
 	return nil
 }
