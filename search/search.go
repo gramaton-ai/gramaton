@@ -511,7 +511,14 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 		return similarities, sources
 	}
 
-	topK := q.Top * 3
+	// Retrieve many more candidates than requested. The vector scan
+	// computes similarity for ALL vectors regardless (brute-force),
+	// so larger topK is free. At 19K+ documents, top*3 is too narrow
+	// for the correct answer to enter the candidate pool.
+	topK := 200
+	if q.Top > topK {
+		topK = q.Top
+	}
 	if topK > len(candidateSet) {
 		topK = len(candidateSet)
 	}
