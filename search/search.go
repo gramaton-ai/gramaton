@@ -22,11 +22,26 @@ type Tool struct {
 	bm25Full index.BM25Index // content_full BM25 (D12: single layer)
 	secIdx   *index.BboltSecondaryIndex
 	embedder embedder
+	reranker reranker // LLM reranker (optional, nil disables)
 	cfg      config.Config
 }
 
 type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// reranker is the LLM interface used for search result reranking.
+type reranker interface {
+	Complete(ctx context.Context, prompt string) (string, error)
+}
+
+// scored is an intermediate search result with score and sort metadata.
+type scored struct {
+	id        string
+	score     float64
+	matchedBy string    // "vector", "bm25", "both", or "" (D14)
+	sortVal   float64   // numeric sort key when using field sort
+	sortTime  time.Time // time sort key
 }
 
 // New creates a search tool. embedder, bm25Full, and secIdx may be nil.
@@ -52,6 +67,11 @@ type ToolOption func(*Tool)
 // edge-count and missing-field queries.
 func WithSecondaryIndex(idx *index.BboltSecondaryIndex) ToolOption {
 	return func(t *Tool) { t.secIdx = idx }
+}
+
+// WithReranker provides an LLM for search result reranking.
+func WithReranker(r reranker) ToolOption {
+	return func(t *Tool) { t.reranker = r }
 }
 
 // Sort field constants.
@@ -329,13 +349,6 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	// Step 3: Score candidates. When we have a text query, only score
 	// nodes that appeared in vector or BM25 results -- not all 151K
 	// candidates. For filter-only queries (no text), score everything.
-	type scored struct {
-		id        string
-		score     float64
-		matchedBy string    // "vector", "bm25", "both", or "" (D14)
-		sortVal   float64   // numeric sort key when using field sort
-		sortTime  time.Time // time sort key
-	}
 	var scoredResults []scored
 
 	// Choose which nodes to score.
@@ -422,6 +435,28 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 		return !less
 	})
+	// Step 4b: LLM reranking (optional). Send top-N candidates to
+	// the LLM for relevance scoring. Only runs for text queries when
+	// reranking is enabled and an LLM is available.
+	if q.Text != "" && t.reranker != nil && t.cfg.Search.RerankEnabled {
+		rerankN := t.cfg.Search.RerankCandidates
+		if rerankN <= 0 {
+			rerankN = 50
+		}
+		if rerankN > len(scoredResults) {
+			rerankN = len(scoredResults)
+		}
+		rerankStart := time.Now()
+		reranked := t.rerankWithLLM(q.Text, scoredResults[:rerankN])
+		if reranked != nil {
+			scoredResults = append(reranked, scoredResults[rerankN:]...)
+		}
+		slog.Info("search step 4b: rerank",
+			"component", "search",
+			"candidates", rerankN,
+			"ms", time.Since(rerankStart).Milliseconds())
+	}
+
 	// Step 5: Parent dedup (D14). For observation nodes, resolve the
 	// parent ID. Keep only the highest-scoring result per parent.
 	// Results are already sorted by score (descending), so the first
@@ -515,7 +550,10 @@ func (t *Tool) computeSimilarities(q Query, queryVec []float32, candidateSet map
 	// computes similarity for ALL vectors regardless (brute-force),
 	// so larger topK is free. At 19K+ documents, top*3 is too narrow
 	// for the correct answer to enter the candidate pool.
-	topK := 200
+	topK := t.cfg.Search.RetrievalCandidates
+	if topK <= 0 {
+		topK = 200
+	}
 	if q.Top > topK {
 		topK = q.Top
 	}

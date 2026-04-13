@@ -143,6 +143,9 @@ type SearchConfig struct {
 	HNSWEfConstruction  int     `yaml:"hnsw_ef_construction"` // HNSW build quality (default 200)
 	HNSWEfSearch        int     `yaml:"hnsw_ef_search"`       // HNSW search width (default 100)
 	VectorOnlyPenalty   float64 `yaml:"vector_only_penalty"`  // score multiplier for results with no BM25 match (default 0.1)
+	RetrievalCandidates int     `yaml:"retrieval_candidates"` // candidates from vector+BM25 before reranking (default 200)
+	RerankEnabled       bool    `yaml:"rerank_enabled"`       // enable LLM reranking of candidates (default false)
+	RerankCandidates    int     `yaml:"rerank_candidates"`    // how many candidates to send to LLM reranker (default 50)
 }
 
 type GraphConfig struct {
@@ -345,6 +348,9 @@ func Defaults() Config {
 			HNSWEfConstruction:  200,
 			HNSWEfSearch:        100,
 			VectorOnlyPenalty:   0.1,
+			RetrievalCandidates: 200,
+			RerankEnabled:       false,
+			RerankCandidates:    50,
 		},
 
 		Storage: StorageConfig{

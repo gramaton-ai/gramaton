@@ -235,6 +235,9 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	if e.secIdx != nil {
 		searchOpts = append(searchOpts, search.WithSecondaryIndex(e.secIdx))
 	}
+	if e.llmProv != nil && cfg.Search.RerankEnabled {
+		searchOpts = append(searchOpts, search.WithReranker(e.llmProv))
+	}
 	e.searcher = search.New(g, propIdx, e.vecIdx, bm25Full, emb, cfg, searchOpts...)
 
 	return e, nil
