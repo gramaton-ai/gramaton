@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -230,6 +231,11 @@ func RewriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
 // v0 commits still load everything eagerly since they lack prolly tree
 // support for single-key lookup.
 func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
+	loadStart := time.Now()
+	slog.Info("loading graph from commit",
+		"component", "graph",
+		"commit", commitHash[:12])
+
 	commitData, err := s.Read(commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("load: read commit %s: %w", commitHash, err)
@@ -275,6 +281,10 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 		for _, e := range entries {
 			g.nodeHashes[e.Key] = e.Value
 		}
+		slog.Info("node tree loaded",
+			"component", "graph",
+			"nodes", g.nodeTotal,
+			"elapsed", time.Since(loadStart).Round(time.Millisecond).String())
 
 		if commit.EdgeTreeRoot != "" {
 			g.lastEdgeTreeRoot = commit.EdgeTreeRoot
@@ -308,19 +318,45 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 		}
 	}
 
-	// Load edges and rebuild adjacency indexes.
-	for _, eh := range edgeEntries {
-		data, err := s.Read(eh.hash)
-		if err != nil {
-			return nil, fmt.Errorf("load: read edge chunk %s: %w", eh.hash, err)
-		}
-		e, err := UnmarshalEdge(data)
-		if err != nil {
-			return nil, fmt.Errorf("load: unmarshal edge: %w", err)
-		}
-		g.edgeStore.Put(e)
-		g.edgeHashes[e.ID] = eh.hash
+	// Load edges. If the bbolt edge store already has data (from a
+	// previous run), skip the expensive per-edge Put calls. Each Put
+	// does a bbolt write transaction + fsync; with 100K+ edges this
+	// produces tens of GB of writes and takes 10+ minutes.
+	edgeStorePopulated := false
+	if bbes, ok := g.edgeStore.(*BboltEdgeStore); ok {
+		edgeStorePopulated = bbes.Count() > 0
 	}
+	if edgeStorePopulated {
+		slog.Info("edge store already populated, skipping load from prolly tree",
+			"component", "graph",
+			"edges", len(edgeEntries))
+		for _, eh := range edgeEntries {
+			g.edgeHashes[eh.id] = eh.hash
+		}
+	} else {
+		slog.Info("loading edges into bbolt",
+			"component", "graph",
+			"edges", len(edgeEntries))
+		for _, eh := range edgeEntries {
+			data, err := s.Read(eh.hash)
+			if err != nil {
+				return nil, fmt.Errorf("load: read edge chunk %s: %w", eh.hash, err)
+			}
+			e, err := UnmarshalEdge(data)
+			if err != nil {
+				return nil, fmt.Errorf("load: unmarshal edge: %w", err)
+			}
+			g.edgeStore.Put(e)
+			g.edgeHashes[e.ID] = eh.hash
+		}
+	}
+
+	slog.Info("graph load complete",
+		"component", "graph",
+		"nodes", g.nodeTotal,
+		"edges", len(edgeEntries),
+		"edge_store_skipped", edgeStorePopulated,
+		"elapsed", time.Since(loadStart).Round(time.Millisecond).String())
 
 	return &commit, nil
 }
