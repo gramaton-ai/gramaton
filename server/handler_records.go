@@ -109,24 +109,30 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 		text      string
 	}
 
+	// Embed content_short at capture time (D5/D13: ~125 tokens, ~30ms).
+	// content_full is BM25-indexed only (D12). Observations get their
+	// own embeddings during curation (D18/D23).
+	//
+	// content_short is the primary vector for parent-record search.
+	// If no summary is provided, use the first 500 chars of content.
 	sources := []struct {
 		sourceKey string
 		embedKey  string
 	}{
-		{"content_keywords", "embedding_keywords"},
-		{"content_short", "embedding_short"},
-		{"content_full", "embedding_full"},
+		{"content_short", "embedding_full"},
+	}
+
+	embedText := req.SummaryShort
+	if embedText == "" {
+		embedText = req.Content
+		if len(embedText) > 500 {
+			embedText = embedText[:500]
+		}
 	}
 
 	var targets []target
 	texts := map[string]string{
-		"content_full": req.Content,
-	}
-	if req.SummaryShort != "" {
-		texts["content_short"] = req.SummaryShort
-	}
-	if len(req.Keywords) > 0 {
-		texts["content_keywords"] = joinStrings(req.Keywords)
+		"content_short": embedText,
 	}
 
 	var embedTexts []string

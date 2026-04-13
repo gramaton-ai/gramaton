@@ -108,6 +108,9 @@ type ActivationConfig struct {
 	AttenuationFactor float64 `yaml:"attenuation_factor"`
 }
 
+// ChunkingConfig controls structural text splitting. NOT used in the
+// capture hot path -- observation extraction (D18/D23) handles content
+// decomposition in the curation cycle. Retained for internal utilities.
 type ChunkingConfig struct {
 	Threshold  int `yaml:"threshold"`
 	ChunkSize  int `yaml:"chunk_size"`

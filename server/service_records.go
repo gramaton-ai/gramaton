@@ -70,7 +70,9 @@ func metaBM25Text(meta map[string]any) string {
 
 // serviceCapture creates a new knowledge record. Handles pre-embedding,
 // deduplication, supersession, and chunking.
-func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[string]any, *serviceError) {
+func (s *Server) serviceCapture(_ context.Context, req *captureRequest) (map[string]any, *serviceError) {
+	captureStart := time.Now()
+
 	if req.Content == "" {
 		return nil, errMissing("content is required")
 	}
@@ -84,9 +86,11 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 		return nil, errInvalid(err.Error())
 	}
 
-	// Pre-embed and pre-chunk outside the lock.
+	// Pre-embed outside the lock. Observation extraction (D18/D23)
+	// happens asynchronously in the curation cycle, not during capture.
+	embedStart := time.Now()
 	preEmbedded := s.preEmbedContent(req)
-	preChunked := s.engine.PreChunk(ctx, req.Content, "", req.SummaryShort)
+	embedDur := time.Since(embedStart)
 
 	s.engine.Lock()
 	defer s.engine.Unlock()
@@ -162,13 +166,17 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 		}
 	}
 
-	if numChunks := s.engine.ApplyChunks(n.ID, preChunked, n.Properties); numChunks > 0 {
-		warnings = append(warnings, fmt.Sprintf("content chunked into %d segments", numChunks))
-	}
-
 	if _, err := s.engine.Save("capture"); err != nil {
 		return nil, errInternal("failed to save")
 	}
+
+	s.log.Info("capture complete",
+		"component", "capture",
+		"node", n.ID,
+		"content_len", len(req.Content),
+		"embed_ms", embedDur.Milliseconds(),
+		"total_ms", time.Since(captureStart).Milliseconds(),
+		"superseded", len(superseded) > 0)
 
 	resp := map[string]any{
 		"id":       n.ID,

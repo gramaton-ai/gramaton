@@ -114,6 +114,19 @@ func NewTokenizerFromVocab(data []byte) (*Tokenizer, error) {
 // The output is truncated to maxLen and does NOT include padding --
 // the caller can pad if needed for batching.
 func (t *Tokenizer) Encode(text string) (ids, mask, types []int32) {
+	// Early truncation: avoid expensive pretokenization of text that
+	// will be discarded by the 512-token limit. 6 chars/token is
+	// conservative (English averages ~4); this guarantees we never
+	// miss tokens that would have fit in the window.
+	maxChars := t.maxLen * 6
+	if len(text) > maxChars {
+		// Truncate on a UTF-8 boundary.
+		text = text[:maxChars]
+		for len(text) > 0 && !utf8.ValidString(text[len(text)-1:]) {
+			text = text[:len(text)-1]
+		}
+	}
+
 	// Normalize.
 	if t.doLower {
 		text = strings.ToLower(text)

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -133,11 +132,11 @@ func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest)
 }
 
 func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
-	// Pre-embed and pre-chunk all files outside the lock.
+	// Pre-embed all files outside the lock. Observation extraction
+	// happens asynchronously in the curation cycle (D18/D23).
 	type precomputed struct {
 		file     ingestFile
 		embedded *preEmbeddedVectors
-		chunked  *core.PreChunkResult
 	}
 	var prepared []precomputed
 	var warnings []string
@@ -159,7 +158,6 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		prepared = append(prepared, precomputed{
 			file:     f,
 			embedded: s.preEmbedContent(capReq),
-			chunked:  s.engine.PreChunk(context.Background(), f.Content, "", ""),
 		})
 	}
 
@@ -196,10 +194,6 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 				}
 			}
 			warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
-		}
-
-		if numChunks := s.engine.ApplyChunks(n.ID, p.chunked, n.Properties); numChunks > 0 {
-			warnings = append(warnings, fmt.Sprintf("%s: chunked into %d segments", p.file.Filename, numChunks))
 		}
 
 		ingested++
