@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -102,6 +103,11 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		candidates = candidates[:maxPerCycle]
 	}
 
+	logger.Info("observation extraction started",
+		"component", "curation",
+		"parents", len(candidates),
+		"max_per_cycle", maxPerCycle)
+
 	// --- Extract and embed phase (outside lock) ---
 	type obsNode struct {
 		parentID string
@@ -109,8 +115,10 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		vec      []float32
 	}
 	var allObs []obsNode
+	embedStart := time.Now()
+	embedErrors := 0
 
-	for _, c := range candidates {
+	for pi, c := range candidates {
 		obs := ExtractObservations(c.content, maxCap)
 		if len(obs) == 0 {
 			continue
@@ -134,6 +142,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 					"parent", c.id,
 					"err", err)
 				vecs = nil
+				embedErrors++
 			}
 		}
 
@@ -144,7 +153,29 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			}
 			allObs = append(allObs, on)
 		}
+
+		// Progress logging every 50 parents.
+		if (pi+1)%50 == 0 {
+			elapsed := time.Since(embedStart)
+			rate := float64(len(allObs)) / elapsed.Seconds()
+			logger.Info("observation embedding progress",
+				"component", "curation",
+				"parents_done", pi+1,
+				"parents_total", len(candidates),
+				"observations", len(allObs),
+				"embed_rate", fmt.Sprintf("%.1f/sec", rate),
+				"elapsed", elapsed.Round(time.Second).String(),
+				"errors", embedErrors)
+		}
 	}
+
+	embedDur := time.Since(embedStart)
+	logger.Info("observation embedding complete",
+		"component", "curation",
+		"parents", len(candidates),
+		"observations", len(allObs),
+		"embed_ms", embedDur.Milliseconds(),
+		"errors", embedErrors)
 
 	if len(allObs) == 0 {
 		return 0
