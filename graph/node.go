@@ -36,20 +36,25 @@ func (g *Graph) AddNode(props Properties) *Node {
 // lazy load from the prolly tree. Accessed nodes are promoted in the LRU;
 // eviction may remove a clean (non-dirty) node from the cache.
 func (g *Graph) GetNode(id string) (*Node, bool) {
+	g.cacheMu.Lock()
 	if n, ok := g.nodes[id]; ok {
 		g.evictLRU(id)
+		g.cacheMu.Unlock()
 		return n, true
 	}
 	// Lazy load from prolly tree if we have a backing store.
 	if g.store != nil && g.lastNodeTreeRoot != "" {
 		n, err := g.loadNode(id)
 		if err != nil || n == nil {
+			g.cacheMu.Unlock()
 			return nil, false
 		}
 		g.nodes[id] = n
 		g.evictLRU(id)
+		g.cacheMu.Unlock()
 		return n, true
 	}
+	g.cacheMu.Unlock()
 	return nil, false
 }
 

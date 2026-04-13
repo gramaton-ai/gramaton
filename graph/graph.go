@@ -54,6 +54,7 @@ type Graph struct {
 
 	entropy *ulid.MonotonicEntropy
 	mu      sync.Mutex // protects entropy only
+	cacheMu sync.Mutex // protects nodes map and lru for concurrent GetNode
 }
 
 // DefaultCacheCapacity is the default maximum number of nodes held in

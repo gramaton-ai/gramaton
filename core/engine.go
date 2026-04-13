@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1073,6 +1074,20 @@ func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex
 
 
 func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
+	// If all indexes are already populated, skip the full graph scan.
+	if bm25FullLoaded && vecLoaded && propLoaded {
+		slog.Info("indexes already populated, skipping rebuild",
+			"component", "engine",
+			"bm25", bm25Full.Len(),
+			"vec", vecIdx.Len(),
+			"prop", propIdx.Count())
+		return
+	}
+	slog.Info("rebuilding indexes from graph",
+		"component", "engine",
+		"bm25_loaded", bm25FullLoaded,
+		"vec_loaded", vecLoaded,
+		"prop_loaded", propLoaded)
 	it := g.NodeIterator()
 	defer it.Close()
 	for it.Next() {
