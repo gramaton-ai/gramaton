@@ -79,8 +79,25 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		return 0
 	}
 
-	// Cap candidates per cycle to avoid overwhelming a single curation run.
-	maxPerCycle := 10
+	// Cap candidates per cycle. The constraint is write lock duration,
+	// not embed speed: ~50 parents * ~10 observations = ~500 nodes
+	// committed in one transaction, keeping the write lock under ~5s.
+	// Embed cost varies by provider but happens outside the lock.
+	// Default 0 = auto-detect: 50 for local (bert/ollama), 10 for
+	// external (API rate limits and cost).
+	maxPerCycle := cfg.Curation.ObservationBatchSize
+	if maxPerCycle <= 0 {
+		if emb := e.Embedder(); emb != nil {
+			switch cfg.Embedding.Provider {
+			case "bert", "ollama", "":
+				maxPerCycle = 500
+			default:
+				maxPerCycle = 10
+			}
+		} else {
+			maxPerCycle = 50
+		}
+	}
 	if len(candidates) > maxPerCycle {
 		candidates = candidates[:maxPerCycle]
 	}
@@ -134,59 +151,70 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	}
 
 	// --- Write phase ---
+	// Batch BM25 and property index writes to amortize fsync. Without
+	// batching, each IndexNode does a separate bbolt write transaction
+	// (~5-10ms fsync each), making 500+ observations take minutes.
 	e.Lock()
 	defer e.Unlock()
 
+	writeStart := time.Now()
 	created := 0
-	for _, o := range allObs {
-		parent, ok := e.Graph().GetNode(o.parentID)
-		if !ok {
-			continue // parent deleted between read and write
-		}
 
-		// Build observation node properties, inheriting from parent.
-		props := graph.Properties{
-			"content_full":      graph.StringProperty(o.text),
-			"processing_status": graph.StringProperty("processed"),
-			"created_at":        graph.TimestampProperty(time.Now().UTC()),
-			"access_count":      graph.Int64Property(0),
-			"node_type":         graph.StringProperty("observation"),
-		}
-
-		// Inherit metadata from parent (D18).
-		for _, key := range []string{
-			"temporality", "confidence", "knowledge_type",
-			"epistemic_status", "content_keywords", "source_ref",
-		} {
-			if v, ok := parent.Properties[key]; ok {
-				props[key] = v
+	// Batch all bbolt-backed index writes (PropIdx + BM25) in a single
+	// transaction. Without batching, each IndexNode call does separate
+	// bbolt write transactions with fsync, making bulk writes extremely slow.
+	e.BatchIndexWrites(func() {
+		for _, o := range allObs {
+			parent, ok := e.Graph().GetNode(o.parentID)
+			if !ok {
+				continue // parent deleted between read and write
 			}
+
+			// Build observation node properties, inheriting from parent.
+			props := graph.Properties{
+				"content_full":      graph.StringProperty(o.text),
+				"processing_status": graph.StringProperty("processed"),
+				"created_at":        graph.TimestampProperty(time.Now().UTC()),
+				"access_count":      graph.Int64Property(0),
+				"node_type":         graph.StringProperty("observation"),
+			}
+
+			// Inherit metadata from parent (D18).
+			for _, key := range []string{
+				"temporality", "confidence", "knowledge_type",
+				"epistemic_status", "content_keywords", "source_ref",
+			} {
+				if v, ok := parent.Properties[key]; ok {
+					props[key] = v
+				}
+			}
+
+			// Truncate text for content_short.
+			short := o.text
+			if len(short) > 200 {
+				short = short[:200]
+			}
+			props["content_short"] = graph.StringProperty(short)
+
+			n := e.Graph().AddNode(props)
+
+			// Create observation_of edge (child -> parent).
+			e.Graph().AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil)
+
+			// Index the node (properties + BM25 + vector).
+			e.IndexNode(n.ID, o.text, o.vec)
+
+			created++
 		}
-
-		// Truncate text for content_short.
-		short := o.text
-		if len(short) > 200 {
-			short = short[:200]
-		}
-		props["content_short"] = graph.StringProperty(short)
-
-		n := e.Graph().AddNode(props)
-
-		// Create observation_of edge (child -> parent).
-		e.Graph().AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil)
-
-		// Index the node (properties + BM25 + vector).
-		e.IndexNode(n.ID, o.text, o.vec)
-
-		created++
-	}
+	})
 
 	if created > 0 {
 		e.Save("curation: observation extraction")
 		logger.Info("observations extracted",
 			"component", "curation",
 			"observations", created,
-			"parents", len(candidates))
+			"parents", len(candidates),
+			"write_ms", time.Since(writeStart).Milliseconds())
 	}
 
 	return created

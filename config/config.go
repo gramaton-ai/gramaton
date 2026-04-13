@@ -195,8 +195,9 @@ type CurationConfig struct {
 	StaleTemporalScore  float64       `yaml:"stale_temporal_score"`
 	MaxOrphansPerRun    int           `yaml:"max_orphans_per_run"`
 	MaxDedupPerRun      int           `yaml:"max_dedup_per_run"`
-	SectionLinkMin      float64       `yaml:"section_link_min"`      // min similarity for cross-section linking (default 0.75)
-	MaxSectionLinksPerRun int         `yaml:"max_section_links_per_run"` // cap per cycle (default 30)
+	SectionLinkMin        float64       `yaml:"section_link_min"`          // min similarity for cross-section linking (default 0.75)
+	MaxSectionLinksPerRun int           `yaml:"max_section_links_per_run"` // cap per cycle (default 30)
+	ObservationBatchSize  int           `yaml:"observation_batch_size"`    // parents per observation cycle (0=auto: 500 local, 20 external)
 }
 
 type LLMConfig struct {
@@ -373,7 +374,7 @@ func Defaults() Config {
 
 		Curation: CurationConfig{
 			Enabled:             true,
-			Interval:            5 * time.Minute,
+			Interval:            1 * time.Minute,
 			OrphanSimilarityMin: 0.6,
 			StaleEphemeralScore: 0.95,
 			StaleTemporalScore:  0.99,
@@ -381,6 +382,7 @@ func Defaults() Config {
 			MaxDedupPerRun:        20,
 			SectionLinkMin:        0.75,
 			MaxSectionLinksPerRun: 30,
+			ObservationBatchSize: 0, // auto: 500 for local providers, 20 for external
 		},
 
 		LLM: LLMConfig{

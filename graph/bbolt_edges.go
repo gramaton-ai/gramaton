@@ -31,6 +31,7 @@ var (
 type BboltEdgeStore struct {
 	db    *bolt.DB
 	cache *edgeLRU
+	batch *bolt.Tx // non-nil during BatchIndexWrites
 }
 
 // DefaultEdgeCacheCapacity is the default max edges in the LRU cache.
@@ -58,9 +59,12 @@ func NewBboltEdgeStore(db *bolt.DB, cacheCapacity int) (*BboltEdgeStore, error) 
 	}, nil
 }
 
+// SetBatch sets an external bbolt transaction for batching writes.
+func (s *BboltEdgeStore) SetBatch(tx *bolt.Tx) { s.batch = tx }
+
 func (s *BboltEdgeStore) Put(e *Edge) {
 	s.cache.Put(e)
-	if err := s.db.Update(func(tx *bolt.Tx) error {
+	writeFn := func(tx *bolt.Tx) error {
 		data, err := MarshalEdge(e)
 		if err != nil {
 			return fmt.Errorf("marshal edge %s: %w", e.ID, err)
@@ -72,7 +76,14 @@ func (s *BboltEdgeStore) Put(e *Edge) {
 		addToEdgeIDList(tx.Bucket(adjInBucket), []byte(e.TargetID), e.ID)
 		addToEdgeIDList(tx.Bucket(adjTypBucket), []byte(e.Type), e.ID)
 		return nil
-	}); err != nil {
+	}
+	if s.batch != nil {
+		if err := writeFn(s.batch); err != nil {
+			slog.Error("bbolt edge store: put (batch)", "edge", e.ID, "err", err)
+		}
+		return
+	}
+	if err := s.db.Update(writeFn); err != nil {
 		slog.Error("bbolt edge store: put", "edge", e.ID, "err", err)
 	}
 }

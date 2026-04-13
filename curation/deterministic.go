@@ -580,8 +580,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 
 	// --- Observation extraction phase (D18, D23) ---
 	// Extract key sentences from processed records >500 chars that
-	// don't yet have observation children. Embeds inline via batched
-	// Ollama calls.
+	// don't yet have observation children. Embeds via BERT (~30ms each).
 	result.ObservationsCreated = extractAndCreateObservations(e, cfg, logger)
 
 	// --- Garbage collection phase ---

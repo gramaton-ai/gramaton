@@ -32,11 +32,12 @@ type Engine struct {
 	cfg      config.Config
 	store    *storage.Store
 	graph    *graph.Graph
-	boltDB   *bolt.DB // shared bbolt database for property index + edge store
-	propIdx  index.PropertyIndex
-	vecIdx   index.VectorIndex
-	bm25Full   index.BM25Index // content_full BM25 (D12: single layer)
-	secIdx   *index.BboltSecondaryIndex    // time, edge count, field existence (D16)
+	boltDB    *bolt.DB // shared bbolt database for property index + edge store
+	propIdx   index.PropertyIndex
+	vecIdx    index.VectorIndex
+	bm25Full  index.BM25Index                // content_full BM25 (D12: single layer)
+	secIdx    *index.BboltSecondaryIndex      // time, edge count, field existence (D16)
+	edgeStore *graph.BboltEdgeStore           // kept for BatchIndexWrites
 	collCache *index.BboltCollectionCache  // collection member cache (D24)
 	embedder embed.Provider
 	llmProv  llm.Provider
@@ -180,17 +181,18 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	e := &Engine{
-		cfg:      cfg,
-		store:    s,
-		graph:    g,
-		boltDB:   boltDB,
-		propIdx:  propIdx,
-		bm25Full: bm25Full,
+		cfg:       cfg,
+		store:     s,
+		graph:     g,
+		boltDB:    boltDB,
+		propIdx:   propIdx,
+		bm25Full:  bm25Full,
 		secIdx:    secIdx,
+		edgeStore: edgeStore,
 		collCache: collCache,
 		embedder:  emb,
-		llmProv:  llmProv,
-		headHash: headHash,
+		llmProv:   llmProv,
+		headHash:  headHash,
 	}
 
 	// Apply options before creating the vector index. This lets
@@ -477,6 +479,34 @@ func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.secIdx }
 // CollCache returns the collection membership cache.
 // May be nil in tests that don't create one.
 func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
+
+// BatchIndexWrites executes fn within a single bbolt write transaction
+// shared across all bbolt-backed indexes (PropIdx, BM25, SecIdx,
+// EdgeStore). Use this when creating many nodes at once (e.g.,
+// observation extraction) to avoid per-node fsync overhead.
+// Caller must hold the engine write lock.
+func (e *Engine) BatchIndexWrites(fn func()) {
+	e.boltDB.Update(func(tx *bolt.Tx) error {
+		if pi, ok := e.propIdx.(*index.BboltPropertyIndex); ok {
+			pi.SetBatch(tx)
+			defer pi.SetBatch(nil)
+		}
+		if bm, ok := e.bm25Full.(*index.BboltBM25Index); ok {
+			bm.SetBatch(tx)
+			defer bm.SetBatch(nil)
+		}
+		if e.secIdx != nil {
+			e.secIdx.SetBatch(tx)
+			defer e.secIdx.SetBatch(nil)
+		}
+		if e.edgeStore != nil {
+			e.edgeStore.SetBatch(tx)
+			defer e.edgeStore.SetBatch(nil)
+		}
+		fn()
+		return nil
+	})
+}
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
 // Flushes buffered vectors and closes the bbolt database.
