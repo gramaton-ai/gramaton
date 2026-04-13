@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"sort"
 	"strings"
@@ -249,7 +250,8 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	if q.Top <= 0 {
 		q.Top = 10
 	}
-	now := time.Now().UTC()
+	searchStart := time.Now()
+	now := searchStart.UTC()
 
 	// Determine sort field. When no text and no explicit sort, default
 	// to created_at desc (most recent first) rather than effective_score
@@ -271,7 +273,10 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	}
 
 	// Step 1: Build candidate set via metadata filters.
+	step1 := time.Now()
 	candidates := t.filterCandidates(q, now)
+	filterDur := time.Since(step1)
+	slog.Info("search step 1: filter", "component", "search", "candidates", len(candidates), "ms", filterDur.Milliseconds())
 
 	// Exclude the source record from its own similar-to results.
 	if q.SimilarTo != "" {
@@ -303,19 +308,27 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			if !ok {
 				continue
 			}
+			if !t.passesPropertyFilters(q, n, id, now) {
+				continue
+			}
 			results = append(results, t.buildResult(n, 0))
 		}
 		return results, nil
 	}
 
 	// Step 2: Compute similarity via hybrid search (vector + BM25 with RRF).
+	step2 := time.Now()
 	candidateSet := make(map[string]struct{}, len(candidates))
 	for _, id := range candidates {
 		candidateSet[id] = struct{}{}
 	}
 	similarities, matchSources := t.computeSimilarities(q, queryVec, candidateSet)
+	simDur := time.Since(step2)
+	slog.Info("search step 2: similarity", "component", "search", "matches", len(similarities), "ms", simDur.Milliseconds())
 
-	// Step 3: Score each candidate and collect sort values.
+	// Step 3: Score candidates. When we have a text query, only score
+	// nodes that appeared in vector or BM25 results -- not all 151K
+	// candidates. For filter-only queries (no text), score everything.
 	type scored struct {
 		id        string
 		score     float64
@@ -325,9 +338,26 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	}
 	var scoredResults []scored
 
-	for _, id := range candidates {
+	// Choose which nodes to score.
+	step3 := time.Now()
+	scoreSet := candidates
+	if q.Text != "" && len(similarities) > 0 {
+		scoreSet = make([]string, 0, len(similarities))
+		for id := range similarities {
+			scoreSet = append(scoreSet, id)
+		}
+	}
+
+	for _, id := range scoreSet {
 		n, ok := t.graph.GetNode(id)
 		if !ok {
+			continue
+		}
+
+		// Apply property-based filters (chunk/collection exclusion,
+		// confidence/importance ranges, date ranges, edge counts).
+		// These run on the small similarity set (~30 nodes), not 151K.
+		if !t.passesPropertyFilters(q, n, id, now) {
 			continue
 		}
 
@@ -371,7 +401,11 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		scoredResults = append(scoredResults, sr)
 	}
 
+	scoreDur := time.Since(step3)
+	slog.Info("search step 3: score", "component", "search", "scored", len(scoredResults), "ms", scoreDur.Milliseconds())
+
 	// Step 4: Sort.
+	step4 := time.Now()
 	useTimeSort := sortField == SortCreatedAt || sortField == SortLastAccessed
 	sort.Slice(scoredResults, func(i, j int) bool {
 		var less bool
@@ -436,6 +470,18 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 		results = append(results, r)
 	}
+
+	dedupSortDur := time.Since(step4)
+	slog.Info("search timing",
+		"component", "search",
+		"candidates", len(candidates),
+		"scored", len(scoreSet),
+		"results", len(results),
+		"filter_ms", filterDur.Milliseconds(),
+		"similarity_ms", simDur.Milliseconds(),
+		"score_ms", scoreDur.Milliseconds(),
+		"dedup_sort_ms", dedupSortDur.Milliseconds(),
+		"total_ms", time.Since(searchStart).Milliseconds())
 
 	return results, nil
 }
@@ -601,15 +647,13 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	if q.Resolution == "unresolved" {
 		// Nodes that do NOT have a resolution property.
 		have := t.propIdx.NodesWithKey("resolution")
-		result := make(map[string]struct{})
-		it := t.graph.NodeIterator()
-		for it.Next() {
-			id := it.Node().ID
+		allIDs := t.graph.NodeIDSet()
+		result := make(map[string]struct{}, len(allIDs))
+		for id := range allIDs {
 			if _, has := have[id]; !has {
 				result[id] = struct{}{}
 			}
 		}
-		it.Close()
 		sets = append(sets, result)
 	} else {
 		enumFilter("resolution", q.Resolution)
@@ -622,15 +666,13 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// index entries.
 	for _, field := range q.Missing {
 		have := t.propIdx.NodesWithKey(field)
-		result := make(map[string]struct{})
-		it := t.graph.NodeIterator()
-		for it.Next() {
-			id := it.Node().ID
+		allIDs := t.graph.NodeIDSet()
+		result := make(map[string]struct{}, len(allIDs))
+		for id := range allIDs {
 			if _, has := have[id]; !has {
 				result[id] = struct{}{}
 			}
 		}
-		it.Close()
 		sets = append(sets, result)
 	}
 
@@ -661,12 +703,7 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 	// Intersect all filter sets, or start with all nodes if no index filters.
 	var candidateSet map[string]struct{}
 	if len(sets) == 0 {
-		candidateSet = make(map[string]struct{}, t.graph.NodeCount())
-		it := t.graph.NodeIterator()
-		for it.Next() {
-			candidateSet[it.Node().ID] = struct{}{}
-		}
-		it.Close()
+		candidateSet = t.graph.NodeIDSet()
 	} else {
 		candidateSet = sets[0]
 		for i := 1; i < len(sets); i++ {
@@ -684,137 +721,129 @@ func (t *Tool) filterCandidates(q Query, now time.Time) []string {
 		candidateSet = intersect(candidateSet, nearby)
 	}
 
-	// Apply remaining filters that require property reads.
-	var result []string
+	// Return all index-filtered IDs. Property-read filters (chunk
+	// exclusion, confidence ranges, date ranges, etc.) are applied
+	// later in the scoring loop on the much smaller similarity set.
+	result := make([]string, 0, len(candidateSet))
 	for id := range candidateSet {
-		n, ok := t.graph.GetNode(id)
-		if !ok {
-			continue
-		}
-
-		// Exclude legacy chunk nodes (dumb fragments). Section nodes
-		// (structural splits with metadata) are included in results.
-		if isLegacyChunk(t.graph, id) {
-			continue
-		}
-
-		// Exclude collection items and collection containers -- they're
-		// accessed via gramaton_collection_items, not search.
-		if isCollectionItem(t.graph, id) {
-			continue
-		}
-		if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "collection" {
-			continue
-		}
-
-		if q.ConfidenceMin != nil {
-			if c, ok := n.Properties.GetFloat64("confidence"); ok {
-				if c < *q.ConfidenceMin {
-					continue
-				}
-			}
-		}
-		if q.ConfidenceMax != nil {
-			if c, ok := n.Properties.GetFloat64("confidence"); ok {
-				if c > *q.ConfidenceMax {
-					continue
-				}
-			}
-		}
-		if q.ImportanceMin != nil {
-			if imp, ok := n.Properties.GetFloat64("importance"); ok {
-				if imp < *q.ImportanceMin {
-					continue
-				}
-			}
-		}
-		if q.ImportanceMax != nil {
-			if imp, ok := n.Properties.GetFloat64("importance"); ok {
-				if imp > *q.ImportanceMax {
-					continue
-				}
-			}
-		}
-		if q.AccessCountMin != nil {
-			ac, ok := n.Properties.GetInt64("access_count")
-			if !ok || ac < *q.AccessCountMin {
-				continue
-			}
-		}
-		if q.AccessCountMax != nil {
-			ac, _ := n.Properties.GetInt64("access_count")
-			if ac > *q.AccessCountMax {
-				continue
-			}
-		}
-		if q.LastAccessedAfter != nil {
-			la, ok := n.Properties.GetTimestamp("last_accessed")
-			if !ok || la.Before(*q.LastAccessedAfter) {
-				continue
-			}
-		}
-		if q.LastAccessedBefore != nil {
-			la, ok := n.Properties.GetTimestamp("last_accessed")
-			if !ok || !la.Before(*q.LastAccessedBefore) {
-				continue
-			}
-		}
-		if q.ValidAfter != nil {
-			vf, ok := n.Properties.GetTimestamp("valid_from")
-			if !ok || vf.Before(*q.ValidAfter) {
-				continue
-			}
-		}
-		if q.ValidBefore != nil {
-			vf, ok := n.Properties.GetTimestamp("valid_from")
-			if !ok || !vf.Before(*q.ValidBefore) {
-				continue
-			}
-		}
-		if q.ExpiresAfter != nil {
-			vu, ok := n.Properties.GetTimestamp("valid_until")
-			if !ok || vu.Before(*q.ExpiresAfter) {
-				continue
-			}
-		}
-		if q.ExpiresBefore != nil {
-			vu, ok := n.Properties.GetTimestamp("valid_until")
-			if !ok || !vu.Before(*q.ExpiresBefore) {
-				continue
-			}
-		}
-		if q.Since != nil {
-			if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
-				if ca.Before(*q.Since) {
-					continue
-				}
-			}
-		}
-
-		if q.MinEdges != nil || q.MaxEdges != nil {
-			ec := edgeCount(t.graph, id)
-			if q.MinEdges != nil && ec < *q.MinEdges {
-				continue
-			}
-			if q.MaxEdges != nil && ec > *q.MaxEdges {
-				continue
-			}
-		}
-
-		// Validity filtering: by default, prefer current records.
-		if !q.IncludeHistorical {
-			if vu, ok := n.Properties["valid_until"]; ok {
-				if vu.Timestamp().Before(now) {
-					// Historical record -- still included but with penalty
-					// (handled in scoring via validity_multiplier).
-				}
-			}
-		}
-
 		result = append(result, id)
 	}
-
 	return result
+}
+
+// passesPropertyFilters checks per-node property filters that require
+// loading the node from disk. This is called only on candidates that
+// survived similarity scoring (~30 nodes), not the full candidate set.
+func (t *Tool) passesPropertyFilters(q Query, n *graph.Node, id string, now time.Time) bool {
+	if isLegacyChunk(t.graph, id) {
+		return false
+	}
+	if isCollectionItem(t.graph, id) {
+		return false
+	}
+	if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "collection" {
+		return false
+	}
+
+	if q.ConfidenceMin != nil {
+		if c, ok := n.Properties.GetFloat64("confidence"); ok {
+			if c < *q.ConfidenceMin {
+				return false
+			}
+		}
+	}
+	if q.ConfidenceMax != nil {
+		if c, ok := n.Properties.GetFloat64("confidence"); ok {
+			if c > *q.ConfidenceMax {
+				return false
+			}
+		}
+	}
+	if q.ImportanceMin != nil {
+		if imp, ok := n.Properties.GetFloat64("importance"); ok {
+			if imp < *q.ImportanceMin {
+				return false
+			}
+		}
+	}
+	if q.ImportanceMax != nil {
+		if imp, ok := n.Properties.GetFloat64("importance"); ok {
+			if imp > *q.ImportanceMax {
+				return false
+			}
+		}
+	}
+	if q.AccessCountMin != nil {
+		ac, ok := n.Properties.GetInt64("access_count")
+		if !ok || ac < *q.AccessCountMin {
+			return false
+		}
+	}
+	if q.AccessCountMax != nil {
+		ac, _ := n.Properties.GetInt64("access_count")
+		if ac > *q.AccessCountMax {
+			return false
+		}
+	}
+	if q.LastAccessedAfter != nil {
+		la, ok := n.Properties.GetTimestamp("last_accessed")
+		if !ok || la.Before(*q.LastAccessedAfter) {
+			return false
+		}
+	}
+	if q.LastAccessedBefore != nil {
+		la, ok := n.Properties.GetTimestamp("last_accessed")
+		if !ok || !la.Before(*q.LastAccessedBefore) {
+			return false
+		}
+	}
+	if q.ValidAfter != nil {
+		vf, ok := n.Properties.GetTimestamp("valid_from")
+		if !ok || vf.Before(*q.ValidAfter) {
+			return false
+		}
+	}
+	if q.ValidBefore != nil {
+		vf, ok := n.Properties.GetTimestamp("valid_from")
+		if !ok || !vf.Before(*q.ValidBefore) {
+			return false
+		}
+	}
+	if q.ExpiresAfter != nil {
+		vu, ok := n.Properties.GetTimestamp("valid_until")
+		if !ok || vu.Before(*q.ExpiresAfter) {
+			return false
+		}
+	}
+	if q.ExpiresBefore != nil {
+		vu, ok := n.Properties.GetTimestamp("valid_until")
+		if !ok || !vu.Before(*q.ExpiresBefore) {
+			return false
+		}
+	}
+	if q.Since != nil {
+		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
+			if ca.Before(*q.Since) {
+				return false
+			}
+		}
+	}
+
+	if q.MinEdges != nil || q.MaxEdges != nil {
+		ec := edgeCount(t.graph, id)
+		if q.MinEdges != nil && ec < *q.MinEdges {
+			return false
+		}
+		if q.MaxEdges != nil && ec > *q.MaxEdges {
+			return false
+		}
+	}
+
+	// Validity filtering: historical records are still included but
+	// penalized in scoring via validity_multiplier.
+	_ = now // used by caller context; validity penalty handled in scoring
+
+	return true
 }
 
 

@@ -165,6 +165,21 @@ func (g *Graph) NodeCount() int {
 	return len(g.nodes)
 }
 
+// NodeIDSet returns a set of all node IDs without loading node data.
+// Uses the in-memory nodeHashes map (populated at Load time) so this
+// is O(n) in IDs only, no disk I/O.
+func (g *Graph) NodeIDSet() map[string]struct{} {
+	result := make(map[string]struct{}, len(g.nodeHashes)+len(g.nodes))
+	for id := range g.nodeHashes {
+		result[id] = struct{}{}
+	}
+	// Include any nodes added after Load (in-memory only, not yet committed).
+	for id := range g.nodes {
+		result[id] = struct{}{}
+	}
+	return result
+}
+
 // AllNodeIDs returns all node IDs in the graph. Order is not guaranteed.
 // In lazy mode, iterates the prolly tree for IDs.
 //

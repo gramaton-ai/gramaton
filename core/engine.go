@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 
@@ -406,12 +407,17 @@ func (e *Engine) MarkAccessDirty() {
 // dirty. Acquires the write lock internally. Safe to call from a
 // background goroutine.
 func (e *Engine) FlushAccess() {
+	slog.Info("access flush: acquiring write lock", "component", "engine")
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.accessDirty {
+		slog.Info("access flush: nothing dirty, skipping", "component", "engine")
 		return
 	}
+	slog.Info("access flush: saving", "component", "engine")
+	start := time.Now()
 	e.Save("access_flush")
+	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
 }
 
 // RebuildAllIndexes clears and rebuilds all indexes from graph state.

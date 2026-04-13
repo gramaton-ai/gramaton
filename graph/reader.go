@@ -9,6 +9,7 @@ package graph
 type NodeReader interface {
 	GetNode(id string) (*Node, bool)
 	NodeIterator() NodeIterator
+	NodeIDSet() map[string]struct{}
 	NodeCount() int
 	EdgeCount() int
 	EdgesFrom(nodeID string) []*Edge
