@@ -246,9 +246,19 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	}
 	commit.Hash = commitHash
 
-	// Clear current state.
+	// Check if bbolt edge store is already populated before clearing.
+	// If populated, we skip the expensive per-edge Put reload.
+	edgeStorePopulated := false
+	if bbes, ok := g.edgeStore.(*BboltEdgeStore); ok {
+		edgeStorePopulated = bbes.Count() > 0
+	}
+
+	// Clear in-memory state. Only clear bbolt edge store if we need
+	// to reload edges from the prolly tree.
 	g.nodes = make(map[string]*Node)
-	g.edgeStore.Clear()
+	if !edgeStorePopulated {
+		g.edgeStore.Clear()
+	}
 	g.nodeHashes = make(map[string]string)
 	g.edgeHashes = make(map[string]string)
 	g.store = s
@@ -318,14 +328,8 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 		}
 	}
 
-	// Load edges. If the bbolt edge store already has data (from a
-	// previous run), skip the expensive per-edge Put calls. Each Put
-	// does a bbolt write transaction + fsync; with 100K+ edges this
-	// produces tens of GB of writes and takes 10+ minutes.
-	edgeStorePopulated := false
-	if bbes, ok := g.edgeStore.(*BboltEdgeStore); ok {
-		edgeStorePopulated = bbes.Count() > 0
-	}
+	// Load edges. If the bbolt edge store already has data (checked
+	// above before Clear), skip the expensive per-edge Put calls.
 	if edgeStorePopulated {
 		slog.Info("edge store already populated, skipping load from prolly tree",
 			"component", "graph",
