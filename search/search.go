@@ -198,9 +198,11 @@ func ComputeFacets(results []Result) Facets {
 
 // Result is a single search result.
 type Result struct {
-	ID              string  `json:"id"`
-	ParentID        string  `json:"parent_id,omitempty"`  // non-empty for observations (D14)
-	MatchedBy       string  `json:"matched_by,omitempty"` // "vector", "bm25", or "both" (D14)
+	ID                  string  `json:"id"`
+	ParentID            string  `json:"parent_id,omitempty"`             // non-empty for observations (D14)
+	ParentSummary       string  `json:"parent_summary,omitempty"`        // parent's content_short (D14 rev)
+	ParentContentLength int     `json:"parent_content_length,omitempty"` // parent's content_full byte length (D14 rev)
+	MatchedBy           string  `json:"matched_by,omitempty"`            // "vector", "bm25", or "both" (D14)
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string  `json:"summary_short,omitempty"`
 	MetadataSummary string  `json:"metadata_summary"`
@@ -410,7 +412,9 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		scoredResults = scoredResults[:q.Top]
 	}
 
-	// Step 6: Build results.
+	// Step 6: Build results. For observation matches, enrich with
+	// parent context so the caller can decide whether to inspect
+	// the full record without a second round-trip (D14 revision).
 	results := make([]Result, 0, len(scoredResults))
 	for _, sr := range scoredResults {
 		n, ok := t.graph.GetNode(sr.id)
@@ -420,6 +424,16 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		r := t.buildResult(n, sr.score)
 		r.MatchedBy = sr.matchedBy
 		r.ParentID = t.resolveParentID(sr.id)
+		if r.ParentID != "" {
+			if parent, ok := t.graph.GetNode(r.ParentID); ok {
+				if s, ok := parent.Properties.GetString("content_short"); ok {
+					r.ParentSummary = s
+				}
+				if c, ok := parent.Properties.GetString("content_full"); ok {
+					r.ParentContentLength = len(c)
+				}
+			}
+		}
 		results = append(results, r)
 	}
 
