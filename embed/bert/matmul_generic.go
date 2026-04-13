@@ -10,5 +10,11 @@ package bert
 // Uses 4x4 register tiling to amortize loads across tile elements.
 // Each A value participates in 4 output columns; each B^T value in 4 rows.
 func MatMul(a, bT []float32, M, K, N int, out []float32) {
+	if M <= 0 || K <= 0 || N <= 0 {
+		return
+	}
+	if len(a) < M*K || len(bT) < N*K || len(out) < M*N {
+		panic("bert.MatMul: slice too short")
+	}
 	matMulGeneric(a, bT, M, K, N, out)
 }
