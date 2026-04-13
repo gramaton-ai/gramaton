@@ -2,15 +2,9 @@ package bert
 
 import "math"
 
-// MatMul computes C = A * B^T where A is [M, K] and bT is [N, K] (transposed).
-// Output is written to out [M, N] which must be pre-allocated and zeroed.
-// This layout matches safetensors weight storage ([out_features, in_features])
-// and provides cache-friendly row access on both operands.
-//
-// Uses 4x4 register tiling to amortize loads across tile elements.
-// Each A value participates in 4 output columns; each B^T value in 4 rows.
-// On Apple M3, achieves ~70% of theoretical NEON float32 throughput.
-func MatMul(a, bT []float32, M, K, N int, out []float32) {
+// matMulGeneric computes C = A * B^T using pure Go with 4x4 register tiling.
+// A is [M, K], bT is [N, K] (transposed), out is [M, N] (pre-allocated and zeroed).
+func matMulGeneric(a, bT []float32, M, K, N int, out []float32) {
 	mTail := M & 3 // M % 4
 	nTail := N & 3
 
