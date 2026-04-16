@@ -519,6 +519,94 @@ func TestSessionPrepareSurfacesCompactionFlag(t *testing.T) {
 	}
 }
 
+func TestSessionPrepareSurfacesPrecompactUncapturedFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("precompact-client-001", "")
+	sessionID := result["id"].(string)
+
+	flagDir := srv.cfg.ConfigDir + "/hook-state"
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	flagPath := flagDir + "/precompact-client-001.precompact-uncaptured"
+	ts := time.Now().UTC().Format(time.RFC3339)
+	payload := `{"count": 3, "warned_at": "` + ts + `", "archive_path": "/tmp/fake.gz"}`
+	if err := os.WriteFile(flagPath, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write flag: %v", err)
+	}
+
+	prep, svcErr := srv.serviceSessionPrepare(sessionID)
+	if svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+	pending, ok := prep["pending_uncaptured"].(map[string]any)
+	if !ok {
+		t.Fatal("expected pending_uncaptured in prepare response")
+	}
+	if pending["count"] != 3 {
+		t.Errorf("pending_uncaptured.count = %v, want 3", pending["count"])
+	}
+	if pending["archive_path"] != "/tmp/fake.gz" {
+		t.Errorf("pending_uncaptured.archive_path = %v, want /tmp/fake.gz", pending["archive_path"])
+	}
+	instructions, _ := prep["instructions"].(string)
+	if !strings.Contains(instructions, "uncaptured at the last compaction") {
+		t.Error("expected precompact note prepended to instructions")
+	}
+	if !strings.Contains(instructions, "/tmp/fake.gz") {
+		t.Error("expected archive path in prepended note")
+	}
+	// Single-shot.
+	if _, err := os.Stat(flagPath); !os.IsNotExist(err) {
+		t.Error("precompact flag should have been deleted (single-shot)")
+	}
+}
+
+func TestSessionPrepareStacksBothNudges(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("stacked-client-001", "")
+	sessionID := result["id"].(string)
+
+	flagDir := srv.cfg.ConfigDir + "/hook-state"
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ts := time.Now().UTC().Format(time.RFC3339)
+
+	// Write both the PostCompact and PreCompact-uncaptured flags.
+	if err := os.WriteFile(flagDir+"/stacked-client-001.compacted", []byte(ts), 0o644); err != nil {
+		t.Fatalf("write compacted: %v", err)
+	}
+	payload := `{"count": 2, "warned_at": "` + ts + `", "archive_path": ""}`
+	if err := os.WriteFile(flagDir+"/stacked-client-001.precompact-uncaptured", []byte(payload), 0o644); err != nil {
+		t.Fatalf("write precompact: %v", err)
+	}
+
+	prep, svcErr := srv.serviceSessionPrepare(sessionID)
+	if svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+	if _, has := prep["recent_compaction"]; !has {
+		t.Error("expected recent_compaction field")
+	}
+	if _, has := prep["pending_uncaptured"]; !has {
+		t.Error("expected pending_uncaptured field")
+	}
+	instructions, _ := prep["instructions"].(string)
+	if !strings.Contains(instructions, "recently compacted") {
+		t.Error("expected compaction note")
+	}
+	if !strings.Contains(instructions, "uncaptured at the last compaction") {
+		t.Error("expected precompact note")
+	}
+	// The note about missing archive should fire (empty archive_path).
+	if !strings.Contains(instructions, "raw transcript could not be archived") {
+		t.Error("expected missing-archive note when archive_path is empty")
+	}
+}
+
 func TestSessionPrepareIgnoresStaleCompactionFlag(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

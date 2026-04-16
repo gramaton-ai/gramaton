@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -490,9 +491,10 @@ func (s *Server) serviceSessionUpdateSegmentCapture(segmentID string, capturedAs
 	}, nil
 }
 
-// compactionFlagTTL bounds how long a PostCompact flag is considered
-// fresh. Compaction is normally followed by continued work within minutes;
-// 2h covers a long break without surfacing stale nudges the next day.
+// compactionFlagTTL bounds how long a PostCompact/PreCompact flag is
+// considered fresh. Compaction is normally followed by continued work
+// within minutes; 2h covers a long break without surfacing stale nudges
+// the next day.
 const compactionFlagTTL = 2 * time.Hour
 
 // consumeCompactionFlag checks for and deletes a PostCompact flag written by
@@ -524,6 +526,51 @@ func (s *Server) consumeCompactionFlag(clientSessionID string) time.Time {
 		return time.Time{}
 	}
 	return ts
+}
+
+// precompactUncapturedNudge is what the PreCompact hook leaves behind
+// when it detects uncaptured segments: the count, when it warned, and
+// the archive path where the raw transcript was preserved (empty if the
+// archive step failed or the hook didn't receive a transcript_path).
+type precompactUncapturedNudge struct {
+	Count       int    `json:"count"`
+	WarnedAt    string `json:"warned_at"`
+	ArchivePath string `json:"archive_path"`
+}
+
+// consumePrecompactUncapturedFlag reads and deletes the PreCompact nudge
+// file at ~/.gramaton/hook-state/{client_session_id}.precompact-uncaptured.
+// Returns the nudge if fresh (within compactionFlagTTL), nil otherwise.
+// Single-shot: the flag is deleted whether fresh or stale.
+func (s *Server) consumePrecompactUncapturedFlag(clientSessionID string) *precompactUncapturedNudge {
+	if s.cfg.ConfigDir == "" || clientSessionID == "" {
+		return nil
+	}
+	flagPath := filepath.Join(s.cfg.ConfigDir, "hook-state", clientSessionID+".precompact-uncaptured")
+	data, err := os.ReadFile(flagPath)
+	if err != nil {
+		return nil
+	}
+	_ = os.Remove(flagPath)
+
+	var nudge precompactUncapturedNudge
+	if err := json.Unmarshal(data, &nudge); err != nil {
+		s.log.Warn("precompact-uncaptured flag parse failed", "component", "session",
+			"path", flagPath, "err", err)
+		return nil
+	}
+	ts, err := time.Parse(time.RFC3339, nudge.WarnedAt)
+	if err != nil {
+		s.log.Warn("precompact-uncaptured warned_at parse failed", "component", "session",
+			"path", flagPath, "warned_at", nudge.WarnedAt, "err", err)
+		return nil
+	}
+	if time.Since(ts) > compactionFlagTTL {
+		s.log.Debug("precompact-uncaptured flag stale, discarded", "component", "session",
+			"client_session_id", clientSessionID, "age", time.Since(ts))
+		return nil
+	}
+	return &nudge
 }
 
 // serviceSessionPrepare returns extraction instructions and current session state.
@@ -570,16 +617,48 @@ func (s *Server) serviceSessionPrepare(sessionID string) (map[string]any, *servi
 		"session_state": sessionState,
 	}
 
-	// Surface a post-compaction nudge if the hook wrote a fresh flag.
+	// Surface hook-written nudges if present. The PostCompact flag fires
+	// after context compaction; the PreCompact nudge fires when uncaptured
+	// segments existed at the moment of the last compaction. They are
+	// related but distinct -- both can be present and stack.
 	clientSessionID, _ := session.Properties.GetString("client_session_id")
+	var notes []string
+
 	if compactedAt := s.consumeCompactionFlag(clientSessionID); !compactedAt.IsZero() {
 		resp["recent_compaction"] = map[string]any{
 			"at": compactedAt.Format(time.RFC3339),
 		}
-		resp["instructions"] = "NOTE: your context was recently compacted. Review session state below for already-captured segments before extracting -- do not re-capture knowledge that is already committed.\n\n" + prompt
+		notes = append(notes, "NOTE: your context was recently compacted. Review session state below for already-captured segments before extracting -- do not re-capture knowledge that is already committed.")
 		s.log.Info("prepare: surfaced compaction nudge", "component", "session",
 			"session_id", sessionID, "client_session_id", clientSessionID,
 			"compacted_at", compactedAt.Format(time.RFC3339))
+	}
+
+	if nudge := s.consumePrecompactUncapturedFlag(clientSessionID); nudge != nil {
+		pending := map[string]any{
+			"count":     nudge.Count,
+			"warned_at": nudge.WarnedAt,
+		}
+		if nudge.ArchivePath != "" {
+			pending["archive_path"] = nudge.ArchivePath
+		}
+		resp["pending_uncaptured"] = pending
+
+		note := fmt.Sprintf("NOTE: %d segment(s) were uncaptured at the last compaction.", nudge.Count)
+		if nudge.ArchivePath != "" {
+			note += fmt.Sprintf(" The raw transcript has been archived at %s -- decompress and read it if the session state below is missing expected knowledge.", nudge.ArchivePath)
+		} else {
+			note += " The raw transcript could not be archived at the time; knowledge from that compaction may be lost unless still in your context."
+		}
+		notes = append(notes, note)
+
+		s.log.Info("prepare: surfaced precompact-uncaptured nudge", "component", "session",
+			"session_id", sessionID, "client_session_id", clientSessionID,
+			"count", nudge.Count, "archive_path", nudge.ArchivePath)
+	}
+
+	if len(notes) > 0 {
+		resp["instructions"] = strings.Join(notes, "\n\n") + "\n\n" + prompt
 	}
 
 	return resp, nil

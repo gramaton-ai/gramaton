@@ -1,8 +1,14 @@
 #!/bin/bash
-# Claude Code PreCompact hook: checks for uncaptured segments before compaction.
-# This is the critical safety net -- compaction destroys context, so we extract
-# any pending knowledge first.
-# Receives JSON on stdin with session_id (Claude Code's client session id).
+# Claude Code PreCompact hook: preservation safety net before compaction.
+#
+# The hook has no LLM, so it cannot extract segments the way in-session
+# prepare/commit does. What it CAN do, when uncaptured segments exist,
+# is preserve the raw transcript via `gramaton session archive` and
+# leave a flag file that the next gramaton_session_prepare surfaces as
+# a pending_uncaptured nudge.
+#
+# Receives JSON on stdin with session_id (Claude Code's client session
+# id) and transcript_path.
 # Logs to ~/.gramaton/hooks.log.
 
 set -euo pipefail
@@ -10,12 +16,14 @@ set -euo pipefail
 mkdir -p "$HOME/.gramaton"
 LOG="$HOME/.gramaton/hooks.log"
 GRAMATON="${GRAMATON_BIN:-gramaton}"
-STATE_FILE="$HOME/.gramaton/hook-state/current-session.json"
+STATE_DIR="$HOME/.gramaton/hook-state"
+STATE_FILE="$STATE_DIR/current-session.json"
 
 log() { echo "[gramaton-hook] $(date -u +%Y-%m-%dT%H:%M:%SZ) pre-compact: $*" >> "$LOG"; }
 
 INPUT=$(cat)
 CLIENT_SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || echo "")
+TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))" 2>/dev/null || echo "")
 
 if [ -z "$CLIENT_SESSION_ID" ]; then
     log "no session_id in input, skipping"
@@ -40,14 +48,13 @@ if [ -z "$GRAMATON_SESSION_ID" ]; then
     exit 0
 fi
 
-# Get session state to check for uncaptured segments.
+# Get session state to count uncaptured segments.
 log "checking gramaton session $GRAMATON_SESSION_ID (client $CLIENT_SESSION_ID) for uncaptured segments"
 STATE=$("$GRAMATON" session get "$GRAMATON_SESSION_ID" 2>>"$LOG") || {
     log "ERROR: failed to get session state"
     exit 0
 }
 
-# Count uncaptured segments (those without captured_as).
 UNCAPTURED=$(echo "$STATE" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -61,9 +68,34 @@ print(count)
 
 log "uncaptured segments: $UNCAPTURED"
 
-if [ "$UNCAPTURED" -gt 0 ]; then
-    log "WARNING: $UNCAPTURED uncaptured segments before compaction"
-    # The agent should have extracted these already. Log the warning
-    # so we can track how often this happens. The redundant nudge
-    # mechanism (PostCompact) will handle recovery.
+if [ "$UNCAPTURED" -eq 0 ]; then
+    # Nothing at risk; nothing to preserve.
+    exit 0
 fi
+
+# We have uncaptured segments. Preserve the raw transcript and leave a
+# nudge flag so the next prepare can surface it to the agent.
+ARCHIVE_PATH=""
+if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+    log "archiving transcript $TRANSCRIPT_PATH for session $GRAMATON_SESSION_ID"
+    ARCHIVE_RESULT=$("$GRAMATON" session archive "$GRAMATON_SESSION_ID" --file "$TRANSCRIPT_PATH" 2>>"$LOG") || {
+        log "WARNING: archive call failed (continuing to write nudge flag)"
+        ARCHIVE_RESULT=""
+    }
+    if [ -n "$ARCHIVE_RESULT" ]; then
+        ARCHIVE_PATH=$(echo "$ARCHIVE_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('archive_path',''))" 2>/dev/null || echo "")
+        log "archive created: $ARCHIVE_PATH"
+    fi
+else
+    log "WARNING: no transcript_path in input (or file missing); skipping archive"
+fi
+
+# Write the nudge flag. serviceSessionPrepare surfaces this (single-shot,
+# 2h TTL) as pending_uncaptured on the next prepare response.
+mkdir -p "$STATE_DIR"
+FLAG_FILE="$STATE_DIR/$CLIENT_SESSION_ID.precompact-uncaptured"
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$FLAG_FILE" <<ENDJSON
+{"count": $UNCAPTURED, "warned_at": "$TS", "archive_path": "$ARCHIVE_PATH"}
+ENDJSON
+log "wrote precompact-uncaptured flag: $FLAG_FILE (count=$UNCAPTURED)"
