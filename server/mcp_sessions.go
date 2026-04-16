@@ -53,7 +53,7 @@ func (s *Server) registerMCPSessionTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_session_prepare",
-		Description: `Prepare to extract knowledge from the current conversation. Returns extraction instructions and current session state. Call this at natural breakpoints, when prompted by hooks or reminders, or when the user asks you to capture knowledge. You must follow the returned instructions before calling gramaton_session_commit.`,
+		Description: `Prepare to extract knowledge from the current conversation. Returns extraction instructions and current session state. Call this BEFORE context compaction -- when the user mentions compacting, running low on context, or needing to compress, extract knowledge first so nothing is lost. Also call at natural breakpoints (topic changes, decisions made, task completion) or when the user asks you to capture. You must follow the returned instructions before calling gramaton_session_commit.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sessionPrepareInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_prepare")
 		defer done(nil)
