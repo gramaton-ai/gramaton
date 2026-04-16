@@ -490,6 +490,42 @@ func (s *Server) serviceSessionUpdateSegmentCapture(segmentID string, capturedAs
 	}, nil
 }
 
+// compactionFlagTTL bounds how long a PostCompact flag is considered
+// fresh. Compaction is normally followed by continued work within minutes;
+// 2h covers a long break without surfacing stale nudges the next day.
+const compactionFlagTTL = 2 * time.Hour
+
+// consumeCompactionFlag checks for and deletes a PostCompact flag written by
+// the hook at ~/.gramaton/hook-state/{client_session_id}.compacted. Returns
+// the flag's timestamp if fresh (within compactionFlagTTL), or zero time
+// otherwise. Single-shot: the flag is deleted whether fresh or stale so the
+// nudge fires at most once per compaction.
+func (s *Server) consumeCompactionFlag(clientSessionID string) time.Time {
+	if s.cfg.ConfigDir == "" || clientSessionID == "" {
+		return time.Time{}
+	}
+	flagPath := filepath.Join(s.cfg.ConfigDir, "hook-state", clientSessionID+".compacted")
+	data, err := os.ReadFile(flagPath)
+	if err != nil {
+		return time.Time{}
+	}
+	// Delete regardless of parse success -- never surface the same flag twice.
+	_ = os.Remove(flagPath)
+
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil {
+		s.log.Warn("compaction flag parse failed", "component", "session",
+			"path", flagPath, "err", err)
+		return time.Time{}
+	}
+	if time.Since(ts) > compactionFlagTTL {
+		s.log.Debug("compaction flag stale, discarded", "component", "session",
+			"client_session_id", clientSessionID, "age", time.Since(ts))
+		return time.Time{}
+	}
+	return ts
+}
+
 // serviceSessionPrepare returns extraction instructions and current session state.
 // Sets an in-memory prepared flag so commit can validate the two-phase flow.
 func (s *Server) serviceSessionPrepare(sessionID string) (map[string]any, *serviceError) {
@@ -529,10 +565,24 @@ func (s *Server) serviceSessionPrepare(sessionID string) (map[string]any, *servi
 	s.log.Debug("prepare returning prompt", "component", "session",
 		"session_id", sessionID, "prompt_hash", promptHash)
 
-	return map[string]any{
+	resp := map[string]any{
 		"instructions":  prompt,
 		"session_state": sessionState,
-	}, nil
+	}
+
+	// Surface a post-compaction nudge if the hook wrote a fresh flag.
+	clientSessionID, _ := session.Properties.GetString("client_session_id")
+	if compactedAt := s.consumeCompactionFlag(clientSessionID); !compactedAt.IsZero() {
+		resp["recent_compaction"] = map[string]any{
+			"at": compactedAt.Format(time.RFC3339),
+		}
+		resp["instructions"] = "NOTE: your context was recently compacted. Review session state below for already-captured segments before extracting -- do not re-capture knowledge that is already committed.\n\n" + prompt
+		s.log.Info("prepare: surfaced compaction nudge", "component", "session",
+			"session_id", sessionID, "client_session_id", clientSessionID,
+			"compacted_at", compactedAt.Format(time.RFC3339))
+	}
+
+	return resp, nil
 }
 
 // commitSegment is a single segment submitted via session_commit.
@@ -558,7 +608,18 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 		return nil, errMissing("segments is required and must not be empty")
 	}
 
-	// Validate prepared flag.
+	// Validate all segments before consuming the prepared flag so that a
+	// malformed commit doesn't force the agent to re-prepare.
+	for i, seg := range segments {
+		if strings.TrimSpace(seg.Content) == "" {
+			return nil, errInvalid(fmt.Sprintf("segment %d: content is required", i))
+		}
+		if strings.TrimSpace(seg.TopicName) == "" {
+			return nil, errInvalid(fmt.Sprintf("segment %d: topic name is required", i))
+		}
+	}
+
+	// Check and consume prepared flag.
 	s.mu.Lock()
 	_, prepared := s.preparedSessions[sessionID]
 	if prepared {
@@ -572,16 +633,6 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 			Status:  400,
 			Code:    "prepare_required",
 			Message: "You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.",
-		}
-	}
-
-	// Validate all segments before writing.
-	for i, seg := range segments {
-		if strings.TrimSpace(seg.Content) == "" {
-			return nil, errInvalid(fmt.Sprintf("segment %d: content is required", i))
-		}
-		if strings.TrimSpace(seg.TopicName) == "" {
-			return nil, errInvalid(fmt.Sprintf("segment %d: topic name is required", i))
 		}
 	}
 

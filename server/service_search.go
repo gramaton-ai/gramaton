@@ -63,6 +63,20 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		return nil, errInvalid(fmt.Sprintf("max_hops must be <= %d", maxSearchHops))
 	}
 
+	// Normalize and validate the store filter. "session" (matching the
+	// singular form used in result output) is accepted as an alias for
+	// "sessions" so agents can round-trip the value safely.
+	switch req.Store {
+	case "", "all":
+		req.Store = ""
+	case "memory":
+		// canonical
+	case "sessions", "session":
+		req.Store = "sessions"
+	default:
+		return nil, errInvalid(`store must be one of "memory", "sessions", or "all"`)
+	}
+
 	// Build search query.
 	q := search.Query{
 		Text:              req.Text,

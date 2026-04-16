@@ -10,6 +10,11 @@ knowledge.
 Available via MCP tools (gramaton_search, gramaton_capture, etc.)
 or the `gramaton` CLI as fallback.
 
+If you are unsure how Gramaton works, or what a metadata field
+means, call `gramaton_guide(topic=...)`. Topics: metadata,
+capture, search, sessions, collections, curation. The guide is
+the authoritative reference -- prefer it over assumptions.
+
 ### Retrieval
 
 **When to search:**
@@ -104,73 +109,65 @@ use `gramaton_diff` with a since date and optional topic filter.
 Narrate the structured change set rather than just searching for
 recent records.
 
-### Capture
+### Capture (User-Initiated Only)
 
-Gramaton IS the knowledge store. When the user says "add a TODO",
-"remember this", "store this", or "capture this" -- call
-gramaton_capture directly. Do NOT search the filesystem, explore
-the codebase, or look for other storage systems. Gramaton is it.
+Gramaton IS the knowledge store. When the user explicitly says
+"remember this", "store this", "save this", or "capture this" --
+call `gramaton_capture` directly. Do NOT search the filesystem,
+explore the codebase, or look for other storage systems. Gramaton
+is it.
 
-When the user explicitly asks to store something, do it immediately
--- no search-first, no exploration. Just capture.
+**`gramaton_capture` is user-initiated only.** Do not call it
+autonomously. Automatic knowledge capture from conversations
+happens through the session flow below (`gramaton_session_prepare`
+/`gramaton_session_commit`), not through capture.
 
-**When to capture (autonomous):**
-- User makes a decision ("let's go with X", "we should use Y")
-- User states a preference ("I prefer Z", "always do it this way")
-- A significant fact or insight emerges from discussion
-- An architecture or design choice is made with reasoning
-- A useful procedure or workflow is established
-- Research findings or domain knowledge are discussed
-- A constraint, requirement, or tradeoff is identified
+For tasks, TODOs, action items, or checklists, use
+`gramaton_collection_add` instead -- capture is for knowledge,
+collections are for structured tracking.
 
-**When NOT to capture:**
-- Trivial exchanges, greetings, small talk
-- Questions without answers
-- Work-in-progress that hasn't solidified
-- Information that's already in the knowledge store
-- Your own generated responses or analysis
+Call gramaton_capture directly -- do NOT spawn subagents. The
+call is a single HTTP round-trip and completes in well under a
+second.
 
-**How to capture:**
-Spawn a subagent with the content to store and a context envelope.
-The subagent handles classification, storage, and linking.
+### Sessions (Automatic Knowledge Extraction)
 
-Example subagent prompt:
+Sessions are how Gramaton captures knowledge from conversations
+without requiring the user to ask. The flow is two-phase:
 
-"Store the following in Gramaton:
+1. **Prepare** -- `gramaton_session_prepare(session_id)` returns
+   extraction instructions and the current session state (already-
+   captured segments, for dedup).
+2. **Commit** -- `gramaton_session_commit(session_id, segments)`
+   submits the extracted segments. The server stores them as
+   Session segments and creates linked Memory records.
 
-Content: [the knowledge to store]
+**When to call prepare/commit:**
+- At natural breakpoints: topic shifts, decisions landing, a task
+  completing, the user redirecting focus.
+- Before context compaction: if the user mentions compacting,
+  running low on context, or needing to compress, extract first
+  so nothing is lost.
+- When the user asks you to capture the conversation.
+- On long-running work, periodically (every ~10 turns is a
+  reasonable default).
 
-Context:
-  What is this about: [topic, domain, subject area]
-  Who or what is involved: [people, organizations, entities]
-  What prompted this: [why this knowledge emerged right now]
-  What should this be findable by: [terms, names for future retrieval]
-  What else in the store relates to this: [known related topics]
-  When was this claimed: [only if source assertion date differs from now]
+**The session_id comes from the Claude Code SessionStart hook.**
+It is written to `~/.gramaton/hook-state/current-session.json` at
+session start. Read the `session_id` field from that file when you
+need it.
 
-Follow the capture subagent instructions in
-integration/claude-code/subagent-capture.md"
+**Do not call commit without calling prepare first.** The server
+rejects commit without a prior prepare, because prepare returns
+the extraction instructions and session state you need to produce
+good segments.
 
-Do NOT block the conversation for capture. Spawn the subagent and
-continue immediately.
+For the full guide on extraction triggers, segment granularity,
+classification, and how to write good segment content, call
+`gramaton_guide(topic="sessions")`.
 
-### Observe (Auto-Extraction)
-
-At natural breakpoints (end of task, topic change, session wind-down),
-call `gramaton_observe` with recent conversation messages. The server
-extracts facts, runs quality gates, and stores survivors as deferred
-captures. Fire-and-forget -- returns immediately.
-
-```
-gramaton_observe(messages=[{role: "user", content: "..."}, ...])
-```
-
-Without server LLM: send pre-extracted facts instead:
-```
-gramaton_observe(facts=["Decided to use JWT", "API v2 replaces v1"])
-```
-
-Do NOT announce observing. Do NOT call every turn.
+`gramaton_observe` is soft-deprecated. Do not use it for new work;
+use the session flow instead.
 
 ### Resolving Records
 

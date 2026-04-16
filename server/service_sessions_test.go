@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
 )
@@ -471,6 +472,78 @@ func TestSessionPrepareReturnsInstructionsAndState(t *testing.T) {
 	topics := state["topics"].([]map[string]any)
 	if len(topics) != 1 {
 		t.Errorf("expected 1 topic in session state, got %d", len(topics))
+	}
+}
+
+func TestSessionPrepareSurfacesCompactionFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("compact-client-001", "")
+	sessionID := result["id"].(string)
+
+	// Write a fresh compaction flag as the PostCompact hook would.
+	flagDir := srv.cfg.ConfigDir + "/hook-state"
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	flagPath := flagDir + "/compact-client-001.compacted"
+	ts := time.Now().UTC().Format(time.RFC3339)
+	if err := os.WriteFile(flagPath, []byte(ts), 0o644); err != nil {
+		t.Fatalf("write flag: %v", err)
+	}
+
+	prep, svcErr := srv.serviceSessionPrepare(sessionID)
+	if svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+	rc, ok := prep["recent_compaction"].(map[string]any)
+	if !ok {
+		t.Fatal("expected recent_compaction in prepare response")
+	}
+	if rc["at"] != ts {
+		t.Errorf("recent_compaction.at = %v, want %v", rc["at"], ts)
+	}
+	instructions, _ := prep["instructions"].(string)
+	if !strings.Contains(instructions, "recently compacted") {
+		t.Error("expected compaction note prepended to instructions")
+	}
+	// Single-shot: flag file must be gone.
+	if _, err := os.Stat(flagPath); !os.IsNotExist(err) {
+		t.Error("compaction flag should have been deleted (single-shot)")
+	}
+
+	// A second prepare must not surface the nudge again.
+	prep2, _ := srv.serviceSessionPrepare(sessionID)
+	if _, has := prep2["recent_compaction"]; has {
+		t.Error("second prepare should not surface compaction nudge")
+	}
+}
+
+func TestSessionPrepareIgnoresStaleCompactionFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("stale-compact-001", "")
+	sessionID := result["id"].(string)
+
+	flagDir := srv.cfg.ConfigDir + "/hook-state"
+	if err := os.MkdirAll(flagDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	flagPath := flagDir + "/stale-compact-001.compacted"
+	staleTS := time.Now().UTC().Add(-3 * time.Hour).Format(time.RFC3339)
+	if err := os.WriteFile(flagPath, []byte(staleTS), 0o644); err != nil {
+		t.Fatalf("write flag: %v", err)
+	}
+
+	prep, svcErr := srv.serviceSessionPrepare(sessionID)
+	if svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+	if _, has := prep["recent_compaction"]; has {
+		t.Error("stale flag (>2h old) should not surface")
+	}
+	if _, err := os.Stat(flagPath); !os.IsNotExist(err) {
+		t.Error("stale flag should have been deleted anyway")
 	}
 }
 
