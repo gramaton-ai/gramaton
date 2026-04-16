@@ -497,6 +497,60 @@ func (s *Server) serviceSessionUpdateSegmentCapture(segmentID string, capturedAs
 // the next day.
 const compactionFlagTTL = 2 * time.Hour
 
+// preparedSessionTTL bounds how long a "prepared but never committed"
+// entry stays in s.preparedSessions before the sweeper drops it. The
+// flag is in-memory only (B2 resolution) and lives long enough to span
+// the realistic gap between a prepare call and the agent's commit.
+// Anything older than this is almost certainly orphaned.
+const preparedSessionTTL = 30 * time.Minute
+
+// preparedSweepInterval is how often the background sweeper runs.
+const preparedSweepInterval = 5 * time.Minute
+
+// sweepPreparedSessions removes prepared-flag entries older than
+// preparedSessionTTL. Called by the background sweeper goroutine.
+func (s *Server) sweepPreparedSessions() {
+	cutoff := time.Now().Add(-preparedSessionTTL)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for sessionID, t := range s.preparedSessions {
+		if t.Before(cutoff) {
+			delete(s.preparedSessions, sessionID)
+			removed++
+		}
+	}
+	if removed > 0 {
+		s.log.Debug("prepared sessions sweep", "component", "session",
+			"removed", removed, "remaining", len(s.preparedSessions))
+	}
+}
+
+// preparedSweeper runs sweepPreparedSessions on a ticker until ctx is
+// cancelled.
+func (s *Server) preparedSweeper(ctx context.Context) {
+	ticker := time.NewTicker(preparedSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweepPreparedSessions()
+		}
+	}
+}
+
+// startPreparedSweeper launches the background sweeper goroutine and
+// stores its cancel function for shutdown.
+func (s *Server) startPreparedSweeper() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.preparedSweepCancel = cancel
+	s.mu.Unlock()
+	go s.preparedSweeper(ctx)
+}
+
 // consumeCompactionFlag checks for and deletes a PostCompact flag written by
 // the hook at ~/.gramaton/hook-state/{client_session_id}.compacted. Returns
 // the flag's timestamp if fresh (within compactionFlagTTL), or zero time

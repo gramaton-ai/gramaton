@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -64,6 +68,22 @@ searchable -- it is a break-glass backup of the raw conversation.`,
 	RunE: runSessionArchive,
 }
 
+var sessionCurrentCwd string
+
+var sessionCurrentCmd = &cobra.Command{
+	Use:   "current",
+	Short: "Print the active session for this working directory",
+	Long: `Resolves which Gramaton session is bound to the current working
+directory and prints the session id and client session id as JSON.
+
+The Claude Code SessionStart hook writes per-cwd files to
+~/.gramaton/hook-state/by-cwd/. This command reads $PWD (or --cwd),
+finds the matching file, and prints its contents. Falls back to the
+shared current-session.json when no per-cwd file exists. Pure file
+lookup -- no server interaction required.`,
+	RunE: runSessionCurrent,
+}
+
 func init() {
 	sessionStartCmd.Flags().StringVar(&sessionClientID, "client-id", "", "client session identifier (required)")
 	sessionStartCmd.MarkFlagRequired("client-id")
@@ -75,7 +95,9 @@ func init() {
 	sessionArchiveCmd.Flags().StringVarP(&sessionArchiveFile, "file", "f", "", "source file to archive (required)")
 	sessionArchiveCmd.MarkFlagRequired("file")
 
-	sessionCmd.AddCommand(sessionStartCmd, sessionGetCmd, sessionPrepareCmd, sessionCommitCmd, sessionArchiveCmd)
+	sessionCurrentCmd.Flags().StringVar(&sessionCurrentCwd, "cwd", "", "working directory to look up (default: $PWD)")
+
+	sessionCmd.AddCommand(sessionStartCmd, sessionGetCmd, sessionPrepareCmd, sessionCommitCmd, sessionArchiveCmd, sessionCurrentCmd)
 	rootCmd.AddCommand(sessionCmd)
 }
 
@@ -127,6 +149,61 @@ func runSessionCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("session commit: %w", err)
 	}
 	return printEnvelope(resp)
+}
+
+// cwdSlug mirrors the slug computation in
+// hooks/claude-code/session-start.sh: strip the leading slash and
+// replace remaining slashes with dashes. Both sides MUST agree on this
+// formula or the lookup misses.
+func cwdSlug(cwd string) string {
+	cwd = strings.TrimPrefix(cwd, "/")
+	return strings.ReplaceAll(cwd, "/", "-")
+}
+
+// resolveCurrentSession looks up the active session for a given cwd by
+// reading the per-cwd file written by session-start.sh, falling back
+// to the legacy shared current-session.json. Returns the JSON payload
+// as a parsed map, the path it came from, or an error if neither file
+// exists or both are corrupt.
+func resolveCurrentSession(base, cwd string) (map[string]any, string, error) {
+	byCwd := filepath.Join(base, "hook-state", "by-cwd", cwdSlug(cwd)+".session.json")
+	legacy := filepath.Join(base, "hook-state", "current-session.json")
+
+	for _, candidate := range []string{byCwd, legacy} {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			return nil, candidate, fmt.Errorf("%s is corrupt: %w", candidate, err)
+		}
+		return parsed, candidate, nil
+	}
+
+	return nil, "", fmt.Errorf("no session file for cwd %q (checked %s, %s) -- has the SessionStart hook run?", cwd, byCwd, legacy)
+}
+
+func runSessionCurrent(cmd *cobra.Command, args []string) error {
+	cwd := sessionCurrentCwd
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("session current: cannot get working directory: %w", err)
+		}
+	}
+
+	parsed, _, err := resolveCurrentSession(baseConfigDir(), cwd)
+	if err != nil {
+		return fmt.Errorf("session current: %w", err)
+	}
+	out, err := json.Marshal(parsed)
+	if err != nil {
+		return fmt.Errorf("session current: marshal: %w", err)
+	}
+	fmt.Println(string(out))
+	return nil
 }
 
 func runSessionArchive(cmd *cobra.Command, args []string) error {

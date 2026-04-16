@@ -53,11 +53,12 @@ type Server struct {
 	log        *slog.Logger
 	runner     *curation.Runner
 
-	mu             sync.Mutex
-	lastRequest    time.Time
-	lastBackup     time.Time
-	curationCancel context.CancelFunc
-	accessCancel   context.CancelFunc
+	mu                  sync.Mutex
+	lastRequest         time.Time
+	lastBackup          time.Time
+	curationCancel      context.CancelFunc
+	accessCancel        context.CancelFunc
+	preparedSweepCancel context.CancelFunc
 
 	retrieval    *retrievalTracker
 	observeSem   chan struct{} // bounded semaphore for observe goroutines
@@ -222,6 +223,9 @@ func (s *Server) Run() error {
 	// Start access flusher.
 	s.startAccessFlusher()
 
+	// Start prepared-sessions sweeper.
+	s.startPreparedSweeper()
+
 	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
@@ -266,10 +270,13 @@ func (s *Server) Run() error {
 		}
 	}
 
-	// Stop access flusher (triggers final flush).
+	// Stop access flusher (triggers final flush) and prepared-sessions sweeper.
 	s.mu.Lock()
 	if s.accessCancel != nil {
 		s.accessCancel()
+	}
+	if s.preparedSweepCancel != nil {
+		s.preparedSweepCancel()
 	}
 	s.mu.Unlock()
 
@@ -316,6 +323,9 @@ func (s *Server) StartHTTP() error {
 	// Start access flusher.
 	s.startAccessFlusher()
 
+	// Start prepared-sessions sweeper.
+	s.startPreparedSweeper()
+
 	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
@@ -349,17 +359,22 @@ func (s *Server) StartHTTP() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server, access flusher, and
-// curation runner.
+// Shutdown gracefully stops the HTTP server, access flusher, prepared-
+// sessions sweeper, and curation runner.
 func (s *Server) Shutdown() {
 	s.mu.Lock()
 	curationCancel := s.curationCancel
 	accessCancel := s.accessCancel
+	preparedSweepCancel := s.preparedSweepCancel
 	s.mu.Unlock()
 
 	// Stop access flusher first (triggers final flush).
 	if accessCancel != nil {
 		accessCancel()
+	}
+
+	if preparedSweepCancel != nil {
+		preparedSweepCancel()
 	}
 
 	if curationCancel != nil {

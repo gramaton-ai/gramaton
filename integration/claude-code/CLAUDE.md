@@ -152,10 +152,12 @@ without requiring the user to ask. The flow is two-phase:
 - On long-running work, periodically (every ~10 turns is a
   reasonable default).
 
-**The session_id comes from the Claude Code SessionStart hook.**
-It is written to `~/.gramaton/hook-state/current-session.json` at
-session start. Read the `session_id` field from that file when you
-need it.
+**Finding the session_id.** Run `gramaton session current` -- it
+returns `{"session_id": ..., "client_session_id": ...}` for the
+session bound to your current working directory. This is safe under
+multiple concurrent Claude Code instances; each working directory
+gets its own session file. Falls back to a shared file if the
+per-cwd file doesn't exist (older hooks).
 
 **Do not call commit without calling prepare first.** The server
 rejects commit without a prior prepare, because prepare returns

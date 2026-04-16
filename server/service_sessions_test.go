@@ -607,6 +607,38 @@ func TestSessionPrepareStacksBothNudges(t *testing.T) {
 	}
 }
 
+func TestSweepPreparedSessionsRemovesStaleEntries(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	now := time.Now()
+	srv.mu.Lock()
+	srv.preparedSessions["fresh-session"] = now.Add(-1 * time.Minute)
+	srv.preparedSessions["edge-session"] = now.Add(-(preparedSessionTTL - 1*time.Minute))
+	srv.preparedSessions["stale-session"] = now.Add(-2 * preparedSessionTTL)
+	srv.preparedSessions["ancient-session"] = now.Add(-24 * time.Hour)
+	srv.mu.Unlock()
+
+	srv.sweepPreparedSessions()
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if _, has := srv.preparedSessions["fresh-session"]; !has {
+		t.Error("fresh entry (1m old) should be kept")
+	}
+	if _, has := srv.preparedSessions["edge-session"]; !has {
+		t.Error("entry just under TTL should be kept")
+	}
+	if _, has := srv.preparedSessions["stale-session"]; has {
+		t.Error("stale entry (2x TTL) should have been removed")
+	}
+	if _, has := srv.preparedSessions["ancient-session"]; has {
+		t.Error("ancient entry should have been removed")
+	}
+	if got, want := len(srv.preparedSessions), 2; got != want {
+		t.Errorf("expected %d entries after sweep, got %d", want, got)
+	}
+}
+
 func TestSessionPrepareIgnoresStaleCompactionFlag(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

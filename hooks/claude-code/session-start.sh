@@ -16,6 +16,7 @@ log() { echo "[gramaton-hook] $(date -u +%Y-%m-%dT%H:%M:%SZ) session-start: $*" 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null || echo "")
 SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('source','startup'))" 2>/dev/null || echo "startup")
+CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || echo "")
 
 if [ -z "$SESSION_ID" ]; then
     log "no session_id in input, skipping"
@@ -37,10 +38,28 @@ log "session created/resumed: $(echo "$RESULT" | head -1)"
 GRAMATON_SESSION_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 mkdir -p "$COUNTER_DIR"
 if [ -n "$GRAMATON_SESSION_ID" ]; then
+    # Legacy shared file -- still written so older agents/CLAUDE.md
+    # instructions keep working. Last-writer-wins under concurrent
+    # Claude Code instances; the per-cwd file below is the disambig.
     cat > "$COUNTER_DIR/current-session.json" <<ENDJSON
 {"session_id": "$GRAMATON_SESSION_ID", "client_session_id": "$SESSION_ID"}
 ENDJSON
     log "wrote current-session.json: gramaton=$GRAMATON_SESSION_ID client=$SESSION_ID"
+
+    # Per-cwd canonical file. The slug strips the leading slash and
+    # replaces remaining slashes with dashes, giving each working
+    # directory its own file. `gramaton session current` uses this
+    # to find the right session for $PWD even with concurrent
+    # Claude Code instances.
+    if [ -n "$CWD" ]; then
+        CWD_SLUG=$(echo "$CWD" | sed 's|^/||; s|/|-|g')
+        BY_CWD_DIR="$COUNTER_DIR/by-cwd"
+        mkdir -p "$BY_CWD_DIR"
+        cat > "$BY_CWD_DIR/$CWD_SLUG.session.json" <<ENDJSON
+{"session_id": "$GRAMATON_SESSION_ID", "client_session_id": "$SESSION_ID", "cwd": "$CWD"}
+ENDJSON
+        log "wrote by-cwd file: $BY_CWD_DIR/$CWD_SLUG.session.json"
+    fi
 fi
 
 # Reset turn counter.
