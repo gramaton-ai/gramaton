@@ -62,7 +62,7 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 		b.WriteString(fmt.Sprintf("[%d] %s\n", i+1, s))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	resp, err := t.reranker.Complete(ctx, b.String())
