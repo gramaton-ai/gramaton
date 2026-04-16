@@ -7,12 +7,13 @@ import (
 func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClientSessionID string `json:"client_session_id"`
+		Source          string `json:"source,omitempty"`
 	}
 	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
 		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 		return
 	}
-	result, svcErr := s.serviceSessionCreate(req.ClientSessionID)
+	result, svcErr := s.serviceSessionCreate(req.ClientSessionID, req.Source)
 	if svcErr != nil {
 		s.writeServiceError(w, svcErr)
 		return

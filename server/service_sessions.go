@@ -43,11 +43,12 @@ func (s *Server) loadExtractionPrompt() (string, string) {
 
 // --- helpers ---
 
-// sessionByClientID finds a Session node by its client_session_id property.
-// Returns the node ID and true if found, empty string and false otherwise.
+// sessionsByClientID finds all Session nodes with a given client_session_id.
+// Returns node IDs sorted by created_at (newest last).
 // Caller must hold at least RLock.
-func (s *Server) sessionByClientID(clientID string) (string, bool) {
+func (s *Server) sessionsByClientID(clientID string) []string {
 	ids := s.engine.PropIdx().Lookup("knowledge_type", graph.StringProperty("session"))
+	var matches []string
 	for _, id := range ids {
 		n, ok := s.engine.Graph().GetNode(id)
 		if !ok {
@@ -55,11 +56,41 @@ func (s *Server) sessionByClientID(clientID string) (string, bool) {
 		}
 		if cid, ok := n.Properties.GetString("client_session_id"); ok {
 			if cid == clientID {
-				return id, true
+				matches = append(matches, id)
 			}
 		}
 	}
-	return "", false
+	return matches
+}
+
+// latestSessionByClientID finds the most recent Session with this client_session_id.
+// "Most recent" = the tail of the continues_from chain (no inbound continues_from edges).
+// Caller must hold at least RLock.
+func (s *Server) latestSessionByClientID(clientID string) (string, bool) {
+	matches := s.sessionsByClientID(clientID)
+	if len(matches) == 0 {
+		return "", false
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	// Find the tail: the session that has no inbound continues_from edge
+	// (nothing continues FROM it, so it's the latest).
+	hasNext := make(map[string]bool)
+	for _, id := range matches {
+		for _, e := range s.engine.Graph().EdgesFrom(id) {
+			if e.Type == "continues_from" {
+				hasNext[e.TargetID] = true
+			}
+		}
+	}
+	for _, id := range matches {
+		if !hasNext[id] {
+			return id, true
+		}
+	}
+	// Fallback: return last in list.
+	return matches[len(matches)-1], true
 }
 
 // isSession checks if a node is a Session.
@@ -179,9 +210,13 @@ func (s *Server) buildSessionResponse(sessionID string, session *graph.Node) map
 
 // --- service methods ---
 
-// serviceSessionCreate creates a new Session or returns an existing one
-// for the same client_session_id (idempotent for --continue).
-func (s *Server) serviceSessionCreate(clientSessionID string) (map[string]any, *serviceError) {
+// serviceSessionCreate creates a new Session, chains to previous sessions
+// on resume, or returns the current session for idempotent agent calls.
+//
+// source="startup": fresh session, no chaining
+// source="resume": new session chained to latest with same client_session_id
+// source="" (agent call): return existing if found, create fresh otherwise
+func (s *Server) serviceSessionCreate(clientSessionID string, source string) (map[string]any, *serviceError) {
 	if clientSessionID == "" {
 		return nil, errMissing("client_session_id is required")
 	}
@@ -192,15 +227,19 @@ func (s *Server) serviceSessionCreate(clientSessionID string) (map[string]any, *
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
-	// Check for existing session with this client_session_id.
-	if id, found := s.sessionByClientID(clientSessionID); found {
-		session, _ := s.engine.Graph().GetNode(id)
-		s.log.Debug("session lookup hit", "component", "session", "client_session_id", clientSessionID, "session_id", id)
-		resp := s.buildSessionResponse(id, session)
+	latestID, hasExisting := s.latestSessionByClientID(clientSessionID)
+
+	// Agent idempotent call (no source): return existing if found.
+	if source == "" && hasExisting {
+		session, _ := s.engine.Graph().GetNode(latestID)
+		s.log.Debug("session lookup hit", "component", "session",
+			"client_session_id", clientSessionID, "session_id", latestID)
+		resp := s.buildSessionResponse(latestID, session)
 		resp["resumed"] = true
 		return resp, nil
 	}
 
+	// Create new session.
 	now := time.Now().UTC()
 	props := graph.Properties{
 		"knowledge_type":    graph.StringProperty("session"),
@@ -208,17 +247,34 @@ func (s *Server) serviceSessionCreate(clientSessionID string) (map[string]any, *
 		"created_at":        graph.TimestampProperty(now),
 	}
 	n := s.engine.Graph().AddNode(props)
-	// Index properties for PropertyIndex lookup (no BM25 content for container nodes).
 	s.engine.IndexNode(n.ID, "", nil)
+
+	// On resume, chain to the previous session.
+	var previousSessionID string
+	if source == "resume" && hasExisting {
+		if _, err := s.engine.Graph().AddEdge(n.ID, latestID, "continues_from", 1.0, nil); err != nil {
+			s.log.Warn("failed to create continues_from edge", "component", "session",
+				"new_session", n.ID, "previous_session", latestID, "err", err)
+		} else {
+			previousSessionID = latestID
+			s.log.Info("session chained", "component", "session",
+				"new_session", n.ID, "previous_session", latestID)
+		}
+	}
 
 	if _, err := s.engine.Save("session_create"); err != nil {
 		return nil, errInternal(err.Error())
 	}
 
-	s.log.Info("session created", "component", "session", "session_id", n.ID, "client_session_id", clientSessionID)
+	s.log.Info("session created", "component", "session",
+		"session_id", n.ID, "client_session_id", clientSessionID,
+		"source", source, "chained_to", previousSessionID)
 
 	resp := s.buildSessionResponse(n.ID, n)
 	resp["resumed"] = false
+	if previousSessionID != "" {
+		resp["previous_session_id"] = previousSessionID
+	}
 	return resp, nil
 }
 

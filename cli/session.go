@@ -7,6 +7,7 @@ import (
 )
 
 var sessionClientID string
+var sessionSource string
 var sessionCommitFile string
 var sessionArchiveFile string
 
@@ -66,6 +67,7 @@ searchable -- it is a break-glass backup of the raw conversation.`,
 func init() {
 	sessionStartCmd.Flags().StringVar(&sessionClientID, "client-id", "", "client session identifier (required)")
 	sessionStartCmd.MarkFlagRequired("client-id")
+	sessionStartCmd.Flags().StringVar(&sessionSource, "source", "", "startup or resume (controls session chaining)")
 
 	sessionCommitCmd.Flags().StringVarP(&sessionCommitFile, "file", "f", "", "JSON file containing segments array (required)")
 	sessionCommitCmd.MarkFlagRequired("file")
@@ -80,6 +82,7 @@ func init() {
 func runSessionStart(cmd *cobra.Command, args []string) error {
 	body := map[string]any{
 		"client_session_id": sessionClientID,
+		"source":            sessionSource,
 	}
 	resp, err := serverPost("/v1/sessions", body)
 	if err != nil {

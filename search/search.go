@@ -245,7 +245,9 @@ type Result struct {
 	EdgeCount       int      `json:"edge_count,omitempty"`
 	Staleness       float64  `json:"staleness,omitempty"`
 	Collections     []string `json:"collections,omitempty"`
-	Store           string   `json:"store,omitempty"` // "memory" or "session"
+	Store           string   `json:"store,omitempty"`      // "memory" or "session"
+	SessionID       string   `json:"session_id,omitempty"` // for session segments: parent session node ID
+	TopicName       string   `json:"topic_name,omitempty"` // for session segments: parent topic name
 }
 
 // Execute runs the search query and returns results. This calls
@@ -1035,6 +1037,24 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 		if r.ContentLength == 0 {
 			if v, ok := n.Properties.GetString("content"); ok {
 				r.ContentLength = len(v)
+			}
+		}
+		// Resolve parent topic and session for navigation.
+		for _, e := range t.graph.EdgesFrom(n.ID) {
+			if e.Type == "segment_of" {
+				if topic, ok := t.graph.GetNode(e.TargetID); ok {
+					if name, ok := topic.Properties.GetString("topic_name"); ok {
+						r.TopicName = name
+					}
+					// Follow topic -> session.
+					for _, te := range t.graph.EdgesFrom(e.TargetID) {
+						if te.Type == "topic_of" {
+							r.SessionID = te.TargetID
+							break
+						}
+					}
+				}
+				break
 			}
 		}
 	} else {

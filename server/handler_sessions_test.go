@@ -40,7 +40,7 @@ func addSearchableRecord(t *testing.T, eng *core.Engine, content string, keyword
 // Returns the session ID.
 func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segments []commitSegment) string {
 	t.Helper()
-	result, svcErr := srv.serviceSessionCreate(clientID)
+	result, svcErr := srv.serviceSessionCreate(clientID, "")
 	if svcErr != nil {
 		t.Fatalf("session create: %v", svcErr)
 	}

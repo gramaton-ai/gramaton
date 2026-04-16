@@ -11,15 +11,16 @@ func (s *Server) registerMCPSessionTools(mcpServer *mcp.Server) {
 
 	type sessionStartInput struct {
 		ClientSessionID string `json:"client_session_id" jsonschema:"unique session identifier from the client (e.g. Claude Code session ID)"`
+		Source          string `json:"source,omitempty" jsonschema:"startup|resume -- controls session chaining. Omit for idempotent lookup."`
 	}
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_start",
-		Description: "Start or resume a knowledge capture session. Creates a fresh session or returns the existing one for the same client_session_id (idempotent for --continue). No lookback to previous sessions.",
+		Description: "Start or resume a knowledge capture session. On fresh start, creates a new session. On resume (--continue), creates a new session chained to the previous one. Returns the active session.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sessionStartInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_start")
 		defer done(nil)
-		result, svcErr := s.serviceSessionCreate(args.ClientSessionID)
+		result, svcErr := s.serviceSessionCreate(args.ClientSessionID, args.Source)
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
 		}

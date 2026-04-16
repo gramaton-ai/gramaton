@@ -13,7 +13,7 @@ func TestSessionCreateAndGet(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Create a session.
-	result, svcErr := srv.serviceSessionCreate("test-session-001")
+	result, svcErr := srv.serviceSessionCreate("test-session-001", "")
 	if svcErr != nil {
 		t.Fatalf("create: %v", svcErr)
 	}
@@ -46,14 +46,14 @@ func TestSessionCreateIdempotent(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Create a session.
-	r1, svcErr := srv.serviceSessionCreate("test-session-002")
+	r1, svcErr := srv.serviceSessionCreate("test-session-002", "")
 	if svcErr != nil {
 		t.Fatalf("first create: %v", svcErr)
 	}
 	id1 := r1["id"].(string)
 
 	// Same client_session_id returns the same session.
-	r2, svcErr := srv.serviceSessionCreate("test-session-002")
+	r2, svcErr := srv.serviceSessionCreate("test-session-002", "")
 	if svcErr != nil {
 		t.Fatalf("second create: %v", svcErr)
 	}
@@ -70,7 +70,7 @@ func TestSessionCreateIdempotent(t *testing.T) {
 func TestSessionAddTopicAndSegment(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("test-session-003")
+	result, _ := srv.serviceSessionCreate("test-session-003", "")
 	sessionID := result["id"].(string)
 
 	// Add a topic.
@@ -114,18 +114,18 @@ func TestSessionAddTopicAndSegment(t *testing.T) {
 func TestSessionLookupByClientID(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("my-unique-id")
+	result, _ := srv.serviceSessionCreate("my-unique-id", "")
 	id := result["id"].(string)
 
 	// Create second session.
-	r2, _ := srv.serviceSessionCreate("different-id")
+	r2, _ := srv.serviceSessionCreate("different-id", "")
 	id2 := r2["id"].(string)
 	if id == id2 {
 		t.Fatal("different client IDs should produce different sessions")
 	}
 
 	// Lookup first one should return correct session.
-	r3, _ := srv.serviceSessionCreate("my-unique-id")
+	r3, _ := srv.serviceSessionCreate("my-unique-id", "")
 	if r3["id"].(string) != id {
 		t.Errorf("lookup returned wrong session: got %v, want %v", r3["id"], id)
 	}
@@ -134,7 +134,7 @@ func TestSessionLookupByClientID(t *testing.T) {
 func TestSessionTopicBranching(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("branching-test")
+	result, _ := srv.serviceSessionCreate("branching-test", "")
 	sessionID := result["id"].(string)
 
 	// Create parent topic.
@@ -154,7 +154,7 @@ func TestSessionTopicBranching(t *testing.T) {
 func TestSessionTopicBranchingErrors(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("branching-error-test")
+	result, _ := srv.serviceSessionCreate("branching-error-test", "")
 	sessionID := result["id"].(string)
 
 	// Error: branched_from with nonexistent ID.
@@ -170,7 +170,7 @@ func TestSessionTopicBranchingErrors(t *testing.T) {
 	}
 
 	// Error: branched_from pointing to a topic in a different session.
-	r2, _ := srv.serviceSessionCreate("other-session")
+	r2, _ := srv.serviceSessionCreate("other-session", "")
 	otherSessionID := r2["id"].(string)
 	otherTopic, _ := srv.serviceSessionAddTopic(otherSessionID, "Other topic", "")
 	otherTopicID := otherTopic["id"].(string)
@@ -184,7 +184,7 @@ func TestSessionTopicBranchingErrors(t *testing.T) {
 func TestSessionSegmentCaptureStatus(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("capture-test")
+	result, _ := srv.serviceSessionCreate("capture-test", "")
 	sessionID := result["id"].(string)
 
 	topicResult, _ := srv.serviceSessionAddTopic(sessionID, "Test topic", "")
@@ -225,7 +225,7 @@ func TestSessionSegmentCaptureStatus(t *testing.T) {
 func TestSessionEmptySegmentRejected(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("empty-seg-test")
+	result, _ := srv.serviceSessionCreate("empty-seg-test", "")
 	sessionID := result["id"].(string)
 	topicResult, _ := srv.serviceSessionAddTopic(sessionID, "Topic", "")
 	topicID := topicResult["id"].(string)
@@ -246,7 +246,7 @@ func TestSessionEmptySegmentRejected(t *testing.T) {
 func TestSessionEmptyClientIDRejected(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	_, svcErr := srv.serviceSessionCreate("")
+	_, svcErr := srv.serviceSessionCreate("", "")
 	if svcErr == nil {
 		t.Fatal("expected error for empty client_session_id")
 	}
@@ -255,7 +255,7 @@ func TestSessionEmptyClientIDRejected(t *testing.T) {
 func TestSessionPersistence(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("persist-test")
+	result, _ := srv.serviceSessionCreate("persist-test", "")
 	sessionID := result["id"].(string)
 	topicResult, _ := srv.serviceSessionAddTopic(sessionID, "Persistent topic", "")
 	topicID := topicResult["id"].(string)
@@ -297,8 +297,8 @@ func TestSessionPersistence(t *testing.T) {
 func TestSessionMultipleSessions(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	r1, _ := srv.serviceSessionCreate("session-a")
-	r2, _ := srv.serviceSessionCreate("session-b")
+	r1, _ := srv.serviceSessionCreate("session-a", "")
+	r2, _ := srv.serviceSessionCreate("session-b", "")
 	id1 := r1["id"].(string)
 	id2 := r2["id"].(string)
 
@@ -345,7 +345,7 @@ func TestSessionMultipleSessions(t *testing.T) {
 func TestSessionConcurrentWrites(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("concurrent-test")
+	result, _ := srv.serviceSessionCreate("concurrent-test", "")
 	sessionID := result["id"].(string)
 	topicResult, _ := srv.serviceSessionAddTopic(sessionID, "Concurrent topic", "")
 	topicID := topicResult["id"].(string)
@@ -383,7 +383,7 @@ func TestSessionConcurrentWrites(t *testing.T) {
 func TestSessionSegmentAppendOnly(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("append-only-test")
+	result, _ := srv.serviceSessionCreate("append-only-test", "")
 	sessionID := result["id"].(string)
 	topicResult, _ := srv.serviceSessionAddTopic(sessionID, "Topic", "")
 	topicID := topicResult["id"].(string)
@@ -430,7 +430,7 @@ func TestSessionSegmentUpdateCaptureErrors(t *testing.T) {
 	}
 
 	// Error: updating capture on a non-segment node.
-	result, _ := srv.serviceSessionCreate("capture-error-test")
+	result, _ := srv.serviceSessionCreate("capture-error-test", "")
 	sessionID := result["id"].(string)
 
 	_, svcErr = srv.serviceSessionUpdateSegmentCapture(sessionID, "some-record")
@@ -444,7 +444,7 @@ func TestSessionSegmentUpdateCaptureErrors(t *testing.T) {
 func TestSessionPrepareReturnsInstructionsAndState(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("prepare-test")
+	result, _ := srv.serviceSessionCreate("prepare-test", "")
 	sessionID := result["id"].(string)
 
 	// Add some data to the session first.
@@ -477,7 +477,7 @@ func TestSessionPrepareReturnsInstructionsAndState(t *testing.T) {
 func TestSessionCommitRejectsWithoutPrepare(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("reject-test")
+	result, _ := srv.serviceSessionCreate("reject-test", "")
 	sessionID := result["id"].(string)
 
 	segments := []commitSegment{
@@ -495,7 +495,7 @@ func TestSessionCommitRejectsWithoutPrepare(t *testing.T) {
 func TestSessionCommitAfterPrepare(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("commit-test")
+	result, _ := srv.serviceSessionCreate("commit-test", "")
 	sessionID := result["id"].(string)
 
 	// Prepare first.
@@ -531,7 +531,7 @@ func TestSessionCommitAfterPrepare(t *testing.T) {
 func TestSessionCommitExistingTopic(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("existing-topic-test")
+	result, _ := srv.serviceSessionCreate("existing-topic-test", "")
 	sessionID := result["id"].(string)
 
 	// Create a topic first.
@@ -566,7 +566,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Full round-trip: start -> prepare -> commit -> get.
-	result, _ := srv.serviceSessionCreate("roundtrip-test")
+	result, _ := srv.serviceSessionCreate("roundtrip-test", "")
 	sessionID := result["id"].(string)
 
 	srv.serviceSessionPrepare(sessionID)
@@ -598,7 +598,7 @@ func TestSessionRoundTrip(t *testing.T) {
 func TestSessionCommitEmptySegments(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("empty-commit-test")
+	result, _ := srv.serviceSessionCreate("empty-commit-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -612,7 +612,7 @@ func TestSessionCommitEmptySegments(t *testing.T) {
 func TestSessionCommitMalformedSegments(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("malformed-test")
+	result, _ := srv.serviceSessionCreate("malformed-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -639,7 +639,7 @@ func TestSessionCommitMalformedSegments(t *testing.T) {
 func TestSessionPreparedFlagConsumed(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("flag-consumed-test")
+	result, _ := srv.serviceSessionCreate("flag-consumed-test", "")
 	sessionID := result["id"].(string)
 
 	// Prepare sets the flag.
@@ -667,7 +667,7 @@ func TestSessionPreparedFlagConsumed(t *testing.T) {
 func TestSessionConcurrentPrepare(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("concurrent-prepare-test")
+	result, _ := srv.serviceSessionCreate("concurrent-prepare-test", "")
 	sessionID := result["id"].(string)
 
 	// Two prepares -- second should overwrite, both should succeed.
@@ -695,7 +695,7 @@ func TestSessionConcurrentPrepare(t *testing.T) {
 func TestPrepareReturnsExtractionPromptWithSections(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("prompt-test")
+	result, _ := srv.serviceSessionCreate("prompt-test", "")
 	sessionID := result["id"].(string)
 
 	prepResult, svcErr := srv.serviceSessionPrepare(sessionID)
@@ -723,7 +723,7 @@ func TestPrepareReturnsExtractionPromptWithSections(t *testing.T) {
 func TestHybridCommitCreatesMemoryRecords(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("hybrid-test")
+	result, _ := srv.serviceSessionCreate("hybrid-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -772,7 +772,7 @@ func TestHybridCommitCreatesMemoryRecords(t *testing.T) {
 func TestHybridCommitExtractedAsEdge(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("edge-test")
+	result, _ := srv.serviceSessionCreate("edge-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -805,7 +805,7 @@ func TestHybridCommitExtractedAsEdge(t *testing.T) {
 func TestHybridCommitMemoryRecordHasMetadata(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("metadata-test")
+	result, _ := srv.serviceSessionCreate("metadata-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -848,7 +848,7 @@ func TestHybridCommitMemoryRecordHasMetadata(t *testing.T) {
 func TestHybridCommitPartialMetadata(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("partial-meta-test")
+	result, _ := srv.serviceSessionCreate("partial-meta-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -878,7 +878,7 @@ func TestHybridCommitPartialMetadata(t *testing.T) {
 func TestHybridCommitMultipleSegments(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("multi-segment-test")
+	result, _ := srv.serviceSessionCreate("multi-segment-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -905,7 +905,7 @@ func TestHybridCommitMultipleSegments(t *testing.T) {
 func TestHybridCommitSegmentNotVectorIndexed(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("no-vector-test")
+	result, _ := srv.serviceSessionCreate("no-vector-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -937,7 +937,7 @@ func TestHybridCommitSegmentNotVectorIndexed(t *testing.T) {
 func TestHybridCommitFollowEdges(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("follow-edge-test")
+	result, _ := srv.serviceSessionCreate("follow-edge-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 	srv.serviceSessionCommit(sessionID, []commitSegment{
@@ -978,7 +978,7 @@ func TestCurationSkipsSegmentNodes(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	// Create a session with a long segment (>500 chars to trigger observation extraction).
-	result, _ := srv.serviceSessionCreate("curation-skip-test")
+	result, _ := srv.serviceSessionCreate("curation-skip-test", "")
 	sessionID := result["id"].(string)
 	srv.serviceSessionPrepare(sessionID)
 
@@ -1020,7 +1020,7 @@ func TestCurationSkipsSegmentNodes(t *testing.T) {
 func TestSessionArchiveCreateAndRead(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("archive-test")
+	result, _ := srv.serviceSessionCreate("archive-test", "")
 	sessionID := result["id"].(string)
 
 	// Write a source file to archive.
@@ -1067,7 +1067,7 @@ func TestSessionArchiveCreateAndRead(t *testing.T) {
 func TestSessionArchiveReferencedInGet(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("archive-ref-test")
+	result, _ := srv.serviceSessionCreate("archive-ref-test", "")
 	sessionID := result["id"].(string)
 
 	tmpDir := t.TempDir()
@@ -1095,7 +1095,7 @@ func TestSessionArchiveReferencedInGet(t *testing.T) {
 func TestSessionGetWithoutArchive(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("no-archive-test")
+	result, _ := srv.serviceSessionCreate("no-archive-test", "")
 	sessionID := result["id"].(string)
 
 	// Get should work without an archive -- raw_archive absent.
@@ -1108,7 +1108,7 @@ func TestSessionGetWithoutArchive(t *testing.T) {
 func TestSessionArchiveMissingSource(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("missing-src-test")
+	result, _ := srv.serviceSessionCreate("missing-src-test", "")
 	sessionID := result["id"].(string)
 
 	_, svcErr := srv.serviceSessionArchive(sessionID, "/nonexistent/file.txt")
@@ -1120,7 +1120,7 @@ func TestSessionArchiveMissingSource(t *testing.T) {
 func TestSessionArchiveLargeContent(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("large-archive-test")
+	result, _ := srv.serviceSessionCreate("large-archive-test", "")
 	sessionID := result["id"].(string)
 
 	// Create a 1MB+ source file.
@@ -1152,11 +1152,115 @@ func TestSessionArchiveLargeContent(t *testing.T) {
 func TestSessionReadArchiveNoArchive(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, _ := srv.serviceSessionCreate("read-no-archive-test")
+	result, _ := srv.serviceSessionCreate("read-no-archive-test", "")
 	sessionID := result["id"].(string)
 
 	_, svcErr := srv.serviceSessionReadArchive(sessionID)
 	if svcErr == nil {
 		t.Fatal("expected error reading archive from session without one")
+	}
+}
+
+// --- Session chaining tests ---
+
+func TestSessionChainingOnResume(t *testing.T) {
+	srv, eng := setupTestServer(t)
+
+	// First invocation: startup.
+	r1, _ := srv.serviceSessionCreate("chain-test", "startup")
+	id1 := r1["id"].(string)
+	if r1["previous_session_id"] != nil {
+		t.Error("first session should have no previous")
+	}
+
+	// Second invocation: resume (--continue).
+	r2, _ := srv.serviceSessionCreate("chain-test", "resume")
+	id2 := r2["id"].(string)
+	if id1 == id2 {
+		t.Fatal("resume should create a NEW session, not return the old one")
+	}
+	if r2["previous_session_id"] != id1 {
+		t.Errorf("previous_session_id = %v, want %v", r2["previous_session_id"], id1)
+	}
+
+	// Verify continues_from edge exists.
+	eng.RLock()
+	defer eng.RUnlock()
+	foundEdge := false
+	for _, e := range eng.Graph().EdgesFrom(id2) {
+		if e.Type == "continues_from" && e.TargetID == id1 {
+			foundEdge = true
+		}
+	}
+	if !foundEdge {
+		t.Error("expected continues_from edge from session 2 to session 1")
+	}
+
+	// Verify backward traversal (from session 1, find session 2).
+	foundForward := false
+	for _, e := range eng.Graph().EdgesTo(id1) {
+		if e.Type == "continues_from" && e.SourceID == id2 {
+			foundForward = true
+		}
+	}
+	if !foundForward {
+		t.Error("expected to find session 2 via inbound continues_from on session 1")
+	}
+}
+
+func TestSessionChainingThreeDeep(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	r1, _ := srv.serviceSessionCreate("deep-chain", "startup")
+	id1 := r1["id"].(string)
+
+	r2, _ := srv.serviceSessionCreate("deep-chain", "resume")
+	id2 := r2["id"].(string)
+
+	r3, _ := srv.serviceSessionCreate("deep-chain", "resume")
+	id3 := r3["id"].(string)
+
+	// Session 3 should chain to session 2 (not session 1).
+	if r3["previous_session_id"] != id2 {
+		t.Errorf("session 3 previous = %v, want %v (session 2)", r3["previous_session_id"], id2)
+	}
+
+	// All three should have different IDs.
+	if id1 == id2 || id2 == id3 || id1 == id3 {
+		t.Errorf("all sessions should have unique IDs: %v, %v, %v", id1, id2, id3)
+	}
+}
+
+func TestSessionIdempotentAgentCall(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// Hook creates session on startup.
+	r1, _ := srv.serviceSessionCreate("agent-test", "startup")
+	id1 := r1["id"].(string)
+
+	// Agent calls with no source -- should return the existing session.
+	r2, _ := srv.serviceSessionCreate("agent-test", "")
+	id2 := r2["id"].(string)
+
+	if id1 != id2 {
+		t.Errorf("agent idempotent call should return same session: %v vs %v", id1, id2)
+	}
+	if r2["resumed"] != true {
+		t.Error("agent call should show resumed=true")
+	}
+}
+
+func TestSessionFreshStartNeverChains(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// Two fresh startups with different client IDs -- no chaining.
+	r1, _ := srv.serviceSessionCreate("fresh-a", "startup")
+	r2, _ := srv.serviceSessionCreate("fresh-b", "startup")
+
+	if r1["previous_session_id"] != nil {
+		t.Error("fresh start A should have no previous")
+	}
+	if r2["previous_session_id"] != nil {
+		t.Error("fresh start B should have no previous")
 	}
 }
