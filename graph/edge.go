@@ -123,7 +123,7 @@ func (g *Graph) EdgeCount() int {
 func IsStructuralEdge(edgeType string) bool {
 	switch edgeType {
 	case "chunk_of", "section_of", "member_of", "observation_of",
-		"topic_of", "segment_of":
+		"topic_of", "segment_of", "continues_from", "extracted_as":
 		return true
 	}
 	return false

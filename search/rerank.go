@@ -38,6 +38,12 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 			if len(summary) > 200 {
 				summary = summary[:200]
 			}
+		} else if s, ok := n.Properties.GetString("content"); ok {
+			// Session segments use "content" property.
+			summary = s
+			if len(summary) > 200 {
+				summary = summary[:200]
+			}
 		}
 		if summary == "" {
 			continue
