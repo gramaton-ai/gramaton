@@ -8,6 +8,7 @@ import (
 
 var sessionClientID string
 var sessionCommitFile string
+var sessionArchiveFile string
 
 var sessionCmd = &cobra.Command{
 	Use:   "session",
@@ -52,6 +53,16 @@ prepare to have been called first. Reads segments from --file (JSON).`,
 	RunE: runSessionCommit,
 }
 
+var sessionArchiveCmd = &cobra.Command{
+	Use:   "archive <session-id>",
+	Short: "Archive raw conversation text",
+	Long: `Compresses a conversation transcript and stores it as a gzip
+archive referenced from the session. The archive is NOT indexed or
+searchable -- it is a break-glass backup of the raw conversation.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runSessionArchive,
+}
+
 func init() {
 	sessionStartCmd.Flags().StringVar(&sessionClientID, "client-id", "", "client session identifier (required)")
 	sessionStartCmd.MarkFlagRequired("client-id")
@@ -59,7 +70,10 @@ func init() {
 	sessionCommitCmd.Flags().StringVarP(&sessionCommitFile, "file", "f", "", "JSON file containing segments array (required)")
 	sessionCommitCmd.MarkFlagRequired("file")
 
-	sessionCmd.AddCommand(sessionStartCmd, sessionGetCmd, sessionPrepareCmd, sessionCommitCmd)
+	sessionArchiveCmd.Flags().StringVarP(&sessionArchiveFile, "file", "f", "", "source file to archive (required)")
+	sessionArchiveCmd.MarkFlagRequired("file")
+
+	sessionCmd.AddCommand(sessionStartCmd, sessionGetCmd, sessionPrepareCmd, sessionCommitCmd, sessionArchiveCmd)
 	rootCmd.AddCommand(sessionCmd)
 }
 
@@ -108,6 +122,18 @@ func runSessionCommit(cmd *cobra.Command, args []string) error {
 	resp, err := serverPost(fmt.Sprintf("/v1/sessions/%s/commit", args[0]), body)
 	if err != nil {
 		return fmt.Errorf("session commit: %w", err)
+	}
+	return printEnvelope(resp)
+}
+
+func runSessionArchive(cmd *cobra.Command, args []string) error {
+	body := map[string]any{
+		"session_id":  args[0],
+		"source_path": sessionArchiveFile,
+	}
+	resp, err := serverPost(fmt.Sprintf("/v1/sessions/%s/archive", args[0]), body)
+	if err != nil {
+		return fmt.Errorf("session archive: %w", err)
 	}
 	return printEnvelope(resp)
 }

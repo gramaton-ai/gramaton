@@ -1,10 +1,12 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +118,20 @@ func (s *Server) buildSessionResponse(sessionID string, session *graph.Node) map
 	}
 	if themes, ok := session.Properties.GetStringList("themes"); ok {
 		resp["themes"] = themes
+	}
+	// Include archive reference if present.
+	if path, ok := session.Properties.GetString("archive_path"); ok {
+		archive := map[string]any{"path": path}
+		if sz, ok := session.Properties.GetInt64("archive_size"); ok {
+			archive["compressed_size"] = sz
+		}
+		if sz, ok := session.Properties.GetInt64("archive_original_size"); ok {
+			archive["original_size"] = sz
+		}
+		if at, ok := session.Properties.GetTimestamp("archived_at"); ok {
+			archive["archived_at"] = at.Format(time.RFC3339)
+		}
+		resp["raw_archive"] = archive
 	}
 
 	topics := s.sessionTopics(sessionID)
@@ -722,4 +738,160 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 		resp["superseded"] = superseded
 	}
 	return resp, nil
+}
+
+// serviceSessionArchive compresses a conversation transcript and stores it
+// as a gzip file referenced from the Session node. The archive is NOT indexed
+// or searchable -- it's a break-glass backup of the raw conversation.
+func (s *Server) serviceSessionArchive(sessionID string, sourcePath string) (map[string]any, *serviceError) {
+	if sessionID == "" {
+		return nil, errMissing("session_id is required")
+	}
+	if sourcePath == "" {
+		return nil, errMissing("source file path is required")
+	}
+
+	start := time.Now()
+
+	// Read source file.
+	sourceData, err := os.ReadFile(sourcePath)
+	if err != nil {
+		s.log.Warn("archive: failed to read source", "component", "session",
+			"session_id", sessionID, "path", sourcePath, "err", err)
+		return nil, errInvalid(fmt.Sprintf("cannot read source file: %v", err))
+	}
+	originalSize := len(sourceData)
+
+	// Determine archive directory.
+	archiveDir := filepath.Join(s.cfg.ConfigDir, "archives")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		s.log.Warn("archive: failed to create directory", "component", "session",
+			"path", archiveDir, "err", err)
+		return nil, errInternal("failed to create archive directory")
+	}
+	s.log.Debug("archive directory ready", "component", "session", "path", archiveDir)
+
+	// Write compressed archive via atomic temp file.
+	archiveName := fmt.Sprintf("%s.gz", sessionID)
+	archivePath := filepath.Join(archiveDir, archiveName)
+	tmpPath := archivePath + ".tmp"
+
+	tmpFile, err := os.Create(tmpPath)
+	if err != nil {
+		return nil, errInternal(fmt.Sprintf("failed to create temp file: %v", err))
+	}
+
+	gzWriter := gzip.NewWriter(tmpFile)
+	if _, err := gzWriter.Write(sourceData); err != nil {
+		gzWriter.Close()
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return nil, errInternal(fmt.Sprintf("gzip write failed: %v", err))
+	}
+	if err := gzWriter.Close(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return nil, errInternal(fmt.Sprintf("gzip close failed: %v", err))
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return nil, errInternal(fmt.Sprintf("file close failed: %v", err))
+	}
+
+	// Atomic rename.
+	if err := os.Rename(tmpPath, archivePath); err != nil {
+		os.Remove(tmpPath)
+		return nil, errInternal(fmt.Sprintf("rename failed: %v", err))
+	}
+
+	// Get compressed size.
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return nil, errInternal("failed to stat archive")
+	}
+	compressedSize := info.Size()
+
+	// Update Session node with archive reference.
+	s.engine.Lock()
+	defer s.engine.Unlock()
+
+	if _, svcErr := s.isSession(sessionID); svcErr != nil {
+		return nil, svcErr
+	}
+
+	now := time.Now().UTC()
+	s.engine.SetProp(sessionID, "archive_path", graph.StringProperty(archivePath))
+	s.engine.SetProp(sessionID, "archive_size", graph.Int64Property(compressedSize))
+	s.engine.SetProp(sessionID, "archive_original_size", graph.Int64Property(int64(originalSize)))
+	s.engine.SetProp(sessionID, "archived_at", graph.TimestampProperty(now))
+
+	if _, err := s.engine.Save("session_archive"); err != nil {
+		return nil, errInternal(err.Error())
+	}
+
+	dur := time.Since(start)
+	ratio := float64(compressedSize) / float64(originalSize)
+	s.log.Info("archive created", "component", "session",
+		"session_id", sessionID, "archive_path", archivePath,
+		"original_size", originalSize, "compressed_size", compressedSize,
+		"ratio", fmt.Sprintf("%.2f", ratio), "duration", dur)
+
+	return map[string]any{
+		"session_id":      sessionID,
+		"archive_path":    archivePath,
+		"original_size":   originalSize,
+		"compressed_size": compressedSize,
+		"compression_ratio": fmt.Sprintf("%.2f", ratio),
+	}, nil
+}
+
+// serviceSessionReadArchive decompresses and returns the raw archive content.
+func (s *Server) serviceSessionReadArchive(sessionID string) (map[string]any, *serviceError) {
+	if sessionID == "" {
+		return nil, errMissing("session_id is required")
+	}
+
+	s.engine.RLock()
+	session, svcErr := s.isSession(sessionID)
+	if svcErr != nil {
+		s.engine.RUnlock()
+		return nil, svcErr
+	}
+	archivePath, ok := session.Properties.GetString("archive_path")
+	s.engine.RUnlock()
+
+	if !ok || archivePath == "" {
+		return nil, errNotFound("no archive for this session")
+	}
+
+	s.log.Info("archive read requested", "component", "session",
+		"session_id", sessionID, "archive_path", archivePath)
+
+	f, err := os.Open(archivePath)
+	if err != nil {
+		s.log.Warn("archive read failed", "component", "session",
+			"session_id", sessionID, "path", archivePath, "err", err)
+		return nil, errInternal(fmt.Sprintf("cannot open archive: %v", err))
+	}
+	defer f.Close()
+
+	gzReader, err := gzip.NewReader(f)
+	if err != nil {
+		s.log.Warn("archive decompress failed", "component", "session",
+			"session_id", sessionID, "path", archivePath, "err", err)
+		return nil, errInternal(fmt.Sprintf("corrupt archive: %v", err))
+	}
+	defer gzReader.Close()
+
+	data, err := io.ReadAll(gzReader)
+	if err != nil {
+		return nil, errInternal(fmt.Sprintf("read failed: %v", err))
+	}
+
+	return map[string]any{
+		"session_id":    sessionID,
+		"archive_path":  archivePath,
+		"content_size":  len(data),
+		"content":       string(data),
+	}, nil
 }

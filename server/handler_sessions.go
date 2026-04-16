@@ -57,3 +57,21 @@ func (s *Server) handleSessionCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, result)
 }
+
+func (s *Server) handleSessionArchive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		SessionID  string `json:"session_id"`
+		SourcePath string `json:"source_path"`
+	}
+	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+		return
+	}
+	result, svcErr := s.serviceSessionArchive(id, req.SourcePath)
+	if svcErr != nil {
+		s.writeServiceError(w, svcErr)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, result)
+}

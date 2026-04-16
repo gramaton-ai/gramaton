@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1012,4 +1013,150 @@ func TestCurationSkipsSegmentNodes(t *testing.T) {
 	// This test verifies the property is correctly set; the skip itself
 	// is in curation/observe.go and tested by the curation package.
 	_ = graph.IsStructuralEdge("segment_of") // verify it's structural
+}
+
+// --- Phase 9: Archive tests ---
+
+func TestSessionArchiveCreateAndRead(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("archive-test")
+	sessionID := result["id"].(string)
+
+	// Write a source file to archive.
+	tmpDir := t.TempDir()
+	srcPath := tmpDir + "/conversation.txt"
+	srcContent := strings.Repeat("User: How should we design the database?\nAssistant: I recommend PostgreSQL for these reasons...\n", 20)
+	os.WriteFile(srcPath, []byte(srcContent), 0o644)
+
+	// Create archive.
+	archiveResult, svcErr := srv.serviceSessionArchive(sessionID, srcPath)
+	if svcErr != nil {
+		t.Fatalf("archive: %v", svcErr)
+	}
+	if archiveResult["session_id"] != sessionID {
+		t.Errorf("session_id = %v", archiveResult["session_id"])
+	}
+	archivePath := archiveResult["archive_path"].(string)
+	if archivePath == "" {
+		t.Fatal("expected archive_path")
+	}
+	if archiveResult["original_size"].(int) != len(srcContent) {
+		t.Errorf("original_size = %v, want %d", archiveResult["original_size"], len(srcContent))
+	}
+
+	// Verify compressed file exists and is smaller.
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		t.Fatalf("archive file not found: %v", err)
+	}
+	if info.Size() >= int64(len(srcContent)) {
+		t.Errorf("compressed size %d >= original %d", info.Size(), len(srcContent))
+	}
+
+	// Read archive back.
+	readResult, svcErr := srv.serviceSessionReadArchive(sessionID)
+	if svcErr != nil {
+		t.Fatalf("read archive: %v", svcErr)
+	}
+	if readResult["content"].(string) != srcContent {
+		t.Error("decompressed content doesn't match original")
+	}
+}
+
+func TestSessionArchiveReferencedInGet(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("archive-ref-test")
+	sessionID := result["id"].(string)
+
+	tmpDir := t.TempDir()
+	srcPath := tmpDir + "/conv.txt"
+	os.WriteFile(srcPath, []byte("test conversation"), 0o644)
+	srv.serviceSessionArchive(sessionID, srcPath)
+
+	// Get should include raw_archive field.
+	got, _ := srv.serviceSessionGet(sessionID)
+	archive, ok := got["raw_archive"].(map[string]any)
+	if !ok {
+		t.Fatal("expected raw_archive in session get")
+	}
+	if archive["path"] == nil || archive["path"] == "" {
+		t.Error("expected archive path")
+	}
+	if archive["compressed_size"] == nil {
+		t.Error("expected compressed_size")
+	}
+	if archive["archived_at"] == nil {
+		t.Error("expected archived_at")
+	}
+}
+
+func TestSessionGetWithoutArchive(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("no-archive-test")
+	sessionID := result["id"].(string)
+
+	// Get should work without an archive -- raw_archive absent.
+	got, _ := srv.serviceSessionGet(sessionID)
+	if _, has := got["raw_archive"]; has {
+		t.Error("session without archive should not have raw_archive field")
+	}
+}
+
+func TestSessionArchiveMissingSource(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("missing-src-test")
+	sessionID := result["id"].(string)
+
+	_, svcErr := srv.serviceSessionArchive(sessionID, "/nonexistent/file.txt")
+	if svcErr == nil {
+		t.Fatal("expected error for missing source file")
+	}
+}
+
+func TestSessionArchiveLargeContent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("large-archive-test")
+	sessionID := result["id"].(string)
+
+	// Create a 1MB+ source file.
+	tmpDir := t.TempDir()
+	srcPath := tmpDir + "/large.txt"
+	largeContent := strings.Repeat("This is a line of conversation text.\n", 30000) // ~1.1MB
+	os.WriteFile(srcPath, []byte(largeContent), 0o644)
+
+	archiveResult, svcErr := srv.serviceSessionArchive(sessionID, srcPath)
+	if svcErr != nil {
+		t.Fatalf("archive: %v", svcErr)
+	}
+
+	// Compression should achieve significant reduction on repetitive text.
+	compressedSize := archiveResult["compressed_size"].(int64)
+	originalSize := archiveResult["original_size"].(int)
+	ratio := float64(compressedSize) / float64(originalSize)
+	if ratio > 0.5 {
+		t.Errorf("compression ratio %.2f too high for repetitive text", ratio)
+	}
+
+	// Verify round-trip.
+	readResult, _ := srv.serviceSessionReadArchive(sessionID)
+	if readResult["content"].(string) != largeContent {
+		t.Error("large archive round-trip mismatch")
+	}
+}
+
+func TestSessionReadArchiveNoArchive(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("read-no-archive-test")
+	sessionID := result["id"].(string)
+
+	_, svcErr := srv.serviceSessionReadArchive(sessionID)
+	if svcErr == nil {
+		t.Fatal("expected error reading archive from session without one")
+	}
 }

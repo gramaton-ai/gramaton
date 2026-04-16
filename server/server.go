@@ -540,6 +540,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions/{id}", s.handleSessionGet)
 	mux.HandleFunc("POST /v1/sessions/{id}/prepare", s.handleSessionPrepare)
 	mux.HandleFunc("POST /v1/sessions/{id}/commit", s.handleSessionCommit)
+	mux.HandleFunc("POST /v1/sessions/{id}/archive", s.handleSessionArchive)
 }
 
 // Log returns the server's structured logger.
