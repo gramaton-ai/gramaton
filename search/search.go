@@ -132,6 +132,7 @@ type Query struct {
 	Order           string            // "asc" or "desc" (default: "desc")
 	Random          bool              // return random results (ignores sort/score)
 	Meta            map[string]string // meta.* property filters (key -> value, exact match)
+	Store           string            // store filter: "memory", "sessions", or "all" (default: "all")
 }
 
 // Facets holds per-field value counts across a result set.
@@ -244,6 +245,7 @@ type Result struct {
 	EdgeCount       int      `json:"edge_count,omitempty"`
 	Staleness       float64  `json:"staleness,omitempty"`
 	Collections     []string `json:"collections,omitempty"`
+	Store           string   `json:"store,omitempty"` // "memory" or "session"
 }
 
 // Execute runs the search query and returns results. This calls
@@ -504,6 +506,42 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			}
 		}
 		results = append(results, r)
+	}
+
+	// Step 7: Session dedup. If enabled, suppress Session segments when
+	// the Memory record they extracted to is already in the result set.
+	if t.cfg.Search.SessionDedupEnabled && len(results) > 1 {
+		memoryIDs := make(map[string]struct{})
+		for _, r := range results {
+			if r.Store == "memory" {
+				memoryIDs[r.ID] = struct{}{}
+			}
+		}
+		suppressed := 0
+		var kept []Result
+		for _, r := range results {
+			if r.Store == "session" {
+				// Check extracted_as edges from this segment.
+				suppress := false
+				for _, e := range t.graph.EdgesFrom(r.ID) {
+					if e.Type == "extracted_as" {
+						if _, inResults := memoryIDs[e.TargetID]; inResults {
+							suppress = true
+							break
+						}
+					}
+				}
+				if suppress {
+					suppressed++
+					continue
+				}
+			}
+			kept = append(kept, r)
+		}
+		if suppressed > 0 {
+			results = kept
+			slog.Debug("session dedup", "component", "search", "suppressed", suppressed)
+		}
 	}
 
 	dedupSortDur := time.Since(step4)
@@ -786,7 +824,16 @@ func (t *Tool) passesPropertyFilters(q Query, n *graph.Node, id string, now time
 	if isCollectionItem(t.graph, id) {
 		return false
 	}
-	if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "collection" {
+	kt, _ := n.Properties.GetString("knowledge_type")
+	// Exclude container nodes (not searchable content).
+	if kt == "collection" || kt == "session" || kt == "topic" {
+		return false
+	}
+	// Apply store filter.
+	if q.Store == "memory" && kt == "segment" {
+		return false
+	}
+	if q.Store == "sessions" && kt != "segment" {
 		return false
 	}
 
@@ -980,6 +1027,19 @@ func (t *Tool) buildResult(n *graph.Node, score float64) Result {
 	r.Staleness = ComputeStaleness(n, time.Now().UTC(), t.cfg.Decay)
 
 	r.MetadataSummary = buildMetadataSummary(n.Properties)
+
+	// Infer store origin from knowledge_type.
+	if r.KnowledgeType == "segment" {
+		r.Store = "session"
+		// Session segments use "content" property, not "content_full".
+		if r.ContentLength == 0 {
+			if v, ok := n.Properties.GetString("content"); ok {
+				r.ContentLength = len(v)
+			}
+		}
+	} else {
+		r.Store = "memory"
+	}
 
 	return r
 }

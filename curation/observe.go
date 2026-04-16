@@ -59,6 +59,10 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
 			continue
 		}
+		// Skip Session segment nodes (already extracted by session LLM).
+		if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "segment" {
+			continue
+		}
 		content, ok := n.Properties.GetString("content_full")
 		if !ok || len(content) < 500 {
 			continue

@@ -62,6 +62,10 @@ type Server struct {
 	retrieval    *retrievalTracker
 	observeSem   chan struct{} // bounded semaphore for observe goroutines
 	usageTracker *llm.UsageTracker
+
+	// Session prepare/commit state. In-memory; lost on restart (B2 resolution).
+	// Key: session ID, value: timestamp when prepare was called.
+	preparedSessions map[string]time.Time
 }
 
 // retrievalTracker records which node IDs were served to agents via
@@ -160,8 +164,9 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		log:          logger,
 		lastRequest:  time.Now(),
 		retrieval:    newRetrievalTracker(),
-		observeSem:   make(chan struct{}, 3), // max 3 concurrent observe goroutines
-		usageTracker: llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession),
+		observeSem:       make(chan struct{}, 3), // max 3 concurrent observe goroutines
+		usageTracker:     llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession),
+		preparedSessions: make(map[string]time.Time),
 	}
 
 	mux := http.NewServeMux()
@@ -529,6 +534,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/collections/{id}/schema", s.handleCollectionSchemaRead)
 	mux.HandleFunc("PUT /v1/collections/{id}/schema", s.handleCollectionSchemaUpdate)
 	mux.HandleFunc("POST /v1/collections/{id}/migrate", s.handleCollectionMigrate)
+
+	// Sessions
+	mux.HandleFunc("POST /v1/sessions", s.handleSessionCreate)
+	mux.HandleFunc("GET /v1/sessions/{id}", s.handleSessionGet)
+	mux.HandleFunc("POST /v1/sessions/{id}/prepare", s.handleSessionPrepare)
+	mux.HandleFunc("POST /v1/sessions/{id}/commit", s.handleSessionCommit)
 }
 
 // Log returns the server's structured logger.

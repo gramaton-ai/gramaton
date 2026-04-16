@@ -33,7 +33,7 @@ type proxyCollectionCreateInput struct {
 func registerCollectionCreateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_create",
-		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use the knowledge graph (gramaton_capture) for semantic knowledge like decisions, context, and research.",
+		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionCreateInput) (*mcp.CallToolResult, any, error) {
 		if args.Name == "" {
 			return proxyErr("name is required")

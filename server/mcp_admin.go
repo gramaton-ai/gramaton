@@ -312,7 +312,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_log",
-		Description: "View commit history. Use to see what operations modified the knowledge graph and when. For per-record history, use gramaton_history instead.",
+		Description: "View commit history. Use to see what operations modified the store and when. For per-record history, use gramaton_history instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args logInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_log")
 		defer done(nil)
@@ -392,7 +392,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_backup",
-		Description: "Create a backup of the knowledge graph or list existing backups.",
+		Description: "Create a backup of the store or list existing backups.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args backupToolInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_backup")
 		defer done(nil)

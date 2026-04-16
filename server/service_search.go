@@ -90,6 +90,7 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		Sort:              req.Sort,
 		Order:             req.Order,
 		Meta:              req.Meta,
+		Store:             req.Store,
 	}
 
 	// Parse date filters.
@@ -220,7 +221,7 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 	return resp, nil
 }
 
-// serviceExplore traverses the knowledge graph from a starting node.
+// serviceExplore traverses the graph from a starting node.
 func (s *Server) serviceExplore(req *exploreRequest) (map[string]any, *serviceError) {
 	if req.NodeID == "" {
 		return nil, errMissing("node_id is required")

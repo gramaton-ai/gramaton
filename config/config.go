@@ -146,6 +146,7 @@ type SearchConfig struct {
 	RetrievalCandidates int     `yaml:"retrieval_candidates"` // candidates from vector+BM25 before reranking (default 200)
 	RerankEnabled       bool    `yaml:"rerank_enabled"`       // enable LLM reranking of candidates (default false)
 	RerankCandidates    int     `yaml:"rerank_candidates"`    // how many candidates to send to LLM reranker (default 50)
+	SessionDedupEnabled bool    `yaml:"session_dedup_enabled"` // suppress Session segments when extracted Memory record is in results (default false)
 }
 
 type GraphConfig struct {

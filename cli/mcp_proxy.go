@@ -38,6 +38,7 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	registerUnlinkProxy(mcpServer)
 	registerHistoryProxy(mcpServer)
 	registerCollectionProxyTools(mcpServer)
+	registerSessionProxyTools(mcpServer)
 }
 
 // --- helpers ---
@@ -141,12 +142,13 @@ type proxySearchInput struct {
 	Sort               string            `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
 	Order              string            `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
 	Meta               map[string]string `json:"meta,omitempty" jsonschema:"filter by structured metadata (e.g. {assignee: Sarah Chen, status: in_progress})"`
+	Store              string            `json:"store,omitempty" jsonschema:"filter by store: memory|sessions|all (default: all)"`
 }
 
 func registerSearchProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_search",
-		Description: "Search the knowledge graph. Returns results ranked by composite score. Text is optional -- omit for filter-only queries. Note: this searches knowledge records, not collection items. For exhaustive collection listing, use gramaton_collection_items.",
+		Description: "Search Memory and Sessions. Returns results ranked by composite score with store origin. Text is optional -- omit for filter-only queries. Note: this does not search collection items. For exhaustive collection listing, use gramaton_collection_items.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxySearchInput) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/search", args)
 	})
@@ -179,11 +181,9 @@ type proxyCaptureInput struct {
 func registerCaptureProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "gramaton_capture",
-		Description: `Store a knowledge record in the graph. Use for decisions, context, research findings, preferences -- things where ranked semantic search is the right retrieval mode.
+		Description: `Store a knowledge record in Memory. Use this ONLY when the user explicitly asks you to remember, save, or capture something. Do not call this tool autonomously -- session extraction (gramaton_session_prepare/commit) handles automatic knowledge capture.
 
 NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
-
-Example: gramaton_capture(content="User prefers dark mode", temporality="durable", confidence=0.95, knowledge_type="semantic", keywords=["preference", "ui"], summary_short="User prefers dark mode")
 
 IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCaptureInput) (*mcp.CallToolResult, any, error) {
@@ -228,7 +228,7 @@ type proxyUpdateInput struct {
 func registerUpdateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_update",
-		Description: "Update metadata on a knowledge graph record. For collection item fields, use gramaton_collection_update instead.",
+		Description: "Update metadata on a Memory record. For collection item fields, use gramaton_collection_update instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyUpdateInput) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return proxyErr("id is required")
@@ -269,7 +269,7 @@ type proxyLinkInput struct {
 func registerLinkProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_link",
-		Description: "Create an edge between two records in the knowledge graph. Collection items are also graph nodes and can be linked.",
+		Description: "Create an edge between two nodes in the graph. Memory records and Collection items are all graph nodes and can be linked.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyLinkInput) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return proxyErr("id is required")
@@ -315,7 +315,7 @@ type proxyExploreInput struct {
 func registerExploreProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_explore",
-		Description: "Traverse the knowledge graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
+		Description: "Traverse the graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyExploreInput) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/explore", args)
 	})
@@ -336,12 +336,10 @@ type proxyObserveInput struct {
 func registerObserveProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "gramaton_observe",
-		Description: `Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
+		Description: `DEPRECATED: Use gramaton_session_prepare/commit for knowledge extraction instead. This tool still works but will be removed in a future version.
 
-Send EITHER messages (server extracts facts, requires LLM) OR facts (server runs quality gates only).
-Call at natural breakpoints: end of task, topic change, session wind-down. Not every turn.
-
-Extracted knowledge enters the knowledge graph as ephemeral, low-confidence records. It does NOT go into collections.`,
+Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
+Extracted knowledge enters Memory as ephemeral, low-confidence records.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyObserveInput) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/observe", args)
 	})
@@ -363,7 +361,7 @@ func registerPendingProxy(s *mcp.Server) {
 func registerStatusProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_status",
-		Description: "Get knowledge graph health: node/edge counts, embedding status, curation status.",
+		Description: "Get store health: node/edge counts, embedding status, curation status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return proxyGet("/v1/status")
 	})
@@ -472,7 +470,7 @@ type proxyLogInput struct {
 func registerLogProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_log",
-		Description: "View commit history. Use to see what operations modified the knowledge graph and when. For per-record history, use gramaton_history instead.",
+		Description: "View commit history. Use to see what operations modified the store and when. For per-record history, use gramaton_history instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyLogInput) (*mcp.CallToolResult, any, error) {
 		params := url.Values{}
 		if args.Limit > 0 {
@@ -529,7 +527,7 @@ type proxyBackupInput struct {
 func registerBackupProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_backup",
-		Description: "Create a backup of the knowledge graph or list existing backups.",
+		Description: "Create a backup of the store or list existing backups.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyBackupInput) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "backup":

@@ -26,12 +26,12 @@ func (s *Server) registerMCPIntakeTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_intake",
-		Description: `Write endpoint for the knowledge graph. Routes to capture or observe based on mode.
+		Description: `Write endpoint for Memory. Routes to capture or observe based on mode.
 
 For deliberate storage: provide content and optional context signals. If the server has an LLM, it classifies the record automatically. Otherwise the record is stored as "captured" and classified later (via gramaton_classify or curation).
 For ambient extraction: set mode="observed" and provide facts=[...]. Quality gates filter noise.
 
-This tool stores records in the knowledge graph (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those.
+This tool stores records in Memory (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those.
 
 You can provide classification metadata (temporality, confidence, etc.) OR provide context signals and let the server classify. Both work.
 

@@ -21,7 +21,7 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_status",
-		Description: "Get knowledge graph health: node/edge counts, embedding status, curation status.",
+		Description: "Get store health: node/edge counts, embedding status, curation status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_status")
 		defer done(nil)
@@ -73,21 +73,24 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_observe",
-		Description: `Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
+		Description: `DEPRECATED: Use gramaton_session_prepare/commit for knowledge extraction instead. This tool still works but will be removed in a future version.
 
-Send EITHER messages (server extracts facts, requires LLM) OR facts (server runs quality gates only).
-Call at natural breakpoints: end of task, topic change, session wind-down. Not every turn.
-
-Extracted knowledge enters the knowledge graph as ephemeral, low-confidence records. It does NOT go into collections.`,
+Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
+Extracted knowledge enters Memory as ephemeral, low-confidence records.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args observeInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_observe")
 		defer done(nil)
+		s.log.Warn("gramaton_observe called (deprecated)", "component", "observe")
 		result, svcErr := s.serviceObserve(observeRequest{
 			Messages: args.Messages,
 			Facts:    args.Facts,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
+		}
+		// Inject deprecation warning into response.
+		if result != nil {
+			result["deprecation_warning"] = "gramaton_observe is deprecated. Use gramaton_session_prepare/commit for session knowledge extraction."
 		}
 		return mcpJSONResult(result)
 	})

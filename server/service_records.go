@@ -277,8 +277,14 @@ func (s *Server) serviceUpdate(id string, req *updateRequest) (map[string]any, *
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
-	if _, ok := s.engine.Graph().GetNode(id); !ok {
+	n, ok := s.engine.Graph().GetNode(id)
+	if !ok {
 		return nil, errNotFound("record not found")
+	}
+
+	// Enforce append-only semantics for Session segments.
+	if kt, _ := n.Properties.GetString("knowledge_type"); kt == "segment" {
+		return nil, errInvalid("session segments are append-only; use gramaton_session_commit to update capture status")
 	}
 
 	updated := false

@@ -15,7 +15,7 @@ var (
 
 var exploreCmd = &cobra.Command{
 	Use:   "explore <record-id>",
-	Short: "Explore the knowledge graph",
+	Short: "Explore the graph",
 	Long: `Tier 3 retrieval: traverse the graph from a starting node.
 
 Returns a subgraph fragment -- connected nodes and edges within

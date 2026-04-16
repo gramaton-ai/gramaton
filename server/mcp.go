@@ -46,6 +46,8 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
 	s.registerMCPCollectionTools(mcpServer)
+	s.registerMCPSessionTools(mcpServer)
+	s.registerMCPGuideTools(mcpServer)
 }
 
 // mcpToolStart records the start of an MCP tool call and returns a

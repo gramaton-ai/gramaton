@@ -40,10 +40,11 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 		Sort              string            `json:"sort,omitempty" jsonschema:"sort by: created_at|last_accessed|access_count|confidence|importance|content_length|edge_count|staleness (default: effective_score, or created_at if no text)"`
 		Order             string            `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
 		Meta              map[string]string `json:"meta,omitempty" jsonschema:"filter by structured metadata (e.g. {assignee: Sarah Chen, status: in_progress}). Keys match meta.* properties set at capture."`
+		Store             string            `json:"store,omitempty" jsonschema:"filter by store: memory|sessions|all (default: all). Memory returns knowledge records only; sessions returns session segments only."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
-		Description: "Search the knowledge graph. Returns results ranked by composite score. Text is optional -- omit for filter-only queries. Note: this searches knowledge records, not collection items. For exhaustive collection listing, use gramaton_collection_items.",
+		Description: "Search Memory and Sessions. Returns results ranked by composite score with store origin. Text is optional -- omit for filter-only queries. Note: this does not search collection items. For exhaustive collection listing, use gramaton_collection_items.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_search")
 		defer done(nil)
@@ -80,6 +81,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 			Sort:               args.Sort,
 			Order:              args.Order,
 			Meta:               args.Meta,
+			Store:              args.Store,
 		})
 		if svcErr != nil {
 			return mcpServiceErr(svcErr)
@@ -96,7 +98,7 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_explore",
-		Description: "Traverse the knowledge graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
+		Description: "Traverse the graph from a starting node. Use to understand context around a record, find related knowledge, or map connections. Returns connected nodes and edges.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args exploreInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_explore")
 		defer done(nil)

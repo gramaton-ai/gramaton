@@ -321,7 +321,7 @@ type collectionItemsRequest struct {
 }
 
 // serviceCollectionItems is deliberately unpaginated -- exhaustive retrieval is the
-// contract that distinguishes collections from the knowledge graph. If a collection
+// contract that distinguishes Collections from Memory. If a collection
 // grows large enough to need pagination, it's a signal to split it.
 func (s *Server) serviceCollectionItems(collectionID string, req *collectionItemsRequest) (map[string]any, *serviceError) {
 	s.engine.RLock()

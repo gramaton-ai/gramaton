@@ -25,7 +25,7 @@ var serveCmd = &cobra.Command{
 background and exits immediately. Use --fg for foreground mode
 (containers, debugging). Use --stop to shut down a running server.
 
-The server loads the knowledge graph into memory, serves the REST
+The server loads the store into memory, serves the REST
 API on the configured port (default 42982), and shuts down after
 an idle timeout (default 30 minutes).`,
 	RunE: runServe,

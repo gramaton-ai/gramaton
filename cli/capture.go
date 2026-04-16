@@ -12,7 +12,7 @@ var captureCmd = &cobra.Command{
 	Use:   "capture",
 	Short: "Store a knowledge record",
 	Long: `Reads a JSON object from stdin or --file containing the record content
-and optional metadata. Creates a node in the knowledge graph, generates
+and optional metadata. Creates a record in Memory, generates
 embeddings if a provider is configured, and commits the change.
 
 Required fields:

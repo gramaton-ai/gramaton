@@ -39,6 +39,7 @@ type searchRequest struct {
 	Sort                string            `json:"sort,omitempty"`
 	Order               string            `json:"order,omitempty"`
 	Meta                map[string]string `json:"meta,omitempty"`
+	Store               string            `json:"store,omitempty"`
 }
 
 type exploreRequest struct {

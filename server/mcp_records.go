@@ -30,11 +30,9 @@ func (s *Server) registerMCPRecordTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_capture",
-		Description: `Store a knowledge record in the graph. Use for decisions, context, research findings, preferences -- things where ranked semantic search is the right retrieval mode.
+		Description: `Store a knowledge record in Memory. Use this ONLY when the user explicitly asks you to remember, save, or capture something. Do not call this tool autonomously -- session extraction (gramaton_session_prepare/commit) handles automatic knowledge capture.
 
 NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
-
-Example: gramaton_capture(content="User prefers dark mode", temporality="durable", confidence=0.95, knowledge_type="semantic", keywords=["preference", "ui"], summary_short="User prefers dark mode")
 
 IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args captureInput) (*mcp.CallToolResult, any, error) {
@@ -103,7 +101,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
-		Description: "Update metadata on a knowledge graph record. For collection item fields, use gramaton_collection_update instead.",
+		Description: "Update metadata on a Memory record. For collection item fields, use gramaton_collection_update instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args updateInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_update")
 		defer done(nil)
@@ -192,7 +190,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_link",
-		Description: "Create an edge between two records in the knowledge graph. Collection items are also graph nodes and can be linked.",
+		Description: "Create an edge between two nodes in the graph. Memory records and Collection items are all graph nodes and can be linked.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args linkInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_link")
 		defer done(nil)

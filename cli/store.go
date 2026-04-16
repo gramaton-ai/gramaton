@@ -16,7 +16,7 @@ var storeDeleteForce bool
 var storeCmd = &cobra.Command{
 	Use:   "store",
 	Short: "Manage named stores",
-	Long: `Named stores isolate knowledge graphs. Each store has its own data
+	Long: `Named stores provide isolated data directories. Each store has its own data
 directory, server process, and optional config override. Use --store
 or GRAMATON_STORE to select a store for other commands.`,
 }
