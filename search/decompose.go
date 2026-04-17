@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // Decomposer splits complex queries into sub-queries using an LLM.
@@ -25,6 +27,7 @@ Query: ` + query + `
 Respond with JSON only: {"sub_queries": ["query1", "query2"]}
 If no decomposition needed: {"sub_queries": []}`
 
+	ctx = telemetry.WithTask(ctx, "decompose")
 	resp, err := llm.Complete(ctx, prompt)
 	if err != nil {
 		return nil

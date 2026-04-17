@@ -2,9 +2,12 @@ package curation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"runtime"
 	"sort"
 	"strings"
@@ -14,20 +17,39 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // AutonomousResult summarizes what an LLM curation cycle did.
 type AutonomousResult struct {
-	Classified              int              `json:"classified"`
-	SummariesGenerated      int              `json:"summaries_generated"`
-	ConceptsCreated         int              `json:"concepts_created"`
-	ContradictionsDetected  int              `json:"contradictions_detected"`
-	ManifestSummary         string           `json:"manifest_summary,omitempty"`
-	Errors                  int              `json:"errors"`
-	LLMCalls                int              `json:"llm_calls"`
-	ModelCounts             map[string]int   `json:"model_counts,omitempty"` // per-model classification counts
-	DryRun                  bool             `json:"dry_run,omitempty"`
-	PlannedChanges          []PlannedChange  `json:"planned_changes,omitempty"`
+	Classified             int                             `json:"classified"`
+	SummariesGenerated     int                             `json:"summaries_generated"`
+	ConceptsCreated        int                             `json:"concepts_created"`
+	ContradictionsDetected int                             `json:"contradictions_detected"`
+	ManifestSummary        string                          `json:"manifest_summary,omitempty"`
+	ManifestCacheHit       bool                            `json:"manifest_cache_hit,omitempty"` // true when manifest summary was reused from prior-cycle cache
+	Errors                 int                             `json:"errors"`
+	LLMCalls               int                             `json:"llm_calls"`
+	ModelCounts            map[string]int                  `json:"model_counts,omitempty"` // per-model classification counts
+
+	// Cycle-level token usage accounting. TokenUsage is the sum across
+	// all tasks; TokenUsageByTask breaks it down. Populated at the end
+	// of runAutonomousInner from the cycle-scoped telemetry recorder.
+	TokenUsage       telemetry.CallUsage            `json:"token_usage,omitempty"`
+	TokenUsageByTask map[string]telemetry.CallUsage `json:"token_usage_by_task,omitempty"`
+	CycleCostUSD     float64                        `json:"cycle_cost_usd,omitempty"`
+
+	DryRun         bool            `json:"dry_run,omitempty"`
+	PlannedChanges []PlannedChange `json:"planned_changes,omitempty"`
+}
+
+// ManifestCache holds the last-computed manifest state-fingerprint hash
+// and the associated qualitative summary. Passed by pointer into
+// RunAutonomous so the cache persists across cycles. Empty fields mean
+// "no cached value"; the next call populates them.
+type ManifestCache struct {
+	Hash    string
+	Summary string
 }
 
 // PlannedChange describes a change that autonomous curation would make.
@@ -42,17 +64,18 @@ type PlannedChange struct {
 // RunAutonomous performs LLM-powered curation tasks.
 // Caller must NOT hold any lock. When dryRun is true, LLM calls are
 // made and results returned in PlannedChanges but no mutations are applied.
-func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, false)
+// manifestCache may be nil to disable the cross-cycle manifest cache.
+func RunAutonomous(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, manifestCache *ManifestCache, logger *slog.Logger) *AutonomousResult {
+	return runAutonomousInner(ctx, e, llmProv, cfg, manifestCache, logger, false)
 }
 
 // RunAutonomousDryRun is like RunAutonomous but does not apply changes.
 // The LLM is still called so you can see what would be classified.
 func RunAutonomousDryRun(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) *AutonomousResult {
-	return runAutonomousInner(ctx, e, llmProv, cfg, logger, true)
+	return runAutonomousInner(ctx, e, llmProv, cfg, nil, logger, true)
 }
 
-func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger, dryRun bool) *AutonomousResult {
+func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, manifestCache *ManifestCache, logger *slog.Logger, dryRun bool) *AutonomousResult {
 	start := time.Now()
 	logger = ensureLogger(logger)
 	result := &AutonomousResult{DryRun: dryRun}
@@ -60,6 +83,13 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	if maxCalls <= 0 {
 		maxCalls = 20
 	}
+
+	// Cycle-scoped usage recorder. All LLM calls in this cycle
+	// accumulate tokens + cost here; the "autonomous curation complete"
+	// log reads totals and per-task breakdown. Metered still records
+	// into its own tracker too; this is additional per-cycle view.
+	cycleUsage := &telemetry.UsageRecorder{}
+	ctx = telemetry.WithUsageRecorder(ctx, cycleUsage)
 
 	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
 	runtime.Gosched() // yield so other goroutines can acquire the lock
@@ -72,17 +102,42 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	// Generate manifest qualitative summary if we have a manifest from
 	// the last deterministic run and haven't used too many LLM calls.
 	if !dryRun && result.LLMCalls < maxCalls {
-		generateManifestSummary(ctx, e, llmProv, cfg, result, logger)
+		generateManifestSummary(ctx, e, llmProv, cfg, result, manifestCache, logger)
 	}
 
-	if (result.Classified + result.SummariesGenerated + result.ConceptsCreated) > 0 {
+	// Attach the cycle-level usage totals and per-task breakdown to the
+	// AutonomousResult so callers (and the log below) can read them.
+	result.TokenUsage = cycleUsage.Total()
+	result.TokenUsageByTask = cycleUsage.ByTask()
+	// Sum cost across all tasks. Per-task cost needs model attribution
+	// which the cycle recorder doesn't hold; we approximate cost via
+	// CallMetrics-side logging (per-call log emits cost_usd per call).
+	// Aggregate cycle cost is the sum of per-task cost using whichever
+	// model the task used most (looked up from cfg).
+	cycleCost := 0.0
+	for task, u := range result.TokenUsageByTask {
+		model := modelForTaskLabel(cfg, task)
+		cycleCost += llm.EstimateCost(model, u)
+	}
+	result.CycleCostUSD = cycleCost
+
+	// Emit the per-cycle completion log. Fires on any LLM activity
+	// (including contradiction-only or manifest-only cycles) by keying
+	// on total tokens rather than just the counted-task counters.
+	if result.LLMCalls > 0 || (result.Classified+result.SummariesGenerated+result.ConceptsCreated+result.ContradictionsDetected) > 0 {
 		logArgs := []any{
 			"component", "curation",
 			"classified", result.Classified,
 			"summaries", result.SummariesGenerated,
 			"concepts", result.ConceptsCreated,
+			"contradictions", result.ContradictionsDetected,
 			"errors", result.Errors,
 			"llm_calls", result.LLMCalls,
+			"input_tokens", result.TokenUsage.InputTokens,
+			"output_tokens", result.TokenUsage.OutputTokens,
+			"cache_read", result.TokenUsage.CacheReadTokens,
+			"cache_write", result.TokenUsage.CacheWriteTokens,
+			"cost_usd", cycleCost,
 			"duration_ms", time.Since(start).Milliseconds(),
 		}
 		for model, count := range result.ModelCounts {
@@ -91,20 +146,50 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 			}
 			logArgs = append(logArgs, "model:"+model, count)
 		}
+		// Per-task token breakdown (compact form).
+		for task, u := range result.TokenUsageByTask {
+			logArgs = append(logArgs,
+				"tokens:"+task,
+				fmt.Sprintf("in=%d/out=%d/cache=%d", u.InputTokens, u.OutputTokens, u.CacheReadTokens),
+			)
+		}
 		logger.Info("autonomous curation complete", logArgs...)
 	}
 
 	return result
 }
 
+// modelForTaskLabel maps the string task label emitted by curation
+// code back to a concrete model name via config. Labels that don't
+// correspond to a curation task (or the contradiction_batch synonym)
+// fall back to the medium tier.
+func modelForTaskLabel(cfg config.Config, task string) string {
+	switch task {
+	case "classify":
+		// Both short and long classification go through here; pick the
+		// medium model as a reasonable single-number estimate. Per-call
+		// log has the exact model used.
+		return cfg.ModelForTask(config.TaskClassificationLong)
+	case "summarize":
+		return cfg.ModelForTask(config.TaskSummarization)
+	case "contradiction", "contradiction_batch":
+		return cfg.ModelForTask(config.TaskContradiction)
+	case "concept":
+		return cfg.ModelForTask(config.TaskConcept)
+	case "manifest":
+		return cfg.ModelForTask(config.TaskManifest)
+	}
+	return cfg.LLM.Models.Medium
+}
+
 // classifyPending classifies records with processing_status="captured".
 func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 
-	// Set system prompt for providers that support caching.
+	// Each tier (short / long) sets its own system prompt per pass.
+	// Ensure the provider's cached prompt is cleared on exit.
 	if setter, ok := llmProv.(llm.SystemPromptSetter); ok {
-		setter.SetSystemPrompt(ClassifySystemPrompt)
-		defer setter.SetSystemPrompt("") // clear after classification
+		defer setter.SetSystemPrompt("")
 	}
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
@@ -162,7 +247,6 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		model   string // model that classified this record
 		data    *classificationResult
 	}
-	var ready []classified
 
 	// Assign model per record: effort-based (short vs long classification).
 	longThreshold := cfg.LLMCuration.LongClassificationThreshold
@@ -172,54 +256,92 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	shortModel := cfg.ModelForTask(config.TaskClassificationShort)
 	longModel := cfg.ModelForTask(config.TaskClassificationLong)
 
-	// If the provider supports system prompts (caching), the taxonomy
-	// is in the system message and the user prompt is just the content.
-	// Otherwise, concatenate both into the user prompt.
-	_, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
-	promptTemplate := classifyPrompt
-	if !hasSystemPrompt {
-		promptTemplate = ClassifySystemPrompt + "\n\n" + classifyPrompt
+	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
+	useCache := hasSystemPrompt && cfg.LLMCuration.PromptCachingEnabled
+
+	// Pick the short-tier system prompt. When
+	// ClassifyShortPromptCompressed is true (default), short records
+	// use the condensed ClassifySystemPromptShort; when false, they get
+	// the full ClassifySystemPrompt identical to long-tier records.
+	shortSystemPrompt := ClassifySystemPromptShort
+	if !cfg.LLMCuration.ClassifyShortPromptCompressed {
+		shortSystemPrompt = ClassifySystemPrompt
 	}
 
-	work := make([]llmWork, len(batch))
-	for i, rec := range batch {
-		model := longModel
-		if len(rec.content) < longThreshold && shortModel != "" {
-			model = shortModel
-		}
-		if model == "" && shortModel != "" {
-			model = shortModel
-		}
-		work[i] = llmWork{
-			id:     rec.id,
-			prompt: fmt.Sprintf(promptTemplate, rec.content, rec.contextSignals),
-			model:  model,
+	// Partition batch by tier. Short-tier records get the leaner prompt
+	// (or full, depending on the flag); long-tier records always get
+	// the full ClassifySystemPrompt. If only one tier is configured,
+	// all records route to that tier.
+	var shortBatch, longBatch []pending
+	for _, rec := range batch {
+		isShort := len(rec.content) < longThreshold
+		switch {
+		case isShort && shortModel != "":
+			shortBatch = append(shortBatch, rec)
+		case !isShort && longModel != "":
+			longBatch = append(longBatch, rec)
+		case longModel != "":
+			longBatch = append(longBatch, rec)
+		case shortModel != "":
+			shortBatch = append(shortBatch, rec)
+		default:
+			// Neither tier configured: route to long so it fails loudly
+			// with an empty-model error in the provider layer.
+			longBatch = append(longBatch, rec)
 		}
 	}
 
-	llmResults := parallelLLM(ctx, llmProv, work, 4)
-	result.LLMCalls += len(llmResults)
-
-	for i, lr := range llmResults {
-		if lr.err != nil {
-			result.Errors++
-			logger.Warn("classify LLM error", "component", "curation", "record", batch[i].id, "err", lr.err)
-			continue
+	runPass := func(sub []pending, systemPrompt, model string) []classified {
+		if len(sub) == 0 {
+			return nil
 		}
 
-		classification, err := parseClassification(lr.response)
-		if err != nil {
-			result.Errors++
-			logger.Warn("classify parse error", "component", "curation", "record", batch[i].id, "err", err)
-			continue
+		userTemplate := classifyPrompt
+		if useCache {
+			setter.SetSystemPrompt(systemPrompt)
+		} else {
+			userTemplate = systemPrompt + "\n\n" + classifyPrompt
 		}
 
-		usedModel := work[i].model
-		if usedModel == "" {
-			usedModel = llmProv.ModelID()
+		work := make([]llmWork, len(sub))
+		for i, rec := range sub {
+			work[i] = llmWork{
+				id:     rec.id,
+				prompt: fmt.Sprintf(userTemplate, rec.content, rec.contextSignals),
+				model:  model,
+				task:   "classify",
+			}
 		}
-		ready = append(ready, classified{id: batch[i].id, content: batch[i].content, model: usedModel, data: classification})
+
+		llmResults := parallelLLM(ctx, llmProv, work, 4)
+		result.LLMCalls += len(llmResults)
+
+		var out []classified
+		for i, lr := range llmResults {
+			if lr.err != nil {
+				result.Errors++
+				logger.Warn("classify LLM error", "component", "curation", "record", sub[i].id, "err", lr.err)
+				continue
+			}
+
+			classification, err := parseClassification(lr.response)
+			if err != nil {
+				result.Errors++
+				logger.Warn("classify parse error", "component", "curation", "record", sub[i].id, "err", err)
+				continue
+			}
+
+			usedModel := work[i].model
+			if usedModel == "" {
+				usedModel = llmProv.ModelID()
+			}
+			out = append(out, classified{id: sub[i].id, content: sub[i].content, model: usedModel, data: classification})
+		}
+		return out
 	}
+
+	ready := append(runPass(shortBatch, shortSystemPrompt, shortModel),
+		runPass(longBatch, ClassifySystemPrompt, longModel)...)
 
 	if len(ready) == 0 {
 		return
@@ -288,6 +410,20 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 // generateSummaries adds summary_short to records that lack one.
 func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
+
+	// Cache the invariant instructions on providers that support it so
+	// subsequent calls within the 5-minute TTL reuse the cached block.
+	// Falls back to concatenation if caching is disabled or the provider
+	// lacks SystemPromptSetter.
+	userPromptTemplate := summarizePrompt
+	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+	if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+		setter.SetSystemPrompt(SummarizeSystemPrompt)
+		defer setter.SetSystemPrompt("")
+	} else {
+		userPromptTemplate = SummarizeSystemPrompt + "\n\n" + summarizePrompt
+	}
+
 	batchSize := cfg.LLMCuration.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
@@ -369,8 +505,9 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	for i, rec := range batch {
 		work[i] = llmWork{
 			id:     rec.id,
-			prompt: fmt.Sprintf(summarizePrompt, rec.content),
+			prompt: fmt.Sprintf(userPromptTemplate, rec.content),
 			model:  summModel,
+			task:   "summarize",
 		}
 	}
 
@@ -435,8 +572,11 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 
 // generateManifestSummary creates a qualitative summary of the store's
 // strengths and gaps using the LLM. The summary is stored on
-// AutonomousResult.ManifestSummary for the runner to apply.
-func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, logger *slog.Logger) {
+// AutonomousResult.ManifestSummary for the runner to apply. When cache is
+// non-nil and its Hash matches the current store fingerprint, the cached
+// Summary is reused without an LLM call (ManifestCacheHit=true). Otherwise
+// the LLM is called and cache.Hash/Summary are updated in place.
+func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, cache *ManifestCache, logger *slog.Logger) {
 	logger = ensureLogger(logger)
 	// Gather lightweight stats under RLock.
 	e.RLock()
@@ -485,14 +625,16 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	for kw, count := range kwCounts {
 		kwList = append(kwList, kwEntry{kw, count})
 	}
-	// Simple sort by count descending.
-	for i := 0; i < len(kwList); i++ {
-		for j := i + 1; j < len(kwList); j++ {
-			if kwList[j].count > kwList[i].count {
-				kwList[i], kwList[j] = kwList[j], kwList[i]
-			}
+	// Canonical sort: count descending, break ties by keyword ascending
+	// so the top-N list is deterministic for the same counts regardless
+	// of map iteration order. This stability is what makes the cache
+	// fingerprint safe to hash across cycles.
+	sort.SliceStable(kwList, func(i, j int) bool {
+		if kwList[i].count != kwList[j].count {
+			return kwList[i].count > kwList[j].count
 		}
-	}
+		return kwList[i].kw < kwList[j].kw
+	})
 	topN := 15
 	if len(kwList) < topN {
 		topN = len(kwList)
@@ -502,10 +644,15 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		kwStrs[i] = fmt.Sprintf("%s(%d)", kwList[i].kw, kwList[i].count)
 	}
 
-	// Build types string.
-	var typeStrs []string
-	for kt, count := range typeMap {
-		typeStrs = append(typeStrs, fmt.Sprintf("%s(%d)", kt, count))
+	// Build types string. Sort by key for canonical fingerprinting.
+	typeKeys := make([]string, 0, len(typeMap))
+	for kt := range typeMap {
+		typeKeys = append(typeKeys, kt)
+	}
+	sort.Strings(typeKeys)
+	typeStrs := make([]string, 0, len(typeKeys))
+	for _, kt := range typeKeys {
+		typeStrs = append(typeStrs, fmt.Sprintf("%s(%d)", kt, typeMap[kt]))
 	}
 
 	earliestStr := "N/A"
@@ -517,7 +664,41 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		latestStr = latest.Format("2006-01-02")
 	}
 
-	prompt := fmt.Sprintf(manifestSummaryPrompt,
+	// Compute the state fingerprint hash. Same inputs -> same summary,
+	// so we can skip the LLM call when nothing has changed.
+	fp := fmt.Sprintf("records=%d|types=%s|keywords=%s|span=%s..%s",
+		totalRecords,
+		strings.Join(typeStrs, ","),
+		strings.Join(kwStrs, ","),
+		earliestStr, latestStr,
+	)
+	sum := sha256.Sum256([]byte(fp))
+	currentHash := hex.EncodeToString(sum[:])
+
+	cacheEnabled := cfg.LLMCuration.ManifestCacheEnabled
+	if cacheEnabled && cache != nil && cache.Hash == currentHash && cache.Summary != "" {
+		result.ManifestSummary = cache.Summary
+		result.ManifestCacheHit = true
+		logger.Info("manifest summary",
+			"component", "curation",
+			"cached", true,
+			"hash", currentHash[:8],
+			"records", totalRecords,
+		)
+		return
+	}
+
+	// Cache the invariant summarize-the-store instructions.
+	userPromptTemplate := manifestSummaryPrompt
+	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+	if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+		setter.SetSystemPrompt(ManifestSystemPrompt)
+		defer setter.SetSystemPrompt("")
+	} else {
+		userPromptTemplate = ManifestSystemPrompt + "\n\n" + manifestSummaryPrompt
+	}
+
+	prompt := fmt.Sprintf(userPromptTemplate,
 		totalRecords,
 		strings.Join(typeStrs, ", "),
 		strings.Join(kwStrs, ", "),
@@ -525,7 +706,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	)
 
 	model := cfg.ModelForTask(config.TaskManifest)
-	resp, err := completeWithModelOrDefault(ctx, llmProv, model, prompt)
+	resp, err := completeWithModelOrDefault(ctx, llmProv, "manifest", model, prompt)
 	result.LLMCalls++
 	if err != nil {
 		result.Errors++
@@ -540,6 +721,21 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		summary = string(runes[:500])
 	}
 	result.ManifestSummary = summary
+
+	// Update the cache so the next cycle with the same fingerprint can
+	// skip the LLM call.
+	if cacheEnabled && cache != nil {
+		cache.Hash = currentHash
+		cache.Summary = summary
+	}
+
+	logger.Info("manifest summary",
+		"component", "curation",
+		"cached", false,
+		"hash", currentHash[:8],
+		"records", totalRecords,
+		"model", model,
+	)
 }
 
 // enrichConceptSyntheses finds concept nodes with synthesis_status=pending
@@ -623,6 +819,15 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		pending = pending[:maxConcepts]
 	}
 
+	// Cache the invariant synthesis instructions on providers that
+	// support it; otherwise include them at the top of every batch.
+	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
+	useCache := hasSystemPrompt && cfg.LLMCuration.PromptCachingEnabled
+	preamble := ""
+	if !useCache {
+		preamble = ConceptSynthesisSystemPrompt + "\n\n"
+	}
+
 	// Build batched synthesis prompts.
 	type conceptBatch struct {
 		concepts []pendingConcept
@@ -633,10 +838,31 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	var currentPrompt strings.Builder
 	estimatedTokens := 0
 
-	currentPrompt.WriteString("Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {\"keyword\": \"...\", \"synthesis\": \"2-4 sentence summary\"}\n\n")
+	currentPrompt.WriteString(preamble)
 	baseTokens := currentPrompt.Len() / 4
 
+	coherenceMin := cfg.LLMCuration.ConceptCoherenceMin
+
 	for _, pc := range pending {
+		// Optional coherence pre-filter: skip clusters whose members
+		// don't embed near a common centroid. Incoherent clusters tend
+		// to produce low-quality syntheses, so filtering them out
+		// preserves LLM budget for clusters that benefit. Default
+		// threshold is 0 (no filter) so behavior is unchanged unless
+		// the user opts in.
+		if coherenceMin > 0 {
+			cos, n := meanCosineToCentroid(g, pc.memberIDs)
+			if n >= 2 && cos < coherenceMin {
+				logger.Debug("concept below coherence threshold, skipping",
+					"component", "curation",
+					"keyword", pc.keyword,
+					"mean_cosine", cos,
+					"threshold", coherenceMin,
+					"members", n)
+				continue
+			}
+		}
+
 		// Gather member summaries.
 		var memberSummaries []string
 		for _, mid := range pc.memberIDs {
@@ -674,7 +900,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			})
 			currentBatch = nil
 			currentPrompt.Reset()
-			currentPrompt.WriteString("Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {\"keyword\": \"...\", \"synthesis\": \"2-4 sentence summary\"}\n\n")
+			currentPrompt.WriteString(preamble)
 			estimatedTokens = baseTokens
 		}
 
@@ -690,6 +916,13 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	}
 
 	e.RUnlock()
+
+	// Activate the cached synthesis instructions for the provider if
+	// supported and enabled. Cleared on return.
+	if useCache {
+		setter.SetSystemPrompt(ConceptSynthesisSystemPrompt)
+		defer setter.SetSystemPrompt("")
+	}
 
 	// Execute batched LLM calls.
 	for _, batch := range batches {
@@ -710,7 +943,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			continue
 		}
 
-		resp, err := completeWithModelOrDefault(ctx, llmProv, cfg.ModelForTask(config.TaskConcept), batch.prompt)
+		resp, err := completeWithModelOrDefault(ctx, llmProv, "concept", cfg.ModelForTask(config.TaskConcept), batch.prompt)
 		result.LLMCalls++
 		if err != nil {
 			result.Errors++
@@ -766,6 +999,74 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		}
 		e.Unlock()
 	}
+}
+
+// meanCosineToCentroid computes the mean cosine similarity of member
+// records to their centroid, using `embedding_full` as the vector.
+// Members without an embedding are skipped. Returns (0, 0) when fewer
+// than 2 members have embeddings (meaningful coherence requires at least
+// two vectors). Assumes embeddings are already L2-normalized (which the
+// current embedding pipelines produce); the centroid is re-normalized
+// defensively.
+func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (float64, int) {
+	var vecs [][]float32
+	var dim int
+	for _, id := range memberIDs {
+		n, ok := g.GetNode(id)
+		if !ok {
+			continue
+		}
+		emb, ok := n.Properties.GetVector("embedding_full")
+		if !ok || len(emb) == 0 {
+			continue
+		}
+		if dim == 0 {
+			dim = len(emb)
+		}
+		if len(emb) != dim {
+			continue // dimension mismatch, skip
+		}
+		vecs = append(vecs, emb)
+	}
+	if len(vecs) < 2 {
+		return 0, len(vecs)
+	}
+
+	// Centroid = mean of all vectors.
+	centroid := make([]float32, dim)
+	for _, v := range vecs {
+		for i, f := range v {
+			centroid[i] += f
+		}
+	}
+	inv := 1.0 / float32(len(vecs))
+	for i := range centroid {
+		centroid[i] *= inv
+	}
+	// Normalize centroid so cosine = dot product (vectors assumed
+	// normalized already).
+	var norm float32
+	for _, f := range centroid {
+		norm += f * f
+	}
+	if norm <= 0 {
+		return 0, len(vecs)
+	}
+	invN := 1.0 / float32(math.Sqrt(float64(norm)))
+	for i := range centroid {
+		centroid[i] *= invN
+	}
+
+	// Mean cosine = average dot product of each vector with centroid.
+	var sum float64
+	for _, v := range vecs {
+		var dot float32
+		for i, f := range v {
+			dot += f * centroid[i]
+		}
+		sum += float64(dot)
+	}
+	return sum / float64(len(vecs)), len(vecs)
 }
 
 // parseBatchSynthesis extracts synthesis strings from a JSON array
@@ -883,12 +1184,23 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			}
 			seen[pairKey] = true
 
-			// Check if they already have an edge between them.
+			// Check if they already have an edge between them. The A->B
+			// direction is always checked; the B->A direction is checked
+			// only when ContradictionCheckReverseEdges is true (default)
+			// -- some edges (notably supersedes) are unidirectional.
 			hasEdge := false
 			for _, edge := range e.Graph().EdgesFrom(idA) {
 				if edge.TargetID == sr.NodeID {
 					hasEdge = true
 					break
+				}
+			}
+			if !hasEdge && cfg.LLMCuration.ContradictionCheckReverseEdges {
+				for _, edge := range e.Graph().EdgesFrom(sr.NodeID) {
+					if edge.TargetID == idA {
+						hasEdge = true
+						break
+					}
 				}
 			}
 			if hasEdge {
@@ -919,7 +1231,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		return
 	}
 
-	// LLM phase: ask about each pair.
+	// LLM phase: single-pair or batched depending on config.
 	type detected struct {
 		idA, idB     string
 		contentA     string
@@ -929,40 +1241,129 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	}
 	var findings []detected
 
-	for _, c := range candidates {
-		if result.LLMCalls >= maxCalls {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	batchSize := cfg.LLMCuration.ContradictionBatchSize
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	model := cfg.ModelForTask(config.TaskContradiction)
 
-		prompt := fmt.Sprintf(contradictionPrompt, c.contentA, c.contentB)
-		resp, err := completeWithModelOrDefault(ctx, llmProv, cfg.ModelForTask(config.TaskContradiction), prompt)
-		result.LLMCalls++
-
-		if err != nil {
-			result.Errors++
-			logger.Warn("contradiction LLM error", "component", "curation", "err", err)
-			continue
+	if batchSize == 1 {
+		// Cache the single-pair instructions. User body is the two records.
+		userPromptTemplate := contradictionPrompt
+		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+		if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+			setter.SetSystemPrompt(ContradictionSystemPrompt)
+			defer setter.SetSystemPrompt("")
+		} else {
+			userPromptTemplate = ContradictionSystemPrompt + "\n\n" + contradictionPrompt
 		}
 
-		cr, err := parseContradictionResult(resp)
-		if err != nil {
-			result.Errors++
-			logger.Warn("contradiction parse error", "component", "curation", "err", err)
-			continue
+		for _, c := range candidates {
+			if result.LLMCalls >= maxCalls {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			prompt := fmt.Sprintf(userPromptTemplate, c.contentA, c.contentB)
+			resp, err := completeWithModelOrDefault(ctx, llmProv, "contradiction", model, prompt)
+			result.LLMCalls++
+
+			if err != nil {
+				result.Errors++
+				logger.Warn("contradiction LLM error", "component", "curation", "err", err)
+				continue
+			}
+
+			cr, err := parseContradictionResult(resp)
+			if err != nil {
+				result.Errors++
+				logger.Warn("contradiction parse error", "component", "curation", "err", err)
+				continue
+			}
+
+			if cr.Relationship == "contradicts" || cr.Relationship == "supersedes" {
+				findings = append(findings, detected{
+					idA: c.idA, idB: c.idB, contentA: c.contentA,
+					relationship: cr.Relationship,
+					confidence:   cr.Confidence,
+					explanation:  cr.Explanation,
+				})
+			}
+		}
+	} else {
+		// Batched mode: N pairs per LLM call. Use the batch system prompt,
+		// which instructs the LLM to return a JSON array with pair_id.
+		includeSystemInline := true
+		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+		if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+			setter.SetSystemPrompt(ContradictionBatchSystemPrompt)
+			defer setter.SetSystemPrompt("")
+			includeSystemInline = false
 		}
 
-		if cr.Relationship == "contradicts" || cr.Relationship == "supersedes" {
-			findings = append(findings, detected{
-				idA: c.idA, idB: c.idB, contentA: c.contentA,
-				relationship: cr.Relationship,
-				confidence:   cr.Confidence,
-				explanation:  cr.Explanation,
-			})
+		for start := 0; start < len(candidates); start += batchSize {
+			if result.LLMCalls >= maxCalls {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			end := start + batchSize
+			if end > len(candidates) {
+				end = len(candidates)
+			}
+			batch := candidates[start:end]
+
+			var sb strings.Builder
+			if includeSystemInline {
+				sb.WriteString(ContradictionBatchSystemPrompt)
+				sb.WriteString("\n\n")
+			}
+			for i, c := range batch {
+				fmt.Fprintf(&sb, "Pair %d:\nRecord A:\n%s\n\nRecord B:\n%s\n\n", i+1, c.contentA, c.contentB)
+			}
+			fmt.Fprintf(&sb, "Classify all %d pairs. Respond with a JSON array of %d objects, one per pair, preserving the input order and pair_id.", len(batch), len(batch))
+
+			resp, err := completeWithModelOrDefault(ctx, llmProv, "contradiction_batch", model, sb.String())
+			result.LLMCalls++
+
+			if err != nil {
+				result.Errors++
+				logger.Warn("contradiction batch LLM error", "component", "curation", "batch_size", len(batch), "err", err)
+				continue
+			}
+
+			batchResults, err := parseContradictionBatchResult(resp)
+			if err != nil {
+				result.Errors++
+				logger.Warn("contradiction batch parse error", "component", "curation", "batch_size", len(batch), "err", err)
+				continue
+			}
+
+			for _, br := range batchResults {
+				// pair_id is 1-indexed into the current batch; fall back
+				// to positional match if pair_id is missing or out of range.
+				idx := br.PairID - 1
+				if idx < 0 || idx >= len(batch) {
+					continue
+				}
+				c := batch[idx]
+				if br.Relationship == "contradicts" || br.Relationship == "supersedes" {
+					findings = append(findings, detected{
+						idA: c.idA, idB: c.idB, contentA: c.contentA,
+						relationship: br.Relationship,
+						confidence:   br.Confidence,
+						explanation:  br.Explanation,
+					})
+				}
+			}
 		}
 	}
 
@@ -1034,6 +1435,53 @@ type contradictionResult struct {
 	Relationship string  `json:"relationship"`
 	Confidence   float64 `json:"confidence"`
 	Explanation  string  `json:"explanation"`
+}
+
+// batchContradictionResult is one entry from a batched contradiction call.
+// PairID is 1-indexed into the input batch; the caller maps it back to the
+// candidate pair.
+type batchContradictionResult struct {
+	PairID       int     `json:"pair_id"`
+	Relationship string  `json:"relationship"`
+	Confidence   float64 `json:"confidence"`
+	Explanation  string  `json:"explanation"`
+}
+
+// parseContradictionBatchResult extracts per-pair results from a JSON
+// array response. Handles markdown code fences and validates each entry.
+// Returns an empty slice + nil error for an empty array; returns an error
+// only on malformed JSON.
+func parseContradictionBatchResult(resp string) ([]batchContradictionResult, error) {
+	text := strings.TrimSpace(resp)
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	// Be tolerant of leading narration: find the first [ and last ].
+	start := strings.Index(text, "[")
+	end := strings.LastIndex(text, "]")
+	if start >= 0 && end > start {
+		text = text[start : end+1]
+	}
+
+	var raw []batchContradictionResult
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil, fmt.Errorf("parse contradiction batch JSON: %w", err)
+	}
+
+	out := make([]batchContradictionResult, 0, len(raw))
+	for _, r := range raw {
+		r.Relationship = validateEnum(r.Relationship, []string{"contradicts", "supersedes", "related", "none"})
+		if r.Relationship == "" {
+			r.Relationship = "none"
+		}
+		if r.Confidence < 0 || r.Confidence > 1 {
+			r.Confidence = 0.5
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // parseContradictionResult extracts the contradiction analysis from LLM response.

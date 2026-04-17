@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // rerankWithLLM sends candidate summaries to the LLM and returns them
@@ -70,6 +72,7 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	ctx = telemetry.WithTask(ctx, "rerank")
 
 	resp, err := t.reranker.Complete(ctx, b.String())
 	if err != nil {

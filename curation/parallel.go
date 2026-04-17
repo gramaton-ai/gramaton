@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/gramaton-ai/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // llmWork represents a single LLM call to be executed in a worker pool.
@@ -12,14 +13,19 @@ type llmWork struct {
 	id     string // record ID or identifier for logging
 	prompt string
 	model  string // model override; empty = use provider default
+	task   string // task label attached to ctx for usage metering
 }
 
 // completeWithModelOrDefault calls CompleteWithModel when model is
 // non-empty, else falls back to the provider's default via Complete.
 // Used by curation tasks that resolve their model via cfg.ModelForTask --
 // an empty result there signals "no tier configured, let the provider
-// pick."
-func completeWithModelOrDefault(ctx context.Context, p llm.Provider, model, prompt string) (string, error) {
+// pick." Attaches the task label to ctx so Metered records metrics
+// under the right bucket.
+func completeWithModelOrDefault(ctx context.Context, p llm.Provider, task, model, prompt string) (string, error) {
+	if task != "" {
+		ctx = telemetry.WithTask(ctx, task)
+	}
 	if model != "" {
 		return p.CompleteWithModel(ctx, model, prompt)
 	}
@@ -49,12 +55,16 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 
 	// For single item, skip the goroutine overhead.
 	if len(work) == 1 {
+		callCtx := ctx
+		if work[0].task != "" {
+			callCtx = telemetry.WithTask(ctx, work[0].task)
+		}
 		var resp string
 		var err error
 		if work[0].model != "" {
-			resp, err = llmProv.CompleteWithModel(ctx, work[0].model, work[0].prompt)
+			resp, err = llmProv.CompleteWithModel(callCtx, work[0].model, work[0].prompt)
 		} else {
-			resp, err = llmProv.Complete(ctx, work[0].prompt)
+			resp, err = llmProv.Complete(callCtx, work[0].prompt)
 		}
 		return []llmResult{{id: work[0].id, response: resp, err: err}}
 	}
@@ -77,12 +87,16 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 					continue
 				default:
 				}
+				callCtx := ctx
+				if work[idx].task != "" {
+					callCtx = telemetry.WithTask(ctx, work[idx].task)
+				}
 				var resp string
 				var err error
 				if work[idx].model != "" {
-					resp, err = llmProv.CompleteWithModel(ctx, work[idx].model, work[idx].prompt)
+					resp, err = llmProv.CompleteWithModel(callCtx, work[idx].model, work[idx].prompt)
 				} else {
-					resp, err = llmProv.Complete(ctx, work[idx].prompt)
+					resp, err = llmProv.Complete(callCtx, work[idx].prompt)
 				}
 				results[idx] = llmResult{
 					id:       work[idx].id,

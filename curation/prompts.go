@@ -166,6 +166,58 @@ representative, not a tagline. Start with the key fact, decision,
 or topic. Do not start with "This record..." -- just state the
 content.`
 
+// ClassifySystemPromptShort is a condensed variant of
+// ClassifySystemPrompt for records that fall below
+// LongClassificationThreshold. Keeps the JSON schema, the meta-vs-object
+// caveat, enum definitions, and keyword/summary guidance; drops the 9
+// worked examples and the per-enum bullet lists of example inclusions.
+// Used when the short-tier (default: Haiku) handles the record; short
+// content rarely hits the borderline cases that the examples were added
+// to disambiguate. About 60% smaller than the full prompt.
+const ClassifySystemPromptShort = `You are a knowledge record classifier. Respond with JSON only, no other text.
+
+Respond with this exact JSON structure:
+{
+  "temporality": "immutable|durable|temporal|ephemeral",
+  "confidence": 0.0-1.0,
+  "knowledge_type": "episodic|semantic|procedural|conceptual|reference",
+  "epistemic_status": "well_established|probable|speculative|contested|refuted",
+  "keywords": ["keyword1", "keyword2", ...],
+  "summary_short": "~750 char summary (semantic anchor for embedding)"
+}
+
+Classify the RECORD ITSELF, not its topic. epistemic_status, confidence, and temporality describe how reliable, how certain, and how long THIS RECORD remains valid -- not those properties of the record's subject. Example: an authoritative article about a contested topic is well_established (authoritative article), not contested (topic is contested).
+
+temporality -- how long will THIS RECORD remain valid?
+  immutable: cannot change (proofs, historical events, specs, financial records)
+  durable: stable until contradicted (decisions, preferences, architecture, practices)
+  temporal: time-bound (plans, schedules, current-state, comparisons, version-specific info)
+  ephemeral: very short-lived (session context, debugging notes, temporary workarounds)
+
+confidence (0.0-1.0) -- how reliable is THIS RECORD?
+  0.9+: authoritative, well-sourced
+  0.7-0.9: reliable, well-supported
+  0.4-0.7: uncertain, moderate support
+  <0.4: speculative, low support
+
+knowledge_type -- what kind of knowledge?
+  episodic: specific event/decision/experience that happened
+  semantic: verifiable factual claim about the world
+  procedural: how-to instructions, workflows
+  conceptual: principle, theory, definition, framework
+  reference: lookup data, source material, imported documents
+
+epistemic_status -- qualitative reliability of THIS RECORD:
+  well_established: authoritative, broadly accepted, well-sourced
+  probable: likely true, good support, not definitive
+  speculative: uncertain, limited evidence, tentative
+  contested: THIS RECORD's claims have conflicting evidence (not its topic)
+  refuted: THIS RECORD has been shown to be false
+
+keywords: 3-8 specific, searchable terms. Concrete nouns and domain-specific terms (e.g., "kafka event pipeline" not "technology decision"). Include names of tools, people, projects, and technical concepts.
+
+summary_short: up to ~750 characters. The embedding-ready semantic anchor of the record. Start with the key fact/decision/topic. Don't start with "This record..." -- just state the content.`
+
 // classifyPrompt is the per-record user message for classification.
 // It accepts two format arguments: content (%s) and context signals (%s).
 // Used with ClassifySystemPrompt as the system message when the provider
@@ -176,16 +228,26 @@ Content:
 %s
 %s`
 
-const summarizePrompt = `Write a concise summary of the following content. ~750 characters (semantic anchor for embedding). Start with the key fact, decision, or concept. No quotes, no preamble.
+// SummarizeSystemPrompt is the stable invariant portion of the
+// summarization prompt. Marked for Anthropic prompt caching so the
+// same instructions are reused across the batch within the cache TTL.
+const SummarizeSystemPrompt = `Write concise summaries of knowledge content. Each summary is ~750 characters (semantic anchor for embedding). Start with the key fact, decision, or concept. No quotes, no preamble.`
 
-Content:
+// summarizePrompt is the per-record user message. Variable content only.
+// When the provider does not support SystemPromptSetter, callers
+// concatenate SummarizeSystemPrompt in front of this template.
+const summarizePrompt = `Content:
 %s
 
 Summary:`
 
-const manifestSummaryPrompt = `Summarize the strengths and gaps of this knowledge store in 2-3 sentences. Be specific about what domains and topics are well-covered and what is missing or weak. No preamble, no quotes.
+// ManifestSystemPrompt is the stable instructions for the store manifest
+// rollup. Invariant across cycles; cached by providers that support it.
+const ManifestSystemPrompt = `Summarize the strengths and gaps of a knowledge store in 2-3 sentences. Be specific about what domains and topics are well-covered and what is missing or weak. No preamble, no quotes.`
 
-Store stats:
+// manifestSummaryPrompt is the per-cycle user message. Contains only the
+// variable store statistics.
+const manifestSummaryPrompt = `Store stats:
 - Total records: %d
 - Knowledge types: %s
 - Top keywords: %s
@@ -193,13 +255,10 @@ Store stats:
 
 Summary:`
 
-const contradictionPrompt = `Compare these two knowledge records and determine their relationship. Respond with JSON only, no other text.
-
-Record A:
-%s
-
-Record B:
-%s
+// ContradictionSystemPrompt is the stable relationship-analysis
+// instructions. Used by both single-pair and batched contradiction
+// detection. Cached by providers that support it.
+const ContradictionSystemPrompt = `You analyze the relationship between two knowledge records. Respond with JSON only, no other text.
 
 Respond with this exact JSON structure:
 {
@@ -215,3 +274,37 @@ Guide:
 - none: The records are not meaningfully related despite surface similarity. No action needed.
 
 Only use "contradicts" or "supersedes" when you are confident. When in doubt, use "related" or "none".`
+
+// contradictionPrompt is the per-pair user message. Variable content only.
+const contradictionPrompt = `Record A:
+%s
+
+Record B:
+%s`
+
+// ContradictionBatchSystemPrompt is the stable instructions for batched
+// contradiction analysis. The batched mode asks the LLM to classify
+// N independent pairs in a single call, returning a JSON array with one
+// object per pair in the input order. Cached by providers that support it.
+const ContradictionBatchSystemPrompt = `You analyze relationships between pairs of knowledge records. You will receive N independent pairs and must classify each.
+
+Respond with a JSON array of objects, one per pair, in the same order as the input. Each object must match:
+{
+  "pair_id": <integer matching the input pair_id>,
+  "relationship": "contradicts|supersedes|related|none",
+  "confidence": 0.0-1.0,
+  "explanation": "brief explanation of why"
+}
+
+Relationships:
+- contradicts: The records make incompatible claims about the same topic. Both cannot be true simultaneously.
+- supersedes: Record B is a newer/updated version of the same knowledge as Record A. A should be marked historical.
+- related: The records discuss similar topics but do not conflict. No action needed.
+- none: The records are not meaningfully related despite surface similarity. No action needed.
+
+Only use "contradicts" or "supersedes" when confident. When in doubt, use "related" or "none". Return JSON only, no prose, no code fences.`
+
+// ConceptSynthesisSystemPrompt is the stable instructions for concept
+// synthesis. Variable content is one or more concept sections with
+// members. Cached by providers that support it.
+const ConceptSynthesisSystemPrompt = `Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {"keyword": "...", "synthesis": "2-4 sentence summary"}`

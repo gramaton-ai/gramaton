@@ -695,7 +695,7 @@ func TestRunAutonomousIntegration(t *testing.T) {
 		},
 	}
 
-	result := RunAutonomous(context.Background(), eng, llm, cfg, nil)
+	result := RunAutonomous(context.Background(), eng, llm, cfg, nil, nil)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -853,6 +853,7 @@ func TestDetectContradictions(t *testing.T) {
 	cfg.LLMCuration.MaxContradictionChecks = 10
 	cfg.LLMCuration.ContradictionMinSim = 0.5
 	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1 // exercise single-pair path
 
 	// Two records with embeddings in the contradiction similarity range (~0.7 cosine).
 	addProcessedNodeWithEmbedding(t, eng, "We use JWT tokens for auth", []float32{1.0, 0.0, 0.0})
@@ -893,6 +894,7 @@ func TestDetectContradictionsDryRun(t *testing.T) {
 	cfg.LLMCuration.MaxContradictionChecks = 10
 	cfg.LLMCuration.ContradictionMinSim = 0.5
 	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
 
 	addProcessedNodeWithEmbedding(t, eng, "We use PostgreSQL", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "We migrated to MySQL", []float32{0.7, 0.7, 0.0})
@@ -970,7 +972,7 @@ func TestGenerateManifestSummary(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil, nil)
 
 	if result.ManifestSummary == "" {
 		t.Fatal("expected manifest summary to be generated")
@@ -990,7 +992,7 @@ func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
 	llm := &mockLLM{responses: []string{"Should not be called"}}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil, nil)
 
 	if result.ManifestSummary != "" {
 		t.Fatal("should not generate summary with too few records")
@@ -1042,6 +1044,7 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 	cfg.LLMCuration.MaxContradictionChecks = 10
 	cfg.LLMCuration.ContradictionMinSim = 0.5
 	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Original API v1 design", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "Updated API v2 design", []float32{0.7, 0.7, 0.0})
@@ -1107,6 +1110,209 @@ func TestDetectContradictionsLLMError(t *testing.T) {
 	}
 }
 
+func TestManifestCacheHitSkipsLLM(t *testing.T) {
+	eng := setupEngine(t)
+
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	llm := &mockLLM{responses: []string{"First summary text"}}
+
+	// First run: cache is empty, LLM is called, cache is populated.
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	if result1.ManifestSummary == "" {
+		t.Fatal("first run should have produced a summary")
+	}
+	if result1.ManifestCacheHit {
+		t.Fatal("first run is a cache miss, not a hit")
+	}
+	if result1.LLMCalls != 1 {
+		t.Fatalf("first run should have called LLM once, got %d calls", result1.LLMCalls)
+	}
+	if cache.Hash == "" || cache.Summary == "" {
+		t.Fatalf("cache should be populated, got %+v", cache)
+	}
+
+	// Second run without changing the store: same fingerprint -> cache hit.
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+	if !result2.ManifestCacheHit {
+		t.Fatal("second run with unchanged store should be a cache hit")
+	}
+	if result2.LLMCalls != 0 {
+		t.Fatalf("cache hit should not call LLM, got %d calls", result2.LLMCalls)
+	}
+	if result2.ManifestSummary != result1.ManifestSummary {
+		t.Fatalf("cache hit should reuse summary; got %q vs %q", result2.ManifestSummary, result1.ManifestSummary)
+	}
+}
+
+func TestManifestCacheInvalidatesOnChange(t *testing.T) {
+	eng := setupEngine(t)
+
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	llm := &mockLLM{responses: []string{"First summary", "Second summary"}}
+
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	firstHash := cache.Hash
+
+	// Mutate the store: add another record so the fingerprint changes.
+	addProcessedNodeWithEmbedding(t, eng, "New record about databases", []float32{0.9, 0.1, 0.1})
+
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+	if result2.ManifestCacheHit {
+		t.Fatal("fingerprint changed, expected cache miss")
+	}
+	if cache.Hash == firstHash {
+		t.Fatal("cache hash should update on miss")
+	}
+	if result2.ManifestSummary != "Second summary" {
+		t.Fatalf("expected new summary, got %q", result2.ManifestSummary)
+	}
+}
+
+func TestClassifySystemPromptShortIsSmaller(t *testing.T) {
+	if ClassifySystemPromptShort == "" {
+		t.Fatal("ClassifySystemPromptShort must be defined")
+	}
+	if len(ClassifySystemPromptShort) >= len(ClassifySystemPrompt) {
+		t.Fatalf("short prompt (%d) should be smaller than full prompt (%d)",
+			len(ClassifySystemPromptShort), len(ClassifySystemPrompt))
+	}
+	// Must still contain the JSON schema keys so the LLM knows what to return.
+	for _, key := range []string{"temporality", "confidence", "knowledge_type", "epistemic_status", "keywords", "summary_short"} {
+		if !strings.Contains(ClassifySystemPromptShort, key) {
+			t.Fatalf("short prompt missing required key %q", key)
+		}
+	}
+}
+
+func TestClassifyPendingRoutesShortAndLongTiers(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+	cfg.LLMCuration.MaxCallsPerRun = 10
+	cfg.LLMCuration.LongClassificationThreshold = 100
+	cfg.LLM.Models.Low = "test-short-model"
+	cfg.LLM.Models.Medium = "test-long-model"
+	cfg.LLMCuration.ClassificationShortEffort = "low"
+	cfg.LLMCuration.ClassificationLongEffort = "medium"
+
+	// One short record (below 100 chars), one long record.
+	addPendingNode(t, eng, "short content")
+	addPendingNode(t, eng, strings.Repeat("long content should exceed the 100-char threshold for long tier. ", 5))
+
+	// Valid classification JSON, reused for each call.
+	resp := `{"temporality":"durable","confidence":0.8,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["test"],"summary_short":"x"}`
+	llm := &mockLLM{responses: []string{resp, resp}}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 10, nil, false)
+
+	if result.Classified != 2 {
+		t.Fatalf("expected 2 classified, got %d", result.Classified)
+	}
+
+	// Each record should route to its tier's model.
+	seenShort, seenLong := false, false
+	for _, m := range llm.models {
+		if m == "test-short-model" {
+			seenShort = true
+		}
+		if m == "test-long-model" {
+			seenLong = true
+		}
+	}
+	if !seenShort {
+		t.Fatal("expected short model to be used")
+	}
+	if !seenLong {
+		t.Fatal("expected long model to be used")
+	}
+}
+
+func TestMeanCosineToCentroidUnit(t *testing.T) {
+	eng := setupEngine(t)
+
+	// Three tightly clustered vectors: all near (1,0,0) with small jitter.
+	// Coherent cluster -> mean cosine should be ~1.0.
+	ids := []string{
+		addProcessedNodeWithEmbedding(t, eng, "a", []float32{1.0, 0.0, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "b", []float32{0.98, 0.2, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "c", []float32{0.99, 0.1, 0.1}),
+	}
+
+	eng.RLock()
+	mean, n := meanCosineToCentroid(eng.Graph(), ids)
+	eng.RUnlock()
+
+	if n != 3 {
+		t.Fatalf("expected 3 vectors counted, got %d", n)
+	}
+	if mean < 0.9 {
+		t.Fatalf("tight cluster should have mean cosine > 0.9, got %f", mean)
+	}
+
+	// Diverse vectors pointing different directions -> low mean cosine.
+	divIDs := []string{
+		addProcessedNodeWithEmbedding(t, eng, "x", []float32{1.0, 0.0, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "y", []float32{0.0, 1.0, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "z", []float32{0.0, 0.0, 1.0}),
+	}
+	eng.RLock()
+	meanDiv, _ := meanCosineToCentroid(eng.Graph(), divIDs)
+	eng.RUnlock()
+
+	if meanDiv > 0.7 {
+		t.Fatalf("orthogonal cluster should have low mean cosine, got %f", meanDiv)
+	}
+}
+
+func TestMeanCosineToCentroidEmpty(t *testing.T) {
+	eng := setupEngine(t)
+	eng.RLock()
+	defer eng.RUnlock()
+
+	mean, n := meanCosineToCentroid(eng.Graph(), []string{"nonexistent-1", "nonexistent-2"})
+	if n != 0 {
+		t.Fatalf("no embeddings should count 0, got %d", n)
+	}
+	if mean != 0 {
+		t.Fatalf("no embeddings should return 0 mean, got %f", mean)
+	}
+}
+
+func TestManifestNilCacheAlwaysCallsLLM(t *testing.T) {
+	eng := setupEngine(t)
+
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	llm := &mockLLM{responses: []string{"Summary 1", "Summary 2"}}
+
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, nil, nil)
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, nil, nil)
+
+	if result1.LLMCalls != 1 || result2.LLMCalls != 1 {
+		t.Fatalf("nil cache should always call LLM; got %d and %d", result1.LLMCalls, result2.LLMCalls)
+	}
+	if result2.ManifestCacheHit {
+		t.Fatal("nil cache should never report a cache hit")
+	}
+}
+
 func TestGenerateManifestSummaryLLMError(t *testing.T) {
 	eng := setupEngine(t)
 
@@ -1117,7 +1323,7 @@ func TestGenerateManifestSummaryLLMError(t *testing.T) {
 	llm := &mockLLM{errors: []error{fmt.Errorf("LLM error")}}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil, nil)
 
 	if result.ManifestSummary != "" {
 		t.Fatal("should not have summary on LLM error")
@@ -1135,6 +1341,125 @@ func TestParseContradictionResultInvalidRelationship(t *testing.T) {
 	}
 	if r.Relationship != "none" {
 		t.Fatalf("invalid relationship should default to 'none', got %q", r.Relationship)
+	}
+}
+
+func TestParseContradictionBatchResult(t *testing.T) {
+	input := `[
+		{"pair_id": 1, "relationship": "contradicts", "confidence": 0.8, "explanation": "x"},
+		{"pair_id": 2, "relationship": "related", "confidence": 0.6, "explanation": "y"}
+	]`
+	results, err := parseContradictionBatchResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionBatchResult: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].PairID != 1 || results[0].Relationship != "contradicts" {
+		t.Fatalf("pair 1 wrong: %+v", results[0])
+	}
+	if results[1].PairID != 2 || results[1].Relationship != "related" {
+		t.Fatalf("pair 2 wrong: %+v", results[1])
+	}
+}
+
+func TestParseContradictionBatchResultWithCodeFences(t *testing.T) {
+	input := "```json\n" + `[{"pair_id":1,"relationship":"supersedes","confidence":0.9,"explanation":"a"}]` + "\n```"
+	results, err := parseContradictionBatchResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionBatchResult: %v", err)
+	}
+	if len(results) != 1 || results[0].Relationship != "supersedes" {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}
+
+func TestParseContradictionBatchResultInvalidEnumFallback(t *testing.T) {
+	input := `[{"pair_id": 1, "relationship": "bogus", "confidence": 2.5}]`
+	results, err := parseContradictionBatchResult(input)
+	if err != nil {
+		t.Fatalf("parseContradictionBatchResult: %v", err)
+	}
+	if results[0].Relationship != "none" {
+		t.Fatalf("invalid enum should default to 'none', got %q", results[0].Relationship)
+	}
+	if results[0].Confidence != 0.5 {
+		t.Fatalf("out-of-range confidence should clamp to 0.5, got %f", results[0].Confidence)
+	}
+}
+
+func TestParseContradictionBatchResultMalformed(t *testing.T) {
+	if _, err := parseContradictionBatchResult("not json"); err == nil {
+		t.Fatal("expected error on malformed JSON")
+	}
+}
+
+func TestDetectContradictionsBatched(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 5
+
+	// Three records pairwise similar (two pairs expected -- the third
+	// record's similarity to the first pair's members falls in the
+	// ContradictionMin/Max band as well, producing an additional pair).
+	addProcessedNodeWithEmbedding(t, eng, "We use JWT", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "We switched to cookies", []float32{0.7, 0.7, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "We now use OAuth2", []float32{0.5, 0.6, 0.6})
+
+	llm := &mockLLM{
+		responses: []string{
+			// Single batched response covering all candidate pairs. The
+			// LLM returns a 3-object array; the code should map by pair_id.
+			`[
+				{"pair_id": 1, "relationship": "contradicts", "confidence": 0.8, "explanation": "auth mismatch"},
+				{"pair_id": 2, "relationship": "related", "confidence": 0.5, "explanation": "both auth"},
+				{"pair_id": 3, "relationship": "supersedes", "confidence": 0.7, "explanation": "newer"}
+			]`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	// Exactly one LLM call for all pairs in the batch.
+	if result.LLMCalls != 1 {
+		t.Fatalf("batched mode should use 1 LLM call, got %d", result.LLMCalls)
+	}
+
+	// At least one contradiction/supersession should have been applied
+	// (contradicts + supersedes are both recorded; related is dropped).
+	if result.ContradictionsDetected < 1 {
+		t.Fatalf("expected at least 1 finding applied, got %d", result.ContradictionsDetected)
+	}
+}
+
+func TestDetectContradictionsBatchedFallbackToSingleWhenSize1(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1 // explicit single-pair mode
+
+	addProcessedNodeWithEmbedding(t, eng, "We use JWT", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "We switched to cookies", []float32{0.7, 0.7, 0.0})
+
+	// Single-pair mode expects single-object JSON, not array.
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"contradicts","confidence":0.8,"explanation":"auth mismatch"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("single-pair mode should yield 1 finding, got %d", result.ContradictionsDetected)
 	}
 }
 

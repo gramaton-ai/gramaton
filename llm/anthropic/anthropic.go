@@ -12,6 +12,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 const defaultBaseURL = "https://api.anthropic.com"
@@ -90,8 +91,10 @@ type contentBlock struct {
 }
 
 type usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 type apiError struct {
@@ -179,6 +182,17 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 	var result messagesResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("anthropic: unmarshal response: %w", err)
+	}
+
+	// Report token usage via any recorder attached to ctx. No-op when
+	// no recorder is set (e.g., direct calls outside the Metered wrapper).
+	if recorder := telemetry.RecorderFromContext(ctx); recorder != nil {
+		recorder.Record(telemetry.TaskFromContext(ctx), telemetry.CallUsage{
+			InputTokens:      result.Usage.InputTokens,
+			OutputTokens:     result.Usage.OutputTokens,
+			CacheReadTokens:  result.Usage.CacheReadInputTokens,
+			CacheWriteTokens: result.Usage.CacheCreationInputTokens,
+		})
 	}
 
 	// Extract text from content blocks.

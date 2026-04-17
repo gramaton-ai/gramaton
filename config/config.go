@@ -10,11 +10,36 @@ import (
 )
 
 // Config holds all Gramaton configuration.
+//
+// Fields are grouped into two tiers:
+//
+//   - User-facing: operational settings and cost/quality dials. Safe for
+//     a normal operator to change.
+//   - Internal tuning: algorithmic parameters calibrated for correctness
+//     and performance. Do not adjust casually. See the warning header
+//     further down in this file.
 type Config struct {
+	// DataDir is the root directory for all Gramaton on-disk state
+	// (graph, indexes, backups). Change this only for a fresh install;
+	// moving an existing data_dir requires copying the contents.
 	DataDir string `yaml:"data_dir"`
 
-	Server     ServerConfig     `yaml:"server"`
-	Embedding  EmbeddingConfig  `yaml:"embedding"`
+	// --- User-facing configuration ---
+
+	Server      ServerConfig      `yaml:"server"`
+	Embedding   EmbeddingConfig   `yaml:"embedding"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	Backup      BackupConfig      `yaml:"backup"`
+	GC          GCConfig          `yaml:"gc"`
+	Curation    CurationConfig    `yaml:"curation"`
+	LLM         LLMConfig         `yaml:"llm"`
+	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
+	Observe     ObserveConfig     `yaml:"observe"`
+	Limits      LimitsConfig      `yaml:"limits"`
+	Search      SearchConfig      `yaml:"search"`
+
+	// --- Internal tuning (do not adjust casually) ---
+
 	Scoring    ScoringConfig    `yaml:"scoring"`
 	Decay      DecayConfig      `yaml:"decay"`
 	Freshness  FreshnessConfig  `yaml:"freshness"`
@@ -24,209 +49,246 @@ type Config struct {
 	Dedup      DedupConfig      `yaml:"dedup"`
 	Graph      GraphConfig      `yaml:"graph"`
 	Storage    StorageConfig    `yaml:"storage"`
-	Limits     LimitsConfig     `yaml:"limits"`
 	Merge      MergeConfig      `yaml:"merge"`
-	Logging    LoggingConfig    `yaml:"logging"`
-	Curation   CurationConfig   `yaml:"curation"`
-	LLM        LLMConfig        `yaml:"llm"`
-	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
-	Observe     ObserveConfig     `yaml:"observe"`
-	GC          GCConfig          `yaml:"gc"`
-	Backup      BackupConfig      `yaml:"backup"`
-	Search      SearchConfig      `yaml:"search"`
 }
 
+// =============================================================================
+// USER-FACING CONFIGURATION
+// =============================================================================
+//
+// Everything in this section is intended to be changed by operators to fit
+// their environment, cost envelope, or quality expectations.
+
+// ServerConfig controls the gramaton server process.
 type ServerConfig struct {
-	Port        int           `yaml:"port"`
-	AutoStart   bool          `yaml:"auto_start"`
+	// Port is the TCP port for the HTTP API. 0 selects an ephemeral
+	// port; the chosen port is written to the data directory so
+	// clients can discover it.
+	Port int `yaml:"port"`
+
+	// AutoStart causes `gramaton` commands to lazily start a server
+	// when one isn't running. Disable for setups that run the server
+	// as a managed service (systemd, launchd, supervisor).
+	AutoStart bool `yaml:"auto_start"`
+
+	// IdleTimeout is how long the server waits with no client requests
+	// before self-shutdown. Long timeouts match async usage patterns
+	// where the agent returns hours later.
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
+// EmbeddingConfig controls how record text is turned into vectors.
+// Changing provider or dimension after records exist requires
+// re-embedding the whole store (see `gramaton reembed`).
 type EmbeddingConfig struct {
+	// Provider: "bert" (pure-Go, default), "ollama", "openai", "bedrock".
 	Provider string `yaml:"provider"`
+
+	// Endpoint is the base URL for providers that need one (mainly
+	// ollama). Ignored for the pure-Go bert provider.
 	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
+
+	// Model is the embedding model name. Must match the provider's
+	// catalog. Default is bge-small-en-v1.5 (384-dim, pure-Go).
+	Model string `yaml:"model"`
 
 	// MaxTokens overrides the model's context window (in tokens).
 	// Auto-detected for Ollama models. Set manually for OpenAI or
 	// Bedrock if the default (512) produces suboptimal chunk sizes.
 	MaxTokens int `yaml:"max_tokens,omitempty"`
 
-	// Dimension is the embedding vector dimension. Default 384
-	// (mxbai-embed-large). Must match the model's output dimension. The flat vector
-	// index file records its dimension; changing this after initial setup
-	// requires re-embedding all records.
+	// Dimension is the embedding vector dimension. Must match the
+	// model's output dimension. The flat vector index file records its
+	// dimension; changing this after initial setup requires
+	// re-embedding all records.
 	Dimension int `yaml:"dimension,omitempty"`
 
-	// OpenAI-compatible
-	BaseURL    string `yaml:"base_url,omitempty"`
+	// BaseURL overrides the provider's default API endpoint
+	// (openai-compatible servers).
+	BaseURL string `yaml:"base_url,omitempty"`
+
+	// APIKeyFile is the path to a file containing the provider API key.
 	APIKeyFile string `yaml:"api_key_file,omitempty"`
-	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
 
-	// Bedrock
-	Region              string `yaml:"region,omitempty"`
-	AWSProfile          string `yaml:"aws_profile,omitempty"`
-	AWSAccessKeyIDEnv   string `yaml:"aws_access_key_id_env,omitempty"`
-	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
-}
+	// APIKeyEnv is the name of an env var that holds the provider API key.
+	// Checked if APIKeyFile is empty or missing.
+	APIKeyEnv string `yaml:"api_key_env,omitempty"`
 
-type ScoringConfig struct {
-	WeightSimilarity    float64 `yaml:"weight_similarity"`
-	WeightFreshness     float64 `yaml:"weight_freshness"`
-	WeightActivation    float64 `yaml:"weight_activation"`
-	WeightConfidence    float64 `yaml:"weight_confidence"`
-	ImportanceThreshold float64 `yaml:"importance_threshold"`
-	ImportanceFloor     float64 `yaml:"importance_floor_ratio"`
-	HistoricalPenalty   float64 `yaml:"historical_penalty"`
-}
+	// Bedrock-specific: AWS region for the embedding endpoint.
+	Region string `yaml:"region,omitempty"`
 
-type DecayConfig struct {
-	Rates DecayRates `yaml:"rates"`
-}
-
-type DecayRates struct {
-	Ephemeral float64 `yaml:"ephemeral"`
-	Temporal  float64 `yaml:"temporal"`
-	Durable   float64 `yaml:"durable"`
-	Immutable float64 `yaml:"immutable"`
-}
-
-type FreshnessConfig struct {
-	Scale     float64          `yaml:"scale"`
-	Exponents FreshnessExponents `yaml:"exponents"`
-}
-
-type FreshnessExponents struct {
-	Immutable float64 `yaml:"immutable"`
-	Durable   float64 `yaml:"durable"`
-	Temporal  float64 `yaml:"temporal"`
-	Ephemeral float64 `yaml:"ephemeral"`
-}
-
-type ActivationConfig struct {
-	BaseAmount        float64 `yaml:"base_amount"`
-	AttenuationFactor float64 `yaml:"attenuation_factor"`
-}
-
-// ChunkingConfig controls structural text splitting. NOT used in the
-// capture hot path -- observation extraction (D18/D23) handles content
-// decomposition in the curation cycle. Retained for internal utilities.
-type ChunkingConfig struct {
-	Threshold  int `yaml:"threshold"`
-	ChunkSize  int `yaml:"chunk_size"`
-	Overlap    int `yaml:"overlap"`
-	SectionMin int `yaml:"section_min"` // min section size in chars (default 500)
-	SectionMax int `yaml:"section_max"` // max section size in chars (default 5000)
-}
-
-type ConceptsConfig struct {
-	EmergenceThreshold     int     `yaml:"emergence_threshold"`
-	MinContentLengthDirect int     `yaml:"min_content_length_direct"`
-	MaxKeywordPct          float64 `yaml:"max_keyword_pct"` // skip keywords in > this % of records (0-1.0, default 0.2)
-}
-
-type DedupConfig struct {
-	SimilarityThreshold float64 `yaml:"similarity_threshold"`
-	Action              string  `yaml:"action"`
-}
-
-type SearchConfig struct {
-	BM25K1              float64 `yaml:"bm25_k1"`              // term frequency saturation (default 1.2)
-	BM25B               float64 `yaml:"bm25_b"`               // length normalization (default 0.75)
-	BM25WeightFull      float64 `yaml:"bm25_weight_full"`     // RRF weight for content_full BM25 (default 1.0)
-	BM25WeightMedium    float64 `yaml:"bm25_weight_medium"`   // RRF weight for content_medium BM25 (default 2.0)
-	BM25WeightShort     float64 `yaml:"bm25_weight_short"`    // RRF weight for content_short BM25 (default 3.0)
-	RRFK                int     `yaml:"rrf_k"`                // RRF rank constant (default 60)
-	SuggestionThreshold float64 `yaml:"suggestion_threshold"` // top-result score below which suggestions are returned (default 0.75)
-	HNSWThreshold       int     `yaml:"hnsw_threshold"`       // vector count above which HNSW is used instead of flat scan (default 5000)
-	HNSWM               int     `yaml:"hnsw_m"`               // HNSW max connections per layer (default 16)
-	HNSWEfConstruction  int     `yaml:"hnsw_ef_construction"` // HNSW build quality (default 200)
-	HNSWEfSearch        int     `yaml:"hnsw_ef_search"`       // HNSW search width (default 100)
-	VectorOnlyPenalty   float64 `yaml:"vector_only_penalty"`  // score multiplier for results with no BM25 match (default 0.1)
-	RetrievalCandidates int     `yaml:"retrieval_candidates"` // candidates from vector+BM25 before reranking (default 200)
-	RerankEnabled       bool    `yaml:"rerank_enabled"`       // enable LLM reranking of candidates (default false)
-	RerankCandidates    int     `yaml:"rerank_candidates"`    // how many candidates to send to LLM reranker (default 50)
-	SessionDedupEnabled bool    `yaml:"session_dedup_enabled"` // suppress Session segments when extracted Memory record is in results (default false)
-}
-
-type GraphConfig struct {
-	EdgeWeightTraversalThreshold float64 `yaml:"edge_weight_traversal_threshold"`
-}
-
-type LimitsConfig struct {
-	MaxJSONSize        int           `yaml:"max_json_size"`
-	MaxNestingDepth    int           `yaml:"max_nesting_depth"`
-	MaxContentLength   int           `yaml:"max_content_length"`
-	MaxKeywords        int           `yaml:"max_keywords"`
-	MaxSummaryShort    int           `yaml:"max_summary_short"`
-	StdinTimeout       time.Duration `yaml:"stdin_timeout"`
-	MaxWritesPerSecond int           `yaml:"max_writes_per_second"`
-}
-
-type StorageConfig struct {
-	// ProllyTargetChunkSize is the target number of entries per leaf
-	// chunk in the prolly tree. Controls the tradeoff between chunk
-	// sharing granularity and per-chunk overhead. Smaller values mean
-	// finer sharing (less data rewritten per mutation) but more tree
-	// nodes and disk I/O on traversal. Larger values mean coarser
-	// sharing but fewer nodes. Default 64 works well for stores up
-	// to ~100K nodes.
-	ProllyTargetChunkSize int `yaml:"prolly_target_chunk_size"`
-
-	// ProllySplitBits is the number of low bits of the FNV-1a hash
-	// that must be zero to trigger a chunk boundary. Determines the
-	// average chunk size: 2^bits entries. 6 bits = average 64 entries.
-	// 5 bits = 32 entries (finer sharing, more overhead). 7 bits = 128
-	// entries (coarser sharing, less overhead). Must be between 3 and 10.
-	ProllySplitBits int `yaml:"prolly_split_bits"`
-}
-
-type MergeConfig struct {
-	ConflictStrategy string `yaml:"conflict_strategy"`
-}
-
-type LoggingConfig struct {
-	Level       string `yaml:"level"`        // debug, info, warn, error
-	MaxSizeMB   int    `yaml:"max_size_mb"`  // total disk budget for all log files
-	RotateSizeMB int   `yaml:"rotate_size_mb"` // rotate when file reaches this size
-}
-
-type CurationConfig struct {
-	Enabled             bool          `yaml:"enabled"`
-	Interval            time.Duration `yaml:"interval"`
-	OrphanSimilarityMin float64       `yaml:"orphan_similarity_min"`
-	StaleEphemeralScore float64       `yaml:"stale_ephemeral_score"`
-	StaleTemporalScore  float64       `yaml:"stale_temporal_score"`
-	MaxOrphansPerRun    int           `yaml:"max_orphans_per_run"`
-	MaxDedupPerRun      int           `yaml:"max_dedup_per_run"`
-	SectionLinkMin        float64       `yaml:"section_link_min"`          // min similarity for cross-section linking (default 0.75)
-	MaxSectionLinksPerRun int           `yaml:"max_section_links_per_run"` // cap per cycle (default 30)
-	ObservationBatchSize  int           `yaml:"observation_batch_size"`    // parents per observation cycle (0=auto: 500 local, 20 external)
-}
-
-type LLMConfig struct {
-	Provider   string `yaml:"provider"`
-	Model      string `yaml:"model"` // default model for non-curation paths (sessions, extraction, inline classification)
-	BaseURL    string `yaml:"base_url,omitempty"`
-	APIKeyFile string `yaml:"api_key_file,omitempty"`
-	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
-	Region     string `yaml:"region,omitempty"`
+	// Bedrock-specific: named AWS profile to use for credentials.
 	AWSProfile string `yaml:"aws_profile,omitempty"`
 
-	// Models maps effort tiers to concrete model names. Used by curation
-	// task routing (see Config.ModelForTask). Each tier has a sensible
-	// default from config.Defaults(); users override to pin versions or
-	// swap providers without touching task-level code.
+	// Bedrock-specific: env var name holding the access key ID
+	// (alternative to aws_profile).
+	AWSAccessKeyIDEnv string `yaml:"aws_access_key_id_env,omitempty"`
+
+	// Bedrock-specific: env var name holding the secret access key.
+	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
+}
+
+// LoggingConfig controls log verbosity and on-disk log rotation.
+type LoggingConfig struct {
+	// Level: "debug", "info", "warn", or "error".
+	Level string `yaml:"level"`
+
+	// MaxSizeMB is the total disk budget for all log files combined.
+	// Older rotations are deleted once this is exceeded.
+	MaxSizeMB int `yaml:"max_size_mb"`
+
+	// RotateSizeMB triggers a rotation to a new file when the current
+	// log reaches this size.
+	RotateSizeMB int `yaml:"rotate_size_mb"`
+}
+
+// BackupConfig controls automatic data_dir snapshots.
+type BackupConfig struct {
+	// Enabled toggles the background backup goroutine.
+	Enabled bool `yaml:"enabled"`
+
+	// Dir is the destination directory for backups. Empty = default
+	// location inside data_dir.
+	Dir string `yaml:"dir"`
+
+	// Retain is the number of most-recent backups to keep. Older
+	// backups are pruned.
+	Retain int `yaml:"retain"`
+
+	// Schedule is the interval between automatic backups.
+	Schedule time.Duration `yaml:"schedule"`
+}
+
+// GCConfig controls garbage collection of old content blob revisions.
+// GC is off by default because it's a destructive operation.
+type GCConfig struct {
+	// Enabled turns the GC loop on. Safe to leave off for most stores.
+	Enabled bool `yaml:"enabled"`
+
+	// DryRun logs candidates without deleting. Recommended first step
+	// when turning GC on.
+	DryRun bool `yaml:"dry_run"`
+
+	// MinAgeDays is the minimum age (in days) before a content blob
+	// revision can be collected. Guards against collecting recent
+	// revisions that may still be referenced.
+	MinAgeDays int `yaml:"min_age_days"`
+}
+
+// CurationConfig controls the background curation loop. Curation handles
+// deterministic maintenance (auto-supersession, orphan linking, lifecycle
+// expiry, concept emergence) and, when LLM is configured, autonomous
+// classification / summarization / contradiction detection / concept
+// synthesis / manifest rollup.
+type CurationConfig struct {
+	// Enabled turns the curation loop on. When false, none of the
+	// cost-reduction knobs in LLMCurationConfig have any effect and
+	// the store loses free deterministic maintenance too.
+	Enabled bool `yaml:"enabled"`
+
+	// Interval is the cadence of the curation tick. Shorter intervals
+	// keep the Anthropic prompt cache (5-min TTL) warm across cycles.
+	Interval time.Duration `yaml:"interval"`
+
+	// OrphanSimilarityMin is the minimum cosine similarity for an
+	// orphan record to be auto-linked to an existing cluster.
+	OrphanSimilarityMin float64 `yaml:"orphan_similarity_min"`
+
+	// StaleEphemeralScore is the staleness score above which ephemeral
+	// records are expired.
+	StaleEphemeralScore float64 `yaml:"stale_ephemeral_score"`
+
+	// StaleTemporalScore is the staleness score above which temporal
+	// records are expired. Higher than ephemeral to reflect longer
+	// natural lifespan.
+	StaleTemporalScore float64 `yaml:"stale_temporal_score"`
+
+	// MaxOrphansPerRun caps how many orphan-linking operations run
+	// per cycle. Prevents a massive backlog from blocking a single
+	// cycle.
+	MaxOrphansPerRun int `yaml:"max_orphans_per_run"`
+
+	// MaxDedupPerRun caps how many duplicate-consolidation operations
+	// run per cycle.
+	MaxDedupPerRun int `yaml:"max_dedup_per_run"`
+
+	// SectionLinkMin is the minimum similarity for cross-section
+	// linking. Section nodes below this similarity are not linked
+	// to sibling sections.
+	SectionLinkMin float64 `yaml:"section_link_min"`
+
+	// MaxSectionLinksPerRun caps cross-section linking per cycle.
+	MaxSectionLinksPerRun int `yaml:"max_section_links_per_run"`
+
+	// ObservationBatchSize is the number of parent records processed
+	// per observation extraction cycle. 0 = auto (500 for local
+	// providers, 20 for external). Observation is soft-deprecated;
+	// see ObserveConfig.Enabled.
+	ObservationBatchSize int `yaml:"observation_batch_size"`
+}
+
+// LLMConfig configures the LLM provider and cost/rate caps. Model
+// selection for curation tasks flows through Models (effort tiers);
+// the top-level Model field is only used by a few non-curation code
+// paths (see below).
+type LLMConfig struct {
+	// Provider: "anthropic", "openai", "bedrock", "claudecli", "kirocli".
+	Provider string `yaml:"provider"`
+
+	// Model is the default used by code paths that call the provider's
+	// Complete() without specifying a model. Current call sites:
+	//   - search/rerank.go          (active when search.rerank_enabled)
+	//   - search/decompose.go       (complex query decomposition)
+	//   - server/handler_observe.go (active when observe.enabled; soft-deprecated)
+	//   - curation/parallel.go      (fallback when a task's effort tier
+	//                                resolves to an empty model; should
+	//                                never fire with a properly configured
+	//                                LLM.Models)
+	// Does NOT affect session extraction (done agent-side) or capture-time
+	// classification (no server-side LLM call; deferred to curation).
+	Model string `yaml:"model"`
+
+	// Models maps effort tiers to concrete model names. Curation tasks
+	// declare an effort level (low/medium/high) via LLMCuration.*Effort;
+	// this struct turns that into the actual model to pass to the
+	// provider. Swap versions or providers here without touching
+	// task-level code.
 	Models LLMModels `yaml:"models"`
 
-	// Bedrock credential env vars (alternative to aws_profile).
-	AWSAccessKeyIDEnv     string `yaml:"aws_access_key_id_env,omitempty"`
+	// APIKeyFile is the path to a file holding the provider API key.
+	APIKeyFile string `yaml:"api_key_file,omitempty"`
+
+	// APIKeyEnv is the name of an env var holding the provider API key.
+	// Used if APIKeyFile is empty.
+	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+
+	// BaseURL overrides the provider's default endpoint
+	// (openai-compatible servers, local proxies).
+	BaseURL string `yaml:"base_url,omitempty"`
+
+	// Bedrock-specific: AWS region for the model endpoint.
+	Region string `yaml:"region,omitempty"`
+
+	// Bedrock-specific: named AWS profile to use for credentials.
+	AWSProfile string `yaml:"aws_profile,omitempty"`
+
+	// Bedrock-specific: env var name for the access key ID.
+	AWSAccessKeyIDEnv string `yaml:"aws_access_key_id_env,omitempty"`
+
+	// Bedrock-specific: env var name for the secret access key.
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 
-	// Usage caps (0 = no cap).
-	MaxCallsPerDay     int           `yaml:"max_calls_per_day,omitempty"`
-	MaxCallsPerSession int           `yaml:"max_calls_per_session,omitempty"`
-	RateLimitInterval  time.Duration `yaml:"rate_limit_interval,omitempty"`
+	// MaxCallsPerDay caps total LLM calls per calendar day. 0 = no cap.
+	// Safety net against runaway cost.
+	MaxCallsPerDay int `yaml:"max_calls_per_day,omitempty"`
+
+	// MaxCallsPerSession caps LLM calls per server session (between
+	// starts). 0 = no cap.
+	MaxCallsPerSession int `yaml:"max_calls_per_session,omitempty"`
+
+	// RateLimitInterval is the minimum gap between successive LLM
+	// calls. 0 = no rate limit.
+	RateLimitInterval time.Duration `yaml:"rate_limit_interval,omitempty"`
 }
 
 // LLMModels maps effort tiers to model names. Every curation task picks
@@ -235,34 +297,121 @@ type LLMConfig struct {
 // task-level code means a provider swap or model revision only edits
 // this struct.
 type LLMModels struct {
-	Low    string `yaml:"low"`    // cheap/fast tier (default: claude-haiku-4-5)
-	Medium string `yaml:"medium"` // balanced tier (default: claude-sonnet-4-6)
-	High   string `yaml:"high"`   // best-quality tier (default: claude-opus-4-7)
+	// Low: cheap/fast tier (default: claude-haiku-4-5).
+	Low string `yaml:"low"`
+
+	// Medium: balanced tier (default: claude-sonnet-4-6).
+	Medium string `yaml:"medium"`
+
+	// High: best-quality tier (default: claude-opus-4-7).
+	High string `yaml:"high"`
 }
 
+// LLMCurationConfig controls the autonomous (LLM-driven) part of
+// curation: classification, summarization, contradiction detection,
+// concept synthesis, manifest rollup. Every field is cost- or
+// quality-related and intended for operator tuning.
 type LLMCurationConfig struct {
-	BatchSize               int     `yaml:"batch_size"`
-	MaxCallsPerRun          int     `yaml:"max_calls_per_run"`
-	MaxContradictionChecks  int     `yaml:"max_contradiction_checks"`
-	ContradictionMinSim     float64 `yaml:"contradiction_min_similarity"`
-	ContradictionMaxSim     float64 `yaml:"contradiction_max_similarity"`
-	MaxConceptsPerRun       int     `yaml:"max_concepts_per_run"`
-	SynthesisBatchSize      int     `yaml:"synthesis_batch_size"`       // concepts per LLM call (default 5)
-	SynthesisMaxInputTokens int     `yaml:"synthesis_max_input_tokens"` // soft cap per batch (default 8000)
+	// BatchSize is the number of records classified per cycle.
+	BatchSize int `yaml:"batch_size"`
 
-	// Per-task effort levels. Empty = use the baked-in default for that
-	// task (see defaultEffortForTask). Set to "low", "medium", or "high"
-	// to override. The resolved effort maps to a concrete model via
-	// LLM.Models -- callers never name a model here, so a provider swap
-	// (or a new Haiku/Sonnet/Opus revision) only updates LLM.Models.
+	// MaxCallsPerRun is the hard cap on total LLM calls in one
+	// curation cycle. Protects against a runaway cycle burning budget.
+	MaxCallsPerRun int `yaml:"max_calls_per_run"`
+
+	// MaxContradictionChecks is the maximum number of candidate pairs
+	// examined for contradictions per cycle. With
+	// ContradictionBatchSize > 1, multiple pairs share one LLM call.
+	MaxContradictionChecks int `yaml:"max_contradiction_checks"`
+
+	// ContradictionMinSim is the lower bound of the cosine-similarity
+	// band for contradiction candidates. Pairs below this are too
+	// dissimilar to meaningfully contradict.
+	ContradictionMinSim float64 `yaml:"contradiction_min_similarity"`
+
+	// ContradictionMaxSim is the upper bound. Pairs above this are
+	// near-duplicates handled by auto-supersession, not contradiction
+	// detection.
+	ContradictionMaxSim float64 `yaml:"contradiction_max_similarity"`
+
+	// ContradictionBatchSize is the number of pairs packed into a
+	// single LLM call. 1 = single-pair (legacy). 5-10 = batched
+	// (roughly N-fold call reduction at saturation).
+	ContradictionBatchSize int `yaml:"contradiction_batch_size"`
+
+	// MaxConceptsPerRun caps concept syntheses per cycle.
+	MaxConceptsPerRun int `yaml:"max_concepts_per_run"`
+
+	// SynthesisBatchSize is the number of concepts packed into a single
+	// synthesis LLM call.
+	SynthesisBatchSize int `yaml:"synthesis_batch_size"`
+
+	// SynthesisMaxInputTokens is a soft cap on input tokens per
+	// synthesis batch. When exceeded, a new batch starts.
+	SynthesisMaxInputTokens int `yaml:"synthesis_max_input_tokens"`
+
+	// ConceptCoherenceMin is the minimum mean cosine similarity of
+	// member records to their cluster centroid. Concepts below this
+	// are skipped (their members don't coherently represent a single
+	// idea). 0 = no filter.
+	ConceptCoherenceMin float64 `yaml:"concept_coherence_min"`
+
+	// Cost-reduction toggles. All default to true (activated). Flip
+	// to false to revert that individual optimization.
+
+	// PromptCachingEnabled caches invariant system prompts on providers
+	// that support it (e.g., Anthropic). Falls back to inline
+	// concatenation when off or unsupported.
+	PromptCachingEnabled bool `yaml:"prompt_caching_enabled"`
+
+	// ManifestCacheEnabled skips the manifest LLM call when the store's
+	// state fingerprint (record counts, top keywords, temporal span)
+	// is unchanged from the previous cycle.
+	ManifestCacheEnabled bool `yaml:"manifest_cache_enabled"`
+
+	// ContradictionCheckReverseEdges skips candidate pairs that already
+	// have a B->A edge (not just A->B). Reduces redundant work on
+	// previously-linked pairs.
+	ContradictionCheckReverseEdges bool `yaml:"contradiction_check_reverse_edges"`
+
+	// ClassifyShortPromptCompressed routes short-tier records to the
+	// condensed ClassifySystemPromptShort (~60% smaller). Long-tier
+	// records always use the full prompt.
+	ClassifyShortPromptCompressed bool `yaml:"classify_short_prompt_compressed"`
+
+	// Per-task effort assignments. Empty = baked-in default (see
+	// defaultEffortForTask). Set to "low", "medium", or "high" to
+	// override. Resolves to a concrete model via LLM.Models.
+
+	// ClassificationShortEffort: tier for records below
+	// LongClassificationThreshold. Default: low (Haiku).
 	ClassificationShortEffort string `yaml:"classification_short_effort"`
-	ClassificationLongEffort  string `yaml:"classification_long_effort"`
-	SummarizationEffort       string `yaml:"summarization_effort"`
-	ContradictionEffort       string `yaml:"contradiction_effort"`
-	ConceptEffort             string `yaml:"concept_effort"`
-	ManifestEffort            string `yaml:"manifest_effort"`
 
-	// Length cutoff for short-vs-long classification. Default 2000 chars.
+	// ClassificationLongEffort: tier for records at or above
+	// LongClassificationThreshold. Default: medium (Sonnet).
+	ClassificationLongEffort string `yaml:"classification_long_effort"`
+
+	// SummarizationEffort: tier for content_short generation.
+	// Default: low (Haiku).
+	SummarizationEffort string `yaml:"summarization_effort"`
+
+	// ContradictionEffort: tier for contradiction / supersession
+	// detection. Default: medium (Sonnet) because subtle semantic
+	// distinctions benefit from calibrated reasoning.
+	ContradictionEffort string `yaml:"contradiction_effort"`
+
+	// ConceptEffort: tier for concept synthesis. Default: medium
+	// (Sonnet). Bump to high for critical stores where concept
+	// abstraction quality matters.
+	ConceptEffort string `yaml:"concept_effort"`
+
+	// ManifestEffort: tier for the periodic store manifest rollup.
+	// Default: low (Haiku). Low-nuance summarization.
+	ManifestEffort string `yaml:"manifest_effort"`
+
+	// LongClassificationThreshold is the character cutoff between
+	// short-tier and long-tier classification. Records below this
+	// length route to the short tier.
 	LongClassificationThreshold int `yaml:"long_classification_threshold"`
 }
 
@@ -347,36 +496,367 @@ func (c Config) ModelAtEffort(effort EffortLevel) string {
 }
 
 // ModelForTask is the primary entry point for curation model selection:
-// resolves task -> effort -> model name. contentLen is only consulted
-// for classification (short vs long); other tasks ignore it.
+// resolves task -> effort -> model name.
 func (c Config) ModelForTask(task CurationTask) string {
 	return c.ModelAtEffort(c.EffortForTask(task))
 }
 
-type GCConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	DryRun     bool `yaml:"dry_run"`
-	MinAgeDays int  `yaml:"min_age_days"`
-}
-
+// ObserveConfig controls the soft-deprecated observe pipeline. Prefer
+// the session flow (gramaton_session_prepare / gramaton_session_commit)
+// for automatic knowledge capture. Kept here for backwards compatibility;
+// set Enabled=false in new setups.
 type ObserveConfig struct {
-	Enabled                bool    `yaml:"enabled"`
-	MaxFactsPerCall        int     `yaml:"max_facts_per_call"`
-	DefaultConfidence      float64 `yaml:"default_confidence"`
-	DefaultTemporality     string  `yaml:"default_temporality"`
-	SubstanceMinLength     int     `yaml:"substance_min_length"`
-	FeedbackLoopHours      int     `yaml:"feedback_loop_hours"`
+	// Enabled toggles the observe pipeline. Defaults to true for
+	// backwards compatibility; recommend false for new setups.
+	Enabled bool `yaml:"enabled"`
+
+	// MaxFactsPerCall caps facts extracted per observation LLM call.
+	MaxFactsPerCall int `yaml:"max_facts_per_call"`
+
+	// DefaultConfidence is the confidence value assigned to observed
+	// facts that don't include one.
+	DefaultConfidence float64 `yaml:"default_confidence"`
+
+	// DefaultTemporality is the temporality assigned to observed facts
+	// that don't include one. "ephemeral" suits short-lived session
+	// observations.
+	DefaultTemporality string `yaml:"default_temporality"`
+
+	// SubstanceMinLength is the minimum fact length (chars) to keep.
+	// Below this, facts are too trivial to store.
+	SubstanceMinLength int `yaml:"substance_min_length"`
+
+	// FeedbackLoopHours is the look-back window for suppressing
+	// re-observation of recently observed facts.
+	FeedbackLoopHours int `yaml:"feedback_loop_hours"`
+
+	// FeedbackLoopSimilarity is the cosine threshold for "same fact"
+	// dedup during the feedback window.
 	FeedbackLoopSimilarity float64 `yaml:"feedback_loop_similarity"`
-	RetrievalTracking      bool    `yaml:"retrieval_tracking"`
-	RetrievalSimilarity    float64 `yaml:"retrieval_similarity"`
+
+	// RetrievalTracking records which records surfaced in recent
+	// retrievals so the observe pipeline can focus on new ground.
+	RetrievalTracking bool `yaml:"retrieval_tracking"`
+
+	// RetrievalSimilarity is the cosine threshold for "previously
+	// retrieved" membership.
+	RetrievalSimilarity float64 `yaml:"retrieval_similarity"`
 }
 
-type BackupConfig struct {
-	Enabled  bool          `yaml:"enabled"`
-	Dir      string        `yaml:"dir"`
-	Retain   int           `yaml:"retain"`
-	Schedule time.Duration `yaml:"schedule"`
+// LimitsConfig holds request-level safety caps. These are not tuning
+// knobs in the algorithmic sense, but rather environmental bounds to
+// prevent unreasonably large inputs. Operators may raise these for
+// unusual workloads (e.g., importing large documents).
+type LimitsConfig struct {
+	// MaxJSONSize is the largest JSON request body accepted by the
+	// HTTP API, in bytes. Guards against memory exhaustion.
+	MaxJSONSize int `yaml:"max_json_size"`
+
+	// MaxNestingDepth is the maximum JSON nesting depth. Prevents
+	// pathological inputs that would blow the stack.
+	MaxNestingDepth int `yaml:"max_nesting_depth"`
+
+	// MaxContentLength caps the size of record content_full, in bytes.
+	MaxContentLength int `yaml:"max_content_length"`
+
+	// MaxKeywords caps the number of keywords per record.
+	MaxKeywords int `yaml:"max_keywords"`
+
+	// MaxSummaryShort caps the content_short length. Hard cap; soft
+	// target is ~750 chars (the embedding-ready semantic anchor size).
+	MaxSummaryShort int `yaml:"max_summary_short"`
+
+	// StdinTimeout caps how long CLI commands wait for stdin input.
+	StdinTimeout time.Duration `yaml:"stdin_timeout"`
+
+	// MaxWritesPerSecond rate-limits mutating HTTP requests per client.
+	MaxWritesPerSecond int `yaml:"max_writes_per_second"`
 }
+
+// SearchConfig holds search parameters. The first four fields are
+// user-facing cost/quality dials; the remainder are internal scoring
+// and index parameters that operators rarely need to adjust.
+type SearchConfig struct {
+	// --- User-facing dials ---
+
+	// RetrievalCandidates is the number of candidates pulled from
+	// vector + BM25 before reranking. More = better recall, slower.
+	RetrievalCandidates int `yaml:"retrieval_candidates"`
+
+	// RerankEnabled toggles LLM reranking of retrieval candidates.
+	// When true, the top N candidates are passed to the LLM
+	// (llm.model) for relevance scoring.
+	RerankEnabled bool `yaml:"rerank_enabled"`
+
+	// RerankCandidates is the number of candidates sent to the LLM
+	// reranker when RerankEnabled is true. More = better quality,
+	// slower and more expensive.
+	RerankCandidates int `yaml:"rerank_candidates"`
+
+	// SessionDedupEnabled suppresses Session segments in search results
+	// when the Memory record they were extracted into is also in the
+	// result set. Reduces duplication across the two stores.
+	SessionDedupEnabled bool `yaml:"session_dedup_enabled"`
+
+	// --- Internal scoring / index parameters (rarely adjust) ---
+
+	// BM25K1: term frequency saturation parameter.
+	BM25K1 float64 `yaml:"bm25_k1"`
+
+	// BM25B: document-length normalization.
+	BM25B float64 `yaml:"bm25_b"`
+
+	// BM25WeightFull: RRF weight for the content_full BM25 lane.
+	BM25WeightFull float64 `yaml:"bm25_weight_full"`
+
+	// BM25WeightMedium: RRF weight for the content_medium BM25 lane
+	// (retained for legacy stores; content_medium is not written in
+	// current pipelines).
+	BM25WeightMedium float64 `yaml:"bm25_weight_medium"`
+
+	// BM25WeightShort: RRF weight for the content_short BM25 lane.
+	// Weighted higher than full because summaries are more
+	// discriminative for retrieval.
+	BM25WeightShort float64 `yaml:"bm25_weight_short"`
+
+	// RRFK: Reciprocal Rank Fusion constant. Lower = more weight to
+	// top ranks; higher = flatter fusion.
+	RRFK int `yaml:"rrf_k"`
+
+	// SuggestionThreshold: top-result score below which "did you mean"
+	// suggestions are returned alongside the results.
+	SuggestionThreshold float64 `yaml:"suggestion_threshold"`
+
+	// HNSWThreshold: vector count above which HNSW is used instead of
+	// flat scan. Smaller stores don't benefit from HNSW overhead.
+	HNSWThreshold int `yaml:"hnsw_threshold"`
+
+	// HNSWM: HNSW maximum connections per layer. Higher = better
+	// recall, more memory.
+	HNSWM int `yaml:"hnsw_m"`
+
+	// HNSWEfConstruction: HNSW build-time quality parameter.
+	HNSWEfConstruction int `yaml:"hnsw_ef_construction"`
+
+	// HNSWEfSearch: HNSW query-time search width. Higher = better
+	// recall, slower.
+	HNSWEfSearch int `yaml:"hnsw_ef_search"`
+
+	// VectorOnlyPenalty: score multiplier for results that matched via
+	// vector similarity but have no BM25 match. Penalizes
+	// semantic-only matches to favor lexical+semantic hits.
+	VectorOnlyPenalty float64 `yaml:"vector_only_penalty"`
+}
+
+// =============================================================================
+// INTERNAL TUNING PARAMETERS
+// =============================================================================
+//
+// WARNING: Everything below this line controls algorithmic behavior that
+// is calibrated for correctness and performance. Most operators should
+// NOT adjust these values. Changing them may:
+//
+//   - Degrade retrieval quality without any visible error
+//   - Break index invariants (e.g., embedding dimension mismatch
+//     requires a full re-embed)
+//   - Cause silent scoring or lifecycle bugs
+//   - Create corrupt store state that is hard to recover from
+//
+// If you think you need to change a value here, first read the doc block
+// above the specific struct to understand what it controls, and confirm
+// the change against the gramaton source code before running in production.
+//
+// Retained in config because integration tests and advanced deployments
+// occasionally need them, not because they're tuned per deployment.
+// =============================================================================
+
+// ScoringConfig controls the weighted sum that ranks search results.
+// The four weights are normalized to sum to 1.0 at the default values;
+// changing one weight should shift the others or be accompanied by a
+// rerun of calibration benchmarks. HistoricalPenalty and importance
+// thresholds further modulate scores for historical/important records.
+type ScoringConfig struct {
+	// WeightSimilarity: cosine similarity to the query. Dominant term.
+	WeightSimilarity float64 `yaml:"weight_similarity"`
+
+	// WeightFreshness: decay-modulated recency bonus.
+	WeightFreshness float64 `yaml:"weight_freshness"`
+
+	// WeightActivation: graph-activation spreading from query anchors.
+	WeightActivation float64 `yaml:"weight_activation"`
+
+	// WeightConfidence: record's declared confidence (0-1).
+	WeightConfidence float64 `yaml:"weight_confidence"`
+
+	// ImportanceThreshold: records with importance >= this get floor
+	// protection (won't drop below ImportanceFloor * top_score).
+	ImportanceThreshold float64 `yaml:"importance_threshold"`
+
+	// ImportanceFloor: fraction of top-result score that "important"
+	// records are guaranteed to reach.
+	ImportanceFloor float64 `yaml:"importance_floor_ratio"`
+
+	// HistoricalPenalty: score multiplier applied to records that have
+	// been superseded or marked historical (valid_until in the past).
+	HistoricalPenalty float64 `yaml:"historical_penalty"`
+}
+
+// DecayConfig holds per-temporality decay rates used when computing
+// freshness. Rates are per-hour half-life coefficients. Changing these
+// shifts record expiration cadence and historical-scoring weight.
+type DecayConfig struct {
+	Rates DecayRates `yaml:"rates"`
+}
+
+// DecayRates maps each temporality to a decay coefficient.
+type DecayRates struct {
+	// Ephemeral: fastest decay. Default tuned to decay to near-zero
+	// over hours.
+	Ephemeral float64 `yaml:"ephemeral"`
+
+	// Temporal: decays over weeks-to-months.
+	Temporal float64 `yaml:"temporal"`
+
+	// Durable: decays over years.
+	Durable float64 `yaml:"durable"`
+
+	// Immutable: zero decay. Should always be 0.
+	Immutable float64 `yaml:"immutable"`
+}
+
+// FreshnessConfig controls how the freshness score is computed from
+// a record's age and temporality.
+type FreshnessConfig struct {
+	// Scale is the time scale (in hours) used by the decay function.
+	// Default 8760 = one year.
+	Scale float64 `yaml:"scale"`
+
+	// Exponents modulates how quickly freshness drops for each
+	// temporality class.
+	Exponents FreshnessExponents `yaml:"exponents"`
+}
+
+// FreshnessExponents are per-temporality exponents applied in the
+// freshness decay formula. Higher = steeper drop.
+type FreshnessExponents struct {
+	// Immutable: should be 0 (immutable records don't decay).
+	Immutable float64 `yaml:"immutable"`
+
+	// Durable: gentle decay (~0.5).
+	Durable float64 `yaml:"durable"`
+
+	// Temporal: linear-ish decay (~1.0).
+	Temporal float64 `yaml:"temporal"`
+
+	// Ephemeral: linear-ish decay, subject to fast decay rate in
+	// DecayConfig.
+	Ephemeral float64 `yaml:"ephemeral"`
+}
+
+// ActivationConfig controls graph-based spreading activation. When a
+// query matches anchor records, activation spreads outward through
+// edges, boosting related records' scores.
+type ActivationConfig struct {
+	// BaseAmount: initial activation delivered to anchor records.
+	BaseAmount float64 `yaml:"base_amount"`
+
+	// AttenuationFactor: multiplier applied as activation spreads one
+	// hop further. 0.5 = each hop halves the contribution.
+	AttenuationFactor float64 `yaml:"attenuation_factor"`
+}
+
+// ChunkingConfig controls structural text splitting. NOT used in the
+// capture hot path -- observation extraction (D18/D23) handles content
+// decomposition in the curation cycle. Retained for internal utilities.
+type ChunkingConfig struct {
+	// Threshold: content length above which chunking kicks in.
+	Threshold int `yaml:"threshold"`
+
+	// ChunkSize: target chunk length in chars.
+	ChunkSize int `yaml:"chunk_size"`
+
+	// Overlap: adjacent chunks share this many chars.
+	Overlap int `yaml:"overlap"`
+
+	// SectionMin: minimum section size in chars (default 500).
+	SectionMin int `yaml:"section_min"`
+
+	// SectionMax: maximum section size in chars (default 5000).
+	SectionMax int `yaml:"section_max"`
+}
+
+// ConceptsConfig controls concept emergence thresholds. Concepts are
+// synthesized from repeated keywords; these knobs decide when a keyword
+// cluster is promoted to a concept node.
+type ConceptsConfig struct {
+	// EmergenceThreshold: minimum number of records sharing a keyword
+	// before it becomes a candidate concept.
+	EmergenceThreshold int `yaml:"emergence_threshold"`
+
+	// MinContentLengthDirect: minimum content length for a record to
+	// count toward the emergence threshold directly (short records
+	// contribute less evidence).
+	MinContentLengthDirect int `yaml:"min_content_length_direct"`
+
+	// MaxKeywordPct: skip keywords that appear in more than this
+	// fraction of records (0-1.0). Ubiquitous keywords don't make
+	// meaningful concepts.
+	MaxKeywordPct float64 `yaml:"max_keyword_pct"`
+}
+
+// DedupConfig controls auto-supersession of near-duplicate records.
+// The similarity threshold is carefully calibrated; changing it can
+// either miss true duplicates or incorrectly supersede distinct records.
+type DedupConfig struct {
+	// SimilarityThreshold: cosine similarity above which a new capture
+	// supersedes an older record. Default 0.92 is calibrated for
+	// bge-small-en-v1.5 embeddings.
+	SimilarityThreshold float64 `yaml:"similarity_threshold"`
+
+	// Action: "flag" (mark but don't delete) or "supersede" (set
+	// valid_until on the older record). Default "flag".
+	Action string `yaml:"action"`
+}
+
+// GraphConfig controls graph traversal behavior.
+type GraphConfig struct {
+	// EdgeWeightTraversalThreshold: minimum edge weight required for
+	// traversal during spreading activation and explore queries.
+	// Edges weaker than this are treated as absent.
+	EdgeWeightTraversalThreshold float64 `yaml:"edge_weight_traversal_threshold"`
+}
+
+// StorageConfig controls the on-disk prolly-tree parameters. These
+// directly affect the write-amplification / storage-overhead tradeoff
+// and should not be changed on existing stores (would require rebuild).
+type StorageConfig struct {
+	// ProllyTargetChunkSize is the target number of entries per leaf
+	// chunk in the prolly tree. Controls the tradeoff between chunk
+	// sharing granularity and per-chunk overhead. Smaller values mean
+	// finer sharing (less data rewritten per mutation) but more tree
+	// nodes and disk I/O on traversal. Larger values mean coarser
+	// sharing but fewer nodes. Default 64 works well for stores up
+	// to ~100K nodes.
+	ProllyTargetChunkSize int `yaml:"prolly_target_chunk_size"`
+
+	// ProllySplitBits is the number of low bits of the FNV-1a hash
+	// that must be zero to trigger a chunk boundary. Determines the
+	// average chunk size: 2^bits entries. 6 bits = average 64 entries.
+	// 5 bits = 32 entries (finer sharing, more overhead). 7 bits = 128
+	// entries (coarser sharing, less overhead). Must be between 3 and 10.
+	ProllySplitBits int `yaml:"prolly_split_bits"`
+}
+
+// MergeConfig controls how conflicts are resolved during branch merges.
+type MergeConfig struct {
+	// ConflictStrategy: "timestamp_wins" (newer mutation wins;
+	// current default) or future alternatives.
+	ConflictStrategy string `yaml:"conflict_strategy"`
+}
+
+// =============================================================================
+// Defaults, Load, Save
+// =============================================================================
 
 // Defaults returns a Config with all values set to their documented defaults.
 func Defaults() Config {
@@ -395,6 +875,124 @@ func Defaults() Config {
 			Model:     "bge-small-en-v1.5",
 			Dimension: 384,
 		},
+
+		Logging: LoggingConfig{
+			Level:        "info",
+			MaxSizeMB:    512,
+			RotateSizeMB: 50,
+		},
+
+		Backup: BackupConfig{
+			Enabled:  true,
+			Retain:   2,
+			Schedule: 24 * time.Hour,
+		},
+
+		GC: GCConfig{
+			Enabled:    false,
+			DryRun:     true,
+			MinAgeDays: 30,
+		},
+
+		Curation: CurationConfig{
+			Enabled:               true,
+			Interval:              1 * time.Minute,
+			OrphanSimilarityMin:   0.6,
+			StaleEphemeralScore:   0.95,
+			StaleTemporalScore:    0.99,
+			MaxOrphansPerRun:      20,
+			MaxDedupPerRun:        20,
+			SectionLinkMin:        0.75,
+			MaxSectionLinksPerRun: 30,
+			ObservationBatchSize:  0, // auto: 500 for local providers, 20 for external
+		},
+
+		LLM: LLMConfig{
+			Model: "claude-sonnet-4-6", // used by search reranking, query decomposition, observe (if enabled)
+			Models: LLMModels{
+				Low:    "claude-haiku-4-5",
+				Medium: "claude-sonnet-4-6",
+				High:   "claude-opus-4-7",
+			},
+		},
+
+		LLMCuration: LLMCurationConfig{
+			BatchSize:                   10,
+			MaxCallsPerRun:              20,
+			MaxContradictionChecks:      5,
+			ContradictionMinSim:         0.5,
+			ContradictionMaxSim:         0.85,
+			ContradictionBatchSize:      5,   // batched: 5 pairs per LLM call (~5x call reduction at saturation)
+			MaxConceptsPerRun:           5,
+			SynthesisBatchSize:          5,
+			SynthesisMaxInputTokens:     8000,
+			ConceptCoherenceMin:         0.6, // skip concept synthesis when member cluster has mean cosine < 0.6
+			LongClassificationThreshold: 2000,
+
+			// All cost-reduction optimizations activated by default.
+			PromptCachingEnabled:           true,
+			ManifestCacheEnabled:           true,
+			ContradictionCheckReverseEdges: true,
+			ClassifyShortPromptCompressed:  true,
+
+			// Explicit effort assignments per curation task. Users edit
+			// these in config.yaml to retune cost vs quality. Summarization
+			// and short classification are Haiku-grade (clear-signal work,
+			// enum picks, distilled summaries). Contradiction detection,
+			// concept synthesis, and long-content classification benefit
+			// from Sonnet-grade reasoning (subtle semantic + temporal
+			// distinctions, multi-record abstraction, calibrated
+			// confidence/temporality choices). Manifest rollup is
+			// infrequent and low-nuance -> Haiku.
+			ClassificationShortEffort: string(EffortLow),
+			ClassificationLongEffort:  string(EffortMedium),
+			SummarizationEffort:       string(EffortLow),
+			ContradictionEffort:       string(EffortMedium),
+			ConceptEffort:             string(EffortMedium),
+			ManifestEffort:            string(EffortLow),
+		},
+
+		Observe: ObserveConfig{
+			Enabled:                true,
+			MaxFactsPerCall:        20,
+			DefaultConfidence:      0.3,
+			DefaultTemporality:     "ephemeral",
+			SubstanceMinLength:     20,
+			FeedbackLoopHours:      4,
+			FeedbackLoopSimilarity: 0.85,
+			RetrievalTracking:      true,
+			RetrievalSimilarity:    0.7,
+		},
+
+		Limits: LimitsConfig{
+			MaxJSONSize:        2 * 1024 * 1024,
+			MaxNestingDepth:    10,
+			MaxContentLength:   1024 * 1024,
+			MaxKeywords:        100,
+			MaxSummaryShort:    1000,
+			StdinTimeout:       30 * time.Second,
+			MaxWritesPerSecond: 100,
+		},
+
+		Search: SearchConfig{
+			BM25K1:              1.2,
+			BM25B:               0.75,
+			BM25WeightFull:      1.0,
+			BM25WeightMedium:    2.0,
+			BM25WeightShort:     3.0,
+			RRFK:                60,
+			SuggestionThreshold: 0.75,
+			HNSWThreshold:       5000,
+			HNSWM:               16,
+			HNSWEfConstruction:  200,
+			HNSWEfSearch:        100,
+			VectorOnlyPenalty:   0.1,
+			RetrievalCandidates: 200,
+			RerankEnabled:       false,
+			RerankCandidates:    50,
+		},
+
+		// --- Internal tuning defaults ---
 
 		Scoring: ScoringConfig{
 			WeightSimilarity:    0.55,
@@ -439,8 +1037,8 @@ func Defaults() Config {
 		},
 
 		Concepts: ConceptsConfig{
-			EmergenceThreshold:    3,
-		MaxKeywordPct:         0.2,
+			EmergenceThreshold:     3,
+			MaxKeywordPct:          0.2,
 			MinContentLengthDirect: 50,
 		},
 
@@ -453,121 +1051,13 @@ func Defaults() Config {
 			EdgeWeightTraversalThreshold: 0.3,
 		},
 
-		Search: SearchConfig{
-			BM25K1:              1.2,
-			BM25B:               0.75,
-			BM25WeightFull:      1.0,
-			BM25WeightMedium:    2.0,
-			BM25WeightShort:     3.0,
-			RRFK:                60,
-			SuggestionThreshold: 0.75,
-			HNSWThreshold:       5000,
-			HNSWM:               16,
-			HNSWEfConstruction:  200,
-			HNSWEfSearch:        100,
-			VectorOnlyPenalty:   0.1,
-			RetrievalCandidates: 200,
-			RerankEnabled:       false,
-			RerankCandidates:    50,
-		},
-
 		Storage: StorageConfig{
 			ProllyTargetChunkSize: 64,
 			ProllySplitBits:       6,
 		},
 
-		Limits: LimitsConfig{
-			MaxJSONSize:        2 * 1024 * 1024,
-			MaxNestingDepth:    10,
-			MaxContentLength:   1024 * 1024,
-			MaxKeywords:        100,
-			MaxSummaryShort:    1000,
-			StdinTimeout:       30 * time.Second,
-			MaxWritesPerSecond: 100,
-		},
-
 		Merge: MergeConfig{
 			ConflictStrategy: "timestamp_wins",
-		},
-
-		Logging: LoggingConfig{
-			Level:        "info",
-			MaxSizeMB:    512,
-			RotateSizeMB: 50,
-		},
-
-		Curation: CurationConfig{
-			Enabled:             true,
-			Interval:            1 * time.Minute,
-			OrphanSimilarityMin: 0.6,
-			StaleEphemeralScore: 0.95,
-			StaleTemporalScore:  0.99,
-			MaxOrphansPerRun:      20,
-			MaxDedupPerRun:        20,
-			SectionLinkMin:        0.75,
-			MaxSectionLinksPerRun: 30,
-			ObservationBatchSize: 0, // auto: 500 for local providers, 20 for external
-		},
-
-		LLM: LLMConfig{
-			Model: "claude-sonnet-4-6", // used by non-curation paths (sessions, inline classification)
-			Models: LLMModels{
-				Low:    "claude-haiku-4-5",
-				Medium: "claude-sonnet-4-6",
-				High:   "claude-opus-4-7",
-			},
-		},
-
-		LLMCuration: LLMCurationConfig{
-			BatchSize:                   10,
-			MaxCallsPerRun:              20,
-			MaxContradictionChecks:      5,
-			ContradictionMinSim:         0.5,
-			ContradictionMaxSim:         0.85,
-			MaxConceptsPerRun:           5,
-			SynthesisBatchSize:          5,
-			SynthesisMaxInputTokens:     8000,
-			LongClassificationThreshold: 2000,
-
-			// Explicit effort assignments per curation task. Users edit
-			// these in config.yaml to retune cost vs quality. Summarization
-			// and short classification are Haiku-grade (clear-signal work,
-			// enum picks, distilled summaries). Contradiction detection,
-			// concept synthesis, and long-content classification benefit
-			// from Sonnet-grade reasoning (subtle semantic + temporal
-			// distinctions, multi-record abstraction, calibrated
-			// confidence/temporality choices). Manifest rollup is
-			// infrequent and low-nuance -> Haiku.
-			ClassificationShortEffort: string(EffortLow),
-			ClassificationLongEffort:  string(EffortMedium),
-			SummarizationEffort:       string(EffortLow),
-			ContradictionEffort:       string(EffortMedium),
-			ConceptEffort:             string(EffortMedium),
-			ManifestEffort:            string(EffortLow),
-		},
-
-		Observe: ObserveConfig{
-			Enabled:                true,
-			MaxFactsPerCall:        20,
-			DefaultConfidence:      0.3,
-			DefaultTemporality:     "ephemeral",
-			SubstanceMinLength:     20,
-			FeedbackLoopHours:      4,
-			FeedbackLoopSimilarity: 0.85,
-			RetrievalTracking:      true,
-			RetrievalSimilarity:    0.7,
-		},
-
-		GC: GCConfig{
-			Enabled:    false,
-			DryRun:     true,
-			MinAgeDays: 30,
-		},
-
-		Backup: BackupConfig{
-			Enabled:  true,
-			Retain:   2,
-			Schedule: 24 * time.Hour,
 		},
 	}
 }
@@ -614,6 +1104,19 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.LLMCuration.BatchSize > 5000 {
 		cfg.LLMCuration.BatchSize = 5000
+	}
+	if cfg.LLMCuration.ContradictionBatchSize < 0 {
+		cfg.LLMCuration.ContradictionBatchSize = 0
+	}
+	if cfg.LLMCuration.ContradictionBatchSize > 20 {
+		// Beyond ~20 pairs the prompt size and parser reliability degrade.
+		cfg.LLMCuration.ContradictionBatchSize = 20
+	}
+	if cfg.LLMCuration.ConceptCoherenceMin < 0 {
+		cfg.LLMCuration.ConceptCoherenceMin = 0
+	}
+	if cfg.LLMCuration.ConceptCoherenceMin > 1 {
+		cfg.LLMCuration.ConceptCoherenceMin = 1
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		cfg.Curation.MaxOrphansPerRun = 200

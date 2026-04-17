@@ -42,6 +42,14 @@ type State struct {
 	LLMPaused              bool
 	LLMPauseReason         string
 	LLMPausedAt            time.Time
+
+	// Manifest LLM cache: the fingerprint of the last store stats that
+	// produced a qualitative summary, and the summary itself. When a
+	// subsequent cycle's fingerprint matches, the cached summary is
+	// reused without firing another LLM call. In-memory only; the store
+	// regenerates on restart after one LLM call.
+	LastManifestHash    string
+	LastManifestSummary string
 }
 
 // EnhancedStatus is the curation info included in the response envelope.
@@ -256,9 +264,22 @@ func (r *Runner) cycle(ctx context.Context) {
 		hasCandidates := len(result.ConceptCandidates) > 0
 		needsSummary := result.Manifest != nil && result.Manifest.QualitativeSummary == ""
 		if !llmPaused && (hasPending || hasCandidates || needsSummary) {
-			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, r.logger)
+			// Snapshot the manifest cache under lock so the autonomous
+			// run sees a consistent hash/summary pair. The cache struct
+			// is mutated in place by generateManifestSummary; copy back
+			// under lock after the run.
+			r.state.mu.Lock()
+			mcache := ManifestCache{
+				Hash:    r.state.LastManifestHash,
+				Summary: r.state.LastManifestSummary,
+			}
+			r.state.mu.Unlock()
+
+			aResult := RunAutonomous(cycleCtx, r.engine, r.llm, r.cfg, &mcache, r.logger)
 			r.state.mu.Lock()
 			r.state.LastAutonomous = aResult
+			r.state.LastManifestHash = mcache.Hash
+			r.state.LastManifestSummary = mcache.Summary
 
 			// Circuit breaker: if >80% of LLM calls errored, count as
 			// an error cycle. After 3 consecutive error cycles, pause.

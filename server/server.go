@@ -235,7 +235,7 @@ func (s *Server) Run() error {
 	if engineCfg.Curation.Enabled {
 		curationLLM := s.engine.LLM()
 		if curationLLM != nil && s.usageTracker != nil {
-			curationLLM = llm.NewMetered(curationLLM, s.usageTracker)
+			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
 		}
 		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
@@ -335,7 +335,7 @@ func (s *Server) StartHTTP() error {
 	if engineCfg.Curation.Enabled {
 		curationLLM := s.engine.LLM()
 		if curationLLM != nil && s.usageTracker != nil {
-			curationLLM = llm.NewMetered(curationLLM, s.usageTracker)
+			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
 		}
 		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
 		curationCtx, curationCancel := context.WithCancel(context.Background())

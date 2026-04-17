@@ -2,36 +2,66 @@ package llm
 
 import (
 	"context"
+	"log/slog"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
-// Metered wraps a Provider and records usage metrics on every call.
+// Metered wraps a Provider and records usage metrics + emits a
+// per-call log on every Complete/CompleteWithModel. It:
+//
+//   - Reads the task label from the incoming context (set by callers
+//     via telemetry.WithTask). Empty task is recorded as "unknown".
+//   - Ensures a telemetry.UsageRecorder is attached to the context so
+//     the inner provider (Anthropic) can report token counts. If the
+//     caller attached their own recorder (for cycle-level aggregation),
+//     Metered records into that one and reads its delta per call.
+//   - Looks up model pricing via LookupPricing and computes a
+//     per-call USD cost.
+//   - Emits one Info log per call with model, task, token counts,
+//     cache counts, latency, cost.
+//   - Records to the UsageTracker for cap enforcement + summary.
 type Metered struct {
 	inner   Provider
 	tracker *UsageTracker
-	task    string // default task label
+	logger  *slog.Logger
 }
 
-// NewMetered wraps a provider with usage tracking.
-func NewMetered(inner Provider, tracker *UsageTracker) *Metered {
-	return &Metered{inner: inner, tracker: tracker}
+// NewMetered wraps a provider with usage tracking and per-call logging.
+// logger may be nil; in that case no per-call log is emitted (metrics
+// still go to the tracker).
+func NewMetered(inner Provider, tracker *UsageTracker, logger *slog.Logger) *Metered {
+	return &Metered{inner: inner, tracker: tracker, logger: logger}
 }
 
 func (m *Metered) Complete(ctx context.Context, prompt string) (string, error) {
+	ctx, capture := m.ensureRecorder(ctx)
+	task := telemetry.TaskFromContext(ctx)
+
 	start := time.Now()
 	resp, err := m.inner.Complete(ctx, prompt)
-	m.record(m.inner.ModelID(), start, err)
+	latency := time.Since(start)
+
+	delta := capture()
+	m.record(m.inner.ModelID(), task, delta, latency, err)
 	return resp, err
 }
 
 func (m *Metered) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	ctx, capture := m.ensureRecorder(ctx)
+	task := telemetry.TaskFromContext(ctx)
+
 	start := time.Now()
 	resp, err := m.inner.CompleteWithModel(ctx, model, prompt)
+	latency := time.Since(start)
+
 	usedModel := model
 	if usedModel == "" {
 		usedModel = m.inner.ModelID()
 	}
-	m.record(usedModel, start, err)
+	delta := capture()
+	m.record(usedModel, task, delta, latency, err)
 	return resp, err
 }
 
@@ -47,24 +77,71 @@ func (m *Metered) SetSystemPrompt(text string) {
 	}
 }
 
-func (m *Metered) record(model string, start time.Time, err error) {
-	if m.tracker == nil {
-		return
+// ensureRecorder attaches a UsageRecorder to ctx if one isn't already
+// present, and returns a closure that yields the per-call delta when
+// invoked. The delta is computed against the pre-call snapshot of the
+// recorder, which lets Metered work correctly whether the caller
+// supplied its own cycle-scoped recorder (totals accumulate there) or
+// didn't (Metered uses a scratch recorder).
+func (m *Metered) ensureRecorder(ctx context.Context) (context.Context, func() telemetry.CallUsage) {
+	recorder := telemetry.RecorderFromContext(ctx)
+	if recorder == nil {
+		recorder = &telemetry.UsageRecorder{}
+		ctx = telemetry.WithUsageRecorder(ctx, recorder)
 	}
-	task := m.task
+	before := recorder.Total()
+	return ctx, func() telemetry.CallUsage {
+		return recorder.Total().Sub(before)
+	}
+}
+
+func (m *Metered) record(model, task string, usage telemetry.CallUsage, latency time.Duration, err error) {
 	if task == "" {
 		task = "unknown"
 	}
+	cost := EstimateCost(model, usage)
+	success := err == nil
 	errType := ""
 	if err != nil {
 		errType = "error"
 	}
-	m.tracker.Record(CallMetrics{
-		Provider:  "metered",
-		Model:     model,
-		Task:      task,
-		LatencyMs: time.Since(start).Milliseconds(),
-		Success:   err == nil,
-		ErrorType: errType,
-	})
+
+	metrics := CallMetrics{
+		Provider:         "metered",
+		Model:            model,
+		Task:             task,
+		InputTokens:      usage.InputTokens,
+		OutputTokens:     usage.OutputTokens,
+		CacheReadTokens:  usage.CacheReadTokens,
+		CacheWriteTokens: usage.CacheWriteTokens,
+		CostUSD:          cost,
+		LatencyMs:        latency.Milliseconds(),
+		Success:          success,
+		ErrorType:        errType,
+	}
+
+	if m.tracker != nil {
+		m.tracker.Record(metrics)
+	}
+
+	if m.logger != nil {
+		args := []any{
+			"component", "llm",
+			"model", model,
+			"task", task,
+			"input_tokens", metrics.InputTokens,
+			"output_tokens", metrics.OutputTokens,
+			"cache_read", metrics.CacheReadTokens,
+			"cache_write", metrics.CacheWriteTokens,
+			"latency_ms", metrics.LatencyMs,
+			"cost_usd", cost,
+			"success", success,
+		}
+		if !success {
+			args = append(args, "error", errType)
+			m.logger.Warn("llm call", args...)
+		} else {
+			m.logger.Info("llm call", args...)
+		}
+	}
 }
