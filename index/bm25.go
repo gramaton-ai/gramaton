@@ -42,6 +42,12 @@ type MemoryBM25Index struct {
 	// Total number of documents.
 	numDocs int
 
+	// totalLen is the sum of docLen values, maintained incrementally
+	// on every Add/Remove. avgDL is derived from totalLen / numDocs.
+	// (Wave 5 P1-58: was recomputed via O(N) scan over docLen on
+	// every Add/Remove; now O(1) per write.)
+	totalLen int
+
 	// Average document length (maintained incrementally).
 	avgDL float64
 
@@ -94,6 +100,7 @@ func (idx *MemoryBM25Index) Add(nodeID, text string) {
 
 	idx.tf[nodeID] = tf
 	idx.docLen[nodeID] = len(tokens)
+	idx.totalLen += len(tokens)
 
 	for token := range tf {
 		if idx.inverted[token] == nil {
@@ -103,7 +110,7 @@ func (idx *MemoryBM25Index) Add(nodeID, text string) {
 	}
 
 	idx.numDocs++
-	idx.recomputeAvgDL()
+	idx.refreshAvgDL()
 }
 
 // Remove deletes a document from the index.
@@ -112,7 +119,7 @@ func (idx *MemoryBM25Index) Remove(nodeID string) {
 		return
 	}
 	idx.removeInternal(nodeID)
-	idx.recomputeAvgDL()
+	idx.refreshAvgDL()
 }
 
 func (idx *MemoryBM25Index) removeInternal(nodeID string) {
@@ -124,21 +131,21 @@ func (idx *MemoryBM25Index) removeInternal(nodeID string) {
 			}
 		}
 	}
+	idx.totalLen -= idx.docLen[nodeID]
 	delete(idx.tf, nodeID)
 	delete(idx.docLen, nodeID)
 	idx.numDocs--
 }
 
-func (idx *MemoryBM25Index) recomputeAvgDL() {
+// refreshAvgDL recomputes the cached avgDL from the incrementally
+// maintained totalLen / numDocs. O(1) per Add/Remove.
+func (idx *MemoryBM25Index) refreshAvgDL() {
 	if idx.numDocs == 0 {
 		idx.avgDL = 0
+		idx.totalLen = 0 // defensive: keep accounting clean on empty
 		return
 	}
-	total := 0
-	for _, dl := range idx.docLen {
-		total += dl
-	}
-	idx.avgDL = float64(total) / float64(idx.numDocs)
+	idx.avgDL = float64(idx.totalLen) / float64(idx.numDocs)
 }
 
 // Search scores all documents in the optional candidate set against
@@ -232,6 +239,7 @@ func (idx *MemoryBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]
 
 	idx.tf[nodeID] = termFreqs
 	idx.docLen[nodeID] = docLength
+	idx.totalLen += docLength
 
 	for token := range termFreqs {
 		if idx.inverted[token] == nil {
@@ -241,7 +249,7 @@ func (idx *MemoryBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]
 	}
 
 	idx.numDocs++
-	idx.recomputeAvgDL()
+	idx.refreshAvgDL()
 }
 
 // bm25 serialization format (binary, little-endian):

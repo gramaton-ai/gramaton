@@ -176,9 +176,20 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
+	// LLM is optional -- a misconfigured provider becomes nil so the
+	// rest of the engine can run without curation. Log the error
+	// loudly so operators can tell "no LLM configured" apart from
+	// "LLM configured but typo'd / wrong key / wrong region". Before
+	// this, a misspelled provider name was indistinguishable from
+	// no provider at all. (Wave 5 P1-48.)
 	llmProv, err := llm.New(cfg.LLM)
 	if err != nil {
-		// LLM is optional -- ignore the error.
+		if cfg.LLM.Provider != "" {
+			slog.Error("llm provider configured but failed to initialise",
+				"component", "engine",
+				"provider", cfg.LLM.Provider,
+				"err", err)
+		}
 		llmProv = nil
 	}
 

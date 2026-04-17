@@ -64,12 +64,18 @@ func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
 	}
 
 	idx := &BboltBM25Index{db: db, k1: k1, b: b}
-	idx.loadMeta()
+	if err := idx.loadMeta(); err != nil {
+		return nil, fmt.Errorf("bbolt bm25: load meta: %w", err)
+	}
 	return idx, nil
 }
 
-func (idx *BboltBM25Index) loadMeta() {
-	idx.db.View(func(tx *bolt.Tx) error {
+// loadMeta restores numDocs/totalLen/avgDL from the on-disk meta
+// bucket. If this fails silently and avgDL stays 0, every Search
+// short-circuits at the avgDL==0 guard and returns nil -- a
+// catastrophic but invisible bug. (Wave 5 P1-56.)
+func (idx *BboltBM25Index) loadMeta() error {
+	return idx.db.View(func(tx *bolt.Tx) error {
 		mb := tx.Bucket(bm25MetaBucket)
 		if v := mb.Get([]byte("num_docs")); len(v) >= 4 {
 			idx.numDocs = int(binary.LittleEndian.Uint32(v))

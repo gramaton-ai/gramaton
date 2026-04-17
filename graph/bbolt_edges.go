@@ -173,6 +173,12 @@ func (s *BboltEdgeStore) ForEach(fn func(e *Edge)) {
 	}
 }
 
+// loadEdgesFromBucket reads the edge-ID list for key from the
+// adjacency bucket and returns the corresponding edges. Lookups
+// for cached edges short-circuit; uncached edges are batched into
+// a single bbolt View instead of one View per edge. Previously
+// each cache miss opened its own transaction, making EdgesFrom
+// cost O(N+1) views on a hot path. (Wave 5 P1-49.)
 func (s *BboltEdgeStore) loadEdgesFromBucket(bucket []byte, key string) []*Edge {
 	var edgeIDs []string
 	if err := s.db.View(func(tx *bolt.Tx) error {
@@ -186,13 +192,56 @@ func (s *BboltEdgeStore) loadEdgesFromBucket(bucket []byte, key string) []*Edge 
 	if len(edgeIDs) == 0 {
 		return nil
 	}
+
+	// Edges are returned in the bucket's stored order. We walk the
+	// list once, collecting cache hits inline and queueing misses
+	// for a batched View so the order on the way out matches.
 	edges := make([]*Edge, 0, len(edgeIDs))
+	type missSlot struct {
+		idx int
+		id  string
+	}
+	var misses []missSlot
 	for _, eid := range edgeIDs {
-		if e, ok := s.Get(eid); ok {
+		if e, ok := s.cache.Get(eid); ok {
 			edges = append(edges, e)
+			continue
+		}
+		// Reserve the slot; we'll fill it in after the batched read.
+		misses = append(misses, missSlot{idx: len(edges), id: eid})
+		edges = append(edges, nil)
+	}
+
+	if len(misses) > 0 {
+		_ = s.db.View(func(tx *bolt.Tx) error {
+			eb := tx.Bucket(edgesBucket)
+			for _, m := range misses {
+				data := eb.Get([]byte(m.id))
+				if data == nil {
+					continue
+				}
+				e, err := UnmarshalEdge(data)
+				if err != nil {
+					slog.Error("bbolt edge store: loadEdges unmarshal",
+						"edge", m.id, "err", err)
+					continue
+				}
+				s.cache.Put(e)
+				edges[m.idx] = e
+			}
+			return nil
+		})
+	}
+
+	// Compact: drop nil slots from edges whose row was missing on disk
+	// (data races, manual deletion). Caller expects a tight slice.
+	out := edges[:0]
+	for _, e := range edges {
+		if e != nil {
+			out = append(out, e)
 		}
 	}
-	return edges
+	return out
 }
 
 // --- Edge ID list encoding ---

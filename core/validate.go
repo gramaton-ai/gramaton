@@ -2,6 +2,8 @@ package core
 
 import (
 	"fmt"
+
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // ValidationResult holds the outcome of a store integrity check.
@@ -46,38 +48,21 @@ func (e *Engine) Validate() *ValidationResult {
 	}
 
 	// --- Edge integrity ---
+	// Walk every edge once via ForEachEdge instead of per-node
+	// EdgesFrom + EdgesTo. The old loop was N² (each node opens
+	// two adjacency lookups, each of which on BboltEdgeStore costs
+	// an extra View). This is a single pass over the edges bucket.
+	// (Wave 5 P1-47.)
 	edgeCount := 0
-	edgeSeen := make(map[string]struct{})
-	for _, nodeID := range allIDs {
-		for _, edge := range g.EdgesFrom(nodeID) {
-			if _, seen := edgeSeen[edge.ID]; seen {
-				continue
-			}
-			edgeSeen[edge.ID] = struct{}{}
-			edgeCount++
-
-			if _, ok := nodeSet[edge.SourceID]; !ok {
-				r.addError("edge %s: source node %s does not exist", edge.ID, edge.SourceID)
-			}
-			if _, ok := nodeSet[edge.TargetID]; !ok {
-				r.addError("edge %s: target node %s does not exist", edge.ID, edge.TargetID)
-			}
+	g.ForEachEdge(func(edge *graph.Edge) {
+		edgeCount++
+		if _, ok := nodeSet[edge.SourceID]; !ok {
+			r.addError("edge %s: source node %s does not exist", edge.ID, edge.SourceID)
 		}
-		for _, edge := range g.EdgesTo(nodeID) {
-			if _, seen := edgeSeen[edge.ID]; seen {
-				continue
-			}
-			edgeSeen[edge.ID] = struct{}{}
-			edgeCount++
-
-			if _, ok := nodeSet[edge.SourceID]; !ok {
-				r.addError("edge %s: source node %s does not exist", edge.ID, edge.SourceID)
-			}
-			if _, ok := nodeSet[edge.TargetID]; !ok {
-				r.addError("edge %s: target node %s does not exist", edge.ID, edge.TargetID)
-			}
+		if _, ok := nodeSet[edge.TargetID]; !ok {
+			r.addError("edge %s: target node %s does not exist", edge.ID, edge.TargetID)
 		}
-	}
+	})
 	r.Stats.Edges = edgeCount
 
 	// --- Structural integrity ---

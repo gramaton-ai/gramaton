@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -321,8 +321,13 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		if k > n {
 			k = n
 		}
+		// math/rand/v2 is auto-seeded per process. Previously the
+		// legacy math/rand was unseeded, so Random mode returned
+		// the same "random" slice on every server-process lifetime
+		// -- the opposite of what the doc-string promises.
+		// (Wave 5 P1-57.)
 		for i := 0; i < k; i++ {
-			j := i + rand.Intn(n-i)
+			j := i + rand.IntN(n-i)
 			candidates[i], candidates[j] = candidates[j], candidates[i]
 		}
 		candidates = candidates[:k]

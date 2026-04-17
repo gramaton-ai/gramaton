@@ -114,7 +114,13 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 	// own embeddings during curation (D18/D23).
 	//
 	// content_short is the primary vector for parent-record search.
-	// If no summary is provided, use the first 500 chars of content.
+	// If no summary is provided, derive one from the content using
+	// the configured MaxSummaryShort cap (rather than a hardcoded
+	// 500). Curation later replaces this with an LLM-generated
+	// summary; the temporary embed at capture time should at least
+	// match the cap that subsequent rewrites are bounded by, so
+	// vector geometry is consistent across the lifecycle.
+	// (Wave 5 P1-65.)
 	sources := []struct {
 		sourceKey string
 		embedKey  string
@@ -125,8 +131,9 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 	embedText := req.SummaryShort
 	if embedText == "" {
 		embedText = req.Content
-		if len(embedText) > 500 {
-			embedText = embedText[:500]
+		cap := getMaxSummaryShort()
+		if len(embedText) > cap {
+			embedText = embedText[:cap]
 		}
 	}
 

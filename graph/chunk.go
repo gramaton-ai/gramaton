@@ -7,8 +7,14 @@ import (
 
 // ChunkText splits text into overlapping chunks based on a token budget.
 // Uses a simple approximation of 1 token per 4 characters.
-// Returns nil if the text is at or below the threshold.
+// Returns nil if the text is at or below the threshold, or if
+// chunkTokens is non-positive (callers misconfiguring chunkSize=0
+// previously could trigger an infinite loop when nextStart didn't
+// advance past start). (Wave 5 P1-51.)
 func ChunkText(text string, thresholdTokens, chunkTokens, overlapTokens int) []string {
+	if chunkTokens <= 0 {
+		return nil
+	}
 	charsPerToken := 4
 	thresholdChars := thresholdTokens * charsPerToken
 	chunkChars := chunkTokens * charsPerToken
@@ -44,10 +50,16 @@ func ChunkText(text string, thresholdTokens, chunkTokens, overlapTokens int) []s
 
 		chunks = append(chunks, text[start:end])
 
-		// Advance based on actual chunk end, minus overlap.
+		// Advance based on actual chunk end, minus overlap. Guarantee
+		// strictly positive forward motion so a degenerate input
+		// (overlap >= chunkChars, or word-boundary collapse) cannot
+		// loop forever -- we'd rather over-chunk than spin.
 		nextStart := end - overlapChars
 		if nextStart <= start {
 			nextStart = start + chunkChars/2
+		}
+		if nextStart <= start {
+			nextStart = start + 1
 		}
 		start = nextStart
 

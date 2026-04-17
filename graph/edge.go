@@ -47,6 +47,13 @@ func (g *Graph) GetEdge(id string) (*Edge, bool) {
 	return g.edgeStore.Get(id)
 }
 
+// ForEachEdge iterates every edge in the store in unspecified order,
+// calling fn for each. Avoids the per-node EdgesFrom/EdgesTo round
+// trips when callers genuinely need every edge (e.g. Validate).
+func (g *Graph) ForEachEdge(fn func(*Edge)) {
+	g.edgeStore.ForEach(fn)
+}
+
 // SetEdgeWeight updates an edge's weight.
 func (g *Graph) SetEdgeWeight(id string, weight float64) error {
 	e, ok := g.edgeStore.Get(id)
