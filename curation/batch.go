@@ -122,7 +122,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 	// Submit batch.
 	logger.Info("batch: submitting", "records", len(requests))
-	batchID, err := anthClient.SubmitBatch(requests)
+	batchID, err := anthClient.SubmitBatch(ctx, requests)
 	if err != nil {
 		return nil, fmt.Errorf("batch submit: %w", err)
 	}
@@ -143,7 +143,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		case <-time.After(pollInterval):
 		}
 
-		status, err := anthClient.PollBatch(batchID)
+		status, err := anthClient.PollBatch(ctx, batchID)
 		if err != nil {
 			pollErrors++
 			if pollErrors >= maxPollErrors {
@@ -177,7 +177,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	}
 
 	// Fetch and apply results.
-	batchResults, err := anthClient.FetchResults(batchID)
+	batchResults, err := anthClient.FetchResults(ctx, batchID)
 	if err != nil {
 		return result, fmt.Errorf("batch fetch results: %w", err)
 	}

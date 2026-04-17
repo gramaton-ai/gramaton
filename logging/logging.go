@@ -206,7 +206,11 @@ func (w *RotatingWriter) compressedFiles() []string {
 }
 
 // enforcebudget deletes the oldest compressed files until total size
-// is under the budget.
+// is under the budget. Stat/Remove failures are surfaced via the
+// shared stderr writer (same channel used elsewhere in this file)
+// so disk-budget overshoot is observable. Previously these errors
+// were silently dropped, which let the budget overshoot
+// indefinitely with no operator signal. (Wave 4 P1-08.)
 func (w *RotatingWriter) enforcebudget() {
 	files := w.compressedFiles()
 	if len(files) == 0 {
@@ -218,6 +222,7 @@ func (w *RotatingWriter) enforcebudget() {
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "logging: budget stat failed: %s: %v\n", f, err)
 			continue
 		}
 		sizes[f] = info.Size()
@@ -229,8 +234,11 @@ func (w *RotatingWriter) enforcebudget() {
 		if totalSize <= w.maxTotal {
 			break
 		}
+		if err := os.Remove(f); err != nil {
+			fmt.Fprintf(os.Stderr, "logging: budget remove failed: %s: %v\n", f, err)
+			continue
+		}
 		totalSize -= sizes[f]
-		os.Remove(f)
 	}
 }
 

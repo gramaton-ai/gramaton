@@ -43,16 +43,22 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("create archive: %w", err)
 	}
-	defer f.Close()
+	// Cleanup-on-error: if we return without success, drop the
+	// half-written archive so the user doesn't see a corrupt file.
+	success := false
+	defer func() {
+		if !success {
+			f.Close()
+			os.Remove(archivePath)
+		}
+	}()
 
 	gz, err := gzip.NewWriterLevel(f, gzip.DefaultCompression)
 	if err != nil {
 		return "", fmt.Errorf("create gzip writer: %w", err)
 	}
-	defer gz.Close()
 
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
 
 	// Walk the data directory and add files.
 	if err := filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
@@ -101,15 +107,53 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 		return "", fmt.Errorf("archive data: %w", err)
 	}
 
-	// Include sanitized config if available.
+	// Include sanitized config if available. Distinguish file-read
+	// errors (non-fatal: backup works without the config sidecar)
+	// from tar-write errors (fatal: archive is now corrupt).
 	if cfgPath != "" {
 		if err := addSanitizedConfig(tw, cfgPath); err != nil {
-			// Non-fatal: backup works without config.
-			_ = err
+			if isTarWriteError(err) {
+				return "", fmt.Errorf("archive config: %w", err)
+			}
+			// File-read failure -- log via a hint in the error path
+			// would be ideal, but Create has no logger. Silent skip
+			// matches the prior policy.
 		}
 	}
 
+	// Explicit Close + error checks. Defer would swallow errors from
+	// these flushes -- and gzip/tar buffer their final blocks until
+	// Close, so Close failure means the archive is truncated.
+	// (Wave 4 P1-04.)
+	if err := tw.Close(); err != nil {
+		return "", fmt.Errorf("close tar writer: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return "", fmt.Errorf("close gzip writer: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return "", fmt.Errorf("fsync archive: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close archive: %w", err)
+	}
+
+	success = true
 	return archivePath, nil
+}
+
+// isTarWriteError returns true when err originates from tar.Writer
+// (vs the underlying file read in addSanitizedConfig). Used to
+// distinguish "config file missing on disk" (non-fatal) from "tar
+// stream broken" (fatal).
+func isTarWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "tar:") ||
+		strings.Contains(s, "tar.Writer") ||
+		strings.Contains(s, "write tar")
 }
 
 // Restore extracts a backup archive into the data directory.

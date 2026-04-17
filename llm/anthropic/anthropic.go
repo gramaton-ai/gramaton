@@ -31,6 +31,12 @@ type Client struct {
 	apiKey  string
 	client  *http.Client
 
+	// batchClient has a longer timeout (5 min) for the message
+	// batches API which streams results that can take noticeably
+	// longer than chat-style single-message calls. Connection pool
+	// is reused across batch operations.
+	batchClient *http.Client
+
 	systemMu    sync.RWMutex
 	systemCache []systemBlock // cached system prompt, set via SetSystemPrompt
 }
@@ -53,10 +59,11 @@ func New(cfg config.LLMConfig) (*Client, error) {
 	}
 
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		model:   model,
-		apiKey:  key,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		model:       model,
+		apiKey:      key,
+		client:      &http.Client{Timeout: 120 * time.Second},
+		batchClient: &http.Client{Timeout: 5 * time.Minute},
 	}, nil
 }
 

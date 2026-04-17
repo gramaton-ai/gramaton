@@ -2,11 +2,11 @@ package anthropic
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
 // BatchRequest is a single request in a message batch.
@@ -84,13 +84,14 @@ type BatchResultData struct {
 }
 
 // SubmitBatch creates a new message batch. Returns the batch ID.
-func (c *Client) SubmitBatch(requests []BatchRequest) (string, error) {
+// The supplied ctx cancels the underlying HTTP request.
+func (c *Client) SubmitBatch(ctx context.Context, requests []BatchRequest) (string, error) {
 	body, err := json.Marshal(batchCreateRequest{Requests: requests})
 	if err != nil {
 		return "", fmt.Errorf("anthropic batch: marshal: %w", err)
 	}
 
-	resp, err := c.doBatchRequest("POST", "/v1/messages/batches", body)
+	resp, err := c.doBatchRequest(ctx, "POST", "/v1/messages/batches", body)
 	if err != nil {
 		return "", err
 	}
@@ -102,9 +103,10 @@ func (c *Client) SubmitBatch(requests []BatchRequest) (string, error) {
 	return status.ID, nil
 }
 
-// PollBatch checks the status of a batch.
-func (c *Client) PollBatch(batchID string) (BatchStatus, error) {
-	resp, err := c.doBatchRequest("GET", "/v1/messages/batches/"+batchID, nil)
+// PollBatch checks the status of a batch. The supplied ctx cancels
+// the underlying HTTP request.
+func (c *Client) PollBatch(ctx context.Context, batchID string) (BatchStatus, error) {
+	resp, err := c.doBatchRequest(ctx, "GET", "/v1/messages/batches/"+batchID, nil)
 	if err != nil {
 		return BatchStatus{}, err
 	}
@@ -117,8 +119,9 @@ func (c *Client) PollBatch(batchID string) (BatchStatus, error) {
 }
 
 // FetchResults retrieves the results of a completed batch as JSONL.
-func (c *Client) FetchResults(batchID string) ([]BatchResult, error) {
-	resp, err := c.doBatchRequest("GET", "/v1/messages/batches/"+batchID+"/results", nil)
+// The supplied ctx cancels the underlying HTTP request.
+func (c *Client) FetchResults(ctx context.Context, batchID string) ([]BatchResult, error) {
+	resp, err := c.doBatchRequest(ctx, "GET", "/v1/messages/batches/"+batchID+"/results", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -140,20 +143,21 @@ func (c *Client) FetchResults(batchID string) ([]BatchResult, error) {
 	return results, nil
 }
 
-// CancelBatch cancels an in-progress batch.
-func (c *Client) CancelBatch(batchID string) error {
-	_, err := c.doBatchRequest("POST", "/v1/messages/batches/"+batchID+"/cancel", nil)
+// CancelBatch cancels an in-progress batch. The supplied ctx
+// cancels the underlying HTTP request.
+func (c *Client) CancelBatch(ctx context.Context, batchID string) error {
+	_, err := c.doBatchRequest(ctx, "POST", "/v1/messages/batches/"+batchID+"/cancel", nil)
 	return err
 }
 
-func (c *Client) doBatchRequest(method, path string, body []byte) ([]byte, error) {
+func (c *Client) doBatchRequest(ctx context.Context, method, path string, body []byte) ([]byte, error) {
 	url := c.baseURL + path
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic batch: create request: %w", err)
 	}
@@ -161,9 +165,8 @@ func (c *Client) doBatchRequest(method, path string, body []byte) ([]byte, error
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", apiVersion)
 
-	// Batch operations can be slow; use a longer timeout.
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
+	// Use the shared batch client (5-min timeout, connection-pooled).
+	resp, err := c.batchClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic batch: request failed: %w", err)
 	}

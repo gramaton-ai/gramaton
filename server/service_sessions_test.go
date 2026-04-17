@@ -639,6 +639,67 @@ func TestSweepPreparedSessionsRemovesStaleEntries(t *testing.T) {
 	}
 }
 
+// TestPreparedSessionsSurviveServerRestart is the regression test for
+// P1-44: a server restart between an agent's prepare call and its
+// follow-up commit must not break the flow. Before the on-disk
+// persistence, the second server saw an empty preparedSessions map
+// and rejected commit with prepare_required. Now the map is
+// reloaded on construction with the TTL filter applied.
+func TestPreparedSessionsSurviveServerRestart(t *testing.T) {
+	srv1, _ := setupTestServer(t)
+
+	// Seed the prepared map and persist.
+	srv1.mu.Lock()
+	srv1.preparedSessions["session-A"] = time.Now()
+	srv1.preparedSessions["session-B"] = time.Now()
+	srv1.savePreparedSessionsLocked()
+	srv1.mu.Unlock()
+
+	// Build a second Server pointing at the same ConfigDir to
+	// simulate a restart. The second instance must load + restore
+	// the map.
+	srv2 := &Server{
+		cfg:              srv1.cfg,
+		log:              srv1.log,
+		preparedSessions: make(map[string]time.Time),
+	}
+	srv2.loadPreparedSessions()
+
+	if _, has := srv2.preparedSessions["session-A"]; !has {
+		t.Errorf("session-A missing after restart restore: %#v", srv2.preparedSessions)
+	}
+	if _, has := srv2.preparedSessions["session-B"]; !has {
+		t.Errorf("session-B missing after restart restore: %#v", srv2.preparedSessions)
+	}
+}
+
+// TestPreparedSessionsRestoreDropsExpired confirms the TTL filter
+// is applied during load -- a server that's been down for >TTL
+// should not surface zombie flags.
+func TestPreparedSessionsRestoreDropsExpired(t *testing.T) {
+	srv1, _ := setupTestServer(t)
+
+	srv1.mu.Lock()
+	srv1.preparedSessions["fresh"] = time.Now()
+	srv1.preparedSessions["expired"] = time.Now().Add(-2 * preparedSessionTTL)
+	srv1.savePreparedSessionsLocked()
+	srv1.mu.Unlock()
+
+	srv2 := &Server{
+		cfg:              srv1.cfg,
+		log:              srv1.log,
+		preparedSessions: make(map[string]time.Time),
+	}
+	srv2.loadPreparedSessions()
+
+	if _, has := srv2.preparedSessions["fresh"]; !has {
+		t.Error("fresh entry should survive restore")
+	}
+	if _, has := srv2.preparedSessions["expired"]; has {
+		t.Error("expired entry should be dropped during restore")
+	}
+}
+
 func TestSessionPrepareIgnoresStaleCompactionFlag(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

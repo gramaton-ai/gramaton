@@ -9,7 +9,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 )
+
+// modelPattern restricts model strings to a conservative shape:
+// alphanumeric, hyphen, dot, underscore, colon, and slash. argv form
+// blocks shell metacharacters today, but a future claude CLI parser
+// bug that splits on whitespace within an arg could turn an
+// unvalidated user-supplied "sonnet --dangerous-flag" into two argv
+// entries. Reject anything that doesn't match the pattern. (Wave 4
+// P1-22.)
+var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
 
 // modelAliases maps short names to Claude CLI model identifiers.
 var modelAliases = map[string]string{
@@ -62,6 +72,9 @@ func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (s
 func (c *Client) ModelID() string { return "claude-cli:" + c.model }
 
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
+	if !modelPattern.MatchString(model) {
+		return "", fmt.Errorf("claudecli: rejected model %q (must match [A-Za-z0-9._:/-]+)", model)
+	}
 	args := []string{
 		"-p",
 		"--output-format", "json",

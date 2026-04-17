@@ -181,6 +181,9 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		preparedSessions: make(map[string]time.Time),
 		curationCacheTTL: 5 * time.Second,
 	}
+	// Restore any prepared-session flags from a prior process so a
+	// restart between prepare and commit doesn't break the flow.
+	s.loadPreparedSessions()
 
 	// Seed validation with the active LimitsConfig so user YAML overrides
 	// take effect on summary_short cap, keyword count, etc.

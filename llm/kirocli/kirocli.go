@@ -20,6 +20,15 @@ var modelAliases = map[string]string{
 	"auto":   "auto",
 }
 
+// modelPattern restricts model strings to a conservative shape:
+// alphanumeric, hyphen, dot, underscore, colon, and slash. argv form
+// blocks shell metacharacters today, but a future kiro-cli parser
+// change that splits on whitespace within an arg could turn an
+// unvalidated user-supplied "auto --trust-all-tools" into two argv
+// entries. Reject anything that doesn't match the pattern. (Wave 4
+// P1-22.)
+var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
 // ansiRe strips ANSI escape sequences from kiro-cli output.
 // Covers CSI (7-bit and 8-bit), OSC, DCS, APC, and PM sequences.
 var ansiRe = regexp.MustCompile(
@@ -66,6 +75,9 @@ func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (s
 func (c *Client) ModelID() string { return "kiro-cli:" + c.model }
 
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
+	if !modelPattern.MatchString(model) {
+		return "", fmt.Errorf("kirocli: rejected model %q (must match [A-Za-z0-9._:/-]+)", model)
+	}
 	args := []string{
 		"chat",
 		"--no-interactive",

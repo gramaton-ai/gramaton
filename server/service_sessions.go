@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -507,6 +508,73 @@ const preparedSessionTTL = 30 * time.Minute
 // preparedSweepInterval is how often the background sweeper runs.
 const preparedSweepInterval = 5 * time.Minute
 
+// preparedSessionsFilename is the on-disk file persisting the
+// preparedSessions map across server restarts. Without this, a
+// restart between an agent's prepare call and its follow-up commit
+// permanently breaks the flow with prepare_required, even though
+// the agent acted correctly. (Wave 4 P1-44.)
+const preparedSessionsFilename = "prepared_sessions.json"
+
+// preparedSessionsPath returns the on-disk path for the persisted
+// prepared-flag map.
+func (s *Server) preparedSessionsPath() string {
+	return filepath.Join(s.cfg.ConfigDir, preparedSessionsFilename)
+}
+
+// loadPreparedSessions reads the persisted map from disk and applies
+// the TTL filter (so a restart that lands long after the prior
+// process died doesn't surface zombie flags). Called during Server
+// construction. Best-effort: load failures fall through to an empty
+// map and log at Warn.
+func (s *Server) loadPreparedSessions() {
+	data, err := os.ReadFile(s.preparedSessionsPath())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			s.log.Warn("prepared sessions load failed",
+				"component", "session", "err", err)
+		}
+		return
+	}
+	var stored map[string]time.Time
+	if err := json.Unmarshal(data, &stored); err != nil {
+		s.log.Warn("prepared sessions parse failed",
+			"component", "session", "err", err)
+		return
+	}
+	cutoff := time.Now().Add(-preparedSessionTTL)
+	for sessionID, t := range stored {
+		if t.After(cutoff) {
+			s.preparedSessions[sessionID] = t
+		}
+	}
+	if len(s.preparedSessions) > 0 {
+		s.log.Info("prepared sessions restored",
+			"component", "session", "count", len(s.preparedSessions))
+	}
+}
+
+// savePreparedSessionsLocked persists the current preparedSessions
+// map to disk via atomic temp+rename. Caller MUST hold s.mu.
+// Failures log at Warn but do not return -- a failed persist still
+// leaves correct in-memory state for the rest of this process's
+// lifetime; the worst case is the same as pre-Wave-4 (lost on
+// restart).
+func (s *Server) savePreparedSessionsLocked() {
+	if s.cfg.ConfigDir == "" {
+		return
+	}
+	data, err := json.Marshal(s.preparedSessions)
+	if err != nil {
+		s.log.Warn("prepared sessions marshal failed",
+			"component", "session", "err", err)
+		return
+	}
+	if err := core.AtomicWriteFile(s.preparedSessionsPath(), data, 0o600); err != nil {
+		s.log.Warn("prepared sessions persist failed",
+			"component", "session", "err", err)
+	}
+}
+
 // sweepPreparedSessions removes prepared-flag entries older than
 // preparedSessionTTL. Called by the background sweeper goroutine.
 func (s *Server) sweepPreparedSessions() {
@@ -523,6 +591,7 @@ func (s *Server) sweepPreparedSessions() {
 	if removed > 0 {
 		s.log.Debug("prepared sessions sweep", "component", "session",
 			"removed", removed, "remaining", len(s.preparedSessions))
+		s.savePreparedSessionsLocked()
 	}
 }
 
@@ -645,8 +714,11 @@ func (s *Server) serviceSessionPrepare(sessionID string) (map[string]any, *servi
 	sessionState := s.buildSessionResponse(sessionID, session)
 
 	// Set prepared flag (protected by mu since preparedSessions is not engine-locked).
+	// Persist to disk so a restart between prepare and commit doesn't
+	// permanently break the agent's flow. (Wave 4 P1-44.)
 	s.mu.Lock()
 	s.preparedSessions[sessionID] = time.Now()
+	s.savePreparedSessionsLocked()
 	s.mu.Unlock()
 
 	// Count segments for logging.
@@ -777,6 +849,7 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 	_, prepared := s.preparedSessions[sessionID]
 	if prepared {
 		delete(s.preparedSessions, sessionID)
+		s.savePreparedSessionsLocked()
 	}
 	s.mu.Unlock()
 

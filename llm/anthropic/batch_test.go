@@ -1,11 +1,25 @@
 package anthropic
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+// batchTestClient builds a *Client wired to a test server with the
+// real batchClient (5-min timeout) so the new ctx-aware batch
+// methods can run without nil-deref. Used by every batch test.
+func batchTestClient(serverURL string) *Client {
+	return &Client{
+		baseURL:     serverURL,
+		apiKey:      "test-key",
+		model:       "test",
+		batchClient: &http.Client{Timeout: 5 * time.Minute},
+	}
+}
 
 func TestSubmitBatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,9 +37,9 @@ func TestSubmitBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := &Client{baseURL: server.URL, apiKey: "test-key", model: "test"}
+	c := batchTestClient(server.URL)
 
-	batchID, err := c.SubmitBatch([]BatchRequest{
+	batchID, err := c.SubmitBatch(context.Background(), []BatchRequest{
 		{CustomID: "r1", Params: BatchParams{Model: "haiku", MaxTokens: 100, Messages: []BatchMessage{{Role: "user", Content: "test"}}}},
 		{CustomID: "r2", Params: BatchParams{Model: "sonnet", MaxTokens: 100, Messages: []BatchMessage{{Role: "user", Content: "test2"}}}},
 	})
@@ -50,9 +64,9 @@ func TestPollBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := &Client{baseURL: server.URL, apiKey: "test-key", model: "test"}
+	c := batchTestClient(server.URL)
 
-	status, err := c.PollBatch("batch_123")
+	status, err := c.PollBatch(context.Background(), "batch_123")
 	if err != nil {
 		t.Fatalf("PollBatch: %v", err)
 	}
@@ -75,9 +89,9 @@ func TestFetchResults(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := &Client{baseURL: server.URL, apiKey: "test-key", model: "test"}
+	c := batchTestClient(server.URL)
 
-	results, err := c.FetchResults("batch_123")
+	results, err := c.FetchResults(context.Background(), "batch_123")
 	if err != nil {
 		t.Fatalf("FetchResults: %v", err)
 	}
@@ -101,9 +115,9 @@ func TestBatchAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := &Client{baseURL: server.URL, apiKey: "test-key", model: "test"}
+	c := batchTestClient(server.URL)
 
-	_, err := c.SubmitBatch([]BatchRequest{{CustomID: "r1", Params: BatchParams{Model: "haiku", MaxTokens: 100}}})
+	_, err := c.SubmitBatch(context.Background(), []BatchRequest{{CustomID: "r1", Params: BatchParams{Model: "haiku", MaxTokens: 100}}})
 	if err == nil {
 		t.Fatal("expected error for 429")
 	}
