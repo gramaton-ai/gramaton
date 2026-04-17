@@ -105,9 +105,28 @@ func (s *Store) Write(data []byte) (string, error) {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return "", fmt.Errorf("storage: rename %q to %q: %w", tmpPath, path, err)
 	}
+	// Fsync the parent directory so the rename(2) is durable. Without
+	// this, a crash after rename but before the next dir-sync can
+	// lose the entry on ext4 with certain mount options and on older
+	// filesystems. The advertised "atomic, content-addressed" store
+	// must actually be atomic on disk. (Wave 3 P1-42.)
+	if err := fsyncDir(filepath.Dir(path)); err != nil {
+		return "", fmt.Errorf("storage: fsync parent dir: %w", err)
+	}
 
 	success = true
 	return hash, nil
+}
+
+// fsyncDir opens the given directory and fsyncs it. Required after
+// rename(2) for full durability of the directory entry change.
+func fsyncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // Read returns the data for the given content hash. Returns an error

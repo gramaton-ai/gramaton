@@ -156,6 +156,63 @@ func TestCompleteSuccess(t *testing.T) {
 	}
 }
 
+// TestSetSystemPromptConcurrentWithComplete is the regression test
+// for P1-32: SetSystemPrompt and Complete share systemCache; before
+// the mutex was added, concurrent SetSystemPrompt + Complete races
+// fired under -race, and partial cache annotations could end up in
+// the request body. The test stresses both via interleaving and
+// asserts no race + no panic. Run with `go test -race`.
+func TestSetSystemPromptConcurrentWithComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain body so the connection can be reused; respond cheaply.
+		var req messagesRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(messagesResponse{
+			Content: []contentBlock{{Type: "text", Text: "ok"}},
+			Usage:   usage{InputTokens: 1, OutputTokens: 1},
+		})
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		baseURL: srv.URL,
+		model:   "claude-sonnet-4-6",
+		apiKey:  "sk-ant-test",
+		client:  srv.Client(),
+	}
+
+	const goroutines = 8
+	const iters = 50
+
+	done := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < iters; j++ {
+				if id%2 == 0 {
+					if _, err := client.Complete(context.Background(), "ping"); err != nil {
+						t.Errorf("Complete: %v", err)
+						return
+					}
+				} else {
+					// Toggle system prompt: empty / set / set-different.
+					switch j % 3 {
+					case 0:
+						client.SetSystemPrompt("")
+					case 1:
+						client.SetSystemPrompt("you are a helpful assistant")
+					case 2:
+						client.SetSystemPrompt("be concise")
+					}
+				}
+			}
+		}(i)
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}
+
 func TestCompleteAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

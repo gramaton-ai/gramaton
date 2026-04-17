@@ -7,7 +7,11 @@ import (
 	"strings"
 )
 
-// AtomicWriteFile writes data to a file atomically via temp file + rename.
+// AtomicWriteFile writes data to a file atomically via temp file +
+// rename. The parent directory is fsynced after the rename so that a
+// crash between the rename(2) syscall and the next sync cannot lose
+// the directory entry change. POSIX requires this -- a fsync on the
+// regular file does NOT make the rename durable. (Wave 3 P1-42.)
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -43,9 +47,26 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)
 	}
+	if err := fsyncDir(dir); err != nil {
+		// Data is written and renamed; missing dir-fsync risks losing
+		// the rename on crash but does not poison the file. Surface
+		// as a warning rather than fail the write.
+		return fmt.Errorf("fsync parent dir %s: %w", dir, err)
+	}
 
 	success = true
 	return nil
+}
+
+// fsyncDir opens the given directory and fsyncs it. Required after
+// rename(2) so that the directory entry change is durable.
+func fsyncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // RefsDir returns the refs directory for the given data directory.

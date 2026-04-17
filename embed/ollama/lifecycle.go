@@ -48,8 +48,12 @@ func EnsureRunning(endpoint string) error {
 	cmd := exec.Command(bin, "serve")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	// Detach from our process group so it survives after gramaton exits.
 	cmd.Env = os.Environ()
+	// Detach from our process group so signals delivered to gramaton
+	// (SIGINT, SIGHUP) don't propagate to ollama. Without this, the
+	// child inherits our pgid and dies when we die -- the zombie
+	// processes the user has been seeing. See P1-39 / project memory.
+	detachProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ollama serve: %w", err)
 	}

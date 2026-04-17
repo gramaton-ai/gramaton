@@ -93,7 +93,7 @@ func (s *BboltEdgeStore) Get(id string) (*Edge, bool) {
 		return e, true
 	}
 	var e *Edge
-	s.db.View(func(tx *bolt.Tx) error {
+	if err := s.db.View(func(tx *bolt.Tx) error {
 		data := tx.Bucket(edgesBucket).Get([]byte(id))
 		if data == nil {
 			return nil
@@ -105,7 +105,10 @@ func (s *BboltEdgeStore) Get(id string) (*Edge, bool) {
 			return nil
 		}
 		return nil
-	})
+	}); err != nil {
+		slog.Warn("bbolt edge store: get view failed", "edge", id, "err", err)
+		return nil, false
+	}
 	if e != nil {
 		s.cache.Put(e)
 		return e, true
@@ -145,15 +148,17 @@ func (s *BboltEdgeStore) ByType(edgeType string) []*Edge {
 
 func (s *BboltEdgeStore) Count() int {
 	count := 0
-	s.db.View(func(tx *bolt.Tx) error {
+	if err := s.db.View(func(tx *bolt.Tx) error {
 		count = tx.Bucket(edgesBucket).Stats().KeyN
 		return nil
-	})
+	}); err != nil {
+		slog.Warn("bbolt edge store: count view failed", "err", err)
+	}
 	return count
 }
 
 func (s *BboltEdgeStore) ForEach(fn func(e *Edge)) {
-	s.db.View(func(tx *bolt.Tx) error {
+	if err := s.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(edgesBucket).ForEach(func(k, v []byte) error {
 			e, err := UnmarshalEdge(v)
 			if err != nil {
@@ -163,15 +168,21 @@ func (s *BboltEdgeStore) ForEach(fn func(e *Edge)) {
 			fn(e)
 			return nil
 		})
-	})
+	}); err != nil {
+		slog.Warn("bbolt edge store: foreach view failed", "err", err)
+	}
 }
 
 func (s *BboltEdgeStore) loadEdgesFromBucket(bucket []byte, key string) []*Edge {
 	var edgeIDs []string
-	s.db.View(func(tx *bolt.Tx) error {
+	if err := s.db.View(func(tx *bolt.Tx) error {
 		edgeIDs = decodeEdgeIDList(tx.Bucket(bucket).Get([]byte(key)))
 		return nil
-	})
+	}); err != nil {
+		slog.Warn("bbolt edge store: loadEdges view failed",
+			"bucket", string(bucket), "key", key, "err", err)
+		return nil
+	}
 	if len(edgeIDs) == 0 {
 		return nil
 	}

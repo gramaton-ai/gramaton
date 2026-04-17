@@ -67,6 +67,17 @@ type Server struct {
 	// Session prepare/commit state. In-memory; lost on restart (B2 resolution).
 	// Key: session ID, value: timestamp when prepare was called.
 	preparedSessions map[string]time.Time
+
+	// Curation envelope cache: every successful HTTP response embeds
+	// a CurationStatus. Computing it requires an engine RLock plus a
+	// PropIdx lookup ("processing_status" = "captured"), so it cost
+	// per-request CPU on busy servers. We cache for curationCacheTTL
+	// since the envelope's underlying counts shift on a curation
+	// tick (~1 minute), not per-request. (Wave 3 P1-29.)
+	curationCacheMu  sync.RWMutex
+	curationCache    CurationStatus
+	curationCacheAt  time.Time
+	curationCacheTTL time.Duration
 }
 
 // retrievalTracker records which node IDs were served to agents via
@@ -168,6 +179,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		observeSem:       make(chan struct{}, 3), // max 3 concurrent observe goroutines
 		usageTracker:     llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession),
 		preparedSessions: make(map[string]time.Time),
+		curationCacheTTL: 5 * time.Second,
 	}
 
 	// Seed validation with the active LimitsConfig so user YAML overrides
@@ -659,21 +671,58 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 // writeJSON writes a JSON response with the standard envelope.
-// Callers that already hold a lock should use writeJSONWithCuration
-// to avoid deadlock (RWMutex is not reentrant).
+// Callers that already hold a lock should use writeJSONLocked to
+// avoid deadlock (RWMutex is not reentrant).
+//
+// The curation envelope is cached for curationCacheTTL (5s) so this
+// hot path no longer takes an engine RLock + PropIdx lookup per
+// request. Stale data on a 5s window is fine -- the underlying
+// counters shift on the curation tick (~1 minute).
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
-	s.engine.RLock()
-	curation := computeCuration(s.engine, s.runner, s.usageTracker)
-	s.engine.RUnlock()
-
+	curation := s.curationStatus(true)
 	s.writeJSONRaw(w, status, data, curation)
 }
 
-// writeJSONLocked writes a JSON response when the caller already holds
-// a lock. Computes curation without acquiring a separate lock.
+// writeJSONLocked writes a JSON response when the caller already
+// holds the engine lock (read or write). Reads the curation cache
+// without refreshing -- refresh would require its own engine RLock,
+// which would deadlock.
 func (s *Server) writeJSONLocked(w http.ResponseWriter, status int, data any) {
-	curation := computeCuration(s.engine, s.runner, s.usageTracker)
+	curation := s.curationStatus(false)
 	s.writeJSONRaw(w, status, data, curation)
+}
+
+// curationStatus returns the cached curation envelope. If
+// allowRefresh is true and the cache is stale (or empty), refreshes
+// it under an engine RLock first. Callers that hold the engine
+// lock MUST pass allowRefresh=false to avoid deadlock; in that
+// case a stale value is returned (or zero-value if never populated,
+// which is harmless -- agents see "no curation status this turn"
+// rather than incorrect data).
+func (s *Server) curationStatus(allowRefresh bool) CurationStatus {
+	s.curationCacheMu.RLock()
+	cached := s.curationCache
+	cachedAt := s.curationCacheAt
+	s.curationCacheMu.RUnlock()
+
+	if !allowRefresh {
+		return cached
+	}
+	if !cachedAt.IsZero() && time.Since(cachedAt) < s.curationCacheTTL {
+		return cached
+	}
+
+	// Refresh under engine RLock + cache write lock.
+	s.engine.RLock()
+	fresh := computeCuration(s.engine, s.runner, s.usageTracker)
+	s.engine.RUnlock()
+
+	s.curationCacheMu.Lock()
+	s.curationCache = fresh
+	s.curationCacheAt = time.Now()
+	s.curationCacheMu.Unlock()
+
+	return fresh
 }
 
 func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curation CurationStatus) {

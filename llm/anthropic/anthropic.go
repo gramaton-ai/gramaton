@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -19,11 +20,18 @@ const defaultBaseURL = "https://api.anthropic.com"
 const apiVersion = "2023-06-01"
 
 // Client calls the Anthropic Messages API.
+//
+// Concurrency: Complete and CompleteWithModel are safe to call from
+// multiple goroutines (curation runs them in parallel). The system
+// prompt cache is protected by systemMu so SetSystemPrompt and
+// in-flight Completes don't race on systemCache.
 type Client struct {
-	baseURL     string
-	model       string
-	apiKey      string
-	client      *http.Client
+	baseURL string
+	model   string
+	apiKey  string
+	client  *http.Client
+
+	systemMu    sync.RWMutex
 	systemCache []systemBlock // cached system prompt, set via SetSystemPrompt
 }
 
@@ -105,8 +113,10 @@ type apiError struct {
 // SetSystemPrompt configures a system prompt that will be included
 // in all subsequent Complete/CompleteWithModel calls. The system
 // prompt is marked with cache_control for Anthropic prompt caching.
-// Pass empty string to clear.
+// Pass empty string to clear. Safe to call concurrently with Complete.
 func (c *Client) SetSystemPrompt(text string) {
+	c.systemMu.Lock()
+	defer c.systemMu.Unlock()
 	if text == "" {
 		c.systemCache = nil
 		return
@@ -116,6 +126,21 @@ func (c *Client) SetSystemPrompt(text string) {
 		Text:         text,
 		CacheControl: &cacheControl{Type: "ephemeral"},
 	}}
+}
+
+// snapshotSystemCache returns a defensive copy of the current system
+// cache for use in a request body. Holding the read lock for the
+// duration of the in-flight HTTP request would needlessly serialise
+// concurrent Completes, so we copy and release.
+func (c *Client) snapshotSystemCache() []systemBlock {
+	c.systemMu.RLock()
+	defer c.systemMu.RUnlock()
+	if len(c.systemCache) == 0 {
+		return nil
+	}
+	cp := make([]systemBlock, len(c.systemCache))
+	copy(cp, c.systemCache)
+	return cp
 }
 
 // CompleteWithModel sends a prompt using a specific model override.
@@ -139,8 +164,8 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 			{Role: "user", Content: prompt},
 		},
 	}
-	if len(c.systemCache) > 0 {
-		req.System = c.systemCache
+	if sys := c.snapshotSystemCache(); len(sys) > 0 {
+		req.System = sys
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

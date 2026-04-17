@@ -424,14 +424,19 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				continue
 			}
 
-			olderID := pair.IDA
-			newerID := pair.IDB
-			// Determine which is older by created_at.
+			// Determine which is older. Tie-break on identical
+			// created_at (common in bulk imports) by inbound edge
+			// count -- keep the more-referenced record as the
+			// "newer" survivor since rewriting more inbound edges
+			// is more destructive. Final fallback is lex order on
+			// ID, which matches FindDuplicates' canonical pair
+			// ordering and stays deterministic.
+			// (Wave 3 P1-36: previously the lex-smaller ID was
+			// silently chosen as "older" on identical timestamps,
+			// because pair.IDA = lex-smaller per FindDuplicates.)
 			caA, _ := na.Properties.GetTimestamp("created_at")
 			caB, _ := nb.Properties.GetTimestamp("created_at")
-			if caB.Before(caA) {
-				olderID, newerID = newerID, olderID
-			}
+			olderID, newerID := pickOlder(e.Graph(), pair.IDA, pair.IDB, caA, caB)
 
 			older, ok := e.Graph().GetNode(olderID)
 			if !ok {
@@ -1072,6 +1077,42 @@ func isLikelyProperName(kw string) bool {
 }
 
 // isWeakConceptKeyword returns true if a keyword is too short, too
+// pickOlder selects which of (idA, idB) should be marked as the
+// historical/older record in an auto-supersession pair. Strategy:
+//
+//  1. If created_at differs, the older timestamp wins.
+//  2. If timestamps are identical (common in bulk imports), the
+//     record with FEWER inbound edges is treated as older. This
+//     keeps the more-referenced record alive so we rewrite fewer
+//     existing graph relationships.
+//  3. Final fallback is lex-order on ID for determinism.
+//
+// Returns (olderID, newerID).
+func pickOlder(g *graph.Graph, idA, idB string, caA, caB time.Time) (string, string) {
+	if caA.Before(caB) {
+		return idA, idB
+	}
+	if caB.Before(caA) {
+		return idB, idA
+	}
+	// Identical timestamps: tie-break on inbound edge count.
+	inA := len(g.EdgesTo(idA))
+	inB := len(g.EdgesTo(idB))
+	if inA < inB {
+		return idA, idB
+	}
+	if inB < inA {
+		return idB, idA
+	}
+	// Final fallback: lex-order. Matches FindDuplicates' canonical
+	// pair ordering so behaviour is at least deterministic across
+	// runs even when fully ambiguous.
+	if idA < idB {
+		return idA, idB
+	}
+	return idB, idA
+}
+
 // generic, or is a meta-term that doesn't represent a real concept.
 func isWeakConceptKeyword(kw string) bool {
 	if len(kw) < 3 {

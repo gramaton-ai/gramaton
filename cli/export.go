@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,8 +51,11 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export: marshal: %w", err)
 	}
 
-	resp, err := http.Post(url+"/v1/export", "application/json",
-		bytes.NewReader(jsonBody))
+	// Use the slow-client (120s) -- export streams the full record set
+	// and can take a while on large stores. Raw http.Post (which this
+	// previously used) had no timeout, so a stuck server hung the CLI
+	// indefinitely. (Wave 3 P1-43.)
+	resp, err := httpPostSlow(url+"/v1/export", jsonBody)
 	if err != nil {
 		return fmt.Errorf("export: %w", err)
 	}

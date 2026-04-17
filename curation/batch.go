@@ -226,23 +226,37 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	return result, nil
 }
 
-// runSequentialBatch processes all pending records sequentially for
+// runSequentialBatch processes pending records sequentially for
 // non-batch providers (CLI providers, etc.). Uses the same prompts
-// and tiering as batch mode, just one call at a time.
+// and tiering as batch mode, one call at a time.
+//
+// Bounded by cfg.LLMCuration.MaxCallsPerRun. Earlier versions
+// silently raised this to 100,000, which bypassed the circuit
+// breaker and let an admin trigger run unbounded LLM calls against
+// a paid provider. (Wave 3 P1-37.) Operators who want a larger
+// run must raise the configured cap (clamped to 10,000 in
+// config.Load).
+//
+// BatchSize is irrelevant in sequential mode (one call per
+// record), but we raise it locally so the inner loop's "select up
+// to BatchSize candidates" pre-filter doesn't artificially
+// constrain how many records this cycle processes within the cap.
 func runSequentialBatch(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) (*BatchResult, error) {
-	logger.Info("batch: sequential mode (provider does not support batch API)")
+	logger.Info("batch: sequential mode (provider does not support batch API)",
+		"max_calls", cfg.LLMCuration.MaxCallsPerRun)
 	start := time.Now()
 
-	// Run autonomous classification with a very large batch size.
+	// BatchSize raise is safe (sequential processing makes it a
+	// candidate-selection knob, not a per-call batch). MaxCallsPerRun
+	// is honoured as configured.
 	savedBatch := cfg.LLMCuration.BatchSize
-	savedMax := cfg.LLMCuration.MaxCallsPerRun
-	cfg.LLMCuration.BatchSize = 100000
-	cfg.LLMCuration.MaxCallsPerRun = 100000
+	if cfg.LLMCuration.MaxCallsPerRun > savedBatch {
+		cfg.LLMCuration.BatchSize = cfg.LLMCuration.MaxCallsPerRun
+	}
 
 	ar := runAutonomousInner(ctx, e, llmProv, cfg, nil, logger, false)
 
 	cfg.LLMCuration.BatchSize = savedBatch
-	cfg.LLMCuration.MaxCallsPerRun = savedMax
 
 	return &BatchResult{
 		Submitted:  ar.Classified + ar.Errors,
