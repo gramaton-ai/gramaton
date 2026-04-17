@@ -2,11 +2,23 @@ package llm
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
+
+// ErrCapped is returned when the caller's UsageTracker is paused
+// (daily or session call cap exceeded). The cap is enforced BEFORE
+// the inner provider is invoked, so no tokens are consumed and no
+// telemetry record is created. Callers that want to ignore the cap
+// should not wrap their provider in Metered (or should call the
+// inner provider directly).
+//
+// Use errors.Is(err, llm.ErrCapped) to detect.
+var ErrCapped = errors.New("llm call cap reached")
 
 // Metered wraps a Provider and records usage metrics + emits a
 // per-call log on every Complete/CompleteWithModel. It:
@@ -36,6 +48,9 @@ func NewMetered(inner Provider, tracker *UsageTracker, logger *slog.Logger) *Met
 }
 
 func (m *Metered) Complete(ctx context.Context, prompt string) (string, error) {
+	if err := m.checkCap(); err != nil {
+		return "", err
+	}
 	ctx, capture := m.ensureRecorder(ctx)
 	task := telemetry.TaskFromContext(ctx)
 
@@ -49,6 +64,9 @@ func (m *Metered) Complete(ctx context.Context, prompt string) (string, error) {
 }
 
 func (m *Metered) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	if err := m.checkCap(); err != nil {
+		return "", err
+	}
 	ctx, capture := m.ensureRecorder(ctx)
 	task := telemetry.TaskFromContext(ctx)
 
@@ -63,6 +81,24 @@ func (m *Metered) CompleteWithModel(ctx context.Context, model, prompt string) (
 	delta := capture()
 	m.record(usedModel, task, delta, latency, err)
 	return resp, err
+}
+
+// checkCap returns ErrCapped (wrapped with the pause reason) if the
+// tracker reports the caller is over its daily or session cap. A nil
+// tracker means caps are not enforced.
+func (m *Metered) checkCap() error {
+	if m.tracker == nil {
+		return nil
+	}
+	if paused, reason := m.tracker.IsPaused(); paused {
+		if m.logger != nil {
+			m.logger.Warn("llm call refused: cap reached",
+				"component", "llm",
+				"reason", reason)
+		}
+		return fmt.Errorf("%w: %s", ErrCapped, reason)
+	}
+	return nil
 }
 
 func (m *Metered) ModelID() string { return m.inner.ModelID() }

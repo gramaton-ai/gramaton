@@ -29,7 +29,7 @@ type Client struct {
 
 // New creates an Anthropic LLM client from config.
 func New(cfg config.LLMConfig) (*Client, error) {
-	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv, cfg.APIKey)
 	if key == "" {
 		return nil, fmt.Errorf("anthropic: API key not configured (set api_key_file or api_key_env, or run 'gramaton configure')")
 	}

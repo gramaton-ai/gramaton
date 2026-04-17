@@ -15,14 +15,14 @@ import (
 
 func TestResolveKeyFromEnv(t *testing.T) {
 	t.Setenv("TEST_GRAMATON_KEY", "sk-ant-test-key")
-	key := secret.ResolveKey("", "TEST_GRAMATON_KEY")
+	key := secret.ResolveKey("", "TEST_GRAMATON_KEY", "")
 	if key != "sk-ant-test-key" {
 		t.Fatalf("expected key from env, got %q", key)
 	}
 }
 
 func TestResolveKeyDirect(t *testing.T) {
-	key := secret.ResolveKey("", "sk-ant-direct-key-value")
+	key := secret.ResolveKey("", "", "sk-ant-direct-key-value")
 	if key != "sk-ant-direct-key-value" {
 		t.Fatalf("expected direct key, got %q", key)
 	}
@@ -33,7 +33,7 @@ func TestResolveKeyFromFile(t *testing.T) {
 	keyPath := filepath.Join(dir, "api.key")
 	os.WriteFile(keyPath, []byte("sk-ant-file-key\n"), 0o600)
 
-	key := secret.ResolveKey(keyPath, "")
+	key := secret.ResolveKey(keyPath, "", "")
 	if key != "sk-ant-file-key" {
 		t.Fatalf("expected key from file, got %q", key)
 	}
@@ -45,21 +45,21 @@ func TestResolveKeyFileTakesPrecedence(t *testing.T) {
 	keyPath := filepath.Join(dir, "api.key")
 	os.WriteFile(keyPath, []byte("sk-ant-file-key\n"), 0o600)
 
-	key := secret.ResolveKey(keyPath, "TEST_GRAMATON_KEY")
+	key := secret.ResolveKey(keyPath, "TEST_GRAMATON_KEY", "")
 	if key != "sk-ant-file-key" {
 		t.Fatalf("expected file key to take precedence, got %q", key)
 	}
 }
 
 func TestResolveKeyEmpty(t *testing.T) {
-	key := secret.ResolveKey("", "")
+	key := secret.ResolveKey("", "", "")
 	if key != "" {
 		t.Fatalf("expected empty, got %q", key)
 	}
 }
 
 func TestResolveKeyUnsetEnv(t *testing.T) {
-	key := secret.ResolveKey("", "NONEXISTENT_VAR_12345")
+	key := secret.ResolveKey("", "NONEXISTENT_VAR_12345", "")
 	if key != "" {
 		t.Fatalf("expected empty for unset env var, got %q", key)
 	}
@@ -79,9 +79,9 @@ func TestNewWithoutKey(t *testing.T) {
 
 func TestNewWithDirectKey(t *testing.T) {
 	cfg := config.LLMConfig{
-		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-6",
-		APIKeyEnv: "sk-ant-test-key",
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "sk-ant-test-key",
 	}
 	client, err := New(cfg)
 	if err != nil {
@@ -94,8 +94,8 @@ func TestNewWithDirectKey(t *testing.T) {
 
 func TestNewDefaultModel(t *testing.T) {
 	cfg := config.LLMConfig{
-		Provider:  "anthropic",
-		APIKeyEnv: "sk-ant-test",
+		Provider: "anthropic",
+		APIKey:   "sk-ant-test",
 	}
 	client, err := New(cfg)
 	if err != nil {

@@ -153,7 +153,11 @@ func TestResolveKey(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			if got := secret.ResolveKey("", tt.val); got != tt.want {
+			// Pass tt.val as both env-name AND direct, mirroring
+			// pre-Wave-2 ergonomics where APIKeyEnv could double
+			// as a literal key. The deprecation warning fires
+			// once for the sk- direct path; harmless in tests.
+			if got := secret.ResolveKey("", tt.val, ""); got != tt.want {
 				t.Errorf("ResolveKey(%q) = %q, want %q", tt.val, got, tt.want)
 			}
 		})

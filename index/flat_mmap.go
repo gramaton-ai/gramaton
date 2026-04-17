@@ -47,6 +47,13 @@ type MmapFlatIndex struct {
 	// Write buffer: new vectors accumulate here until Flush.
 	// Avoids remap+fsync on every Add.
 	buffer []bufferedEntry
+
+	// hasTombstones is set when Remove or Add(replace) writes a
+	// tombstone (idLen=0) into the mmap'd region. Tombstones break
+	// buildOffsetMap on reopen because the original idLen is lost,
+	// so Flush MUST rewrite the file from scratch when this is true,
+	// even if buffer is empty. See P0-02 fix.
+	hasTombstones bool
 }
 
 type bufferedEntry struct {
@@ -186,6 +193,7 @@ func (idx *MmapFlatIndex) Add(nodeID string, vec []float32) {
 	// If node exists in mmap'd data, mark as tombstone.
 	if oldOff, exists := idx.offsets[nodeID]; exists && oldOff >= 0 {
 		idx.file.WriteAt([]byte{0, 0}, int64(oldOff))
+		idx.hasTombstones = true
 	}
 
 	// If node exists in buffer, remove old entry.
@@ -220,6 +228,7 @@ func (idx *MmapFlatIndex) Remove(nodeID string) {
 	if off >= 0 {
 		// In mmap'd data: tombstone it.
 		idx.file.WriteAt([]byte{0, 0}, int64(off))
+		idx.hasTombstones = true
 	} else {
 		// In buffer: mark dead.
 		bufIdx := -(off + 1)
@@ -234,38 +243,50 @@ func (idx *MmapFlatIndex) Remove(nodeID string) {
 
 // Flush writes all buffered vectors to disk, updates the header,
 // syncs, and remaps. Call this from Engine.Save and Engine.Close.
+//
+// When tombstones exist (Remove or Add-replace was called), Flush
+// rewrites the entire file from scratch. This is required because
+// tombstones overwrite the idLen field with zero, which destroys the
+// information needed for buildOffsetMap to walk past them on reopen.
+// Append-only flush would persist a corrupted file. Compaction
+// guarantees the on-disk layout matches the in-memory offsets.
 func (idx *MmapFlatIndex) Flush() error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	if len(idx.buffer) == 0 {
+	if len(idx.buffer) == 0 && !idx.hasTombstones {
 		return nil
 	}
 
-	// Collect live entries (skip dead entries from Remove/Replace).
-	var live []bufferedEntry
+	// Collect live entries from the buffer (skip dead entries from
+	// Remove/Replace).
+	var liveBuffered []bufferedEntry
 	for _, e := range idx.buffer {
 		if e.nodeID != "" {
-			live = append(live, e)
+			liveBuffered = append(liveBuffered, e)
 		}
 	}
 
-	if len(live) == 0 {
+	// Tombstones present: rewrite the entire file. The on-disk
+	// format cannot represent a tombstone in a way buildOffsetMap
+	// can skip (the original idLen is gone), so a fresh write is
+	// the only correct option.
+	if idx.hasTombstones {
+		return idx.rewriteFromOffsetsLocked(liveBuffered)
+	}
+
+	if len(liveBuffered) == 0 {
 		idx.buffer = nil
-		// Still need to update header for tombstoned entries.
-		idx.writeHeader(idx.count)
-		idx.file.Sync()
-		idx.remap()
 		return nil
 	}
 
-	// Build a single write buffer for all entries.
+	// Fast path: no tombstones, only new entries -> append.
 	entrySize := 2 + 26 + idx.dim // typical ULID is 26 bytes
-	buf := make([]byte, 0, len(live)*entrySize)
+	buf := make([]byte, 0, len(liveBuffered)*entrySize)
 	info, _ := idx.file.Stat()
 	baseOffset := info.Size()
 
-	for _, e := range live {
+	for _, e := range liveBuffered {
 		entry := make([]byte, 2+len(e.nodeID)+idx.dim)
 		binary.LittleEndian.PutUint16(entry[:2], uint16(len(e.nodeID)))
 		copy(entry[2:], e.nodeID)
@@ -280,14 +301,103 @@ func (idx *MmapFlatIndex) Flush() error {
 
 	// Update offsets to point to mmap'd positions.
 	pos := int(baseOffset)
-	for _, e := range live {
+	for _, e := range liveBuffered {
 		idx.offsets[e.nodeID] = pos
 		pos += 2 + len(e.nodeID) + idx.dim
 	}
 
 	idx.buffer = nil
-	idx.writeHeader(idx.count)
-	idx.file.Sync()
+	if err := idx.writeHeader(idx.count); err != nil {
+		return fmt.Errorf("flat index: write header: %w", err)
+	}
+	if err := idx.file.Sync(); err != nil {
+		return fmt.Errorf("flat index: sync: %w", err)
+	}
+	return idx.remap()
+}
+
+// rewriteFromOffsetsLocked compacts the index by reading every live
+// vector (from mmap or buffer), then rewriting the file from scratch
+// with header + entries (no tombstones). Caller must hold idx.mu.
+//
+// Required when hasTombstones is true because buildOffsetMap cannot
+// skip tombstones safely (the on-disk format loses the original idLen).
+func (idx *MmapFlatIndex) rewriteFromOffsetsLocked(liveBuffered []bufferedEntry) error {
+	// Snapshot every live entry as (id, qvec) pairs. Reading from
+	// mmap before truncate is safe; we materialise into Go-owned
+	// memory before remapping.
+	type liveEntry struct {
+		id  string
+		vec []byte
+	}
+	live := make([]liveEntry, 0, len(idx.offsets))
+
+	// Track buffered IDs so we don't double-add when iterating offsets
+	// (offsets entries with negative offset are buffered).
+	for id, off := range idx.offsets {
+		if off < 0 {
+			continue // handled in the buffered loop below
+		}
+		vec := idx.readVecAt(off)
+		if vec == nil {
+			continue // tombstoned (shouldn't be in offsets, but be defensive)
+		}
+		// Copy out of mmap before we munmap.
+		copied := make([]byte, len(vec))
+		copy(copied, vec)
+		live = append(live, liveEntry{id: id, vec: copied})
+	}
+	for _, e := range liveBuffered {
+		live = append(live, liveEntry{id: e.nodeID, vec: e.vec})
+	}
+
+	// Truncate file back to header-only, then write fresh entries.
+	// Munmap first so we can resize.
+	if idx.data != nil {
+		syscall.Munmap(idx.data)
+		idx.data = nil
+	}
+	if err := idx.file.Truncate(flatHeaderSize); err != nil {
+		return fmt.Errorf("flat index: truncate: %w", err)
+	}
+
+	// Build serialised entries.
+	totalSize := 0
+	for _, e := range live {
+		totalSize += 2 + len(e.id) + idx.dim
+	}
+	buf := make([]byte, 0, totalSize)
+	for _, e := range live {
+		entry := make([]byte, 2+len(e.id)+idx.dim)
+		binary.LittleEndian.PutUint16(entry[:2], uint16(len(e.id)))
+		copy(entry[2:], e.id)
+		copy(entry[2+len(e.id):], e.vec)
+		buf = append(buf, entry...)
+	}
+
+	if len(buf) > 0 {
+		if _, err := idx.file.WriteAt(buf, flatHeaderSize); err != nil {
+			return fmt.Errorf("flat index: rewrite write: %w", err)
+		}
+	}
+
+	// Rebuild the offsets map for the new layout.
+	idx.offsets = make(map[string]int, len(live))
+	pos := flatHeaderSize
+	for _, e := range live {
+		idx.offsets[e.id] = pos
+		pos += 2 + len(e.id) + idx.dim
+	}
+	idx.count = len(live)
+	idx.buffer = nil
+	idx.hasTombstones = false
+
+	if err := idx.writeHeader(idx.count); err != nil {
+		return fmt.Errorf("flat index: write header: %w", err)
+	}
+	if err := idx.file.Sync(); err != nil {
+		return fmt.Errorf("flat index: sync: %w", err)
+	}
 	return idx.remap()
 }
 
@@ -436,14 +546,28 @@ func quantizeF32ToU8(vec []float32, scale float32) []byte {
 	return out
 }
 
-// cosineSimU8 computes cosine similarity between two uint8 vectors.
+// cosineSimU8 computes cosine similarity between two uint8 vectors
+// stored in the shifted quantization scheme (128 represents zero,
+// 0 and 255 represent the negative and positive ends of the
+// quantization range respectively).
+//
+// The shift MUST be removed before computing the cosine. Computing
+// dot/norms on the raw bytes yields a similarity dominated by the
+// constant 128 offset, not the underlying signal: two near-orthogonal
+// L2-normalised vectors would score ~0.99 because their shifted
+// representations are close to (128, 128, ..., 128) which has very
+// high self-cosine. (P0-03 regression class.)
 func cosineSimU8(a, b []byte) float32 {
 	if len(a) != len(b) {
 		return 0
 	}
-	var dot, normA, normB uint64
+	var dot, normA, normB int64
 	for i := range a {
-		ai, bi := uint64(a[i]), uint64(b[i])
+		// Re-centre to signed offsets from zero. int8 isn't quite
+		// right (range -128..127 vs -127..128), but the asymmetry
+		// is at most 1 LSB and harmless for cosine.
+		ai := int64(a[i]) - 128
+		bi := int64(b[i]) - 128
 		dot += ai * bi
 		normA += ai * ai
 		normB += bi * bi

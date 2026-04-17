@@ -129,6 +129,129 @@ func TestMmapFlatPersistence(t *testing.T) {
 	}
 }
 
+// TestMmapFlatRemoveThenReopen is the regression test for P0-02:
+// before the fix, Remove tombstoned an entry but Flush short-circuited
+// when the buffer was empty, leaving the persisted header count
+// stale. On reopen, buildOffsetMap walked stale tombstones and
+// desynced the cursor, silently misreading every subsequent entry.
+//
+// The fix: when hasTombstones is set, Flush rewrites the file from
+// scratch (no tombstones survive on disk).
+func TestMmapFlatRemoveThenReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vec.flat")
+
+	idx1, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx1.Add("n1", []float32{1, 0, 0, 0})
+	idx1.Add("n2", []float32{0, 1, 0, 0})
+	idx1.Add("n3", []float32{0, 0, 1, 0})
+	if err := idx1.Flush(); err != nil {
+		t.Fatalf("first flush: %v", err)
+	}
+
+	// Remove the middle entry, then close (no buffer changes after
+	// remove -- this is the path the original bug missed).
+	idx1.Remove("n2")
+	if err := idx1.Close(); err != nil {
+		t.Fatalf("close after remove: %v", err)
+	}
+
+	// Reopen and verify n1 and n3 are intact (no n2).
+	idx2, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer idx2.Close()
+
+	if idx2.Len() != 2 {
+		t.Fatalf("after Remove+reopen: Len = %d, want 2", idx2.Len())
+	}
+
+	// n1 must still be searchable at its original vector.
+	results := idx2.Search([]float32{1, 0, 0, 0}, 5, nil)
+	found := map[string]bool{}
+	for _, r := range results {
+		found[r.NodeID] = true
+	}
+	if !found["n1"] {
+		t.Errorf("n1 missing after Remove+reopen: %v", results)
+	}
+	if !found["n3"] {
+		t.Errorf("n3 missing after Remove+reopen: %v", results)
+	}
+	if found["n2"] {
+		t.Errorf("n2 should be removed but was found: %v", results)
+	}
+}
+
+// TestMmapFlatRemoveAllThenReopen exercises the edge case of removing
+// every entry and then reopening. The persisted file must contain a
+// valid header with count=0 and no leftover entries.
+func TestMmapFlatRemoveAllThenReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vec.flat")
+
+	idx1, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx1.Add("a", []float32{1, 0, 0, 0})
+	idx1.Add("b", []float32{0, 1, 0, 0})
+	idx1.Flush()
+	idx1.Remove("a")
+	idx1.Remove("b")
+	if err := idx1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	idx2, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatalf("reopen empty: %v", err)
+	}
+	defer idx2.Close()
+	if idx2.Len() != 0 {
+		t.Fatalf("after RemoveAll+reopen: Len = %d, want 0", idx2.Len())
+	}
+}
+
+// TestMmapFlatAddReplaceThenReopen covers Add(replace) which also
+// tombstones the prior entry. Same corruption class as Remove.
+func TestMmapFlatAddReplaceThenReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vec.flat")
+
+	idx1, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx1.Add("k", []float32{1, 0, 0, 0})
+	idx1.Add("other", []float32{0, 1, 0, 0})
+	idx1.Flush()
+	// Replace k's vector. This tombstones the prior on-disk entry.
+	idx1.Add("k", []float32{0, 0, 1, 0})
+	if err := idx1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	idx2, err := NewMmapFlatIndex(path, 4)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer idx2.Close()
+
+	if idx2.Len() != 2 {
+		t.Fatalf("after Replace+reopen: Len = %d, want 2", idx2.Len())
+	}
+	// k must now match [0,0,1,0], not the original [1,0,0,0].
+	results := idx2.Search([]float32{0, 0, 1, 0}, 1, nil)
+	if len(results) != 1 || results[0].NodeID != "k" {
+		t.Fatalf("after Replace+reopen: expected k for [0,0,1,0], got %v", results)
+	}
+}
+
 func TestMmapFlatEmpty(t *testing.T) {
 	idx := newTestMmapIndex(t, 384)
 
@@ -363,4 +486,126 @@ func TestMmapFlatSearchDiscrimination(t *testing.T) {
 	if catsDogs-catsQuantum < 0.05 {
 		t.Errorf("insufficient discrimination: sim gap = %.4f (want > 0.05)", catsDogs-catsQuantum)
 	}
+}
+
+// TestCosineSimU8MatchesFloat32 is the regression test for P0-03:
+// the quantised cosine MUST track true float32 cosine. Before the
+// fix, cosineSimU8 computed dot/norms on shifted bytes (centre 128),
+// causing the 128-shift term to dominate and making near-orthogonal
+// vectors score ~0.99. After the fix, the shift is removed before
+// the cosine computation.
+func TestCosineSimU8MatchesFloat32(t *testing.T) {
+	dim := 384
+	scale := quantizationScale(dim)
+
+	// L2-normalised. Two random-ish vectors that should have low
+	// cosine, plus one very similar pair that should score high.
+	mk := func(seed int64) []float32 {
+		v := make([]float32, dim)
+		var sum float64
+		// Cheap deterministic generator: linear congruential.
+		s := uint64(seed)
+		for i := range v {
+			s = s*1103515245 + 12345
+			x := float64(int64(s>>16)&0x7FFF) / 32768.0 * 2.0 - 1.0
+			x /= math.Sqrt(float64(dim)) // keep components small
+			v[i] = float32(x)
+			sum += x * x
+		}
+		norm := math.Sqrt(sum)
+		for i := range v {
+			v[i] = float32(float64(v[i]) / norm)
+		}
+		return v
+	}
+
+	cases := []struct {
+		name string
+		a, b []float32
+		// Tolerance for the |quantised - true| difference. Tight
+		// for high-similarity pairs (where quantisation error is
+		// proportionally small); looser for low-similarity pairs.
+		tol float64
+	}{
+		{"identical", mk(1), nil, 0.001},                                                      // a == b
+		{"very-similar", []float32{1, 0, 0}, []float32{0.99, 0.01, 0}, 0.05},                  // simple
+		{"orthogonal", []float32{1, 0, 0}, []float32{0, 1, 0}, 0.05},                          // simple
+		{"opposite", []float32{1, 0, 0}, []float32{-1, 0, 0}, 0.05},                           // simple
+		{"random-vs-random", mk(11), mk(22), 0.10},                                            // hardest
+		{"random-vs-self-mostly", mixVecs(mk(33), mk(44), 0.95), mixVecs(mk(33), mk(44), 0.85), 0.10},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := c.a
+			b := c.b
+			if b == nil {
+				b = a
+			}
+			// True cosine on float32.
+			trueCos := cosineFloat32(a, b)
+			// Quantised cosine.
+			qa := quantizeF32ToU8(a, scaleFor(len(a), scale))
+			qb := quantizeF32ToU8(b, scaleFor(len(b), scale))
+			gotCos := float64(cosineSimU8(qa, qb))
+
+			diff := math.Abs(trueCos - gotCos)
+			if diff > c.tol {
+				t.Errorf("cosine mismatch (true=%.4f, quantised=%.4f, diff=%.4f, tol=%.4f)",
+					trueCos, gotCos, diff, c.tol)
+			}
+
+			// Sanity: orthogonal pairs must score near zero. The
+			// pre-fix bug would surface here (returned ~0.99).
+			if c.name == "orthogonal" && gotCos > 0.2 {
+				t.Errorf("orthogonal pair scored too high: %.4f -- shift likely not removed", gotCos)
+			}
+			if c.name == "opposite" && gotCos > -0.5 {
+				t.Errorf("opposite pair scored too high (want <-0.5): %.4f", gotCos)
+			}
+		})
+	}
+}
+
+func cosineFloat32(a, b []float32) float64 {
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	denom := math.Sqrt(na) * math.Sqrt(nb)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
+}
+
+// scaleFor picks a quantisation scale appropriate to dim for the
+// test inputs. Mirrors quantizationScale for the dim path; falls
+// back to the supplied default for short test inputs.
+func scaleFor(dim int, def float32) float32 {
+	if dim <= 16 {
+		return 1.0
+	}
+	return def
+}
+
+// mixVecs returns alpha*a + (1-alpha)*b, normalised. Useful for
+// constructing pairs with controlled similarity.
+func mixVecs(a, b []float32, alpha float64) []float32 {
+	out := make([]float32, len(a))
+	var sum float64
+	for i := range a {
+		out[i] = float32(alpha*float64(a[i]) + (1-alpha)*float64(b[i]))
+		sum += float64(out[i]) * float64(out[i])
+	}
+	norm := math.Sqrt(sum)
+	if norm == 0 {
+		return out
+	}
+	for i := range out {
+		out[i] = float32(float64(out[i]) / norm)
+	}
+	return out
 }

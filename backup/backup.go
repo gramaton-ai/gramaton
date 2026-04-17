@@ -121,6 +121,37 @@ func Restore(archivePath, dataDir string) error {
 	}
 	defer f.Close()
 
+	// Restore is destructive: if it fails midway, the user's data
+	// directory must remain intact. Strategy (P0-01 rewrite):
+	//   1. Extract the archive into a sibling staging directory
+	//      created next to dataDir (same filesystem, so the later
+	//      rename is atomic).
+	//   2. Verify HEAD is present in the staged content. If not,
+	//      abort and remove the staging directory; dataDir untouched.
+	//   3. Atomically swap: rename dataDir -> dataDir.replaced-<ts>,
+	//      then rename staging -> dataDir, then fsync the parent.
+	//   4. Remove the replaced directory (best effort; if it fails
+	//      the swap is already complete, so it's just leftover disk).
+	//
+	// On any failure during 1 or 2, dataDir is unchanged. On failure
+	// between the two renames in 3, we attempt to roll back the first
+	// rename so the user is not left without a data directory.
+	parentDir := filepath.Dir(dataDir)
+	tsSuffix := time.Now().UTC().Format("20060102-150405.000000")
+	stagingDir := filepath.Join(parentDir, filepath.Base(dataDir)+".restore-staging-"+tsSuffix)
+	replacedDir := filepath.Join(parentDir, filepath.Base(dataDir)+".replaced-"+tsSuffix)
+
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		return fmt.Errorf("create staging dir: %w", err)
+	}
+	// Track whether we still own staging for cleanup on early abort.
+	stagingOwned := true
+	defer func() {
+		if stagingOwned {
+			os.RemoveAll(stagingDir) // best-effort cleanup
+		}
+	}()
+
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("open gzip: %w", err)
@@ -128,10 +159,7 @@ func Restore(archivePath, dataDir string) error {
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
-
-	// Validate: scan for HEAD file.
 	hasHead := false
-	headers := make([]tar.Header, 0)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -140,101 +168,143 @@ func Restore(archivePath, dataDir string) error {
 		if err != nil {
 			return fmt.Errorf("read archive: %w", err)
 		}
-		headers = append(headers, *header)
-		if header.Name == "data/HEAD" || header.Name == "HEAD" {
-			hasHead = true
-		}
-	}
-	if !hasHead {
-		return fmt.Errorf("invalid backup: no HEAD file found")
-	}
 
-	// Clear existing data directory (preserve the directory itself).
-	entries, err := os.ReadDir(dataDir)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read data dir: %w", err)
-	}
-	for _, e := range entries {
-		p := filepath.Join(dataDir, e.Name())
-		if err := os.RemoveAll(p); err != nil {
-			return fmt.Errorf("clear %s: %w", p, err)
-		}
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return fmt.Errorf("create data dir: %w", err)
-	}
-
-	// Re-open and extract.
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek archive: %w", err)
-	}
-	gz2, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("reopen gzip: %w", err)
-	}
-	defer gz2.Close()
-
-	tr2 := tar.NewReader(gz2)
-	for {
-		header, err := tr2.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read archive entry: %w", err)
-		}
-
-		// Strip "data/" prefix to extract into dataDir.
+		// Strip "data/" prefix to extract into stagingDir.
 		name := header.Name
-		if strings.HasPrefix(name, "data/") {
+		switch {
+		case strings.HasPrefix(name, "data/"):
 			name = strings.TrimPrefix(name, "data/")
-		} else if name == "config.yaml" {
-			// Skip config -- don't restore environment-specific settings.
+		case name == "config.yaml":
+			// Skip config: backup carries the SHIPPING config, not the
+			// environment-specific live one. Restoring it would clobber
+			// the user's API keys / endpoints.
 			continue
-		} else {
+		default:
 			continue
 		}
 
 		if name == "" || name == "." {
 			continue
 		}
+		if name == "HEAD" {
+			hasHead = true
+		}
 
-		target := filepath.Join(dataDir, name)
-
+		target := filepath.Join(stagingDir, name)
 		// Path traversal protection. Append separator to prevent
-		// prefix false positives (e.g., /foo/bar matching /foo/barbaz).
-		if !strings.HasPrefix(filepath.Clean(target)+string(filepath.Separator), filepath.Clean(dataDir)+string(filepath.Separator)) {
+		// prefix false positives (/foo/bar matching /foo/barbaz).
+		if !strings.HasPrefix(filepath.Clean(target)+string(filepath.Separator), filepath.Clean(stagingDir)+string(filepath.Separator)) {
 			return fmt.Errorf("path traversal in archive: %s", header.Name)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o700); err != nil {
-				return err
+				return fmt.Errorf("mkdir %s: %w", target, err)
 			}
 		case tar.TypeReg:
-			dir := filepath.Dir(target)
-			if err := os.MkdirAll(dir, 0o700); err != nil {
+			if err := writeRestoredFile(target, tr); err != nil {
 				return err
-			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(out, tr2); err != nil {
-				out.Close()
-				return err
-			}
-			if err := out.Close(); err != nil {
-				return fmt.Errorf("close restored file %s: %w", header.Name, err)
 			}
 		default:
-			// Reject symlinks, hardlinks, and other special file types.
 			return fmt.Errorf("unsupported file type in archive: %s (type flag %d)", header.Name, header.Typeflag)
 		}
 	}
 
+	if !hasHead {
+		return fmt.Errorf("invalid backup: no HEAD file found")
+	}
+
+	// Stage phase complete. fsync the staging directory so the
+	// extracted content is durable before the swap.
+	if err := fsyncDir(stagingDir); err != nil {
+		return fmt.Errorf("fsync staging: %w", err)
+	}
+
+	// Swap phase. Both renames are within parentDir on the same
+	// filesystem -> atomic. The window between them is tiny but
+	// non-zero; on failure we attempt to roll back the first rename.
+	dataDirExists := true
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		dataDirExists = false
+	} else if err != nil {
+		return fmt.Errorf("stat data dir: %w", err)
+	}
+
+	if dataDirExists {
+		if err := os.Rename(dataDir, replacedDir); err != nil {
+			return fmt.Errorf("rename data dir aside: %w", err)
+		}
+	}
+	if err := os.Rename(stagingDir, dataDir); err != nil {
+		// Try to put the original back. Best effort: if this also
+		// fails the user has lost data dir under its original name
+		// but the data itself survives in replacedDir.
+		if dataDirExists {
+			if rbErr := os.Rename(replacedDir, dataDir); rbErr != nil {
+				return fmt.Errorf("rename staging into place failed (%w); rollback also failed (%v); original data is at %s",
+					err, rbErr, replacedDir)
+			}
+		}
+		return fmt.Errorf("rename staging into place: %w", err)
+	}
+	stagingOwned = false // staging IS the new dataDir now
+
+	// Make the swap durable.
+	if err := fsyncDir(parentDir); err != nil {
+		// Data is in place; sync failure is logged but not fatal
+		// (a subsequent fsync from the engine will catch up).
+		fmt.Fprintf(os.Stderr, "warning: fsync parent dir after restore: %v\n", err)
+	}
+
+	// Remove the replaced directory. Best effort: failure leaves
+	// disk usage but the restore is complete.
+	if dataDirExists {
+		if err := os.RemoveAll(replacedDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remove replaced data dir %s: %v\n", replacedDir, err)
+		}
+	}
+
 	return nil
+}
+
+// writeRestoredFile creates a regular file at target, copies the
+// archive entry into it, fsyncs the file, and closes it. Caller
+// arranges parent directory creation.
+func writeRestoredFile(target string, tr *tar.Reader) error {
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir for %s: %w", target, err)
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", target, err)
+	}
+	if _, err := io.Copy(out, tr); err != nil {
+		out.Close()
+		return fmt.Errorf("copy %s: %w", target, err)
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return fmt.Errorf("fsync %s: %w", target, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", target, err)
+	}
+	return nil
+}
+
+// fsyncDir opens the given directory and fsyncs it. Required for
+// durability of the rename(2) operations performed during Restore;
+// POSIX fsync on a regular file does not guarantee that the parent
+// directory entry is durable.
+func fsyncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // ApplyRetention deletes the oldest backups until at most retain files
@@ -351,25 +421,71 @@ func addSanitizedConfig(tw *tar.Writer, cfgPath string) error {
 	return err
 }
 
-// StripAPIKeys removes sensitive values from config YAML.
+// StripAPIKeys removes sensitive and infrastructure-leaking fields
+// from config YAML before the config is written into a backup
+// archive. (P1-03 fix: was a blacklist of 4 fields; now a
+// whitelist of known-safe ones.)
+//
+// Stripped fields and rationale:
+//   - api_key, api_key_env, api_key_file: literal keys, env-var
+//     names that may themselves contain hints, and filesystem
+//     paths that leak the backup origin's directory layout.
+//   - base_url: leaks internal proxies / private endpoints.
+//   - aws_profile: leaks credential profile names.
+//   - aws_access_key_id_env, aws_secret_access_key_env: env-var
+//     names hint at the user's AWS setup.
+//   - region: kept (region names like "us-east-1" are not sensitive).
+//
+// Implementation: inside the llm/embedding sections, only fields
+// in the whitelist below are preserved. Everything else (including
+// fields added by future config changes) is stripped. New "safe"
+// fields must be added explicitly to the whitelist. This is
+// safer than a blacklist because forgetting to update the strip
+// list when adding a new sensitive field would silently leak.
 func StripAPIKeys(data []byte) ([]byte, error) {
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, err
 	}
 
-	// Strip known sensitive fields.
-	stripNestedKey(raw, "llm", "api_key_env")
-	stripNestedKey(raw, "embedding", "api_key_env")
-	stripNestedKey(raw, "embedding", "aws_access_key_id_env")
-	stripNestedKey(raw, "embedding", "aws_secret_access_key_env")
+	stripToWhitelist(raw, "llm", llmSafeFields)
+	stripToWhitelist(raw, "embedding", embeddingSafeFields)
 
 	return yaml.Marshal(raw)
 }
 
-func stripNestedKey(m map[string]any, section, key string) {
-	if sub, ok := m[section]; ok {
-		if subMap, ok := sub.(map[string]any); ok {
+// llmSafeFields enumerates every llm.* config field safe to ship
+// in a backup. Anything not listed is stripped.
+var llmSafeFields = map[string]bool{
+	"provider": true,
+	"model":    true,
+	"models":   true,
+	"region":   true, // region names like "us-east-1" are not sensitive
+}
+
+// embeddingSafeFields enumerates every embedding.* config field
+// safe to ship in a backup.
+var embeddingSafeFields = map[string]bool{
+	"provider":  true,
+	"model":     true,
+	"dimension": true,
+	"region":    true,
+}
+
+// stripToWhitelist replaces the named section's contents with only
+// those keys present in the safe map. If the section is missing or
+// not a map, nothing happens.
+func stripToWhitelist(m map[string]any, section string, safe map[string]bool) {
+	sub, ok := m[section]
+	if !ok {
+		return
+	}
+	subMap, ok := sub.(map[string]any)
+	if !ok {
+		return
+	}
+	for key := range subMap {
+		if !safe[key] {
 			delete(subMap, key)
 		}
 	}

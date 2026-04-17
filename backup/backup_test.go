@@ -87,6 +87,78 @@ func TestRestoreInvalidArchive(t *testing.T) {
 	}
 }
 
+// TestRestoreFailureLeavesDataDirIntact is the regression test for
+// P0-01: before the staging-dir rewrite, Restore wiped dataDir
+// before validating archive contents, so a malformed archive (no
+// HEAD, path traversal, etc.) destroyed the user's existing data.
+// After the rewrite, dataDir must be untouched on any failure.
+func TestRestoreFailureLeavesDataDirIntact(t *testing.T) {
+	parent := t.TempDir()
+	dataDir := filepath.Join(parent, "store")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed dataDir with content that MUST survive a failed restore.
+	writeFile(t, filepath.Join(dataDir, "HEAD"), "original-hash")
+	writeFile(t, filepath.Join(dataDir, "BRANCH"), "main")
+	if err := os.MkdirAll(filepath.Join(dataDir, "ab"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dataDir, "ab", "abc123"), `{"original":true}`)
+
+	// Failure mode 1: archive with no HEAD entry.
+	noHeadArchive := filepath.Join(t.TempDir(), "no-head.tar.gz")
+	f, _ := os.Create(noHeadArchive)
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "data/some-file", Size: 4, Mode: 0o600})
+	tw.Write([]byte("test"))
+	tw.Close()
+	gz.Close()
+	f.Close()
+
+	if err := Restore(noHeadArchive, dataDir); err == nil {
+		t.Fatal("expected error for archive with no HEAD")
+	}
+	assertFileContent(t, filepath.Join(dataDir, "HEAD"), "original-hash")
+	assertFileContent(t, filepath.Join(dataDir, "BRANCH"), "main")
+	assertFileContent(t, filepath.Join(dataDir, "ab", "abc123"), `{"original":true}`)
+
+	// Failure mode 2: archive with a path-traversal entry. Must
+	// also leave dataDir untouched.
+	evilArchive := filepath.Join(t.TempDir(), "evil.tar.gz")
+	f, _ = os.Create(evilArchive)
+	gz = gzip.NewWriter(f)
+	tw = tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "data/HEAD", Size: 3, Mode: 0o600})
+	tw.Write([]byte("new"))
+	tw.WriteHeader(&tar.Header{Name: "data/../../../etc/evil", Size: 4, Mode: 0o600})
+	tw.Write([]byte("pwnd"))
+	tw.Close()
+	gz.Close()
+	f.Close()
+
+	if err := Restore(evilArchive, dataDir); err == nil {
+		t.Fatal("expected error for archive with path traversal")
+	}
+	assertFileContent(t, filepath.Join(dataDir, "HEAD"), "original-hash")
+	assertFileContent(t, filepath.Join(dataDir, "ab", "abc123"), `{"original":true}`)
+
+	// Verify no leftover staging directories in parent (cleanup
+	// happened on each failure path).
+	siblings, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range siblings {
+		if strings.HasPrefix(s.Name(), "store.restore-staging-") ||
+			strings.HasPrefix(s.Name(), "store.replaced-") {
+			t.Errorf("leftover restore artefact in parent dir: %s", s.Name())
+		}
+	}
+}
+
 func TestRestorePathTraversal(t *testing.T) {
 	dataDir := t.TempDir()
 
@@ -255,6 +327,61 @@ embedding:
 	}
 	if !strings.Contains(s, "claude-sonnet") {
 		t.Fatal("model should be preserved")
+	}
+}
+
+// TestStripAPIKeysWhitelistGaps is the regression test for P1-03:
+// the previous blacklist missed several fields that leak secrets or
+// infrastructure. The whitelist rewrite must drop ALL of them.
+func TestStripAPIKeysWhitelistGaps(t *testing.T) {
+	input := `llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key: sk-ant-INLINE-secret
+  api_key_file: /home/alice/.gramaton/anthropic.key
+  base_url: https://internal-proxy.acme.local/anthropic
+  aws_profile: production-readonly
+  region: us-east-1
+embedding:
+  provider: bedrock
+  model: cohere.embed-english-v3
+  dimension: 1024
+  api_key_file: /home/alice/.gramaton/embed.key
+  base_url: https://my-internal-llm.acme.local
+  aws_profile: embeddings-account
+`
+	result, err := StripAPIKeys([]byte(input))
+	if err != nil {
+		t.Fatalf("StripAPIKeys: %v", err)
+	}
+	s := string(result)
+
+	// All sensitive fields gone.
+	for _, secret := range []string{
+		"sk-ant-INLINE-secret",       // inline key
+		"/home/alice/.gramaton",      // filesystem layout (api_key_file)
+		"internal-proxy.acme.local",  // base_url leak
+		"my-internal-llm.acme.local", // base_url leak
+		"production-readonly",        // aws_profile leak
+		"embeddings-account",         // aws_profile leak
+	} {
+		if strings.Contains(s, secret) {
+			t.Errorf("StripAPIKeys leaked %q in output:\n%s", secret, s)
+		}
+	}
+
+	// Whitelist preserved fields.
+	for _, kept := range []string{
+		"anthropic",
+		"claude-sonnet-4-6",
+		"bedrock",
+		"cohere.embed-english-v3",
+		"dimension",
+		"us-east-1", // region is on the safe list
+	} {
+		if !strings.Contains(s, kept) {
+			t.Errorf("StripAPIKeys dropped expected field %q from output:\n%s", kept, s)
+		}
 	}
 }
 

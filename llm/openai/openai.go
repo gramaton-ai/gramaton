@@ -32,7 +32,7 @@ type Client struct {
 
 // New creates an OpenAI-compatible LLM client.
 func New(cfg config.LLMConfig) (*Client, error) {
-	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv, cfg.APIKey)
 
 	baseURL := cfg.BaseURL
 	if baseURL == "" {

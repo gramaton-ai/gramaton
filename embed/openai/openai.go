@@ -32,7 +32,7 @@ type Client struct {
 
 // New creates an OpenAI-compatible embedding client.
 func New(cfg config.EmbeddingConfig) (*Client, error) {
-	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv)
+	key := secret.ResolveKey(cfg.APIKeyFile, cfg.APIKeyEnv, cfg.APIKey)
 	// Key is optional -- some local servers (vLLM, LiteLLM) don't need one.
 
 	baseURL := cfg.BaseURL

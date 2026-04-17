@@ -114,6 +114,12 @@ type EmbeddingConfig struct {
 	// Checked if APIKeyFile is empty or missing.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
 
+	// APIKey is the literal API key value. Prefer APIKeyFile or
+	// APIKeyEnv -- inline keys end up in backups, version control,
+	// and process listings. Provided here as the explicit "direct"
+	// path for callers that have a real reason (e.g. tests).
+	APIKey string `yaml:"api_key,omitempty"`
+
 	// Bedrock-specific: AWS region for the embedding endpoint.
 	Region string `yaml:"region,omitempty"`
 
@@ -267,6 +273,12 @@ type LLMConfig struct {
 	// APIKeyEnv is the name of an env var holding the provider API key.
 	// Used if APIKeyFile is empty.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+
+	// APIKey is the literal API key value. Prefer APIKeyFile or
+	// APIKeyEnv -- inline keys end up in backups, version control,
+	// and process listings. Provided here as the explicit "direct"
+	// path for callers that have a real reason (e.g. tests).
+	APIKey string `yaml:"api_key,omitempty"`
 
 	// BaseURL overrides the provider's default endpoint
 	// (openai-compatible servers, local proxies).
