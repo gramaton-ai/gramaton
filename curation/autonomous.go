@@ -402,7 +402,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		result.ModelCounts[r.model]++
 	}
 	if result.Classified > 0 {
-		e.Save("curation: classify")
+		e.SaveOrLog("curation: classify")
 	}
 	e.Unlock()
 }
@@ -565,7 +565,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		result.SummariesGenerated++
 	}
 	if result.SummariesGenerated > 0 {
-		e.Save("curation: summarize")
+		e.SaveOrLog("curation: summarize")
 	}
 	e.Unlock()
 }
@@ -995,7 +995,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 				"node_id", pc.id)
 		}
 		if result.ConceptsCreated > 0 {
-			e.Save("curation: enrich concepts")
+			e.SaveOrLog("curation: enrich concepts")
 		}
 		e.Unlock()
 	}
@@ -1404,14 +1404,23 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 		switch f.relationship {
 		case "contradicts":
-			e.Graph().AddEdge(f.idA, f.idB, f.relationship, f.confidence, nil)
-			e.Graph().AddEdge(f.idB, f.idA, f.relationship, f.confidence, nil)
+			if _, err := e.Graph().AddEdge(f.idA, f.idB, f.relationship, f.confidence, nil); err != nil {
+				logger.Error("failed to add contradicts edge",
+					"component", "curation", "from", f.idA, "to", f.idB, "err", err)
+			}
+			if _, err := e.Graph().AddEdge(f.idB, f.idA, f.relationship, f.confidence, nil); err != nil {
+				logger.Error("failed to add contradicts edge (reverse)",
+					"component", "curation", "from", f.idB, "to", f.idA, "err", err)
+			}
 			result.ContradictionsDetected++
 
 		case "supersedes":
 			// B supersedes A: A is older, B is the replacement.
 			now := time.Now().UTC()
-			e.Graph().AddEdge(f.idB, f.idA, "supersedes", f.confidence, nil)
+			if _, err := e.Graph().AddEdge(f.idB, f.idA, "supersedes", f.confidence, nil); err != nil {
+				logger.Error("failed to add supersedes edge",
+					"component", "curation", "newer", f.idB, "older", f.idA, "err", err)
+			}
 			e.SetProp(f.idA, "valid_until", graph.TimestampProperty(now))
 			e.SetProp(f.idA, "resolution", graph.StringProperty("superseded"))
 			e.SetProp(f.idA, "resolved_at", graph.TimestampProperty(now))
@@ -1419,7 +1428,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		}
 	}
 	if result.ContradictionsDetected > 0 {
-		e.Save("curation: contradictions")
+		e.SaveOrLog("curation: contradictions")
 	}
 	e.Unlock()
 

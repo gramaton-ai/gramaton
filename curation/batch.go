@@ -210,7 +210,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		result.Applied++
 	}
 	if result.Applied > 0 {
-		e.Save("curation: batch classify")
+		e.SaveOrLog("curation: batch classify")
 	}
 	e.Unlock()
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -161,12 +162,17 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 			if !ok {
 				continue // target not in import batch
 			}
-			e.Graph().AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil)
+			if _, err := e.Graph().AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil); err != nil {
+				slog.Error("failed to add edge during import",
+					"component", "import", "from", newSourceID, "to", newTargetID, "type", edge.Type, "err", err)
+			}
 		}
 	}
 
 	if result.Imported > 0 {
-		e.Save("import")
+		if _, err := e.Save("import"); err != nil {
+			return result, fmt.Errorf("save after import: %w", err)
+		}
 	}
 
 	return result, nil
@@ -290,7 +296,9 @@ func ImportCSV(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, erro
 	}
 
 	if result.Imported > 0 {
-		e.Save("import csv")
+		if _, err := e.Save("import csv"); err != nil {
+			return result, fmt.Errorf("save after csv import: %w", err)
+		}
 	}
 
 	return result, nil
@@ -415,13 +423,18 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 			if sourceID == targetID {
 				continue
 			}
-			e.Graph().AddEdge(sourceID, targetID, "related_to", 0.5, nil)
+			if _, err := e.Graph().AddEdge(sourceID, targetID, "related_to", 0.5, nil); err != nil {
+				slog.Error("failed to add wikilink edge during obsidian import",
+					"component", "import", "from", sourceID, "to", targetID, "err", err)
+			}
 			edgesCreated++
 		}
 	}
 
 	if result.Imported > 0 {
-		e.Save("import obsidian")
+		if _, err := e.Save("import obsidian"); err != nil {
+			return result, fmt.Errorf("save after obsidian import: %w", err)
+		}
 	}
 
 	if edgesCreated > 0 {

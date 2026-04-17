@@ -444,7 +444,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			e.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
 			e.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
 			e.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
-			e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil)
+			if _, err := e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
+				logger.Error("failed to add supersedes edge",
+					"component", "curation", "newer", newerID, "older", olderID, "err", err)
+			}
 			result.DuplicatesSuperseded++
 		}
 
@@ -574,7 +577,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// Create instance_of edges from member records.
 			for _, memberID := range c.NodeIDs {
 				if _, ok := e.Graph().GetNode(memberID); ok {
-					e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil)
+					if _, err := e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
+						logger.Error("failed to add instance_of edge",
+							"component", "curation", "member", memberID, "concept", cn.ID, "err", err)
+					}
 				}
 			}
 
@@ -582,7 +588,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 
 		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded+result.QualityRepairs+result.ConceptsCreated > 0 {
-			e.Save("curation: deterministic")
+			e.SaveOrLog("curation: deterministic")
 		}
 
 		e.Unlock()
@@ -733,7 +739,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 		deleted++
 	}
 	if deleted > 0 {
-		e.Save("curation: garbage collection")
+		e.SaveOrLog("curation: garbage collection")
 	}
 	e.Unlock()
 
@@ -833,7 +839,7 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		changed = true
 	}
 	if changed {
-		e.Save("curation: concept enrichment")
+		e.SaveOrLog("curation: concept enrichment")
 	}
 	e.Unlock()
 
@@ -1037,7 +1043,7 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 	}
 
 	if linked > 0 {
-		e.Save("curation: section linking")
+		e.SaveOrLog("curation: section linking")
 		logger.Info("cross-section linking complete",
 			"component", "curation",
 			"sections_linked", linked)

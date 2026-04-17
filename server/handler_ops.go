@@ -190,7 +190,10 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
 					s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
 					s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-					s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil)
+					if _, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err != nil {
+						s.log.Error("failed to add supersedes edge",
+							"component", "ingest", "newer", n.ID, "older", dupID, "err", err)
+					}
 				}
 			}
 			warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
@@ -200,7 +203,12 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 	}
 
 	if ingested > 0 {
-		s.engine.Save("ingest")
+		if _, err := s.engine.Save("ingest"); err != nil {
+			s.log.Error("ingest save failed", "component", "ingest", "err", err, "ingested", ingested)
+			s.writeError(w, http.StatusInternalServerError, "save_failed",
+				"failed to persist ingested records", false)
+			return
+		}
 	}
 
 	s.writeJSONLocked(w, http.StatusOK, map[string]any{

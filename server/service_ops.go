@@ -282,7 +282,10 @@ func (s *Server) serviceReembed(ctx context.Context, batch int) (map[string]any,
 	}
 
 	if reembedded > 0 {
-		s.engine.Save("reembed")
+		if _, err := s.engine.Save("reembed"); err != nil {
+			s.log.Error("reembed save failed", "component", "reembed", "err", err, "reembedded", reembedded)
+			return nil, errInternal(fmt.Sprintf("save after reembed failed: %s", err))
+		}
 	}
 
 	s.log.Info("reembed complete", "component", "reembed", "reembedded", reembedded, "errors", errors, "duration_ms", time.Since(start).Milliseconds())

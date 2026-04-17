@@ -1,6 +1,8 @@
 package search
 
 import (
+	"sort"
+
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 )
@@ -140,14 +142,9 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 		}
 	}
 
-	// Sort by descending similarity.
-	for i := 0; i < len(pairs); i++ {
-		for j := i + 1; j < len(pairs); j++ {
-			if pairs[j].Similarity > pairs[i].Similarity {
-				pairs[i], pairs[j] = pairs[j], pairs[i]
-			}
-		}
-	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].Similarity > pairs[j].Similarity
+	})
 
 	if maxPairs < len(pairs) {
 		pairs = pairs[:maxPairs]

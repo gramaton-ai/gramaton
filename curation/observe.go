@@ -202,7 +202,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	// Batch all bbolt-backed index writes (PropIdx + BM25) in a single
 	// transaction. Without batching, each IndexNode call does separate
 	// bbolt write transactions with fsync, making bulk writes extremely slow.
-	e.BatchIndexWrites(func() {
+	if err := e.BatchIndexWrites(func() {
 		for _, o := range allObs {
 			parent, ok := e.Graph().GetNode(o.parentID)
 			if !ok {
@@ -238,17 +238,26 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			n := e.Graph().AddNode(props)
 
 			// Create observation_of edge (child -> parent).
-			e.Graph().AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil)
+			if _, err := e.Graph().AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil); err != nil {
+				logger.Error("failed to add observation_of edge",
+					"component", "curation", "child", n.ID, "parent", o.parentID, "err", err)
+			}
 
 			// Index the node (properties + BM25 + vector).
 			e.IndexNode(n.ID, o.text, o.vec)
 
 			created++
 		}
-	})
+	}); err != nil {
+		logger.Error("observation index batch failed",
+			"component", "curation",
+			"err", err,
+			"attempted", len(allObs))
+		return 0
+	}
 
 	if created > 0 {
-		e.Save("curation: observation extraction")
+		e.SaveOrLog("curation: observation extraction")
 		logger.Info("observations extracted",
 			"component", "curation",
 			"observations", created,

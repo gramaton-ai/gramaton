@@ -329,7 +329,7 @@ func (s *Server) storeDeferredCapture(fact string, cfg config.Config) {
 	}
 	n := s.engine.Graph().AddNode(props)
 	s.engine.IndexNode(n.ID, fact, nil)
-	s.engine.Save("observe")
+	s.engine.SaveOrLog("observe")
 }
 
 // storeDeferredCaptureWithEmbedding stores a fact with its pre-computed
@@ -363,7 +363,7 @@ func (s *Server) storeDeferredCaptureWithEmbedding(fact string, vec []float32, c
 
 	n := s.engine.Graph().AddNode(props)
 	s.engine.IndexNode(n.ID, fact, vec)
-	s.engine.Save("observe")
+	s.engine.SaveOrLog("observe")
 }
 
 // observeExtractionPrompt is the prompt used to extract facts from

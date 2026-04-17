@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
@@ -106,14 +107,9 @@ func MergeResults(resultSets [][]Result, topK int) []Result {
 		merged = append(merged, r)
 	}
 
-	// Sort by score descending.
-	for i := 0; i < len(merged); i++ {
-		for j := i + 1; j < len(merged); j++ {
-			if merged[j].EffectiveScore > merged[i].EffectiveScore {
-				merged[i], merged[j] = merged[j], merged[i]
-			}
-		}
-	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].EffectiveScore > merged[j].EffectiveScore
+	})
 
 	if topK > 0 && topK < len(merged) {
 		merged = merged[:topK]

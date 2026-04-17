@@ -406,6 +406,25 @@ func (e *Engine) MarkAccessDirty() {
 	e.accessDirty = true
 }
 
+// SaveOrLog wraps Save for callers that have no meaningful path to
+// surface a persistence failure (background flushes, fire-and-forget
+// curation writes, mid-loop saves). Errors are logged at Error level
+// with the message label so operators can see silent persistence
+// failures that would otherwise vanish.
+//
+// Callers that CAN handle the error (HTTP handlers returning 5xx,
+// import operations that should abort) MUST use Save directly.
+//
+// Caller must hold the write lock.
+func (e *Engine) SaveOrLog(message string) {
+	if _, err := e.Save(message); err != nil {
+		slog.Error("save failed",
+			"component", "engine",
+			"message", message,
+			"err", err)
+	}
+}
+
 // FlushAccess saves the current graph state if access metadata is
 // dirty. Acquires the write lock internally. Safe to call from a
 // background goroutine.
@@ -419,7 +438,7 @@ func (e *Engine) FlushAccess() {
 	}
 	slog.Info("access flush: saving", "component", "engine")
 	start := time.Now()
-	e.Save("access_flush")
+	e.SaveOrLog("access_flush")
 	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
 }
 
@@ -495,8 +514,13 @@ func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
 // EdgeStore). Use this when creating many nodes at once (e.g.,
 // observation extraction) to avoid per-node fsync overhead.
 // Caller must hold the engine write lock.
-func (e *Engine) BatchIndexWrites(fn func()) {
-	e.boltDB.Update(func(tx *bolt.Tx) error {
+//
+// Returns any error from the underlying bbolt transaction. A non-nil
+// return means the entire batch was rolled back; index writes inside
+// fn did not persist. Callers must check the error -- silently
+// ignoring it loses every write inside the closure.
+func (e *Engine) BatchIndexWrites(fn func()) error {
+	return e.boltDB.Update(func(tx *bolt.Tx) error {
 		if pi, ok := e.propIdx.(*index.BboltPropertyIndex); ok {
 			pi.SetBatch(tx)
 			defer pi.SetBatch(nil)
@@ -920,7 +944,10 @@ func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps
 		}
 
 		node := e.graph.AddNode(props)
-		e.graph.AddEdge(node.ID, parentID, "section_of", 1.0, nil)
+		if _, err := e.graph.AddEdge(node.ID, parentID, "section_of", 1.0, nil); err != nil {
+			slog.Error("failed to add section_of edge",
+				"component", "engine", "child", node.ID, "parent", parentID, "err", err)
+		}
 		e.IndexNode(node.ID, sec.Text, vec)
 
 		if vec != nil && pre.Model != "" {
@@ -942,7 +969,10 @@ func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
 		chunkNode := e.graph.AddNode(graph.Properties{
 			"content_full": graph.StringProperty(chunkText),
 		})
-		e.graph.AddEdge(chunkNode.ID, parentID, "chunk_of", 1.0, nil)
+		if _, err := e.graph.AddEdge(chunkNode.ID, parentID, "chunk_of", 1.0, nil); err != nil {
+			slog.Error("failed to add chunk_of edge",
+				"component", "engine", "child", chunkNode.ID, "parent", parentID, "err", err)
+		}
 		e.IndexNode(chunkNode.ID, chunkText, vec)
 
 		if vec != nil && pre.Model != "" {
