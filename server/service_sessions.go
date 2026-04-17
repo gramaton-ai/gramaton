@@ -719,6 +719,15 @@ func (s *Server) serviceSessionPrepare(sessionID string) (map[string]any, *servi
 }
 
 // commitSegment is a single segment submitted via session_commit.
+//
+// PromoteToMemory implements the two-tier extraction model: when true
+// (or unset), the segment becomes both a Session segment (BM25-indexed)
+// and a Memory record (vector + BM25 indexed, full epistemic metadata,
+// auto-supersession). When false, only the Session segment is created
+// -- BM25-searchable but not vector-embedded, no Memory record, no
+// extracted_as edge. Use false for exploration, dead ends, open
+// questions, and other "valuable context" content that shouldn't
+// pollute the Memory store's vector space.
 type commitSegment struct {
 	Content         string   `json:"content"`
 	TopicName       string   `json:"topic"`
@@ -728,6 +737,17 @@ type commitSegment struct {
 	EpistemicStatus string   `json:"epistemic_status,omitempty"`
 	Keywords        []string `json:"keywords,omitempty"`
 	SummaryShort    string   `json:"summary_short,omitempty"`
+	PromoteToMemory *bool    `json:"promote_to_memory,omitempty"`
+}
+
+// shouldPromote returns true when the segment should be promoted to a
+// Memory record. Default (nil) is true for backward compatibility with
+// pre-two-tier callers; explicitly setting false makes it Session-only.
+func (c commitSegment) shouldPromote() bool {
+	if c.PromoteToMemory == nil {
+		return true
+	}
+	return *c.PromoteToMemory
 }
 
 // serviceSessionCommit appends extracted segments to the session.
@@ -771,26 +791,36 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 
 	start := time.Now()
 
-	// Pre-embed all segment contents for Memory records (outside lock).
-	var embedVecs [][]float32
+	// Pre-embed only segments that will be promoted to Memory (outside lock).
+	// Session-only segments don't need vectors -- they're BM25-only by design.
+	embedVecs := make(map[int][]float32)
 	if s.engine.Embedder() != nil {
-		texts := make([]string, len(segments))
+		var promotedIdx []int
+		var promotedTexts []string
 		for i, seg := range segments {
+			if !seg.shouldPromote() {
+				continue
+			}
 			text := seg.SummaryShort
 			if text == "" {
 				text = seg.Content
-				if len(text) > 500 {
-					text = text[:500]
+				if len(text) > 1000 {
+					text = text[:1000]
 				}
 			}
-			texts[i] = text
+			promotedIdx = append(promotedIdx, i)
+			promotedTexts = append(promotedTexts, text)
 		}
-		vecs, err := s.engine.Embedder().Embed(context.Background(), texts)
-		if err != nil {
-			s.log.Warn("session commit: embedding failed, continuing without vectors",
-				"component", "session", "session_id", sessionID, "err", err)
-		} else {
-			embedVecs = vecs
+		if len(promotedTexts) > 0 {
+			vecs, err := s.engine.Embedder().Embed(context.Background(), promotedTexts)
+			if err != nil {
+				s.log.Warn("session commit: embedding failed, continuing without vectors",
+					"component", "session", "session_id", sessionID, "err", err)
+			} else {
+				for j, idx := range promotedIdx {
+					embedVecs[idx] = vecs[j]
+				}
+			}
 		}
 	}
 	embedDur := time.Since(start)
@@ -812,6 +842,7 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 
 	topicsCreated := 0
 	segmentsAdded := 0
+	sessionOnlySegments := 0
 	memoryRecordsCreated := 0
 	edgesCreated := 0
 	var superseded []map[string]any
@@ -859,6 +890,19 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 		}
 		segmentsAdded++
 
+		// Two-tier extraction: skip Memory promotion when the LLM marked
+		// the segment as Session-only (exploration, dead ends, open
+		// questions). Session segment is BM25-indexed above and remains
+		// searchable; we just don't pollute the vector space or pay the
+		// embed/storage cost for content that isn't decision-grade.
+		if !seg.shouldPromote() {
+			sessionOnlySegments++
+			s.log.Info("session-only segment", "component", "session",
+				"session_id", sessionID, "segment_id", segNode.ID,
+				"topic_id", topicID, "content_len", len(seg.Content))
+			continue
+		}
+
 		// 2. Create the Memory record with segment content + metadata.
 		memProps := graph.Properties{
 			"content_full":      graph.StringProperty(seg.Content),
@@ -889,11 +933,10 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 
 		memNode := s.engine.Graph().AddNode(memProps)
 
-		// 3. Embed the Memory record (vector + BM25).
-		var vec []float32
-		if embedVecs != nil && i < len(embedVecs) {
-			vec = embedVecs[i]
-		}
+		// 3. Embed the Memory record (vector + BM25). embedVecs is keyed
+		// by segment index; nil means embedding wasn't computed (no
+		// embedder configured or embed call failed).
+		vec := embedVecs[i]
 		bm25Text := seg.Content
 		if len(seg.Keywords) > 0 {
 			bm25Text += " " + strings.Join(seg.Keywords, " ")
@@ -964,12 +1007,14 @@ func (s *Server) serviceSessionCommit(sessionID string, segments []commitSegment
 	dur := time.Since(start)
 	s.log.Info("session commit", "component", "session", "session_id", sessionID,
 		"segments_submitted", len(segments), "segments_added", segmentsAdded,
+		"session_only_segments", sessionOnlySegments,
 		"memory_records_created", memoryRecordsCreated, "edges_created", edgesCreated,
 		"embed_ms", embedDur.Milliseconds(), "duration", dur)
 
 	resp := map[string]any{
 		"session_id":             sessionID,
 		"segments_added":         segmentsAdded,
+		"session_only_segments":  sessionOnlySegments,
 		"topics_created":         topicsCreated,
 		"memory_records_created": memoryRecordsCreated,
 		"edges_created":          edgesCreated,

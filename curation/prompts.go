@@ -13,7 +13,7 @@ Respond with this exact JSON structure:
   "knowledge_type": "episodic|semantic|procedural|conceptual|reference",
   "epistemic_status": "well_established|probable|speculative|contested|refuted",
   "keywords": ["keyword1", "keyword2", ...],
-  "summary_short": "max 200 char summary"
+  "summary_short": "~750 char summary (semantic anchor for embedding)"
 }
 
 === CRITICAL: META VS OBJECT LEVEL ===
@@ -159,9 +159,12 @@ domain-specific terms over generic words. "kafka event pipeline" not
 "technology decision". Include names of tools, people, projects, and
 specific technical concepts mentioned in the content.
 
-summary_short: Under 200 characters. The essence of the record for
-search result display. Start with the key fact, decision, or topic.
-Do not start with "This record..." -- just state the content.`
+summary_short: Up to ~750 characters (hard cap 1000). This is the
+embedding-ready semantic anchor of the record -- it is what gets
+vector-embedded for similarity search. Make it semantically
+representative, not a tagline. Start with the key fact, decision,
+or topic. Do not start with "This record..." -- just state the
+content.`
 
 // classifyPrompt is the per-record user message for classification.
 // It accepts two format arguments: content (%s) and context signals (%s).
@@ -173,7 +176,7 @@ Content:
 %s
 %s`
 
-const summarizePrompt = `Write a concise summary of the following content. Max 200 characters. Start with the key fact, decision, or concept. No quotes, no preamble.
+const summarizePrompt = `Write a concise summary of the following content. ~750 characters (semantic anchor for embedding). Start with the key fact, decision, or concept. No quotes, no preamble.
 
 Content:
 %s

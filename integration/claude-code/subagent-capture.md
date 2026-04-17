@@ -67,7 +67,7 @@ no relevant context for that field -- skip them.
    - Entity names from "Who or what is involved"
    - Domain/subject markers from "What is this about"
 
-3. Write a summary_short (max 200 characters) that captures the essence.
+3. Write a summary_short (~750 chars (semantic anchor for embedding)) that captures the essence.
 
 4. Store the record via `gramaton_capture`:
    ```
@@ -78,7 +78,7 @@ no relevant context for that field -- skip them.
      knowledge_type="[value]",
      epistemic_status="[value]",
      keywords=["keyword1", "keyword2"],
-     summary_short="[max 200 chars]",
+     summary_short="[~750 chars]",
      context_about="[from envelope]",
      context_who="[from envelope]",
      context_findable_by="[from envelope]",

@@ -721,6 +721,124 @@ func TestSessionCommitAfterPrepare(t *testing.T) {
 	}
 }
 
+func TestSessionCommitPromoteFalse_SkipsMemoryRecord(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("promote-false-test", "")
+	sessionID := result["id"].(string)
+
+	if _, svcErr := srv.serviceSessionPrepare(sessionID); svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+
+	promoteFalse := false
+	segments := []commitSegment{
+		{Content: "Considered approach X but moved on without deciding",
+			TopicName: "Exploration", PromoteToMemory: &promoteFalse},
+	}
+	commitResult, svcErr := srv.serviceSessionCommit(sessionID, segments)
+	if svcErr != nil {
+		t.Fatalf("commit: %v", svcErr)
+	}
+	if commitResult["segments_added"].(int) != 1 {
+		t.Errorf("segments_added = %v, want 1", commitResult["segments_added"])
+	}
+	if commitResult["session_only_segments"].(int) != 1 {
+		t.Errorf("session_only_segments = %v, want 1", commitResult["session_only_segments"])
+	}
+	if commitResult["memory_records_created"].(int) != 0 {
+		t.Errorf("memory_records_created = %v, want 0 (segment was Session-only)",
+			commitResult["memory_records_created"])
+	}
+	if commitResult["edges_created"].(int) != 0 {
+		t.Errorf("edges_created = %v, want 0 (no extracted_as edge for Session-only segment)",
+			commitResult["edges_created"])
+	}
+
+	// Verify segment exists with no captured_as set.
+	got, _ := srv.serviceSessionGet(sessionID)
+	topics := got["topics"].([]map[string]any)
+	if len(topics) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(topics))
+	}
+	segs := topics[0]["segments"].([]map[string]any)
+	if len(segs) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(segs))
+	}
+	if _, hasCaptured := segs[0]["captured_as"]; hasCaptured {
+		t.Error("Session-only segment should have no captured_as field")
+	}
+}
+
+func TestSessionCommitMixedPromotion(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("mixed-promote-test", "")
+	sessionID := result["id"].(string)
+
+	if _, svcErr := srv.serviceSessionPrepare(sessionID); svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+
+	promoteTrue, promoteFalse := true, false
+	segments := []commitSegment{
+		{Content: "Decided to use bbolt for storage", TopicName: "Storage",
+			PromoteToMemory: &promoteTrue},
+		{Content: "Briefly considered Badger before settling on bbolt", TopicName: "Storage",
+			PromoteToMemory: &promoteFalse},
+		{Content: "Future work: revisit storage choice once we hit 1M nodes", TopicName: "Storage",
+			PromoteToMemory: &promoteFalse},
+		{Content: "User prefers Go modules over GOPATH", TopicName: "Preferences"},
+		// nil PromoteToMemory should default to true.
+	}
+	commitResult, svcErr := srv.serviceSessionCommit(sessionID, segments)
+	if svcErr != nil {
+		t.Fatalf("commit: %v", svcErr)
+	}
+	if commitResult["segments_added"].(int) != 4 {
+		t.Errorf("segments_added = %v, want 4", commitResult["segments_added"])
+	}
+	if commitResult["session_only_segments"].(int) != 2 {
+		t.Errorf("session_only_segments = %v, want 2", commitResult["session_only_segments"])
+	}
+	if commitResult["memory_records_created"].(int) != 2 {
+		t.Errorf("memory_records_created = %v, want 2 (1 explicit true + 1 nil-default)",
+			commitResult["memory_records_created"])
+	}
+	if commitResult["edges_created"].(int) != 2 {
+		t.Errorf("edges_created = %v, want 2", commitResult["edges_created"])
+	}
+}
+
+func TestSessionCommitNilPromoteDefaultsTrue(t *testing.T) {
+	// Backward compatibility: pre-two-tier callers omit promote_to_memory
+	// entirely. Default behavior must continue to promote everything.
+	srv, _ := setupTestServer(t)
+
+	result, _ := srv.serviceSessionCreate("nil-promote-test", "")
+	sessionID := result["id"].(string)
+
+	if _, svcErr := srv.serviceSessionPrepare(sessionID); svcErr != nil {
+		t.Fatalf("prepare: %v", svcErr)
+	}
+
+	segments := []commitSegment{
+		{Content: "Some knowledge", TopicName: "Topic A"},
+		{Content: "More knowledge", TopicName: "Topic B"},
+	}
+	commitResult, svcErr := srv.serviceSessionCommit(sessionID, segments)
+	if svcErr != nil {
+		t.Fatalf("commit: %v", svcErr)
+	}
+	if commitResult["memory_records_created"].(int) != 2 {
+		t.Errorf("nil PromoteToMemory should default to promote: memory_records_created = %v, want 2",
+			commitResult["memory_records_created"])
+	}
+	if commitResult["session_only_segments"].(int) != 0 {
+		t.Errorf("session_only_segments = %v, want 0", commitResult["session_only_segments"])
+	}
+}
+
 func TestSessionCommitExistingTopic(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
@@ -897,11 +1015,18 @@ func TestPrepareReturnsExtractionPromptWithSections(t *testing.T) {
 	}
 	instructions := prepResult["instructions"].(string)
 
-	// Verify prompt has the key sections from extraction.md.
+	// Lock in the structural sections of the rewritten extraction prompt.
+	// These names are load-bearing -- the prompt's effectiveness depends on
+	// the question-type framework, the field-roles distinction, and the
+	// promote_to_memory two-tier guidance all being present.
 	for _, section := range []string{
-		"What to Extract",
-		"What to Skip",
-		"Classification Fields",
+		"Question Types",                  // question-type framework
+		"Field Roles",                     // content / summary_short / keywords distinction
+		"Synthesis, Not Summarization",    // anti-TF-IDF principle
+		"Classification Heuristics",       // per-field choice guidance
+		"promote_to_memory",               // two-tier flag guidance
+		"Dedup vs. Supersession",          // distinguishes the two
+		"What to Skip",                    // narrowed skip list
 		"Call to Action",
 		"gramaton_session_commit",
 	} {

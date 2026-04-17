@@ -139,8 +139,13 @@ without requiring the user to ask. The flow is two-phase:
    extraction instructions and the current session state (already-
    captured segments, for dedup).
 2. **Commit** -- `gramaton_session_commit(session_id, segments)`
-   submits the extracted segments. The server stores them as
-   Session segments and creates linked Memory records.
+   submits the extracted segments. Each segment becomes a Session
+   segment (BM25-indexed). When `promote_to_memory: true` (default
+   when omitted), it also becomes a Memory record (vector-embedded,
+   full lifecycle, auto-supersession). Set `promote_to_memory: false`
+   for exploration, open questions, and dead ends -- they stay
+   searchable as Session segments without polluting Memory's vector
+   space.
 
 **When to call prepare/commit:**
 - At natural breakpoints: topic shifts, decisions landing, a task

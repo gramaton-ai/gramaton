@@ -75,7 +75,7 @@ type proxySessionCommitSegment struct {
 	KnowledgeType   string   `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
 	EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 	Keywords        []string `json:"keywords,omitempty" jsonschema:"search keywords"`
-	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"max 200 chars"`
+	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
 }
 
 type proxySessionCommitInput struct {

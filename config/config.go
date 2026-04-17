@@ -364,7 +364,7 @@ func Defaults() Config {
 			MaxNestingDepth:    10,
 			MaxContentLength:   1024 * 1024,
 			MaxKeywords:        100,
-			MaxSummaryShort:    500,
+			MaxSummaryShort:    1000,
 			StdinTimeout:       30 * time.Second,
 			MaxWritesPerSecond: 100,
 		},

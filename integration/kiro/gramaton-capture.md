@@ -18,7 +18,7 @@ Capture knowledge into the Gramaton store.
 
 2. Extract keywords from the content and conversation context
 
-3. Write a summary_short (max 200 characters)
+3. Write a summary_short (~750 chars (semantic anchor for embedding))
 
 4. Store via `gramaton_capture`:
    ```

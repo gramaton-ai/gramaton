@@ -149,7 +149,7 @@ Instructions:
    (well_established|probable|speculative|contested|refuted)
 2. Extract keywords from BOTH content and context — especially
    from 'What should this be findable by'
-3. Write a summary_short (max 200 chars)
+3. Write a summary_short (~750 chars)
 4. Construct a JSON object with all fields and pipe to gramaton:
    gramaton capture <<'EOF'
    {"content": "...", "temporality": "...", "confidence": 0.9,
@@ -255,7 +255,7 @@ no relevant context for that field — that's fine, skip them.
    - Entity names from "Who or what is involved"
    - Domain/subject markers from "What is this about"
 
-3. Write a summary_short (max 200 characters) that captures the essence.
+3. Write a summary_short (~750 chars (semantic anchor for embedding)) that captures the essence.
 
 4. Store the record by constructing a JSON object and piping to gramaton:
    gramaton capture <<'EOF'
@@ -268,7 +268,7 @@ no relevant context for that field — that's fine, skip them.
      "valid_from": "[date if known, omit if not]",
      "valid_until": "[date if superseded, omit if still current]",
      "keywords": ["keyword1", "keyword2", ...],
-     "summary_short": "[max 200 chars]",
+     "summary_short": "[~750 chars]",
      "context_about": "[from envelope]",
      "context_who": "[from envelope]",
      "context_prompted": "[from envelope]",
