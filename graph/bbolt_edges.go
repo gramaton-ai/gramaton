@@ -387,8 +387,25 @@ func (c *edgeLRU) evict() {
 	delete(c.edges, oldest)
 }
 
+// reset empties the cache in place. Used by BboltEdgeStore.Clear so
+// the cache field doesn't have to be reassigned (which would race
+// with concurrent Get callers reading the old pointer).
+func (c *edgeLRU) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.edges = make(map[string]*Edge, c.capacity)
+	c.order = nil
+}
+
+// Clear deletes every edge bucket and empties the in-memory cache.
+//
+// Caller is expected to hold the engine write lock so no concurrent
+// Get/Put hits the cache during the swap. Even so, the cache is
+// emptied in place via reset() instead of pointer-reassigning the
+// cache field -- the latter would race with Get callers that
+// snapshot the field before the swap. (Wave 6 P1-50.)
 func (s *BboltEdgeStore) Clear() {
-	s.cache = newEdgeLRU(s.cache.capacity)
+	s.cache.reset()
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{edgesBucket, adjOutBucket, adjInBucket, adjTypBucket} {
 			if err := tx.DeleteBucket(name); err != nil {

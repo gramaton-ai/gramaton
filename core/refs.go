@@ -32,6 +32,16 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		}
 	}()
 
+	// Apply the requested mode BEFORE the file is closed so there
+	// is no window during which the file exists on disk under
+	// CreateTemp's default 0o600 (or potentially the umask, on
+	// older Go versions). All current callers ask for 0o600 so the
+	// observable window is zero today, but doing it this way keeps
+	// the function safe for callers that ask for a different mode.
+	// (Wave 6 P1-53.)
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
 	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
@@ -40,9 +50,6 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Chmod(tmpPath, perm); err != nil {
-		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)

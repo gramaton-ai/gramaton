@@ -69,15 +69,33 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 // handleDebugGoroutines dumps all goroutine stacks. Loopback only.
 // Does NOT acquire any locks -- safe to call during a deadlock.
+//
+// Buffer grows until runtime.Stack returns less than its capacity,
+// indicating the full set fit. The fixed 1MB previous version
+// silently truncated on processes with many goroutines -- defeating
+// the purpose of a debug endpoint when you most need it.
+// (Wave 6 P1-66.)
 func (s *Server) handleDebugGoroutines(w http.ResponseWriter, r *http.Request) {
 	if !isLoopback(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	buf := make([]byte, 1<<20) // 1MB
-	n := runtime.Stack(buf, true)
+	const maxBuf = 64 << 20 // 64 MB ceiling
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		if len(buf) >= maxBuf {
+			// Truncated; better to return what we have than spin.
+			break
+		}
+		buf = make([]byte, len(buf)*2)
+	}
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write(buf[:n])
+	w.Write(buf)
 }
 
 // handleLLMStats returns LLM usage metrics.

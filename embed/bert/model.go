@@ -3,6 +3,7 @@ package bert
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 )
 
@@ -308,20 +309,39 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 	return cls
 }
 
-// getWeight looks up a tensor by trying common BERT weight naming prefixes.
+// getWeight looks up a tensor by trying common BERT weight naming
+// prefixes in priority order. If multiple prefixes match the same
+// suffix (e.g. an HF re-export carrying both "bert.X" and "model.X"
+// for the same parameter), the higher-priority prefix wins -- but
+// the ambiguity is logged once at Warn so silent inference variance
+// across multi-format files is observable. (Wave 6 P1-71.)
 func getWeight(st *SafeTensors, suffix string) ([]float32, error) {
 	prefixes := []string{"bert.", "model.", ""}
-	for _, prefix := range prefixes {
-		name := prefix + suffix
-		if st.Has(name) {
-			data, _, err := st.GetFloat32(name)
-			if err != nil {
-				return nil, fmt.Errorf("load weight %q: %w", name, err)
+	chosen := -1
+	for i, prefix := range prefixes {
+		if st.Has(prefix + suffix) {
+			if chosen < 0 {
+				chosen = i
+				continue
 			}
-			return data, nil
+			// Already found a match with a higher-priority prefix;
+			// flag the ambiguity but stick with the chosen one.
+			slog.Warn("BERT weight has multiple matching prefixes; using highest-priority",
+				"component", "bert",
+				"suffix", suffix,
+				"chosen_prefix", prefixes[chosen],
+				"also_found_prefix", prefix)
 		}
 	}
-	return nil, fmt.Errorf("weight not found: tried prefixes %v with suffix %q", prefixes, suffix)
+	if chosen < 0 {
+		return nil, fmt.Errorf("weight not found: tried prefixes %v with suffix %q", prefixes, suffix)
+	}
+	name := prefixes[chosen] + suffix
+	data, _, err := st.GetFloat32(name)
+	if err != nil {
+		return nil, fmt.Errorf("load weight %q: %w", name, err)
+	}
+	return data, nil
 }
 
 func loadLinear(st *SafeTensors, prefix string) (LinearWeights, error) {

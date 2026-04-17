@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -52,10 +53,12 @@ func (c *Client) detectContextWindow() {
 	}
 
 	// Look for context length in model_info. The key varies by model
-	// family but commonly appears as "*context_length" (e.g.,
-	// "bert.context_length", "llama.context_length").
+	// family but always ends in ".context_length" (e.g.,
+	// "bert.context_length", "llama.context_length"). HasSuffix is
+	// safer than the prior length+slice check, which had a fragile
+	// off-by-one and silently failed on key renames. (Wave 6 P1-68.)
 	for k, v := range result.ModelInfo {
-		if len(k) > 15 && k[len(k)-14:] == "context_length" {
+		if strings.HasSuffix(k, ".context_length") {
 			if f, ok := v.(float64); ok && f > 0 {
 				c.contextWindow = int(f)
 				return

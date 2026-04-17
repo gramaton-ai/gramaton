@@ -197,18 +197,23 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 
 	// Read phase: gather pending record IDs and content.
+	// Sort pendingIDs by created_at ascending so older captures
+	// are classified first. PropIdx.Lookup returns IDs in
+	// map-iteration order, which is quasi-stable but not FIFO --
+	// without the sort, a 50-record burst could starve behind
+	// later trickle captures depending on hash collisions.
+	// (Wave 6 P1-62.)
 	e.RLock()
 	pendingIDs := e.PropIdx().Lookup("processing_status", graph.StringProperty("captured"))
 	type pending struct {
 		id             string
 		content        string
 		contextSignals string
+		createdAt      time.Time
 	}
 	var batch []pending
+	all := make([]pending, 0, len(pendingIDs))
 	for _, id := range pendingIDs {
-		if len(batch) >= batchSize {
-			break
-		}
 		n, ok := e.Graph().GetNode(id)
 		if !ok {
 			continue
@@ -217,11 +222,21 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if !ok || content == "" {
 			continue
 		}
-		batch = append(batch, pending{
+		ca, _ := n.Properties.GetTimestamp("created_at")
+		all = append(all, pending{
 			id:             id,
 			content:        content,
 			contextSignals: buildContextSignals(n),
+			createdAt:      ca,
 		})
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		return all[i].createdAt.Before(all[j].createdAt)
+	})
+	if len(all) > batchSize {
+		batch = all[:batchSize]
+	} else {
+		batch = all
 	}
 	e.RUnlock()
 
@@ -1481,7 +1496,9 @@ func parseContradictionBatchResult(resp string) ([]batchContradictionResult, err
 
 	out := make([]batchContradictionResult, 0, len(raw))
 	for _, r := range raw {
-		r.Relationship = validateEnum(r.Relationship, []string{"contradicts", "supersedes", "related", "none"})
+		r.Relationship = validateEnumLogged(r.Relationship,
+			[]string{"contradicts", "supersedes", "related", "none"},
+			"contradiction_batch.relationship", slog.Default())
 		if r.Relationship == "" {
 			r.Relationship = "none"
 		}
@@ -1525,7 +1542,9 @@ func parseContradictionResult(resp string) (*contradictionResult, error) {
 		return nil, fmt.Errorf("parse contradiction JSON: %w", err)
 	}
 
-	result.Relationship = validateEnum(result.Relationship, []string{"contradicts", "supersedes", "related", "none"})
+	result.Relationship = validateEnumLogged(result.Relationship,
+		[]string{"contradicts", "supersedes", "related", "none"},
+		"contradiction.relationship", slog.Default())
 	if result.Relationship == "" {
 		result.Relationship = "none"
 	}
@@ -1651,6 +1670,29 @@ func validateEnum(val string, allowed []string) string {
 		if val == a {
 			return val
 		}
+	}
+	return ""
+}
+
+// validateEnumLogged is validateEnum with a Warn log when the LLM
+// returned a value that didn't match any allowed enum. Useful for
+// surfacing "near-miss" responses that the silent-default-to-zero
+// path of validateEnum would otherwise drop -- e.g. relationship
+// "update" being dropped to "none" without anyone seeing why.
+// (Wave 6 P1-60.)
+func validateEnumLogged(val string, allowed []string, field string, logger *slog.Logger) string {
+	if val == "" {
+		return ""
+	}
+	if v := validateEnum(val, allowed); v != "" {
+		return v
+	}
+	if logger != nil {
+		logger.Warn("LLM returned unrecognised enum value",
+			"component", "curation",
+			"field", field,
+			"value", val,
+			"allowed", allowed)
 	}
 	return ""
 }
