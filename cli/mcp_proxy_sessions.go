@@ -76,6 +76,7 @@ type proxySessionCommitSegment struct {
 	EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 	Keywords        []string `json:"keywords,omitempty" jsonschema:"search keywords"`
 	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+	PromoteToMemory *bool    `json:"promote_to_memory,omitempty" jsonschema:"true (default when omitted) -> Session segment + Memory record; false -> Session-only (exploration, open questions, dead ends)"`
 }
 
 type proxySessionCommitInput struct {
