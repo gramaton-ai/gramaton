@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 )
@@ -313,12 +314,15 @@ func TestClassifyPendingSkipsEmptyContent(t *testing.T) {
 func TestClassifyPendingModelTiering(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.LightModel = "claude-haiku-4-5"
-	cfg.LLMCuration.LightModelThreshold = 100
+	// Set distinct models for low and medium tiers; the default effort
+	// for short classification is low, for long is medium.
+	cfg.LLM.Models.Low = "test-low-model"
+	cfg.LLM.Models.Medium = "test-medium-model"
+	cfg.LLMCuration.LongClassificationThreshold = 100
 
-	// Short content (below threshold) -> light model.
+	// Short content (below threshold) -> low-tier model.
 	shortID := addPendingNode(t, eng, "short fact")
-	// Long content (above threshold) -> default model.
+	// Long content (above threshold) -> medium-tier model.
 	longContent := strings.Repeat("a", 200)
 	longID := addPendingNode(t, eng, longContent)
 
@@ -346,18 +350,22 @@ func TestClassifyPendingModelTiering(t *testing.T) {
 	shortClassifiedBy, _ := shortNode.Properties.GetString("classified_by")
 	longClassifiedBy, _ := longNode.Properties.GetString("classified_by")
 
-	if shortClassifiedBy != "claude-haiku-4-5" {
-		t.Errorf("short record should be classified by haiku, got %q", shortClassifiedBy)
+	if shortClassifiedBy != "test-low-model" {
+		t.Errorf("short record should be classified by low-tier model, got %q", shortClassifiedBy)
 	}
-	if longClassifiedBy != "mock-llm" {
-		t.Errorf("long record should be classified by default model, got %q", longClassifiedBy)
+	if longClassifiedBy != "test-medium-model" {
+		t.Errorf("long record should be classified by medium-tier model, got %q", longClassifiedBy)
 	}
 }
 
-func TestClassifyPendingNoTieringWhenLightModelEmpty(t *testing.T) {
+func TestClassifyPendingNoTieringWhenModelsUnset(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.LightModel = "" // no tiering
+	// Clear all tier models -- curation should fall back to the
+	// provider's default via Complete() (not CompleteWithModel).
+	cfg.LLM.Models.Low = ""
+	cfg.LLM.Models.Medium = ""
+	cfg.LLM.Models.High = ""
 
 	addPendingNode(t, eng, "short fact")
 
@@ -962,7 +970,7 @@ func TestGenerateManifestSummary(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
 
 	if result.ManifestSummary == "" {
 		t.Fatal("expected manifest summary to be generated")
@@ -982,7 +990,7 @@ func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
 	llm := &mockLLM{responses: []string{"Should not be called"}}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
 
 	if result.ManifestSummary != "" {
 		t.Fatal("should not generate summary with too few records")
@@ -1109,7 +1117,7 @@ func TestGenerateManifestSummaryLLMError(t *testing.T) {
 	llm := &mockLLM{errors: []error{fmt.Errorf("LLM error")}}
 
 	result := &AutonomousResult{}
-	generateManifestSummary(context.Background(), eng, llm, result, nil)
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result, nil)
 
 	if result.ManifestSummary != "" {
 		t.Fatal("should not have summary on LLM error")

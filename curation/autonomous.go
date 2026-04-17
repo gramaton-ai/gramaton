@@ -72,7 +72,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	// Generate manifest qualitative summary if we have a manifest from
 	// the last deterministic run and haven't used too many LLM calls.
 	if !dryRun && result.LLMCalls < maxCalls {
-		generateManifestSummary(ctx, e, llmProv, result, logger)
+		generateManifestSummary(ctx, e, llmProv, cfg, result, logger)
 	}
 
 	if (result.Classified + result.SummariesGenerated + result.ConceptsCreated) > 0 {
@@ -164,12 +164,13 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 	var ready []classified
 
-	// Assign model per record: light model for short content, default for long.
-	lightModel := cfg.LLMCuration.LightModel
-	lightThreshold := cfg.LLMCuration.LightModelThreshold
-	if lightThreshold <= 0 {
-		lightThreshold = 2000
+	// Assign model per record: effort-based (short vs long classification).
+	longThreshold := cfg.LLMCuration.LongClassificationThreshold
+	if longThreshold <= 0 {
+		longThreshold = 2000
 	}
+	shortModel := cfg.ModelForTask(config.TaskClassificationShort)
+	longModel := cfg.ModelForTask(config.TaskClassificationLong)
 
 	// If the provider supports system prompts (caching), the taxonomy
 	// is in the system message and the user prompt is just the content.
@@ -182,9 +183,12 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 
 	work := make([]llmWork, len(batch))
 	for i, rec := range batch {
-		model := ""
-		if lightModel != "" && len(rec.content) < lightThreshold {
-			model = lightModel
+		model := longModel
+		if len(rec.content) < longThreshold && shortModel != "" {
+			model = shortModel
+		}
+		if model == "" && shortModel != "" {
+			model = shortModel
 		}
 		work[i] = llmWork{
 			id:     rec.id,
@@ -360,9 +364,14 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 	var readySummaries []summarized
 
+	summModel := cfg.ModelForTask(config.TaskSummarization)
 	work := make([]llmWork, len(batch))
 	for i, rec := range batch {
-		work[i] = llmWork{id: rec.id, prompt: fmt.Sprintf(summarizePrompt, rec.content)}
+		work[i] = llmWork{
+			id:     rec.id,
+			prompt: fmt.Sprintf(summarizePrompt, rec.content),
+			model:  summModel,
+		}
 	}
 
 	llmResults := parallelLLM(ctx, llmProv, work, 4)
@@ -427,7 +436,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 // generateManifestSummary creates a qualitative summary of the store's
 // strengths and gaps using the LLM. The summary is stored on
 // AutonomousResult.ManifestSummary for the runner to apply.
-func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Provider, result *AutonomousResult, logger *slog.Logger) {
+func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, logger *slog.Logger) {
 	logger = ensureLogger(logger)
 	// Gather lightweight stats under RLock.
 	e.RLock()
@@ -515,7 +524,8 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		earliestStr, latestStr,
 	)
 
-	resp, err := llmProv.Complete(ctx, prompt)
+	model := cfg.ModelForTask(config.TaskManifest)
+	resp, err := completeWithModelOrDefault(ctx, llmProv, model, prompt)
 	result.LLMCalls++
 	if err != nil {
 		result.Errors++
@@ -700,7 +710,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			continue
 		}
 
-		resp, err := llmProv.Complete(ctx, batch.prompt)
+		resp, err := completeWithModelOrDefault(ctx, llmProv, cfg.ModelForTask(config.TaskConcept), batch.prompt)
 		result.LLMCalls++
 		if err != nil {
 			result.Errors++
@@ -930,7 +940,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		}
 
 		prompt := fmt.Sprintf(contradictionPrompt, c.contentA, c.contentB)
-		resp, err := llmProv.Complete(ctx, prompt)
+		resp, err := completeWithModelOrDefault(ctx, llmProv, cfg.ModelForTask(config.TaskContradiction), prompt)
 		result.LLMCalls++
 
 		if err != nil {

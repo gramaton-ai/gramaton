@@ -309,3 +309,78 @@ func TestDefaultConfigPath(t *testing.T) {
 		t.Fatalf("expected config.yaml, got %s", filepath.Base(path))
 	}
 }
+
+func TestEffortForTask_DefaultsAndOverrides(t *testing.T) {
+	cfg := Defaults()
+
+	// Baked-in defaults.
+	lowTasks := []CurationTask{TaskClassificationShort, TaskSummarization, TaskManifest}
+	for _, task := range lowTasks {
+		if got := cfg.EffortForTask(task); got != EffortLow {
+			t.Errorf("default effort for %s = %s, want %s", task, got, EffortLow)
+		}
+	}
+	medTasks := []CurationTask{TaskClassificationLong, TaskContradiction, TaskConcept}
+	for _, task := range medTasks {
+		if got := cfg.EffortForTask(task); got != EffortMedium {
+			t.Errorf("default effort for %s = %s, want %s", task, got, EffortMedium)
+		}
+	}
+
+	// Override wins.
+	cfg.LLMCuration.ContradictionEffort = "high"
+	if got := cfg.EffortForTask(TaskContradiction); got != EffortHigh {
+		t.Errorf("override effort for contradiction = %s, want high", got)
+	}
+
+	// Unknown override string falls back to default.
+	cfg.LLMCuration.ConceptEffort = "extreme"
+	if got := cfg.EffortForTask(TaskConcept); got != EffortMedium {
+		t.Errorf("unknown override should fall back, got %s", got)
+	}
+}
+
+func TestModelAtEffort_DefaultsAndOverrides(t *testing.T) {
+	cfg := Defaults()
+
+	if cfg.ModelAtEffort(EffortLow) != "claude-haiku-4-5" {
+		t.Errorf("default low model = %q", cfg.ModelAtEffort(EffortLow))
+	}
+	if cfg.ModelAtEffort(EffortMedium) != "claude-sonnet-4-6" {
+		t.Errorf("default medium model = %q", cfg.ModelAtEffort(EffortMedium))
+	}
+	if cfg.ModelAtEffort(EffortHigh) != "claude-opus-4-7" {
+		t.Errorf("default high model = %q", cfg.ModelAtEffort(EffortHigh))
+	}
+
+	// User override.
+	cfg.LLM.Models.Low = "my-local-model"
+	if cfg.ModelAtEffort(EffortLow) != "my-local-model" {
+		t.Errorf("overridden low model not picked up")
+	}
+
+	// Unset tier returns empty (caller handles fallback).
+	cfg.LLM.Models.High = ""
+	if cfg.ModelAtEffort(EffortHigh) != "" {
+		t.Errorf("cleared tier should return empty, got %q", cfg.ModelAtEffort(EffortHigh))
+	}
+}
+
+func TestModelForTask_EndToEnd(t *testing.T) {
+	cfg := Defaults()
+
+	// Short classification -> low tier -> haiku default.
+	if got := cfg.ModelForTask(TaskClassificationShort); got != "claude-haiku-4-5" {
+		t.Errorf("classification_short model = %q, want claude-haiku-4-5", got)
+	}
+	// Contradiction -> medium tier -> sonnet default.
+	if got := cfg.ModelForTask(TaskContradiction); got != "claude-sonnet-4-6" {
+		t.Errorf("contradiction model = %q, want claude-sonnet-4-6", got)
+	}
+	// Override effort + override tier model.
+	cfg.LLMCuration.SummarizationEffort = "high"
+	cfg.LLM.Models.High = "premium-summarizer"
+	if got := cfg.ModelForTask(TaskSummarization); got != "premium-summarizer" {
+		t.Errorf("summarization model after effort+tier override = %q, want premium-summarizer", got)
+	}
+}

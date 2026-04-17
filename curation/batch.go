@@ -69,15 +69,20 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		return &BatchResult{}, nil
 	}
 
-	// Build batch requests with model tiering.
-	lightModel := cfg.LLMCuration.LightModel
-	lightThreshold := cfg.LLMCuration.LightModelThreshold
-	if lightThreshold <= 0 {
-		lightThreshold = 2000
+	// Classification uses effort-based model selection. Short content
+	// (below LongClassificationThreshold) runs at classification_short
+	// effort; longer content at classification_long effort. Both resolve
+	// to concrete model names via LLM.Models. No hardcoded model names
+	// in this file -- if the config is incomplete the call will fail
+	// loudly rather than silently pin to an out-of-date default.
+	longThreshold := cfg.LLMCuration.LongClassificationThreshold
+	if longThreshold <= 0 {
+		longThreshold = 2000
 	}
-	defaultModel := cfg.LLM.Model
-	if defaultModel == "" {
-		defaultModel = "claude-sonnet-4-6"
+	shortModel := cfg.ModelForTask(config.TaskClassificationShort)
+	longModel := cfg.ModelForTask(config.TaskClassificationLong)
+	if shortModel == "" && longModel == "" {
+		return nil, fmt.Errorf("batch classification: no model resolved for either classification tier -- configure llm.models.low/medium or llm_curation.classification_*_effort")
 	}
 
 	// Build system message for caching.
@@ -89,9 +94,17 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 	requests := make([]anthropic.BatchRequest, len(records))
 	for i, rec := range records {
-		model := defaultModel
-		if lightModel != "" && len(rec.content) < lightThreshold {
-			model = lightModel
+		model := longModel
+		if len(rec.content) < longThreshold && shortModel != "" {
+			model = shortModel
+		}
+		if model == "" {
+			// One tier resolved, the other didn't -- use whichever we have.
+			if shortModel != "" {
+				model = shortModel
+			} else {
+				model = longModel
+			}
 		}
 		requests[i] = anthropic.BatchRequest{
 			CustomID: rec.id,
@@ -193,7 +206,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			continue
 		}
 
-		applyClassification(e, br.CustomID, classification, defaultModel, lightModel, lightThreshold)
+		applyClassification(e, br.CustomID, classification, shortModel, longModel, longThreshold)
 		result.Applied++
 	}
 	if result.Applied > 0 {
@@ -241,8 +254,10 @@ func runSequentialBatch(ctx context.Context, e *core.Engine, llmProv llm.Provide
 }
 
 // applyClassification sets classification properties on a record.
-// Caller must hold the engine write lock.
-func applyClassification(e *core.Engine, id string, data *classificationResult, defaultModel, lightModel string, threshold int) {
+// Caller must hold the engine write lock. shortModel and longModel are
+// the concrete models resolved by the effort tiers; threshold is the
+// byte cutoff between short and long.
+func applyClassification(e *core.Engine, id string, data *classificationResult, shortModel, longModel string, threshold int) {
 	if data.Temporality != "" {
 		e.SetProp(id, "temporality", graph.StringProperty(data.Temporality))
 	}
@@ -263,15 +278,24 @@ func applyClassification(e *core.Engine, id string, data *classificationResult, 
 	}
 	// content_medium generation removed (D12: single BM25 layer).
 
-	// Determine which model classified this record.
+	// Record which model classified this record for audit.
 	n, ok := e.Graph().GetNode(id)
 	if ok {
 		content, _ := n.Properties.GetString("content_full")
-		model := defaultModel
-		if lightModel != "" && len(content) < threshold {
-			model = lightModel
+		model := longModel
+		if len(content) < threshold && shortModel != "" {
+			model = shortModel
 		}
-		e.SetProp(id, "classified_by", graph.StringProperty(model))
+		if model == "" {
+			if shortModel != "" {
+				model = shortModel
+			} else {
+				model = longModel
+			}
+		}
+		if model != "" {
+			e.SetProp(id, "classified_by", graph.StringProperty(model))
+		}
 	}
 
 	e.SetProp(id, "processing_status", graph.StringProperty("processed"))

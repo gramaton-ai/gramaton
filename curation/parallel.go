@@ -14,6 +14,18 @@ type llmWork struct {
 	model  string // model override; empty = use provider default
 }
 
+// completeWithModelOrDefault calls CompleteWithModel when model is
+// non-empty, else falls back to the provider's default via Complete.
+// Used by curation tasks that resolve their model via cfg.ModelForTask --
+// an empty result there signals "no tier configured, let the provider
+// pick."
+func completeWithModelOrDefault(ctx context.Context, p llm.Provider, model, prompt string) (string, error) {
+	if model != "" {
+		return p.CompleteWithModel(ctx, model, prompt)
+	}
+	return p.Complete(ctx, prompt)
+}
+
 // llmResult pairs a work item with its LLM response.
 type llmResult struct {
 	id       string

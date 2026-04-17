@@ -206,12 +206,18 @@ type CurationConfig struct {
 
 type LLMConfig struct {
 	Provider   string `yaml:"provider"`
-	Model      string `yaml:"model"`
+	Model      string `yaml:"model"` // default model for non-curation paths (sessions, extraction, inline classification)
 	BaseURL    string `yaml:"base_url,omitempty"`
 	APIKeyFile string `yaml:"api_key_file,omitempty"`
 	APIKeyEnv  string `yaml:"api_key_env,omitempty"`
 	Region     string `yaml:"region,omitempty"`
 	AWSProfile string `yaml:"aws_profile,omitempty"`
+
+	// Models maps effort tiers to concrete model names. Used by curation
+	// task routing (see Config.ModelForTask). Each tier has a sensible
+	// default from config.Defaults(); users override to pin versions or
+	// swap providers without touching task-level code.
+	Models LLMModels `yaml:"models"`
 
 	// Bedrock credential env vars (alternative to aws_profile).
 	AWSAccessKeyIDEnv     string `yaml:"aws_access_key_id_env,omitempty"`
@@ -223,17 +229,128 @@ type LLMConfig struct {
 	RateLimitInterval  time.Duration `yaml:"rate_limit_interval,omitempty"`
 }
 
+// LLMModels maps effort tiers to model names. Every curation task picks
+// its effort level (low/medium/high), and this struct turns that into a
+// concrete model to pass to the provider. Keeping model names off the
+// task-level code means a provider swap or model revision only edits
+// this struct.
+type LLMModels struct {
+	Low    string `yaml:"low"`    // cheap/fast tier (default: claude-haiku-4-5)
+	Medium string `yaml:"medium"` // balanced tier (default: claude-sonnet-4-6)
+	High   string `yaml:"high"`   // best-quality tier (default: claude-opus-4-7)
+}
+
 type LLMCurationConfig struct {
-	BatchSize              int     `yaml:"batch_size"`
-	MaxCallsPerRun         int     `yaml:"max_calls_per_run"`
-	MaxContradictionChecks int     `yaml:"max_contradiction_checks"`
-	ContradictionMinSim    float64 `yaml:"contradiction_min_similarity"`
-	ContradictionMaxSim    float64 `yaml:"contradiction_max_similarity"`
-	MaxConceptsPerRun      int     `yaml:"max_concepts_per_run"`
-	SynthesisBatchSize     int     `yaml:"synthesis_batch_size"`      // concepts per LLM call (default 5)
-	SynthesisMaxInputTokens int    `yaml:"synthesis_max_input_tokens"` // soft cap per batch (default 8000)
-	LightModel             string  `yaml:"light_model"`           // model for short content classification
-	LightModelThreshold    int     `yaml:"light_model_threshold"` // chars below which light_model is used
+	BatchSize               int     `yaml:"batch_size"`
+	MaxCallsPerRun          int     `yaml:"max_calls_per_run"`
+	MaxContradictionChecks  int     `yaml:"max_contradiction_checks"`
+	ContradictionMinSim     float64 `yaml:"contradiction_min_similarity"`
+	ContradictionMaxSim     float64 `yaml:"contradiction_max_similarity"`
+	MaxConceptsPerRun       int     `yaml:"max_concepts_per_run"`
+	SynthesisBatchSize      int     `yaml:"synthesis_batch_size"`       // concepts per LLM call (default 5)
+	SynthesisMaxInputTokens int     `yaml:"synthesis_max_input_tokens"` // soft cap per batch (default 8000)
+
+	// Per-task effort levels. Empty = use the baked-in default for that
+	// task (see defaultEffortForTask). Set to "low", "medium", or "high"
+	// to override. The resolved effort maps to a concrete model via
+	// LLM.Models -- callers never name a model here, so a provider swap
+	// (or a new Haiku/Sonnet/Opus revision) only updates LLM.Models.
+	ClassificationShortEffort string `yaml:"classification_short_effort"`
+	ClassificationLongEffort  string `yaml:"classification_long_effort"`
+	SummarizationEffort       string `yaml:"summarization_effort"`
+	ContradictionEffort       string `yaml:"contradiction_effort"`
+	ConceptEffort             string `yaml:"concept_effort"`
+	ManifestEffort            string `yaml:"manifest_effort"`
+
+	// Length cutoff for short-vs-long classification. Default 2000 chars.
+	LongClassificationThreshold int `yaml:"long_classification_threshold"`
+}
+
+// EffortLevel names the cost/quality tiers. Each tier maps to a concrete
+// model via LLM.Models; tasks declare effort, not model names.
+type EffortLevel string
+
+const (
+	EffortLow    EffortLevel = "low"    // cheap, fast (default: haiku)
+	EffortMedium EffortLevel = "medium" // balanced (default: sonnet)
+	EffortHigh   EffortLevel = "high"   // best quality (default: opus)
+)
+
+// CurationTask names the curation LLM tasks. Each task has a default
+// effort level; users override via LLMCurationConfig.*Effort fields.
+type CurationTask string
+
+const (
+	TaskClassificationShort CurationTask = "classification_short"
+	TaskClassificationLong  CurationTask = "classification_long"
+	TaskSummarization       CurationTask = "summarization"
+	TaskContradiction       CurationTask = "contradiction"
+	TaskConcept             CurationTask = "concept"
+	TaskManifest            CurationTask = "manifest"
+)
+
+// defaultEffortForTask returns the out-of-the-box effort level for each
+// curation task. Assignment reflects which tasks benefit from better
+// reasoning: summarization and short classification are Haiku-grade;
+// long-content classification, contradiction detection, and concept
+// synthesis need calibrated reasoning; the manifest rollup is cheap.
+func defaultEffortForTask(task CurationTask) EffortLevel {
+	switch task {
+	case TaskClassificationShort, TaskSummarization, TaskManifest:
+		return EffortLow
+	case TaskClassificationLong, TaskContradiction, TaskConcept:
+		return EffortMedium
+	}
+	return EffortMedium
+}
+
+// EffortForTask resolves a task to its effort level, consulting the
+// user's per-task overrides before falling back to the baked-in default.
+// Unknown effort strings are treated as empty (falls through to default).
+func (c Config) EffortForTask(task CurationTask) EffortLevel {
+	var override string
+	switch task {
+	case TaskClassificationShort:
+		override = c.LLMCuration.ClassificationShortEffort
+	case TaskClassificationLong:
+		override = c.LLMCuration.ClassificationLongEffort
+	case TaskSummarization:
+		override = c.LLMCuration.SummarizationEffort
+	case TaskContradiction:
+		override = c.LLMCuration.ContradictionEffort
+	case TaskConcept:
+		override = c.LLMCuration.ConceptEffort
+	case TaskManifest:
+		override = c.LLMCuration.ManifestEffort
+	}
+	switch EffortLevel(override) {
+	case EffortLow, EffortMedium, EffortHigh:
+		return EffortLevel(override)
+	}
+	return defaultEffortForTask(task)
+}
+
+// ModelAtEffort returns the concrete model name for an effort tier.
+// Returns empty string when the tier isn't configured; callers must
+// handle that (log + skip, or error) rather than silently calling the
+// LLM with an empty model name.
+func (c Config) ModelAtEffort(effort EffortLevel) string {
+	switch effort {
+	case EffortLow:
+		return c.LLM.Models.Low
+	case EffortMedium:
+		return c.LLM.Models.Medium
+	case EffortHigh:
+		return c.LLM.Models.High
+	}
+	return ""
+}
+
+// ModelForTask is the primary entry point for curation model selection:
+// resolves task -> effort -> model name. contentLen is only consulted
+// for classification (short vs long); other tasks ignore it.
+func (c Config) ModelForTask(task CurationTask) string {
+	return c.ModelAtEffort(c.EffortForTask(task))
 }
 
 type GCConfig struct {
@@ -393,18 +510,40 @@ func Defaults() Config {
 		},
 
 		LLM: LLMConfig{
-			Model: "claude-sonnet-4-6",
+			Model: "claude-sonnet-4-6", // used by non-curation paths (sessions, inline classification)
+			Models: LLMModels{
+				Low:    "claude-haiku-4-5",
+				Medium: "claude-sonnet-4-6",
+				High:   "claude-opus-4-7",
+			},
 		},
 
 		LLMCuration: LLMCurationConfig{
-			BatchSize:               10,
-			MaxCallsPerRun:          20,
-			MaxContradictionChecks:  5,
-			ContradictionMinSim:     0.5,
-			ContradictionMaxSim:     0.85,
-			MaxConceptsPerRun:       5,
-			SynthesisBatchSize:      5,
-			SynthesisMaxInputTokens: 8000,
+			BatchSize:                   10,
+			MaxCallsPerRun:              20,
+			MaxContradictionChecks:      5,
+			ContradictionMinSim:         0.5,
+			ContradictionMaxSim:         0.85,
+			MaxConceptsPerRun:           5,
+			SynthesisBatchSize:          5,
+			SynthesisMaxInputTokens:     8000,
+			LongClassificationThreshold: 2000,
+
+			// Explicit effort assignments per curation task. Users edit
+			// these in config.yaml to retune cost vs quality. Summarization
+			// and short classification are Haiku-grade (clear-signal work,
+			// enum picks, distilled summaries). Contradiction detection,
+			// concept synthesis, and long-content classification benefit
+			// from Sonnet-grade reasoning (subtle semantic + temporal
+			// distinctions, multi-record abstraction, calibrated
+			// confidence/temporality choices). Manifest rollup is
+			// infrequent and low-nuance -> Haiku.
+			ClassificationShortEffort: string(EffortLow),
+			ClassificationLongEffort:  string(EffortMedium),
+			SummarizationEffort:       string(EffortLow),
+			ContradictionEffort:       string(EffortMedium),
+			ConceptEffort:             string(EffortMedium),
+			ManifestEffort:            string(EffortLow),
 		},
 
 		Observe: ObserveConfig{
