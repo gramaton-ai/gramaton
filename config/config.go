@@ -225,6 +225,12 @@ type CurationConfig struct {
 	// providers, 20 for external). Observation is soft-deprecated;
 	// see ObserveConfig.Enabled.
 	ObservationBatchSize int `yaml:"observation_batch_size"`
+
+	// ObservationMinContentLength is the minimum content_full length
+	// (chars) for a record to be eligible for observation extraction.
+	// Lower values create observations on short records that are
+	// essentially duplicates of their parent. Default 1500.
+	ObservationMinContentLength int `yaml:"observation_min_content_length"`
 }
 
 // LLMConfig configures the LLM provider and cost/rate caps. Model
@@ -904,7 +910,8 @@ func Defaults() Config {
 			MaxDedupPerRun:        20,
 			SectionLinkMin:        0.75,
 			MaxSectionLinksPerRun: 30,
-			ObservationBatchSize:  0, // auto: 500 for local providers, 20 for external
+			ObservationBatchSize:        0, // auto: 500 for local providers, 20 for external
+			ObservationMinContentLength: 1500,
 		},
 
 		LLM: LLMConfig{

@@ -64,7 +64,11 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			continue
 		}
 		content, ok := n.Properties.GetString("content_full")
-		if !ok || len(content) < 500 {
+		minLen := cfg.Curation.ObservationMinContentLength
+		if minLen <= 0 {
+			minLen = 1500
+		}
+		if !ok || len(content) < minLen {
 			continue
 		}
 		if _, done := hasObservations[n.ID]; done {
