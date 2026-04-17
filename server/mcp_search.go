@@ -44,7 +44,11 @@ func (s *Server) registerMCPSearchTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
-		Description: "Search Memory and Sessions. Returns results ranked by composite score with store origin. Text is optional -- omit for filter-only queries. Note: this does not search collection items. For exhaustive collection listing, use gramaton_collection_items.",
+		Description: `Search Memory and Sessions. Returns results ranked by composite score with store origin in each result's "store" field.
+
+Default spans both stores. Memory holds decision-grade knowledge (vector + BM25); Sessions holds the broader conversation thread including exploration, open questions, and dead ends (BM25 only). When hunting for "what's our position on X?" -- both help. When hunting for "what did we try?" or "what's still open?" -- prefer store="sessions". When hunting only for crisp established knowledge, store="memory".
+
+Text is optional -- omit for filter-only queries. Does not search collection items; use gramaton_collection_items for exhaustive collection listing. For retrieval pattern guidance, call gramaton_guide(topic="search").`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_search")
 		defer done(nil)

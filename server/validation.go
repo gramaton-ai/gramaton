@@ -7,10 +7,18 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // maxJSONBodySize is the default max request body size for JSON endpoints.
+//
+// TODO: This is hardcoded to 1MB but config.LimitsConfig.MaxJSONSize
+// defaults to 2MB. Wiring the config value through would change
+// observable behavior for any client hitting the 1-2MB range; deferred
+// pending a deliberate decision on the right default.
 const maxJSONBodySize = 1 << 20 // 1MB
 
 // maxIngestBodySize is the max request body size for ingest uploads.
@@ -19,7 +27,6 @@ const maxIngestBodySize = 200 << 20 // 200MB
 // Search input limits.
 const (
 	maxSearchTop      = 1000
-	maxKeywords       = 100
 	maxMissingFields  = 50
 	maxMatchLength    = 1024
 	maxExploreDepth   = 10
@@ -34,19 +41,59 @@ const (
 	maxFactLen        = 10000
 )
 
-// Per-field length limits.
+// Per-field length limits that aren't in LimitsConfig.
 const (
-	maxKeywordLength      = 256
-	maxReembedBatch       = 500
-	maxSummaryShortLen = 1000
+	maxKeywordLength   = 256
+	maxReembedBatch    = 500
 	maxSourceRefLen    = 2048
-	maxContextFieldLen    = 2048
+	maxContextFieldLen = 2048
 )
+
+// serverLimits holds the configurable validation limits for this
+// process. Seeded with fallback defaults so tests that bypass
+// Server.New() (or call package-level validators before a server is
+// constructed) still get reasonable behavior. Server.New() overwrites
+// it with config.LimitsConfig from the loaded config.
+var (
+	serverLimitsMu sync.RWMutex
+	serverLimits   = config.LimitsConfig{
+		MaxSummaryShort: 1000,
+		MaxKeywords:     100,
+	}
+)
+
+// setServerLimits overwrites the process-level validation limits.
+// Called from Server.New() with cfg.Limits. Zero values are preserved
+// to reveal config omissions rather than silently falling back.
+func setServerLimits(lim config.LimitsConfig) {
+	serverLimitsMu.Lock()
+	defer serverLimitsMu.Unlock()
+	serverLimits = lim
+}
+
+func getMaxSummaryShort() int {
+	serverLimitsMu.RLock()
+	defer serverLimitsMu.RUnlock()
+	if serverLimits.MaxSummaryShort <= 0 {
+		return 1000 // safety net if config omits the field
+	}
+	return serverLimits.MaxSummaryShort
+}
+
+func getMaxKeywords() int {
+	serverLimitsMu.RLock()
+	defer serverLimitsMu.RUnlock()
+	if serverLimits.MaxKeywords <= 0 {
+		return 100
+	}
+	return serverLimits.MaxKeywords
+}
 
 // validateKeywords checks keyword count and per-keyword length.
 func validateKeywords(keywords []string) error {
-	if len(keywords) > maxKeywords {
-		return fmt.Errorf("maximum %d keywords allowed", maxKeywords)
+	max := getMaxKeywords()
+	if len(keywords) > max {
+		return fmt.Errorf("maximum %d keywords allowed", max)
 	}
 	for _, kw := range keywords {
 		if len(kw) > maxKeywordLength {

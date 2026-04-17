@@ -348,8 +348,8 @@ func validateCaptureRequest(req *captureRequest) error {
 	if err := validateKeywords(req.Keywords); err != nil {
 		return err
 	}
-	if len(req.SummaryShort) > maxSummaryShortLen {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	if len(req.SummaryShort) > getMaxSummaryShort() {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
 	}
 	if len(req.SourceRef) > maxSourceRefLen {
 		return fmt.Errorf("source_ref exceeds maximum length of %d", maxSourceRefLen)
@@ -403,8 +403,8 @@ func validateUpdateRequest(req *updateRequest) error {
 	if err := validateKeywords(req.Keywords); err != nil {
 		return err
 	}
-	if len(req.SummaryShort) > maxSummaryShortLen {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	if len(req.SummaryShort) > getMaxSummaryShort() {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
 	}
 	return nil
 }
@@ -428,8 +428,8 @@ func validateClassifyRequest(req *classifyRequest) error {
 	if err := validateKeywords(req.Keywords); err != nil {
 		return err
 	}
-	if len(req.SummaryShort) > maxSummaryShortLen {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", maxSummaryShortLen)
+	if len(req.SummaryShort) > getMaxSummaryShort() {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
 	}
 	return nil
 }

@@ -170,6 +170,10 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		preparedSessions: make(map[string]time.Time),
 	}
 
+	// Seed validation with the active LimitsConfig so user YAML overrides
+	// take effect on summary_short cap, keyword count, etc.
+	setServerLimits(engineCfg.Limits)
+
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 

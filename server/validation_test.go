@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -148,5 +149,53 @@ func TestParseDateArg(t *testing.T) {
 		if !tt.valid && err == nil {
 			t.Errorf("parseDateArg(%q) should be invalid", tt.input)
 		}
+	}
+}
+
+func TestServerLimits_ConfigDriven(t *testing.T) {
+	// Save and restore the package-level limits so the test doesn't
+	// leak state into other tests that run in the same binary.
+	serverLimitsMu.RLock()
+	prev := serverLimits
+	serverLimitsMu.RUnlock()
+	t.Cleanup(func() { setServerLimits(prev) })
+
+	// Install test limits.
+	setServerLimits(config.LimitsConfig{
+		MaxSummaryShort: 50,
+		MaxKeywords:     2,
+	})
+
+	if got := getMaxSummaryShort(); got != 50 {
+		t.Errorf("getMaxSummaryShort() = %d, want 50", got)
+	}
+	if got := getMaxKeywords(); got != 2 {
+		t.Errorf("getMaxKeywords() = %d, want 2", got)
+	}
+
+	// Keyword count enforcement reads from the live limits.
+	if err := validateKeywords([]string{"a", "b", "c"}); err == nil {
+		t.Error("validateKeywords should reject 3 keywords when max=2")
+	}
+	if err := validateKeywords([]string{"a", "b"}); err != nil {
+		t.Errorf("validateKeywords should accept 2 keywords when max=2: %v", err)
+	}
+}
+
+func TestServerLimits_ZeroValueFallback(t *testing.T) {
+	// A zero-value LimitsConfig means the YAML omitted the field; the
+	// getters should fall back to safe defaults rather than enforcing 0.
+	serverLimitsMu.RLock()
+	prev := serverLimits
+	serverLimitsMu.RUnlock()
+	t.Cleanup(func() { setServerLimits(prev) })
+
+	setServerLimits(config.LimitsConfig{}) // all zeros
+
+	if got := getMaxSummaryShort(); got != 1000 {
+		t.Errorf("getMaxSummaryShort() with zero config = %d, want 1000 fallback", got)
+	}
+	if got := getMaxKeywords(); got != 100 {
+		t.Errorf("getMaxKeywords() with zero config = %d, want 100 fallback", got)
 	}
 }

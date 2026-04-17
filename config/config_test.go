@@ -161,9 +161,11 @@ func TestSaveCreatesDirectories(t *testing.T) {
 func TestNewConfigDefaults(t *testing.T) {
 	cfg := Defaults()
 
-	// Curation.
-	if cfg.Curation.Interval != 5*time.Minute {
-		t.Fatalf("expected 5m curation interval, got %v", cfg.Curation.Interval)
+	// Curation. Default was tightened from 5m -> 1m in commit 469f828 so
+	// curation activity is more responsive after captures; test now
+	// tracks that default.
+	if cfg.Curation.Interval != 1*time.Minute {
+		t.Fatalf("expected 1m curation interval, got %v", cfg.Curation.Interval)
 	}
 	if !cfg.Curation.Enabled {
 		t.Fatal("curation should be enabled by default")

@@ -26,18 +26,18 @@ func (s *Server) registerMCPIntakeTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: "gramaton_intake",
-		Description: `Write endpoint for Memory. Routes to capture or observe based on mode.
+		Description: `Write endpoint for Memory. Routes to capture (deliberate) or observe (ambient) based on mode.
 
-For deliberate storage: provide content and optional context signals. If the server has an LLM, it classifies the record automatically. Otherwise the record is stored as "captured" and classified later (via gramaton_classify or curation).
-For ambient extraction: set mode="observed" and provide facts=[...]. Quality gates filter noise.
+Deliberate capture: provide content and optional context signals. If the server has an LLM, it classifies automatically. Otherwise the record is stored as "captured" and classified later via gramaton_classify or curation.
 
-This tool stores records in Memory (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those.
+Ambient extraction (mode="observed"): SOFT-DEPRECATED. Use gramaton_session_prepare/commit instead -- session extraction has the hot conversation context and produces higher-quality segments with full metadata classification. The observed path remains for batch/non-conversational intake only.
 
-You can provide classification metadata (temporality, confidence, etc.) OR provide context signals and let the server classify. Both work.
+This tool stores records in Memory (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those. For session-scoped conversation capture, use gramaton_session_prepare/commit.
 
-Examples:
-  gramaton_intake(content="We decided to use PostgreSQL", context_capture_reason="recording architecture decision")
-  gramaton_intake(mode="observed", facts=["User prefers dark mode", "Project uses Go 1.22"])`,
+You can provide classification metadata (temporality, confidence, etc.) OR provide context signals and let the server classify. Both work. Field roles: content unbounded and self-contained; summary_short ~750 chars is the embedding-ready semantic anchor; keywords are BM25 terms a future agent would type.
+
+Example:
+  gramaton_intake(content="We decided to use PostgreSQL because of foreign-key support and JSONB", context_capture_reason="recording architecture decision")`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args intakeInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_intake")
 		defer done(nil)

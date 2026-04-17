@@ -34,6 +34,8 @@ func (s *Server) registerMCPRecordTools(mcpServer *mcp.Server) {
 
 NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
 
+Field roles: content is unbounded and should be self-contained with rationale; summary_short (~750 chars) is the embedding-ready semantic anchor for vector search; keywords are BM25 terms a future agent would type. These are different outputs serving different parts of retrieval, not nested compressions. For full guidance on what to capture, classification heuristics per question type, and synthesis-not-summarization discipline, call gramaton_guide(topic="capture").
+
 IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args captureInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_capture")
@@ -190,7 +192,7 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_link",
-		Description: "Create an edge between two nodes in the graph. Memory records and Collection items are all graph nodes and can be linked.",
+		Description: "Create an edge between two nodes in the graph. Memory records, Session segments, and Collection items are all graph nodes and can be linked across stores. Prefer specific edge types (justifies, discusses, resolves, contradicts, supersedes) over the generic related_to when the relationship is known -- edge type drives graph traversal and scoring.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args linkInput) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_link")
 		defer done(nil)
