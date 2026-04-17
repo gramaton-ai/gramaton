@@ -14,8 +14,49 @@ type DuplicatePair struct {
 	Similarity   float64 `json:"similarity"`
 }
 
+// structuralEdgeTypes are relationships where high similarity between
+// two nodes is expected by design, not a duplicate. Pairs connected by
+// any of these edges are excluded from duplicate detection so that
+// observation-to-parent, segment-to-memory, or collection-item pairs
+// never get auto-consolidated.
+var structuralEdgeTypes = map[string]struct{}{
+	"observation_of": {},
+	"extracted_as":   {},
+	"member_of":      {},
+	"chunk_of":       {},
+	"section_of":     {},
+	"continues_from": {},
+	"topic_of":       {},
+	"segment_of":     {},
+}
+
+// structurallyRelated returns true if a and b are connected by any
+// edge whose type denotes a structural (not semantic) relationship.
+func structurallyRelated(g graph.NodeReader, a, b string) bool {
+	for _, e := range g.EdgesFrom(a) {
+		if e.TargetID != b {
+			continue
+		}
+		if _, ok := structuralEdgeTypes[e.Type]; ok {
+			return true
+		}
+	}
+	for _, e := range g.EdgesFrom(b) {
+		if e.TargetID != a {
+			continue
+		}
+		if _, ok := structuralEdgeTypes[e.Type]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // FindDuplicates returns pairs of records whose embedding similarity
 // exceeds the given threshold. Each pair appears once (not mirrored).
+// Pairs linked by a structural edge (observation_of, extracted_as,
+// member_of, chunk_of, section_of, continues_from, topic_of,
+// segment_of) are excluded -- similarity between those is by design.
 // Returns at most maxPairs results, ordered by descending similarity.
 func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold float64, maxPairs int) []DuplicatePair {
 	if vecIdx == nil || vecIdx.Len() == 0 {
@@ -73,6 +114,10 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 				continue
 			}
 			seen[key] = struct{}{}
+
+			if structurallyRelated(g, a, b) {
+				continue
+			}
 
 			na, _ := g.GetNode(a)
 			nb, _ := g.GetNode(b)

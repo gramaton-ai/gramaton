@@ -400,6 +400,25 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				continue
 			}
 
+			// Observations are derived from their parents, so observation-
+			// vs-parent similarity is not a duplicate signal. FindDuplicates
+			// already filters observation_of pairs, but we defense-in-depth
+			// here in case an observation ever lands without its edge.
+			if nt, ok := na.Properties.GetString("node_type"); ok && nt == "observation" {
+				continue
+			}
+			if nt, ok := nb.Properties.GetString("node_type"); ok && nt == "observation" {
+				continue
+			}
+
+			// Collection members have structured per-item fields (status,
+			// title, etc.). Silently consolidating them on embedding alone
+			// would merge distinct tracked work. Operators still see these
+			// pairs via gramaton_duplicates for manual triage.
+			if isCollectionMember(e.Graph(), na.ID) || isCollectionMember(e.Graph(), nb.ID) {
+				continue
+			}
+
 			// Jaccard guard: verify content similarity, not just embedding.
 			if !verifyDedupJaccard(na, nb) {
 				continue
@@ -728,6 +747,19 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 }
 
 func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }
+
+// isCollectionMember returns true if id has a member_of edge to any
+// collection. Used by the dedup loop to skip collection items --
+// their structured per-item fields shouldn't be merged on embedding
+// similarity alone.
+func isCollectionMember(g graph.NodeReader, id string) bool {
+	for _, e := range g.EdgesFrom(id) {
+		if e.Type == "member_of" {
+			return true
+		}
+	}
+	return false
+}
 
 // enrichConcepts updates evidence_count and last_evidence_at on concept
 // nodes based on their inbound edges.
