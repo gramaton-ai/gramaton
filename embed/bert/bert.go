@@ -110,9 +110,16 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 		default:
 		}
 
-		ids, mask, _ := p.tokenizer.Encode(text)
-
 		p.mu.Lock()
+		// Re-check under the lock: a concurrent Close may have
+		// nil'd these out. Returning an error is preferable to a
+		// nil dereference; the only legitimate caller pattern is
+		// "stop submitting before Close" anyway.
+		if p.tokenizer == nil || p.model == nil {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("bert: provider closed")
+		}
+		ids, mask, _ := p.tokenizer.Encode(text)
 		embedding := p.model.Forward(ids, mask)
 		p.mu.Unlock()
 
@@ -132,10 +139,24 @@ func (p *Provider) ContextWindow() int {
 	return p.ctxWindow
 }
 
-// Close releases the mmap'd safetensors file.
+// Close releases the mmap'd safetensors file. Takes the same mutex
+// as Embed so an in-flight Forward pass cannot read float32 slices
+// (which point into the mmap'd region) after Munmap. Without this
+// guard, a concurrent Embed during shutdown would segfault.
+// (Wave 7 P1-33.)
+//
+// Callers must NOT call Embed after Close returns; the model and
+// tokenizer fields are zeroed to make subsequent misuse panic
+// loudly rather than silently corrupt.
 func (p *Provider) Close() error {
-	if p.st != nil {
-		return p.st.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.st == nil {
+		return nil
 	}
-	return nil
+	err := p.st.Close()
+	p.st = nil
+	p.model = nil
+	p.tokenizer = nil
+	return err
 }

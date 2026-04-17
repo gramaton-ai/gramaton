@@ -14,6 +14,10 @@ import (
 // Bucket layout:
 //
 //	collmembers -> collectionID -> encoded list of item node IDs
+//
+// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
+// without internal locking; this type relies on the engine's
+// RWMutex serialising every caller. (Wave 7 P1-34.)
 type BboltCollectionCache struct {
 	db    *bolt.DB
 	batch *bolt.Tx

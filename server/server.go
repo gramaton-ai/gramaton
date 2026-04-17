@@ -414,11 +414,12 @@ func (s *Server) Shutdown() {
 }
 
 // RequestShutdown triggers a graceful shutdown from an API call.
+// Caller is responsible for any response flushing -- this function
+// only signals SIGTERM. (The 100ms sleep + recover() that used to
+// be here was a magic number; handleShutdown now flushes explicitly
+// before calling here. Wave 7 P1-64.)
 func (s *Server) RequestShutdown() {
 	go func() {
-		defer func() { recover() }()
-		// Give the response time to send.
-		time.Sleep(100 * time.Millisecond)
 		p, err := os.FindProcess(os.Getpid())
 		if err == nil && p != nil {
 			p.Signal(syscall.SIGTERM)

@@ -257,7 +257,21 @@ func (r *Runner) cycle(ctx context.Context) {
 		}
 		r.state.mu.Unlock()
 		if llmPaused {
-			r.logger.Debug("LLM curation paused (circuit breaker)", "component", "curation")
+			// Operators want to see this without enabling Debug --
+			// the breaker tripping is the whole reason curation
+			// is silent on this cycle. (Wave 7 P1-63.)
+			r.logger.Info("LLM curation paused (circuit breaker)",
+				"component", "curation")
+			// Reset the LastAutonomous counters so /v1/status
+			// doesn't keep showing stale "last cycle did N
+			// classifications" while the breaker is engaged --
+			// this cycle did zero LLM work.
+			r.state.mu.Lock()
+			r.state.LastAutonomous = &AutonomousResult{
+				LastRunPaused: true,
+				PauseReason:   r.state.LLMPauseReason,
+			}
+			r.state.mu.Unlock()
 		}
 
 		hasPending := result.Manifest != nil && result.Manifest.PendingCount > 0

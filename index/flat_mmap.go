@@ -216,6 +216,16 @@ func (idx *MmapFlatIndex) Add(nodeID string, vec []float32) {
 }
 
 // Remove marks an entry as a tombstone or removes it from the buffer.
+//
+// Tombstones are persistence-only: the file.WriteAt below blanks
+// the entry's idLen on disk, but the read path (Search) consults
+// the in-memory offsets map -- which Remove deletes the same call.
+// Code MUST NOT trust the mmap view for entries that have been
+// tombstoned in the same session; the page cache makes the new
+// bytes visible eventually but the ordering is not guaranteed
+// against the WriteAt / mmap view consistency model on macOS.
+// Compaction-on-Flush (see Flush + rewriteFromOffsetsLocked)
+// reconciles disk and offsets atomically. (Wave 7 P1-55.)
 func (idx *MmapFlatIndex) Remove(nodeID string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()

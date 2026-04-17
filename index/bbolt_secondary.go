@@ -17,6 +17,10 @@ import (
 //   - Field existence bitmaps for missing-field queries
 //
 // All indexes are derived data, rebuildable from the graph.
+//
+// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
+// without internal locking; this type relies on the engine's
+// RWMutex serialising every caller. (Wave 7 P1-34.)
 type BboltSecondaryIndex struct {
 	db    *bolt.DB
 	batch *bolt.Tx

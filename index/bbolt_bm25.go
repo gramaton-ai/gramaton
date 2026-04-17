@@ -23,6 +23,12 @@ import (
 // Posting lists are sorted by docID for determinism.
 //
 // BM25 scoring uses the Okapi BM25 formula with configurable k1 and b.
+//
+// Concurrency: NOT thread-safe. The numDocs/totalLen/avgDL Go fields
+// and the batch *bolt.Tx slot mutate without internal locking; this
+// type relies on the engine's RWMutex serialising every caller.
+// Direct callers outside the engine MUST own that lock or supply
+// their own equivalent serialisation. (Wave 7 P1-34.)
 type BboltBM25Index struct {
 	db *bolt.DB
 	k1 float64

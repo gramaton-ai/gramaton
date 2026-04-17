@@ -28,6 +28,11 @@ import (
 // Range queries use bbolt cursor scan over exact:<key> bucket
 // (keys are serialized Property values which sort correctly for
 // same-type comparisons).
+//
+// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
+// without internal locking; this type relies on the engine's
+// RWMutex serialising every caller. Direct callers outside the
+// engine MUST own that lock. (Wave 7 P1-34.)
 type BboltPropertyIndex struct {
 	db    *bolt.DB
 	batch *bolt.Tx // non-nil during Batch() call

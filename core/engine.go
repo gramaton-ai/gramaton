@@ -127,35 +127,49 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	if err != nil {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
+	// Deferred cleanup-on-failure: every resource opened below is
+	// registered here so that any subsequent error returns a clean
+	// state. Previously some paths (g.Load, embed.New, mmap index
+	// creation) leaked boltDB or other handles depending on which
+	// step failed. (Wave 7 P1-52.)
+	success := false
+	cleanups := []func(){
+		func() { boltDB.Close() },
+	}
+	defer func() {
+		if success {
+			return
+		}
+		// Run in reverse order (LIFO) so dependents close before
+		// their backing store.
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
 
 	propIdx, err := index.NewBboltPropertyIndex(boltDB, index.DefaultIndexedFields)
 	if err != nil {
-		boltDB.Close()
 		return nil, fmt.Errorf("create bbolt property index: %w", err)
 	}
 
 	edgeStore, err := graph.NewBboltEdgeStore(boltDB, graph.DefaultEdgeCacheCapacity)
 	if err != nil {
-		boltDB.Close()
 		return nil, fmt.Errorf("create bbolt edge store: %w", err)
 	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(edgeStore))
 	bm25Full, err := index.NewBboltBM25Index(boltDB, cfg.Search.BM25K1, cfg.Search.BM25B)
 	if err != nil {
-		boltDB.Close()
 		return nil, fmt.Errorf("create bbolt BM25 index: %w", err)
 	}
 
 	secIdx, err := index.NewBboltSecondaryIndex(boltDB)
 	if err != nil {
-		boltDB.Close()
 		return nil, fmt.Errorf("create secondary index: %w", err)
 	}
 
 	collCache, err := index.NewBboltCollectionCache(boltDB)
 	if err != nil {
-		boltDB.Close()
 		return nil, fmt.Errorf("create collection cache: %w", err)
 	}
 
@@ -227,9 +241,9 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		vecPath := filepath.Join(cfg.DataDir, "vec.flat")
 		mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
 		if err != nil {
-			boltDB.Close()
 			return nil, fmt.Errorf("open vector index: %w", err)
 		}
+		cleanups = append(cleanups, func() { mmapVec.Close() })
 		e.vecIdx = mmapVec
 	}
 
@@ -251,6 +265,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 	e.searcher = search.New(g, propIdx, e.vecIdx, bm25Full, emb, cfg, searchOpts...)
 
+	success = true // disarm the deferred cleanup
 	return e, nil
 }
 

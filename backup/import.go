@@ -28,32 +28,61 @@ type ImportResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Safe properties that imports can set. Everything else is rejected.
-var safeProperties = map[string]bool{
-	"content_full":        true,
-	"content_short":       true,
-	"content_medium":    true,
-	"content_keywords":    true,
-	"source_ref":          true,
-	"created_at":          true,
-	"valid_from":          true,
-	"valid_until":         true,
-	"context_about":       true,
-	"context_who":         true,
-	"context_prompted":    true,
-	"context_findable_by": true,
-	"context_related":     true,
-	"temporality":         true,
-	"confidence":          true,
-	"knowledge_type":      true,
-	"epistemic_status":    true,
-	"importance":          true,
-	"testimony_hops":      true,
-	"source_credibility":  true,
-	"asserted_as_of":      true,
-	"resolution":          true,
-	"resolution_note":     true,
+// safePropType describes how to coerce a JSON value into a graph
+// Property for a given safe import field. Single source of truth:
+// adding a new safe field means one entry in safePropTypes; the
+// type tag determines coercion in buildSafeProps. Previously a
+// safeProperties map and a buildSafeProps switch listed the same
+// fields independently, with no compile-time check that they stayed
+// in sync. (Wave 7 P1-74.)
+type safePropType int
+
+const (
+	propTypeString safePropType = iota
+	propTypeFloat
+	propTypeInt64
+	propTypeStringList
+	propTypeTimestamp
+)
+
+// safePropTypes is the single source of truth for fields imports
+// can set. Anything not listed is rejected.
+var safePropTypes = map[string]safePropType{
+	"content_full":        propTypeString,
+	"content_short":       propTypeString,
+	"content_medium":      propTypeString,
+	"source_ref":          propTypeString,
+	"temporality":         propTypeString,
+	"knowledge_type":      propTypeString,
+	"epistemic_status":    propTypeString,
+	"context_about":       propTypeString,
+	"context_who":         propTypeString,
+	"context_prompted":    propTypeString,
+	"context_findable_by": propTypeString,
+	"context_related":     propTypeString,
+	"resolution":          propTypeString,
+	"resolution_note":     propTypeString,
+	"confidence":          propTypeFloat,
+	"importance":          propTypeFloat,
+	"source_credibility":  propTypeFloat,
+	"testimony_hops":      propTypeInt64,
+	"content_keywords":    propTypeStringList,
+	"created_at":          propTypeTimestamp,
+	"valid_from":          propTypeTimestamp,
+	"valid_until":         propTypeTimestamp,
+	"asserted_as_of":      propTypeTimestamp,
 }
+
+// safeProperties is retained as a name-only set for callers that
+// want a quick "is this field safe?" check without coercion.
+// Derived from safePropTypes so the two cannot drift.
+var safeProperties = func() map[string]bool {
+	m := make(map[string]bool, len(safePropTypes))
+	for name := range safePropTypes {
+		m[name] = true
+	}
+	return m
+}()
 
 // ImportJSON reads JSON Lines (one ExportRecord per line) and creates
 // records in the store. New ULIDs are assigned; original IDs stored as
@@ -446,39 +475,37 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 }
 
 // buildSafeProps converts a map[string]any to graph.Properties,
-// only including safe properties.
+// only including safe properties. Type coercion is driven by
+// safePropTypes (single source of truth). Adding a new safe field
+// only requires one entry in that map.
 func buildSafeProps(raw map[string]any) graph.Properties {
 	props := make(graph.Properties)
 	for k, v := range raw {
-		if !safeProperties[k] {
+		t, ok := safePropTypes[k]
+		if !ok {
 			continue
 		}
-		switch k {
-		case "content_full", "content_short", "content_medium",
-			"source_ref", "temporality", "knowledge_type",
-			"epistemic_status", "context_about", "context_who",
-			"context_prompted", "context_findable_by", "context_related",
-			"resolution", "resolution_note":
+		switch t {
+		case propTypeString:
 			if s, ok := v.(string); ok {
 				props[k] = graph.StringProperty(s)
 			}
-		case "confidence", "importance", "source_credibility":
+		case propTypeFloat:
 			switch val := v.(type) {
 			case float64:
 				props[k] = graph.Float64Property(val)
 			case string:
-				// Try parse.
 				var f float64
 				if _, err := fmt.Sscanf(val, "%f", &f); err == nil {
 					props[k] = graph.Float64Property(f)
 				}
 			}
-		case "testimony_hops":
+		case propTypeInt64:
 			switch val := v.(type) {
 			case float64:
 				props[k] = graph.Int64Property(int64(val))
 			}
-		case "content_keywords":
+		case propTypeStringList:
 			switch val := v.(type) {
 			case []any:
 				var kw []string
@@ -491,7 +518,6 @@ func buildSafeProps(raw map[string]any) graph.Properties {
 					props[k] = graph.StringListProperty(kw)
 				}
 			case string:
-				// Semicolon-separated.
 				parts := strings.Split(val, ";")
 				var kw []string
 				for _, p := range parts {
@@ -504,10 +530,10 @@ func buildSafeProps(raw map[string]any) graph.Properties {
 					props[k] = graph.StringListProperty(kw)
 				}
 			}
-		case "created_at", "valid_from", "valid_until", "asserted_as_of":
+		case propTypeTimestamp:
 			if s, ok := v.(string); ok {
-				if t, err := time.Parse(time.RFC3339, s); err == nil {
-					props[k] = graph.TimestampProperty(t)
+				if ts, err := time.Parse(time.RFC3339, s); err == nil {
+					props[k] = graph.TimestampProperty(ts)
 				}
 			}
 		}

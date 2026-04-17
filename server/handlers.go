@@ -53,6 +53,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleShutdown triggers graceful server shutdown.
+//
+// Writes the response, flushes the body to the wire, then signals
+// SIGTERM. Previously RequestShutdown slept 100ms in a goroutine
+// "to give the response time to send" -- a magic number that under
+// load could fire before the response left the kernel buffer,
+// dropping the response with connection-reset. Flushing explicitly
+// makes the timing deterministic. (Wave 7 P1-64.)
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if !isLoopback(r) {
 		s.writeError(w, http.StatusForbidden, "forbidden",
@@ -63,6 +70,9 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{
 		"message": "shutting down",
 	})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 
 	s.RequestShutdown()
 }

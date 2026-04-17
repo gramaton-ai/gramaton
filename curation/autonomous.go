@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"runtime"
 	"sort"
 	"strings"
@@ -41,6 +42,13 @@ type AutonomousResult struct {
 
 	DryRun         bool            `json:"dry_run,omitempty"`
 	PlannedChanges []PlannedChange `json:"planned_changes,omitempty"`
+
+	// LastRunPaused is set by the runner when the circuit breaker
+	// is engaged for an entire cycle, so /v1/status doesn't keep
+	// surfacing stale numbers from the previous successful cycle.
+	// (Wave 7 P1-63.)
+	LastRunPaused bool   `json:"last_run_paused,omitempty"`
+	PauseReason   string `json:"pause_reason,omitempty"`
 }
 
 // ManifestCache holds the last-computed manifest state-fingerprint hash
@@ -1158,6 +1166,18 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 	e.RLock()
 	processedIDs := e.PropIdx().Lookup("processing_status", graph.StringProperty("processed"))
+	// Shuffle so different records get checked across cycles.
+	// PropIdx.Lookup returns IDs in map-iteration order, which is
+	// quasi-stable -- without this, the same first-N records would
+	// be re-checked every cycle and the rest never reached. A
+	// random pick covers the population over time. We don't pick
+	// newest-first because the contradiction-application path
+	// trusts the LLM's A/B assignment, which is sensitive to
+	// prompt ordering; a stable newest-first sort would change
+	// behavior for the same store across restarts. (Wave 7 P1-61.)
+	rand.Shuffle(len(processedIDs), func(i, j int) {
+		processedIDs[i], processedIDs[j] = processedIDs[j], processedIDs[i]
+	})
 	seen := make(map[string]bool)
 
 	for _, idA := range processedIDs {
