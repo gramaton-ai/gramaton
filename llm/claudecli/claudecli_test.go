@@ -1,6 +1,10 @@
 package claudecli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gramaton-ai/gramaton/internal/strutil"
+)
 
 func TestModelAliases(t *testing.T) {
 	if modelAliases["haiku"] != "haiku" {
@@ -14,11 +18,11 @@ func TestModelAliases(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
-	if truncate("hello", 10) != "hello" {
+func TestTruncateRedirectedToStrutil(t *testing.T) {
+	if strutil.Truncate("hello", 10) != "hello" {
 		t.Fatal("short string should not be truncated")
 	}
-	if truncate("hello world", 5) != "hello..." {
+	if strutil.Truncate("hello world", 5) != "hello..." {
 		t.Fatal("long string should be truncated")
 	}
 }

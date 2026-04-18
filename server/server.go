@@ -744,7 +744,10 @@ func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curat
 	enc.Encode(envelope)
 }
 
-// writeError writes a JSON error response.
+// writeError writes a JSON error response. Includes the curation
+// envelope so agents see the same backlog signals on a 4xx/5xx as
+// they do on a 2xx -- without it, an agent hammering an erroring
+// endpoint never learns the store has work pending. (P2-13 nit.)
 func (s *Server) writeError(w http.ResponseWriter, status int, code, message string, retryable bool) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
@@ -755,6 +758,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 			Message:   message,
 			Retryable: retryable,
 		},
+		Curation: s.curationStatus(false),
 	})
 }
 
@@ -787,9 +791,12 @@ type CurationStatus struct {
 	PauseReason      string     `json:"pause_reason,omitempty"`
 }
 
-// ErrorResponse is the standard error wrapper.
+// ErrorResponse is the standard error wrapper. Includes the curation
+// envelope so error responses carry the same backlog signal as
+// successful ones.
 type ErrorResponse struct {
-	Error ErrorDetail `json:"error"`
+	Error    ErrorDetail    `json:"error"`
+	Curation CurationStatus `json:"curation,omitzero"`
 }
 
 // ErrorDetail contains error information.

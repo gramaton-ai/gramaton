@@ -10,10 +10,15 @@ import (
 	"time"
 )
 
-// IsReachable checks if the Ollama API is responding.
-func IsReachable(endpoint string) bool {
+// IsReachable checks if the Ollama API is responding. ctx is honoured
+// for cancellation; pass context.Background() if no deadline applies.
+func IsReachable(ctx context.Context, endpoint string) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(endpoint + "/api/tags")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/api/tags", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -34,8 +39,8 @@ func FindBinary() string {
 // EnsureRunning starts Ollama if it's installed but not running. Returns
 // nil if Ollama is reachable (either already running or successfully
 // started). Returns an error if Ollama can't be found or started.
-func EnsureRunning(endpoint string) error {
-	if IsReachable(endpoint) {
+func EnsureRunning(ctx context.Context, endpoint string) error {
+	if IsReachable(ctx, endpoint) {
 		return nil
 	}
 
@@ -61,11 +66,15 @@ func EnsureRunning(endpoint string) error {
 	// Release the process so it doesn't become a zombie.
 	go func() { _ = cmd.Wait() }()
 
-	// Poll until ready.
+	// Poll until ready, honouring ctx.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		time.Sleep(250 * time.Millisecond)
-		if IsReachable(endpoint) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+		if IsReachable(ctx, endpoint) {
 			return nil
 		}
 	}
@@ -82,10 +91,15 @@ type modelInfo struct {
 	Name string `json:"name"`
 }
 
-// HasModel checks if a model is available locally in Ollama.
-func HasModel(endpoint, model string) bool {
+// HasModel checks if a model is available locally in Ollama. ctx is
+// honoured for cancellation; pass context.Background() if no deadline.
+func HasModel(ctx context.Context, endpoint, model string) bool {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(endpoint + "/api/tags")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/api/tags", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}

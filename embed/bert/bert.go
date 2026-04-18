@@ -38,10 +38,11 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 	if model != DefaultModel {
 		repo = model
 		// Use the last path component as the directory name.
-		parts := filepath.SplitList(model)
-		if len(parts) > 0 {
-			model = parts[len(parts)-1]
-		}
+		// filepath.SplitList splits on the OS PATH separator (':' on
+		// Unix), not '/' -- so a HF repo path "BAAI/bge-..." used to
+		// produce a single-element slice with the slash intact, then
+		// ModelDir would create two nested dirs. (P2-17 nit.)
+		model = filepath.Base(model)
 	}
 
 	// Ensure model files are downloaded.

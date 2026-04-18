@@ -78,9 +78,9 @@ func setupOllama(ctx context.Context, cfg *config.Config) SetupResult {
 	result.Messages = append(result.Messages, fmt.Sprintf("Ollama binary: %s", bin))
 
 	// Ensure Ollama is running.
-	if !ollama.IsReachable(endpoint) {
+	if !ollama.IsReachable(ctx, endpoint) {
 		result.Messages = append(result.Messages, "Starting Ollama...")
-		if err := ollama.EnsureRunning(endpoint); err != nil {
+		if err := ollama.EnsureRunning(ctx, endpoint); err != nil {
 			result.Messages = append(result.Messages, fmt.Sprintf("Could not start Ollama: %s", err))
 			return result
 		}
@@ -88,7 +88,7 @@ func setupOllama(ctx context.Context, cfg *config.Config) SetupResult {
 	result.Messages = append(result.Messages, fmt.Sprintf("Ollama responding at %s", endpoint))
 
 	// Check for embedding model.
-	if !ollama.HasModel(endpoint, model) {
+	if !ollama.HasModel(ctx, endpoint, model) {
 		result.Messages = append(result.Messages, fmt.Sprintf("Pulling %s...", model))
 		err := ollama.PullModel(ctx, endpoint, model, func(msg string) {
 			result.Messages = append(result.Messages, msg)

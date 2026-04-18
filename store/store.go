@@ -30,6 +30,9 @@ var nameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 // characters of alphanumeric, hyphen, or underscore. "default" is
 // reserved as an alias for the unnamed store in rename operations.
 func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("store name is required (use 1-64 alphanumeric, hyphen, or underscore characters)")
+	}
 	if name == "default" {
 		return fmt.Errorf("%q is reserved for the unnamed store", name)
 	}

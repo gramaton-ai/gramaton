@@ -597,33 +597,8 @@ func SortedEntries(m map[string]string) []ProllyEntry {
 }
 
 func sortEntries(entries []ProllyEntry) {
-	// Insertion sort for small slices, custom quickSort for larger.
-	if len(entries) <= 32 {
-		for i := 1; i < len(entries); i++ {
-			for j := i; j > 0 && entries[j].Key < entries[j-1].Key; j-- {
-				entries[j], entries[j-1] = entries[j-1], entries[j]
-			}
-		}
-		return
-	}
-	n := len(entries)
-	quickSort(entries, 0, n-1)
-}
-
-func quickSort(entries []ProllyEntry, lo, hi int) {
-	if lo >= hi {
-		return
-	}
-	pivot := entries[hi].Key
-	i := lo
-	for j := lo; j < hi; j++ {
-		if entries[j].Key < pivot {
-			entries[i], entries[j] = entries[j], entries[i]
-			i++
-		}
-	}
-	entries[i], entries[hi] = entries[hi], entries[i]
-	quickSort(entries, lo, i-1)
-	quickSort(entries, i+1, hi)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Key < entries[j].Key
+	})
 }
 

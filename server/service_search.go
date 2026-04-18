@@ -148,8 +148,10 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 		}
 	}
 
-	// Pre-embed query text outside the lock.
-	s.log.Info("search: embedding query", "component", "search", "text_len", len(q.Text))
+	// Pre-embed query text outside the lock. These per-phase logs are
+	// debugging-grade -- one Debug per request is fine; four Info per
+	// request floods operator logs in steady state. (P3-04 nit.)
+	s.log.Debug("search: embedding query", "component", "search", "text_len", len(q.Text))
 	embedStart := time.Now()
 	var queryVec []float32
 	if q.Text != "" && s.engine.Embedder() != nil {
@@ -158,15 +160,15 @@ func (s *Server) serviceSearch(ctx context.Context, req *searchRequest) (map[str
 			queryVec = vecs[0]
 		}
 	}
-	s.log.Info("search: embed done, acquiring read lock", "component", "search", "embed_ms", time.Since(embedStart).Milliseconds())
+	s.log.Debug("search: embed done, acquiring read lock", "component", "search", "embed_ms", time.Since(embedStart).Milliseconds())
 
 	// Search under read lock.
 	lockStart := time.Now()
 	s.engine.RLock()
-	s.log.Info("search: read lock acquired, executing", "component", "search", "lock_wait_ms", time.Since(lockStart).Milliseconds())
+	s.log.Debug("search: read lock acquired, executing", "component", "search", "lock_wait_ms", time.Since(lockStart).Milliseconds())
 	searchStart := time.Now()
 	results, err := s.engine.Searcher().ExecuteWithVector(ctx, q, queryVec)
-	s.log.Info("search: execute done", "component", "search", "search_ms", time.Since(searchStart).Milliseconds(), "results", len(results))
+	s.log.Debug("search: execute done", "component", "search", "search_ms", time.Since(searchStart).Milliseconds(), "results", len(results))
 	s.engine.RUnlock()
 
 	if err != nil {

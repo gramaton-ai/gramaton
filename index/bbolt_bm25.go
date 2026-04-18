@@ -486,9 +486,14 @@ type postingEntry struct {
 }
 
 func encodePostingList(entries []postingEntry) []byte {
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].nodeID < entries[j].nodeID
+	// Sort a copy so callers don't observe in-place mutation. The
+	// in-batch cache reuses entries slices across flushes; sorting
+	// the original would break iteration order assumptions elsewhere.
+	sorted := append([]postingEntry(nil), entries...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].nodeID < sorted[j].nodeID
 	})
+	entries = sorted
 	size := 4
 	for _, e := range entries {
 		size += 2 + len(e.nodeID) + 4

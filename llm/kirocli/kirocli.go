@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
 
 // modelAliases maps short names to Kiro CLI model identifiers.
@@ -92,7 +94,7 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("kirocli: command failed (%v): %s", err, truncate(stderr.String(), 200))
+		return "", fmt.Errorf("kirocli: command failed (%v): %s", err, strutil.Truncate(stderr.String(), 200))
 	}
 
 	return extractResponse(stdout.String())
@@ -164,9 +166,3 @@ func stripCodeFences(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

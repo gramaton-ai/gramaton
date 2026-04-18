@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
 
 // modelPattern restricts model strings to a conservative shape:
@@ -95,19 +97,13 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 
 	var resp cliResponse
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return "", fmt.Errorf("claudecli: parse response: %w (raw: %s)", err, truncate(stdout.String(), 200))
+		return "", fmt.Errorf("claudecli: parse response: %w (raw: %s)", err, strutil.Truncate(stdout.String(), 200))
 	}
 
 	if resp.IsError {
-		return "", fmt.Errorf("claudecli: model returned error: %s", truncate(resp.Result, 500))
+		return "", fmt.Errorf("claudecli: model returned error: %s", strutil.Truncate(resp.Result, 500))
 	}
 
 	return resp.Result, nil
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
 
 // BatchRequest is a single request in a message batch.
@@ -183,17 +185,11 @@ func (c *Client) doBatchRequest(ctx context.Context, method, path string, body [
 			Error apiError `json:"error"`
 		}
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
-			return nil, fmt.Errorf("anthropic batch: %s: %s", errResp.Error.Type, truncate(errResp.Error.Message, 200))
+			return nil, fmt.Errorf("anthropic batch: %s: %s", errResp.Error.Type, strutil.Truncate(errResp.Error.Message, 200))
 		}
-		return nil, fmt.Errorf("anthropic batch: HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+		return nil, fmt.Errorf("anthropic batch: HTTP %d: %s", resp.StatusCode, strutil.Truncate(string(respBody), 200))
 	}
 
 	return respBody, nil
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}
