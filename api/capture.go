@@ -1,0 +1,241 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/gramaton-ai/gramaton/graph"
+)
+
+// CaptureRequest is the canonical input to the capture operation.
+// Every transport (HTTP, MCP, CLI proxy) uses this struct directly --
+// there is no per-transport copy to drift from.
+//
+// json tags are the HTTP wire format.
+// jsonschema tags surface as MCP tool descriptions (the MCP SDK reads
+// them via reflection when the struct is passed as a tool args type).
+type CaptureRequest struct {
+	Content                string         `json:"content" jsonschema:"the knowledge to store (required)"`
+	Temporality            string         `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
+	Confidence             *float64       `json:"confidence,omitempty" jsonschema:"number between 0.0 and 1.0"`
+	KnowledgeType          string         `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
+	EpistemicStatus        string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
+	Importance             *float64       `json:"importance,omitempty" jsonschema:"number between 0.0 and 1.0"`
+	Keywords               []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings for search"`
+	SummaryShort           string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+	SourceRef              string         `json:"source_ref,omitempty" jsonschema:"source URL or path"`
+	SourceCredibility      *float64       `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
+	TestimonyHops          *int64         `json:"testimony_hops,omitempty" jsonschema:"how many people removed from the first-hand source (0=first-hand, 1=heard from someone who was there, etc.)"`
+	ContextAbout           string         `json:"context_about,omitempty" jsonschema:"topic/domain"`
+	ContextWho             string         `json:"context_who,omitempty" jsonschema:"entities involved"`
+	ContextPrompted        string         `json:"context_prompted,omitempty" jsonschema:"what prompted this capture"`
+	ContextFindable        string         `json:"context_findable_by,omitempty" jsonschema:"future retrieval terms"`
+	ContextRelated         string         `json:"context_related,omitempty" jsonschema:"related concepts or records"`
+	ContextSourceType      string         `json:"context_source_type,omitempty" jsonschema:"what kind of source (e.g. published academic article, personal observation, team discussion)"`
+	ContextTimeSensitivity string         `json:"context_time_sensitivity,omitempty" jsonschema:"how time-sensitive (e.g. stable reference, changes quarterly, deadline-driven)"`
+	ContextReliability     string         `json:"context_reliability,omitempty" jsonschema:"reliability signals (e.g. peer-reviewed, unverified, first-hand experience)"`
+	ContextCaptureReason   string         `json:"context_capture_reason,omitempty" jsonschema:"why this is being captured (e.g. recording a decision, building reference corpus)"`
+	ValidFrom              string         `json:"valid_from,omitempty" jsonschema:"RFC3339; optional lower lifecycle bound"`
+	ValidUntil             string         `json:"valid_until,omitempty" jsonschema:"RFC3339; optional expiration"`
+	AssertedAsOf           string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
+	Meta                   map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems (e.g. {assignee: Sarah, priority: P1, sprint: 23}). Stored as meta.* properties, indexed for keyword search."`
+}
+
+// SupersededRecord describes a record that Capture automatically marked
+// as historical because the new record was near-duplicate.
+type SupersededRecord struct {
+	ID         string  `json:"id"`
+	Summary    string  `json:"summary,omitempty"`
+	Similarity float64 `json:"similarity"`
+	EdgeID     string  `json:"edge_id"`
+}
+
+// CaptureResponse is the canonical output of the capture operation.
+// Omitted fields use json:",omitempty" so the wire format stays tight
+// on the happy path (no warnings, no supersession).
+type CaptureResponse struct {
+	ID         string             `json:"id"`
+	Warnings   []string           `json:"warnings,omitempty"`
+	Superseded []SupersededRecord `json:"superseded,omitempty"`
+}
+
+// CaptureDescription is the MCP tool description shared by every
+// transport that surfaces capture (direct MCP registration and the
+// CLI MCP proxy). Changes here update both surfaces.
+const CaptureDescription = `Store a knowledge record in Memory. Use this ONLY when the user explicitly asks you to remember, save, or capture something. Do not call this tool autonomously -- session extraction (gramaton_session_prepare/commit) handles automatic knowledge capture.
+
+NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
+
+Field roles: content is unbounded and should be self-contained with rationale; summary_short (~750 chars) is the embedding-ready semantic anchor for vector search; keywords are BM25 terms a future agent would type. These are different outputs serving different parts of retrieval, not nested compressions. For full guidance on what to capture, classification heuristics per question type, and synthesis-not-summarization discipline, call gramaton_guide(topic="capture").
+
+IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`
+
+// Capture creates a new knowledge record. Pre-embeds content_short
+// outside the engine write lock, then holds the lock for the minimum
+// time needed to insert the node, attach the embedding, check dedup,
+// and save. Auto-supersession: if the captured record is a
+// near-duplicate (cosine >= dedup.threshold) of an existing record,
+// the older one is marked historical and a "supersedes" edge links
+// the new record to it. Returns ErrConflict only when dedup.action =
+// "reject" AND a duplicate is found.
+func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse, *APIError) {
+	captureStart := time.Now()
+
+	if req.Content == "" {
+		return CaptureResponse{}, ErrMissing("content is required")
+	}
+	if len(req.Content) > a.engine.Config().Limits.MaxContentLength {
+		return CaptureResponse{}, ErrInvalid("content exceeds maximum length")
+	}
+	if err := validateCaptureRequest(req); err != nil {
+		return CaptureResponse{}, ErrInvalid(err.Error())
+	}
+	if err := validateMeta(req.Meta); err != nil {
+		return CaptureResponse{}, ErrInvalid(err.Error())
+	}
+
+	// Pre-embed outside the lock. Observation extraction (D18/D23)
+	// happens asynchronously in the curation cycle, not here.
+	embedStart := time.Now()
+	preEmbedded := a.preEmbedContent(req)
+	embedDur := time.Since(embedStart)
+
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	props := graph.Properties{
+		"content_full": graph.StringProperty(req.Content),
+		"created_at":   graph.TimestampProperty(time.Now().UTC()),
+		"access_count": graph.Int64Property(0),
+	}
+
+	hasClassification := req.Temporality != "" || req.Confidence != nil
+	if hasClassification {
+		props["processing_status"] = graph.StringProperty("processed")
+	} else {
+		props["processing_status"] = graph.StringProperty("captured")
+	}
+
+	setOptionalProps(props, req)
+
+	n := a.engine.Graph().AddNode(props)
+
+	// Index content for BM25. Append meta values so keyword search
+	// matches structured metadata fields.
+	bm25Text := req.Content
+	if metaText := metaBM25Text(req.Meta); metaText != "" {
+		bm25Text += " " + metaText
+	}
+	a.engine.IndexNode(n.ID, bm25Text, nil)
+
+	if len(req.Meta) > 0 {
+		a.setMetaProps(n.ID, req.Meta)
+	}
+
+	var warnings []string
+	if err := a.applyPreEmbedded(n.ID, preEmbedded); err != nil {
+		warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
+	}
+
+	var superseded []SupersededRecord
+	if dupID, sim := a.engine.CheckDedup(n.ID); dupID != "" {
+		cfg := a.engine.Config()
+		if cfg.Dedup.Action == "reject" {
+			msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
+			a.engine.PropIdx().RemoveNode(n.ID, n.Properties)
+			a.engine.VecIdx().Remove(n.ID)
+			a.engine.Graph().DeleteNode(n.ID)
+			return CaptureResponse{}, ErrConflict(msg)
+		}
+
+		now := time.Now().UTC()
+		oldNode, _ := a.engine.Graph().GetNode(dupID)
+		if oldNode != nil {
+			_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
+			if !alreadyHistorical {
+				a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+				a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+				a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
+				if e, err := a.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+					summary := ""
+					if v, ok := oldNode.Properties.GetString("content_short"); ok {
+						summary = v
+					}
+					superseded = append(superseded, SupersededRecord{
+						ID:         dupID,
+						Summary:    summary,
+						Similarity: sim,
+						EdgeID:     e.ID,
+					})
+				}
+			}
+		}
+	}
+
+	if _, err := a.engine.Save("capture"); err != nil {
+		return CaptureResponse{}, ErrInternal("failed to save")
+	}
+
+	a.log.Info("capture complete",
+		"component", "capture",
+		"node", n.ID,
+		"content_len", len(req.Content),
+		"embed_ms", embedDur.Milliseconds(),
+		"total_ms", time.Since(captureStart).Milliseconds(),
+		"superseded", len(superseded) > 0)
+
+	return CaptureResponse{
+		ID:         n.ID,
+		Warnings:   warnings,
+		Superseded: superseded,
+	}, nil
+}
+
+// validateCaptureRequest checks per-field invariants: numeric ranges,
+// enum values, string lengths. Returns the first problem found.
+func validateCaptureRequest(r CaptureRequest) error {
+	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateFloat64Range("importance", r.Importance, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateFloat64Range("source_credibility", r.SourceCredibility, 0.0, 1.0); err != nil {
+		return err
+	}
+	if err := validateEnum("temporality", r.Temporality, ValidTemporalities); err != nil {
+		return err
+	}
+	if err := validateEnum("knowledge_type", r.KnowledgeType, ValidKnowledgeTypes); err != nil {
+		return err
+	}
+	if err := validateEnum("epistemic_status", r.EpistemicStatus, ValidEpistemicStatuses); err != nil {
+		return err
+	}
+	if err := validateKeywords(r.Keywords); err != nil {
+		return err
+	}
+	if len(r.SummaryShort) > MaxSummaryShort() {
+		return fmt.Errorf("summary_short exceeds maximum length of %d", MaxSummaryShort())
+	}
+	if len(r.SourceRef) > MaxSourceRefLen {
+		return fmt.Errorf("source_ref exceeds maximum length of %d", MaxSourceRefLen)
+	}
+	for _, pair := range []struct{ name, val string }{
+		{"context_about", r.ContextAbout},
+		{"context_who", r.ContextWho},
+		{"context_prompted", r.ContextPrompted},
+		{"context_findable_by", r.ContextFindable},
+		{"context_related", r.ContextRelated},
+		{"context_source_type", r.ContextSourceType},
+		{"context_time_sensitivity", r.ContextTimeSensitivity},
+		{"context_reliability", r.ContextReliability},
+		{"context_capture_reason", r.ContextCaptureReason},
+	} {
+		if len(pair.val) > MaxContextFieldLen {
+			return fmt.Errorf("%s exceeds maximum length of %d", pair.name, MaxContextFieldLen)
+		}
+	}
+	return nil
+}

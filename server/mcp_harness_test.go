@@ -79,6 +79,7 @@ func TestMCPToolRegistry(t *testing.T) {
 		"gramaton_duplicates",
 		"gramaton_explore",
 		"gramaton_guide",
+		"gramaton_history",
 		"gramaton_inspect",
 		"gramaton_intake",
 		"gramaton_link",
@@ -94,6 +95,7 @@ func TestMCPToolRegistry(t *testing.T) {
 		"gramaton_session_start",
 		"gramaton_stats",
 		"gramaton_status",
+		"gramaton_unlink",
 		"gramaton_update",
 	}
 

@@ -41,7 +41,9 @@ func (s *Server) MCPServer() *mcp.Server {
 
 func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPSearchTools(mcpServer)
-	s.registerMCPRecordTools(mcpServer)
+	// Records cluster: migrated to api package. Tools registered by
+	// bindings_records.go via thin shims over s.api.X methods.
+	s.registerRecordsMCPTools(mcpServer)
 	s.registerMCPIntakeTools(mcpServer)
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)

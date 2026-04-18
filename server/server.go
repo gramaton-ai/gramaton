@@ -517,21 +517,9 @@ func (s *Server) idleWatcher(shutdownCh chan<- string) {
 
 // registerRoutes sets up the HTTP routes.
 func (s *Server) registerRoutes(mux *http.ServeMux) {
-	// Records
-	mux.HandleFunc("POST /v1/records", s.handleCreateRecord)
-	mux.HandleFunc("GET /v1/records/{id}", s.handleGetRecord)
-	mux.HandleFunc("PATCH /v1/records/{id}", s.handleUpdateRecord)
-	mux.HandleFunc("DELETE /v1/records/{id}", s.handleDeleteRecord)
-	mux.HandleFunc("POST /v1/records/{id}/edges", s.handleCreateEdge)
-	mux.HandleFunc("DELETE /v1/edges/{edge_id}", s.handleDeleteEdge)
-	mux.HandleFunc("POST /v1/records/{id}/classify", s.handleClassifyRecord)
-	mux.HandleFunc("POST /v1/records/{id}/resolve", s.handleResolveRecord)
-	mux.HandleFunc("GET /v1/records/{id}/history", func(w http.ResponseWriter, r *http.Request) {
-		// Redirect to log endpoint with record query param.
-		id := r.PathValue("id")
-		r.URL.RawQuery = "record=" + id
-		s.handleLog(w, r)
-	})
+	// Records cluster: migrated to the api package. Each route is a
+	// thin shim (parse -> call s.api.X -> write) in bindings_records.go.
+	s.registerRecordsRoutes(mux)
 
 	// Search and traversal
 	mux.HandleFunc("POST /v1/search", s.handleSearch)

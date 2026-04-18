@@ -15,12 +15,10 @@ import (
 // server process.
 func registerProxyTools(mcpServer *mcp.Server) {
 	registerSearchProxy(mcpServer)
-	registerCaptureProxy(mcpServer)
-	registerInspectProxy(mcpServer)
-	registerUpdateProxy(mcpServer)
-	registerResolveProxy(mcpServer)
-	registerLinkProxy(mcpServer)
-	registerClassifyProxy(mcpServer)
+	// Records cluster: migrated to api-package-typed bindings in
+	// mcp_proxy_records.go. Uses api.XxxRequest directly so fields
+	// can't drift between HTTP / MCP / CLI-proxy.
+	registerRecordsProxyTools(mcpServer)
 	registerExploreProxy(mcpServer)
 	registerObserveProxy(mcpServer)
 	registerPendingProxy(mcpServer)
@@ -35,8 +33,6 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	registerBackupProxy(mcpServer)
 	// registerDeleteProxy intentionally excluded -- destructive operations
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
-	registerUnlinkProxy(mcpServer)
-	registerHistoryProxy(mcpServer)
 	registerCollectionProxyTools(mcpServer)
 	registerSessionProxyTools(mcpServer)
 }
