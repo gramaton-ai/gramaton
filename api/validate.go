@@ -65,6 +65,16 @@ const (
 	MaxLogTraversal   = 5000
 )
 
+// Collection item listing limits. Bounds on the new projection and
+// filter knobs keep CollectionItems from being a DoS amplifier --
+// 10k field names or a filter map with 1000 keys * 1000 values each
+// would otherwise be valid inputs.
+const (
+	MaxProjectionFields   = 64
+	MaxFilterKeys         = 20
+	MaxFilterValuesPerKey = 100
+)
+
 // Enum sets. Exposed so transport-level validators (e.g. MCP schema
 // hints) can reference the same source of truth.
 var (

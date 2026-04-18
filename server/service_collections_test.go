@@ -358,6 +358,78 @@ func TestCollectionItemsHTTPProjectionAndFilter(t *testing.T) {
 	}
 }
 
+func TestCollectionItemsProjectionCapExceeded(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	tooMany := make([]string, api.MaxProjectionFields+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("f%d", i)
+	}
+	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{Fields: tooMany})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for projection cap")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("expected input_error, got %s", apiErr.Code)
+	}
+}
+
+func TestCollectionItemsFilterKeyCapExceeded(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	filter := make(map[string]any, api.MaxFilterKeys+1)
+	for i := 0; i <= api.MaxFilterKeys; i++ {
+		filter[fmt.Sprintf("f%d", i)] = "x"
+	}
+	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{Filter: filter})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for filter key cap")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("expected input_error, got %s", apiErr.Code)
+	}
+}
+
+func TestCollectionItemsFilterValueCapExceeded(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	tooMany := make([]string, api.MaxFilterValuesPerKey+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("v%d", i)
+	}
+	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"status": tooMany},
+	})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for filter value cap")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("expected input_error, got %s", apiErr.Code)
+	}
+}
+
+func TestCollectionItemsProjectionInvalidFieldNameRejected(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Fields: []string{"title", "not a field name"},
+	})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for malformed projection field name")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("expected input_error, got %s", apiErr.Code)
+	}
+}
+
 func TestCollectionItemsSortOnExcludedField(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ctx := context.Background()

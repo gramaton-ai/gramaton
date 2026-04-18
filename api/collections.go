@@ -188,6 +188,34 @@ func joinCollectionNames(names []string) string {
 	return strings.Join(names, ", ")
 }
 
+// Description constants shared by every transport (HTTP binding MCP
+// tool, CLI MCP proxy). Keeping them with the api package is the T-02
+// anti-drift convention: one source of truth for "what does this tool
+// do", so the server-registered description and the CLI proxy's
+// description can't diverge over time.
+
+const CollectionCreateDescription = "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research."
+
+const CollectionListDescription = "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page."
+
+const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]})."
+
+const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns ErrConflict if an item with the same title already exists in the collection."
+
+const CollectionUpdateDescription = "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema."
+
+const CollectionMoveDescription = "Move an item from one collection to another. The item's fields are validated against the target collection's schema."
+
+const CollectionRemoveDescription = "Remove an item from a collection. The item node is preserved in the graph; only the membership edge is deleted."
+
+const CollectionRenameDescription = "Rename a collection. Name must be unique."
+
+const CollectionDeleteDescription = "Retire a collection (reversible). Items and edges are preserved. Call again on a retired collection to re-activate it."
+
+const CollectionSchemaDescription = "Read a collection's schema and migration status."
+
+const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
+
 // --- service methods ---
 
 type CollectionCreateRequest struct {
@@ -359,7 +387,10 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 	if filterErr != nil {
 		return nil, ErrInvalid(filterErr.Error())
 	}
-	projection := normalizeProjection(req.Fields)
+	projection, projErr := normalizeProjection(req.Fields)
+	if projErr != nil {
+		return nil, ErrInvalid(projErr.Error())
+	}
 
 	a.engine.RLock()
 	defer a.engine.RUnlock()
@@ -526,10 +557,15 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 // field-name -> allowed-value-set. Each item passes when, for every
 // matcher, its field value is contained in the allowed set. Values are
 // compared as strings (most schema fields are strings or enums; the
-// filter here is deliberately coarse, not a query DSL).
+// filter here is deliberately coarse, not a query DSL). Bounded by
+// MaxFilterKeys and MaxFilterValuesPerKey to prevent unbounded
+// attacker-controlled allocation.
 func buildFilterMatchers(filter map[string]any) (map[string]map[string]struct{}, error) {
 	if len(filter) == 0 {
 		return nil, nil
+	}
+	if len(filter) > MaxFilterKeys {
+		return nil, fmt.Errorf("filter: maximum %d keys allowed", MaxFilterKeys)
 	}
 	out := make(map[string]map[string]struct{}, len(filter))
 	for key, raw := range filter {
@@ -537,12 +573,23 @@ func buildFilterMatchers(filter map[string]any) (map[string]map[string]struct{},
 			return nil, fmt.Errorf("filter key %q contains invalid characters", key)
 		}
 		allowed := make(map[string]struct{})
+		addValue := func(name string, s string) error {
+			if len(allowed) >= MaxFilterValuesPerKey {
+				return fmt.Errorf("filter.%s: maximum %d values allowed", name, MaxFilterValuesPerKey)
+			}
+			allowed[s] = struct{}{}
+			return nil
+		}
 		switch v := raw.(type) {
 		case string:
-			allowed[v] = struct{}{}
+			if err := addValue(key, v); err != nil {
+				return nil, err
+			}
 		case []string:
 			for _, s := range v {
-				allowed[s] = struct{}{}
+				if err := addValue(key, s); err != nil {
+					return nil, err
+				}
 			}
 		case []any:
 			for i, elem := range v {
@@ -550,7 +597,9 @@ func buildFilterMatchers(filter map[string]any) (map[string]map[string]struct{},
 				if !ok {
 					return nil, fmt.Errorf("filter.%s[%d]: expected string, got %T", key, i, elem)
 				}
-				allowed[s] = struct{}{}
+				if err := addValue(key, s); err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, fmt.Errorf("filter.%s: expected string or []string, got %T", key, raw)
@@ -583,22 +632,30 @@ func matchesFilter(fields map[string]any, matchers map[string]map[string]struct{
 // normalizeProjection returns a set (map-with-empty-struct values) of
 // schema field names the caller asked for, or nil when projection is
 // disabled. An empty slice is treated as "no projection" so a
-// forgotten query string doesn't silently strip everything.
-func normalizeProjection(fields []string) map[string]struct{} {
+// forgotten query string doesn't silently strip everything. Bounded by
+// MaxProjectionFields; field names must match fieldNameRe (matching the
+// rule for schema-declared field names) so malformed inputs fail fast.
+func normalizeProjection(fields []string) (map[string]struct{}, error) {
 	if len(fields) == 0 {
-		return nil
+		return nil, nil
+	}
+	if len(fields) > MaxProjectionFields {
+		return nil, fmt.Errorf("fields: maximum %d entries allowed", MaxProjectionFields)
 	}
 	out := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
 		if f == "" {
 			continue
 		}
+		if !fieldNameRe.MatchString(f) {
+			return nil, fmt.Errorf("fields: %q contains invalid characters", f)
+		}
 		out[f] = struct{}{}
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 type CollectionAddRequest struct {

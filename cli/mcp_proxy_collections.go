@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -34,7 +35,7 @@ type proxyCollectionCreateInput struct {
 func registerCollectionCreateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_create",
-		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research.",
+		Description: api.CollectionCreateDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionCreateInput) (*mcp.CallToolResult, any, error) {
 		if args.Name == "" {
 			return proxyErr("name is required")
@@ -53,7 +54,7 @@ type proxyCollectionListInput struct {
 func registerCollectionListProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_list",
-		Description: "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page.",
+		Description: api.CollectionListDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionListInput) (*mcp.CallToolResult, any, error) {
 		path := "/v1/collections"
 		params := url.Values{}
@@ -84,7 +85,7 @@ type proxyCollectionItemsInput struct {
 func registerCollectionItemsProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_items",
-		Description: "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]}).",
+		Description: api.CollectionItemsDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionItemsInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -147,7 +148,7 @@ type proxyCollectionAddInput struct {
 func registerCollectionAddProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_add",
-		Description: "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns duplicate info if an item with the same title already exists.",
+		Description: api.CollectionAddDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionAddInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -168,7 +169,7 @@ type proxyCollectionUpdateInput struct {
 func registerCollectionUpdateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_update",
-		Description: "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema.",
+		Description: api.CollectionUpdateDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionUpdateInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.ItemID == "" {
 			return proxyErr("collection_id and item_id are required")
@@ -190,7 +191,7 @@ type proxyCollectionMoveInput struct {
 func registerCollectionMoveProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_move",
-		Description: "Move an item from one collection to another. The item's fields are validated against the target collection's schema.",
+		Description: api.CollectionMoveDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionMoveInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.ItemID == "" || args.TargetCollectionID == "" {
 			return proxyErr("collection_id, item_id, and target_collection_id are required")
@@ -211,7 +212,7 @@ type proxyCollectionRemoveInput struct {
 func registerCollectionRemoveProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_remove",
-		Description: "Remove an item from a collection. The item node is preserved in the graph; only the membership edge is deleted.",
+		Description: api.CollectionRemoveDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionRemoveInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.ItemID == "" {
 			return proxyErr("collection_id and item_id are required")
@@ -232,7 +233,7 @@ type proxyCollectionRenameInput struct {
 func registerCollectionRenameProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_rename",
-		Description: "Rename a collection. Name must be unique.",
+		Description: api.CollectionRenameDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionRenameInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.Name == "" {
 			return proxyErr("collection_id and name are required")
@@ -251,7 +252,7 @@ type proxyCollectionDeleteInput struct {
 func registerCollectionDeleteProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_delete",
-		Description: "Retire a collection (reversible). Items and edges are preserved. Call again on a retired collection to re-activate it.",
+		Description: api.CollectionDeleteDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionDeleteInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -270,7 +271,7 @@ type proxyCollectionSchemaInput struct {
 func registerCollectionSchemaProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_schema",
-		Description: "Read a collection's schema and migration status.",
+		Description: api.CollectionSchemaDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionSchemaInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -291,7 +292,7 @@ type proxyCollectionMigrateInput struct {
 func registerCollectionMigrateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_migrate",
-		Description: "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema.",
+		Description: api.CollectionMigrateDescription,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionMigrateInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.Field == "" {
 			return proxyErr("collection_id and field are required")
