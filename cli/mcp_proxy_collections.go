@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -72,16 +73,18 @@ func registerCollectionListProxy(s *mcp.Server) {
 // --- items ---
 
 type proxyCollectionItemsInput struct {
-	CollectionID   string `json:"collection_id" jsonschema:"collection ID"`
-	Sort           string `json:"sort,omitempty" jsonschema:"field name to sort by (default: created_at)"`
-	Order          string `json:"order,omitempty" jsonschema:"asc or desc (default: asc)"`
-	IncludeRetired bool   `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
+	CollectionID   string         `json:"collection_id" jsonschema:"collection ID"`
+	Sort           string         `json:"sort,omitempty" jsonschema:"field name to sort by (default: created_at)"`
+	Order          string         `json:"order,omitempty" jsonschema:"asc or desc (default: asc)"`
+	IncludeRetired bool           `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
+	Fields         []string       `json:"fields,omitempty" jsonschema:"whitelist of schema field names to include per item (default: all fields). id, created_at, and needs_migration are always included."`
+	Filter         map[string]any `json:"filter,omitempty" jsonschema:"schema-field -> expected-value(s) map. Value may be a string (exact match) or []string (any-of). Items must match every entry."`
 }
 
 func registerCollectionItemsProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_items",
-		Description: "List ALL items in a collection. Returns every item, guaranteed complete. Supports sorting by any field.",
+		Description: "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]}).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionItemsInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -96,6 +99,36 @@ func registerCollectionItemsProxy(s *mcp.Server) {
 		}
 		if args.IncludeRetired {
 			params.Set("include_retired", "true")
+		}
+		for _, f := range args.Fields {
+			if f = strings.TrimSpace(f); f != "" {
+				params.Add("fields", f)
+			}
+		}
+		for key, raw := range args.Filter {
+			if key == "" {
+				continue
+			}
+			switch v := raw.(type) {
+			case string:
+				if v != "" {
+					params.Set("filter."+key, v)
+				}
+			case []string:
+				if len(v) > 0 {
+					params.Set("filter."+key, strings.Join(v, ","))
+				}
+			case []any:
+				parts := make([]string, 0, len(v))
+				for _, elem := range v {
+					if s, ok := elem.(string); ok && s != "" {
+						parts = append(parts, s)
+					}
+				}
+				if len(parts) > 0 {
+					params.Set("filter."+key, strings.Join(parts, ","))
+				}
+			}
 		}
 		if len(params) > 0 {
 			path += "?" + params.Encode()

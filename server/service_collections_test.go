@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/api"
 )
 
 func TestCollectionCreateAndList(t *testing.T) {
@@ -145,6 +147,242 @@ func TestCollectionItemsExhaustive(t *testing.T) {
 	count := items["count"].(int)
 	if count != 5 {
 		t.Fatalf("expected 5 items, got %d", count)
+	}
+}
+
+// collectionItemsFixture builds a 4-item schema'd collection for
+// projection + filter tests: two open/P1 items, one open/P2, one
+// closed/P3. Returns the collection id.
+func collectionItemsFixture(t *testing.T, srv *Server) string {
+	t.Helper()
+	ctx := context.Background()
+	schema := &CollectionSchema{
+		Fields: []SchemaField{
+			{Name: "title", Type: FieldTypeString, Required: true},
+			{Name: "status", Type: FieldTypeEnum, Required: true, Values: []string{"open", "closed"}},
+			{Name: "severity", Type: FieldTypeEnum, Required: true, Values: []string{"P1", "P2", "P3"}},
+			{Name: "details", Type: FieldTypeString, Required: false},
+		},
+	}
+	cc, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Bugs", Schema: schema})
+	if svcErr != nil {
+		t.Fatalf("create: %v", svcErr)
+	}
+	collID := cc["id"].(string)
+	rows := []map[string]any{
+		{"title": "Panic middleware", "status": "open", "severity": "P2", "details": "long-form notes a b c"},
+		{"title": "Ctx propagation", "status": "open", "severity": "P1", "details": "blah blah blah"},
+		{"title": "Error scrub", "status": "closed", "severity": "P3", "details": "done"},
+		{"title": "Taxonomy drift", "status": "open", "severity": "P1", "details": "more notes"},
+	}
+	for _, row := range rows {
+		if _, err := srv.serviceCollectionAdd(collID, &collectionAddRequest{Fields: row}); err != nil {
+			t.Fatalf("add %q: %v", row["title"], err)
+		}
+	}
+	return collID
+}
+
+func TestCollectionItemsFieldProjection(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Fields: []string{"title", "status"},
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	items := res["items"].([]map[string]any)
+	if len(items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(items))
+	}
+	for _, item := range items {
+		fields := item["fields"].(map[string]any)
+		// Whitelist respected.
+		for k := range fields {
+			if k != "title" && k != "status" {
+				t.Errorf("projection leaked field %q", k)
+			}
+		}
+		if _, ok := fields["title"]; !ok {
+			t.Errorf("title missing from projected fields")
+		}
+		if _, ok := fields["status"]; !ok {
+			t.Errorf("status missing from projected fields")
+		}
+		// details + severity must be dropped.
+		if _, ok := fields["details"]; ok {
+			t.Errorf("details should be absent from projection")
+		}
+		if _, ok := fields["severity"]; ok {
+			t.Errorf("severity should be absent from projection")
+		}
+		// Top-level id always present.
+		if item["id"] == nil {
+			t.Error("top-level id missing")
+		}
+	}
+}
+
+func TestCollectionItemsFilterExact(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"status": "closed"},
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	items := res["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 closed item, got %d", len(items))
+	}
+	if items[0]["fields"].(map[string]any)["status"] != "closed" {
+		t.Error("filtered item does not have status=closed")
+	}
+}
+
+func TestCollectionItemsFilterAnyOf(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"severity": []string{"P1", "P2"}},
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	items := res["items"].([]map[string]any)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 P1/P2 items, got %d", len(items))
+	}
+	for _, item := range items {
+		sev := item["fields"].(map[string]any)["severity"]
+		if sev != "P1" && sev != "P2" {
+			t.Errorf("unexpected severity %v in filtered result", sev)
+		}
+	}
+}
+
+func TestCollectionItemsFilterAndProjection(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"status": "open", "severity": "P1"},
+		Fields: []string{"title"},
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	items := res["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 open+P1 items, got %d", len(items))
+	}
+	for _, item := range items {
+		fields := item["fields"].(map[string]any)
+		if len(fields) != 1 {
+			t.Errorf("expected 1 projected field, got %d (%v)", len(fields), fields)
+		}
+		if _, ok := fields["title"]; !ok {
+			t.Error("title missing")
+		}
+	}
+}
+
+func TestCollectionItemsFilterUnknownFieldReturnsEmpty(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"status": "nonexistent"},
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	if n := res["count"].(int); n != 0 {
+		t.Errorf("expected 0 items for unmatched filter value, got %d", n)
+	}
+}
+
+func TestCollectionItemsFilterInvalidValueTypeRejected(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Filter: map[string]any{"severity": 42}, // not string, not []string
+	})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for numeric filter value")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("expected input_error, got %s", apiErr.Code)
+	}
+}
+
+func TestCollectionItemsHTTPProjectionAndFilter(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	collID := collectionItemsFixture(t, srv)
+
+	// fields=title,status  (comma-separated) + filter.status=open&filter.severity=P1,P2
+	path := fmt.Sprintf("/v1/collections/%s/items?fields=title,status&filter.status=open&filter.severity=P1,P2", collID)
+	w := doRequest(t, srv, "GET", path, nil)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	env := parseResponse(t, w)
+	data := env["data"].(map[string]any)
+	items := data["items"].([]any)
+	// 3 open items, of which 2 are P1 and 1 is P2 -> all 3 match "open AND P1|P2".
+	if len(items) != 3 {
+		t.Fatalf("expected 3 matching items, got %d: %v", len(items), items)
+	}
+	for _, it := range items {
+		fields := it.(map[string]any)["fields"].(map[string]any)
+		for k := range fields {
+			if k != "title" && k != "status" {
+				t.Errorf("projection leaked field %q via HTTP", k)
+			}
+		}
+		if fields["status"] != "open" {
+			t.Errorf("filter failed: status=%v", fields["status"])
+		}
+	}
+}
+
+func TestCollectionItemsSortOnExcludedField(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ctx := context.Background()
+	collID := collectionItemsFixture(t, srv)
+
+	// Sort by severity but only project title -- sort still works,
+	// severity doesn't bleed into the projected output.
+	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+		Fields: []string{"title"},
+		Sort:   "severity",
+		Order:  "asc",
+	})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
+	}
+	items := res["items"].([]map[string]any)
+	if len(items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(items))
+	}
+	// severity should NOT be present in any projected fields.
+	for _, item := range items {
+		fields := item["fields"].(map[string]any)
+		if _, present := fields["severity"]; present {
+			t.Error("severity should not leak into projection after sort-on-excluded-field")
+		}
 	}
 }
 

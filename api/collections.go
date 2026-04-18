@@ -329,13 +329,38 @@ type CollectionItemsRequest struct {
 	Sort           string `json:"sort,omitempty"`
 	Order          string `json:"order,omitempty"`
 	IncludeRetired bool   `json:"include_retired,omitempty"`
+
+	// Fields is a whitelist of schema field names to include in each
+	// item's `fields` sub-map. Empty/nil means return every field
+	// (today's behavior). `id`, `created_at`, and `needs_migration`
+	// are always included at the top level regardless of this list.
+	Fields []string `json:"fields,omitempty"`
+
+	// Filter is a schema-field -> expected-value(s) map that keeps an
+	// item only when every listed field matches. Values may be a
+	// single string for exact match, or a []string / []any of strings
+	// for "any-of" match (OR within a field, AND across fields).
+	// Unknown field names match nothing (empty result). Filtering
+	// preserves the exhaustive-retrieval contract because matches are
+	// exact, not ranked.
+	Filter map[string]any `json:"filter,omitempty"`
 }
 
 // CollectionItems is deliberately unpaginated -- exhaustive retrieval is the
 // contract that distinguishes Collections from Memory. If a collection
 // grows large enough to need pagination, it's a signal to split it.
+// Filter narrows the result by exact schema-field match (preserving the
+// exhaustive contract). Fields projects the per-item `fields` sub-map
+// down to a whitelist -- both are there so agents can audit large
+// collections without dragging the full-fidelity `details` payload.
 func (a *API) CollectionItems(ctx context.Context, collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
 	_ = ctx
+	filterMatchers, filterErr := buildFilterMatchers(req.Filter)
+	if filterErr != nil {
+		return nil, ErrInvalid(filterErr.Error())
+	}
+	projection := normalizeProjection(req.Fields)
+
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 
@@ -359,45 +384,98 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 
 	edges := a.collectionItemEdges(collectionID)
 	items := make([]map[string]any, 0, len(edges))
+	// Track migration progress over the full (pre-filter) set so
+	// done/remaining counts reflect the collection, not whatever
+	// subset the caller filtered to.
+	var migDone, migRemaining int
 
 	for _, e := range edges {
 		n, ok := a.engine.Graph().GetNode(e.SourceID)
 		if !ok {
 			continue
 		}
+		fullFields := extractFields(n)
+
+		// Migration accounting on the full set.
+		var migMissing []string
+		if migration != nil {
+			if migFields, ok := migration["fields"].([]string); ok {
+				for _, f := range migFields {
+					if _, has := n.Properties["field."+f]; !has {
+						migMissing = append(migMissing, f)
+					}
+				}
+				if len(migMissing) > 0 {
+					migRemaining++
+				} else {
+					migDone++
+				}
+			}
+		}
+
+		// Filter check runs against the full field map, not the
+		// projection. Filtering on a field the caller didn't project
+		// must still work.
+		if len(filterMatchers) > 0 && !matchesFilter(fullFields, filterMatchers) {
+			continue
+		}
+
+		projectedFields := fullFields
+		if projection != nil {
+			projectedFields = make(map[string]any, len(projection))
+			for name := range projection {
+				if v, ok := fullFields[name]; ok {
+					projectedFields[name] = v
+				}
+			}
+		}
+
 		item := map[string]any{
 			"id":     e.SourceID,
-			"fields": extractFields(n),
+			"fields": projectedFields,
 		}
 		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
 			item["created_at"] = ca.Format(time.RFC3339)
 		}
-
-		// Annotate pre-migration items. The "fields" entry is always
-		// set by the caller above, but guard the assertion anyway so
-		// upstream refactors can't turn it into a panic.
-		if migration != nil {
-			if migFields, ok := migration["fields"].([]string); ok {
-				var missing []string
-				for _, f := range migFields {
-					if _, has := n.Properties["field."+f]; !has {
-						missing = append(missing, f)
-					}
-				}
-				if len(missing) > 0 {
-					item["needs_migration"] = missing
-				}
-			}
+		if len(migMissing) > 0 {
+			item["needs_migration"] = migMissing
 		}
 
 		items = append(items, item)
 	}
 
-	// Sort items.
+	// Sort items. Sort uses the full field map where needed -- the
+	// projection above may have dropped the sort key, but we stashed
+	// the value on the item when assembling it. For non-projected
+	// fields we re-extract from the node in the sort comparator, but
+	// that would require re-locking / re-fetching; simpler: keep the
+	// sort key in the item if it isn't in the projection.
 	sortField := req.Sort
 	descending := req.Order == "desc"
 	if sortField == "" {
 		sortField = "created_at"
+	}
+	if sortField != "created_at" && projection != nil {
+		if _, projected := projection[sortField]; !projected {
+			// The caller excluded the sort field from projection; add
+			// it back onto the stashed fields just for ordering. This
+			// keeps sort semantics consistent with non-projected calls.
+			for _, item := range items {
+				f, _ := item["fields"].(map[string]any)
+				if f == nil {
+					f = map[string]any{}
+					item["fields"] = f
+				}
+				if _, present := f[sortField]; present {
+					continue
+				}
+				if n, ok := a.engine.Graph().GetNode(item["id"].(string)); ok {
+					if v, ok := extractFields(n)[sortField]; ok {
+						f[sortField] = v
+					}
+				}
+			}
+		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		var vi, vj any
@@ -405,10 +483,6 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 			vi = items[i]["created_at"]
 			vj = items[j]["created_at"]
 		} else {
-			// Items are built above with a "fields" entry; the checked
-			// assertion is defensive against future refactors that
-			// could drop the entry for certain rows. A missing entry
-			// sorts as nil.
 			if fi, ok := items[i]["fields"].(map[string]any); ok {
 				vi = fi[sortField]
 			}
@@ -422,6 +496,17 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 		}
 		return less
 	})
+	// Strip the sort-only field re-adds so the wire output actually
+	// honors the projection whitelist.
+	if sortField != "created_at" && projection != nil {
+		if _, projected := projection[sortField]; !projected {
+			for _, item := range items {
+				if f, ok := item["fields"].(map[string]any); ok {
+					delete(f, sortField)
+				}
+			}
+		}
+	}
 
 	result := map[string]any{
 		"collection_id": collectionID,
@@ -429,18 +514,91 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 		"count":         len(items),
 	}
 	if migration != nil {
-		done := 0
-		for _, item := range items {
-			if item["needs_migration"] == nil {
-				done++
-			}
-		}
-		migration["done"] = done
-		migration["remaining"] = len(items) - done
+		migration["done"] = migDone
+		migration["remaining"] = migRemaining
 		result["migration"] = migration
 	}
 
 	return result, nil
+}
+
+// buildFilterMatchers validates the filter request and returns a map of
+// field-name -> allowed-value-set. Each item passes when, for every
+// matcher, its field value is contained in the allowed set. Values are
+// compared as strings (most schema fields are strings or enums; the
+// filter here is deliberately coarse, not a query DSL).
+func buildFilterMatchers(filter map[string]any) (map[string]map[string]struct{}, error) {
+	if len(filter) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]map[string]struct{}, len(filter))
+	for key, raw := range filter {
+		if !fieldNameRe.MatchString(key) {
+			return nil, fmt.Errorf("filter key %q contains invalid characters", key)
+		}
+		allowed := make(map[string]struct{})
+		switch v := raw.(type) {
+		case string:
+			allowed[v] = struct{}{}
+		case []string:
+			for _, s := range v {
+				allowed[s] = struct{}{}
+			}
+		case []any:
+			for i, elem := range v {
+				s, ok := elem.(string)
+				if !ok {
+					return nil, fmt.Errorf("filter.%s[%d]: expected string, got %T", key, i, elem)
+				}
+				allowed[s] = struct{}{}
+			}
+		default:
+			return nil, fmt.Errorf("filter.%s: expected string or []string, got %T", key, raw)
+		}
+		if len(allowed) == 0 {
+			return nil, fmt.Errorf("filter.%s: at least one value required", key)
+		}
+		out[key] = allowed
+	}
+	return out, nil
+}
+
+// matchesFilter returns true when every matcher hits a value in the
+// item's fields. Values are coerced to their canonical string form via
+// fmt.Sprint so numeric and bool schema fields still compare correctly
+// against stringly-typed filter values.
+func matchesFilter(fields map[string]any, matchers map[string]map[string]struct{}) bool {
+	for key, allowed := range matchers {
+		val, ok := fields[key]
+		if !ok {
+			return false
+		}
+		if _, hit := allowed[fmt.Sprint(val)]; !hit {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeProjection returns a set (map-with-empty-struct values) of
+// schema field names the caller asked for, or nil when projection is
+// disabled. An empty slice is treated as "no projection" so a
+// forgotten query string doesn't silently strip everything.
+func normalizeProjection(fields []string) map[string]struct{} {
+	if len(fields) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		if f == "" {
+			continue
+		}
+		out[f] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type CollectionAddRequest struct {
