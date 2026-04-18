@@ -72,9 +72,10 @@ func ExtractObservations(content string, maxCap int) []Observation {
 	return obs
 }
 
-// MaxObservations returns the observation count for a given content
-// length, following the D23 sliding scale.
-func MaxObservations(contentLen, maxCap int) int {
+// maxObservations returns the observation count for a given content
+// length, following the D23 sliding scale. Internal -- exported only
+// to test access.
+func maxObservations(contentLen, maxCap int) int {
 	if contentLen < 500 {
 		return 0
 	}

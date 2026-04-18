@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -81,10 +80,3 @@ func (s *Server) serviceGuide(topic string) (map[string]any, *serviceError) {
 	}, nil
 }
 
-// guideTopicList returns sorted list of available topics.
-func guideTopicList() []string {
-	topics := make([]string, len(validGuideTopics))
-	copy(topics, validGuideTopics)
-	sort.Strings(topics)
-	return topics
-}

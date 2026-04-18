@@ -232,7 +232,6 @@ func (r *Runner) cycle(ctx context.Context) {
 	// Per-cycle timeout to prevent hangs.
 	cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	_ = cycleCtx // used by autonomous below
 
 	// 1. Always run deterministic curation.
 	result := RunDeterministic(r.engine, r.cfg, r.logger)

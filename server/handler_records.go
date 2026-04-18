@@ -210,17 +210,6 @@ func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error 
 	return nil
 }
 
-func joinStrings(ss []string) string {
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += " "
-		}
-		result += s
-	}
-	return result
-}
-
 func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	includeContent := r.URL.Query().Get("include_content") != "false"

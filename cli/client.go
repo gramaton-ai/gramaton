@@ -154,7 +154,7 @@ func serverPatch(path string, body any) (*server.ResponseEnvelope, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPatch, base+path, bytesReader(reqBody))
+	req, err := http.NewRequest(http.MethodPatch, base+path, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -214,7 +214,3 @@ func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
 	return &envelope, nil
 }
 
-// bytesReader creates an io.Reader from a byte slice.
-func bytesReader(b []byte) io.Reader {
-	return bytes.NewReader(b)
-}

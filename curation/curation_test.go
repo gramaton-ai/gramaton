@@ -1,6 +1,7 @@
 package curation
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -611,7 +612,7 @@ func TestParseClassificationKeywordLimits(t *testing.T) {
 	for i := range parts {
 		parts[i] = `"keyword"`
 	}
-	jsonStr := `{"keywords":[` + joinStrings(parts) + `]}`
+	jsonStr := `{"keywords":[` + strings.Join(parts, ",") + `]}`
 
 	result, err := parseClassification(jsonStr)
 	if err != nil {
@@ -620,17 +621,6 @@ func TestParseClassificationKeywordLimits(t *testing.T) {
 	if len(result.Keywords) > 100 {
 		t.Fatalf("keywords should be capped at 100, got %d", len(result.Keywords))
 	}
-}
-
-func joinStrings(s []string) string {
-	result := ""
-	for i, v := range s {
-		if i > 0 {
-			result += ","
-		}
-		result += v
-	}
-	return result
 }
 
 func TestParseClassificationSummaryTruncation(t *testing.T) {

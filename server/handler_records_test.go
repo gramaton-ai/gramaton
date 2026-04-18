@@ -8,24 +8,6 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
-func TestJoinStrings(t *testing.T) {
-	tests := []struct {
-		input  []string
-		expect string
-	}{
-		{nil, ""},
-		{[]string{}, ""},
-		{[]string{"a"}, "a"},
-		{[]string{"a", "b", "c"}, "a b c"},
-	}
-	for _, tt := range tests {
-		got := joinStrings(tt.input)
-		if got != tt.expect {
-			t.Errorf("joinStrings(%v) = %q, want %q", tt.input, got, tt.expect)
-		}
-	}
-}
-
 func TestInspectMetadataSummary(t *testing.T) {
 	props := graph.Properties{
 		"temporality":     graph.StringProperty("durable"),

@@ -26,9 +26,9 @@ func TestExtractObservationsSlidingScale(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := MaxObservations(tt.contentLen, 20)
+		got := maxObservations(tt.contentLen, 20)
 		if got != tt.wantMax {
-			t.Errorf("MaxObservations(%d, 20) = %d, want %d", tt.contentLen, got, tt.wantMax)
+			t.Errorf("maxObservations(%d, 20) = %d, want %d", tt.contentLen, got, tt.wantMax)
 		}
 	}
 }
@@ -172,8 +172,8 @@ func TestSplitSentences(t *testing.T) {
 
 func TestMaxObservationsZeroCap(t *testing.T) {
 	// Zero cap should default to 20.
-	got := MaxObservations(50000, 0)
+	got := maxObservations(50000, 0)
 	if got != 20 {
-		t.Fatalf("MaxObservations with zero cap: got %d, want 20", got)
+		t.Fatalf("maxObservations with zero cap: got %d, want 20", got)
 	}
 }

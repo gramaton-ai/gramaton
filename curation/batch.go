@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -333,8 +332,3 @@ func extractAnthropicClient(p llm.Provider) (*anthropic.Client, bool) {
 	return nil, false
 }
 
-// ensureLogger is defined in autonomous.go but we re-declare for
-// compilation safety. This is a no-op if autonomous.go is present.
-func init() {
-	_ = strings.TrimSpace // avoid unused import warning
-}
