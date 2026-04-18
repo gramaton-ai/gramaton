@@ -3,10 +3,36 @@ package api
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"sync"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
+
+// clientSessionIDRe bounds client_session_id to characters safe for
+// filesystem paths. Rejects path-separator segments (`.` `..`, `/`, `\`)
+// and every other shell/glob metacharacter. Keeps ULID/UUID and hyphen/
+// underscore-delimited identifiers while denying traversal primitives.
+var clientSessionIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// MaxClientSessionIDLen caps how long a client_session_id can be. Keeps
+// pathological callers from blowing up hook-state file paths.
+const MaxClientSessionIDLen = 256
+
+// validateClientSessionID enforces the character set + length cap used
+// anywhere the ID flows into a filesystem path (hook-state flags, etc.).
+func validateClientSessionID(id string) error {
+	if id == "" {
+		return fmt.Errorf("client_session_id is required")
+	}
+	if len(id) > MaxClientSessionIDLen {
+		return fmt.Errorf("client_session_id exceeds %d characters", MaxClientSessionIDLen)
+	}
+	if !clientSessionIDRe.MatchString(id) {
+		return fmt.Errorf("client_session_id may only contain letters, digits, hyphen, and underscore")
+	}
+	return nil
+}
 
 // Per-field length + cardinality limits used by api method validation.
 // Keep these in sync with anything the HTTP layer enforces separately

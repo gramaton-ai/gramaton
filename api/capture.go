@@ -98,7 +98,7 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 	// Pre-embed outside the lock. Observation extraction (D18/D23)
 	// happens asynchronously in the curation cycle, not here.
 	embedStart := time.Now()
-	preEmbedded := a.preEmbedContent(req)
+	preEmbedded := a.preEmbedContent(ctx, req)
 	embedDur := time.Since(embedStart)
 
 	a.engine.Lock()
@@ -235,6 +235,18 @@ func validateCaptureRequest(r CaptureRequest) error {
 	} {
 		if len(pair.val) > MaxContextFieldLen {
 			return fmt.Errorf("%s exceeds maximum length of %d", pair.name, MaxContextFieldLen)
+		}
+	}
+	for _, pair := range []struct{ name, val string }{
+		{"valid_from", r.ValidFrom},
+		{"valid_until", r.ValidUntil},
+		{"asserted_as_of", r.AssertedAsOf},
+	} {
+		if pair.val == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, pair.val); err != nil {
+			return fmt.Errorf("%s is not valid RFC3339", pair.name)
 		}
 	}
 	return nil

@@ -50,9 +50,14 @@ type SearchRequest struct {
 // SearchResponse carries ranked results plus aggregates (facets,
 // refinement suggestions).
 type SearchResponse struct {
-	Results     []search.Result      `json:"results"`
-	Facets      search.Facets        `json:"facets,omitempty"`
-	Suggestions *search.Suggestions  `json:"suggestions,omitempty"`
+	Results     []search.Result     `json:"results"`
+	Facets      search.Facets       `json:"facets,omitempty"`
+	Suggestions *search.Suggestions `json:"suggestions,omitempty"`
+	// Warnings surfaces non-fatal degradations -- e.g. the query
+	// embedder failed so the request fell back to BM25-only. Callers
+	// can decide whether to surface them to the user. Empty on the
+	// happy path.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // SearchDescription is the MCP tool description for gramaton_search.
@@ -184,9 +189,18 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	a.log.Debug("search: embedding query", "component", "search", "text_len", len(q.Text))
 	embedStart := time.Now()
 	var queryVec []float32
+	var warnings []string
 	if q.Text != "" && a.engine.Embedder() != nil {
 		vecs, err := a.engine.Embedder().Embed(ctx, []string{q.Text})
-		if err == nil && len(vecs) > 0 {
+		switch {
+		case err != nil:
+			// Degrade gracefully to BM25-only instead of failing the
+			// whole search. Surface the degradation so callers know
+			// vector scoring was skipped.
+			a.log.Warn("search: query embed failed, falling back to BM25",
+				"component", "search", "err", err)
+			warnings = append(warnings, "query embedding failed; results ranked by BM25 only")
+		case len(vecs) > 0:
 			queryVec = vecs[0]
 		}
 	}
@@ -244,8 +258,9 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 
 	resp := SearchResponse{
-		Results: results,
-		Facets:  search.ComputeFacets(results),
+		Results:  results,
+		Facets:   search.ComputeFacets(results),
+		Warnings: warnings,
 	}
 
 	a.engine.RLock()

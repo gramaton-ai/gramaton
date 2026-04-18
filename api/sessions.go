@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,12 +217,10 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[st
 // source="startup": fresh session, no chaining
 // source="resume": new session chained to latest with same client_session_id
 // source="" (agent call): return existing if found, create fresh otherwise
-func (a *API) SessionStart(clientSessionID string, source string) (map[string]any, *APIError) {
-	if clientSessionID == "" {
-		return nil, ErrMissing("client_session_id is required")
-	}
-	if len(clientSessionID) > 256 {
-		return nil, ErrInvalid("client_session_id exceeds 256 characters")
+func (a *API) SessionStart(ctx context.Context, clientSessionID string, source string) (map[string]any, *APIError) {
+	_ = ctx // reserved for future engine calls that accept cancellation
+	if err := validateClientSessionID(clientSessionID); err != nil {
+		return nil, ErrInvalid(err.Error())
 	}
 
 	a.engine.Lock()
@@ -265,7 +262,8 @@ func (a *API) SessionStart(clientSessionID string, source string) (map[string]an
 	}
 
 	if _, err := a.engine.Save("session_create"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("session save failed", "component", "session", "err", err)
+		return nil, ErrInternal("failed to save session")
 	}
 
 	a.log.Info("session created", "component", "session",
@@ -281,7 +279,8 @@ func (a *API) SessionStart(clientSessionID string, source string) (map[string]an
 }
 
 // SessionGet returns the full state of a Session.
-func (a *API) SessionGet(sessionID string) (map[string]any, *APIError) {
+func (a *API) SessionGet(ctx context.Context, sessionID string) (map[string]any, *APIError) {
+	_ = ctx
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -301,7 +300,8 @@ func (a *API) SessionGet(sessionID string) (map[string]any, *APIError) {
 }
 
 // sessionAddTopic adds a new Topic to a Session.
-func (a *API) sessionAddTopic(sessionID string, name string, branchedFrom string) (map[string]any, *APIError) {
+func (a *API) sessionAddTopic(ctx context.Context, sessionID string, name string, branchedFrom string) (map[string]any, *APIError) {
+	_ = ctx
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -356,11 +356,15 @@ func (a *API) sessionAddTopic(sessionID string, name string, branchedFrom string
 
 	// Create structural edge: topic -> session.
 	if _, err := a.engine.Graph().AddEdge(topicNode.ID, sessionID, "topic_of", 1.0, nil); err != nil {
-		return nil, ErrInternal(fmt.Sprintf("failed to create topic_of edge: %v", err))
+		a.log.Warn("topic_of edge create failed", "component", "session",
+			"session_id", sessionID, "topic_id", topicNode.ID, "err", err)
+		return nil, ErrInternal("failed to link topic to session")
 	}
 
 	if _, err := a.engine.Save("session_add_topic"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("session save failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to save topic")
 	}
 
 	a.log.Info("topic created", "component", "session", "session_id", sessionID,
@@ -379,7 +383,8 @@ func (a *API) sessionAddTopic(sessionID string, name string, branchedFrom string
 }
 
 // sessionAddSegment adds a Segment to a Topic within a Session.
-func (a *API) sessionAddSegment(sessionID string, topicID string, content string) (map[string]any, *APIError) {
+func (a *API) sessionAddSegment(ctx context.Context, sessionID string, topicID string, content string) (map[string]any, *APIError) {
+	_ = ctx
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -388,6 +393,9 @@ func (a *API) sessionAddSegment(sessionID string, topicID string, content string
 	}
 	if strings.TrimSpace(content) == "" {
 		return nil, ErrMissing("segment content is required")
+	}
+	if maxContent := a.engine.Config().Limits.MaxContentLength; maxContent > 0 && len(content) > maxContent {
+		return nil, ErrInvalid("content exceeds maximum length")
 	}
 
 	a.engine.Lock()
@@ -432,11 +440,15 @@ func (a *API) sessionAddSegment(sessionID string, topicID string, content string
 
 	// Create structural edge: segment -> topic.
 	if _, err := a.engine.Graph().AddEdge(segNode.ID, topicID, "segment_of", 1.0, nil); err != nil {
-		return nil, ErrInternal(fmt.Sprintf("failed to create segment_of edge: %v", err))
+		a.log.Warn("segment_of edge create failed", "component", "session",
+			"session_id", sessionID, "topic_id", topicID, "err", err)
+		return nil, ErrInternal("failed to link segment to topic")
 	}
 
 	if _, err := a.engine.Save("session_add_segment"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("session save failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to save segment")
 	}
 
 	dur := time.Since(start)
@@ -454,7 +466,8 @@ func (a *API) sessionAddSegment(sessionID string, topicID string, content string
 
 // sessionUpdateSegmentCapture updates a Segment's captured_as and captured_at
 // fields. This is the only allowed mutation on a Segment (append-only).
-func (a *API) sessionUpdateSegmentCapture(segmentID string, capturedAs string) (map[string]any, *APIError) {
+func (a *API) sessionUpdateSegmentCapture(ctx context.Context, segmentID string, capturedAs string) (map[string]any, *APIError) {
+	_ = ctx
 	if segmentID == "" {
 		return nil, ErrMissing("segment_id is required")
 	}
@@ -479,7 +492,9 @@ func (a *API) sessionUpdateSegmentCapture(segmentID string, capturedAs string) (
 	a.engine.SetProp(segmentID, "captured_at", graph.TimestampProperty(now))
 
 	if _, err := a.engine.Save("session_segment_captured"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("session save failed", "component", "session",
+			"segment_id", segmentID, "err", err)
+		return nil, ErrInternal("failed to save segment")
 	}
 
 	a.log.Info("segment capture status updated", "component", "session",
@@ -611,10 +626,18 @@ func (a *API) preparedSweeper(ctx context.Context) {
 }
 
 // StartPreparedSweeper launches the background sweeper goroutine and
-// stores its cancel function for shutdown.
+// stores its cancel function for shutdown. Idempotent -- if a sweeper
+// is already running, return without starting a second one. A server
+// with multiple entry points (Serve, StartHTTP) could otherwise leak
+// goroutines with every additional start.
 func (a *API) StartPreparedSweeper() {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.preparedMu.Lock()
+	if a.preparedSweepCancel != nil {
+		a.preparedMu.Unlock()
+		cancel()
+		return
+	}
 	a.preparedSweepCancel = cancel
 	a.preparedMu.Unlock()
 	go a.preparedSweeper(ctx)
@@ -626,7 +649,17 @@ func (a *API) StartPreparedSweeper() {
 // otherwise. Single-shot: the flag is deleted whether fresh or stale so the
 // nudge fires at most once per compaction.
 func (a *API) consumeCompactionFlag(clientSessionID string) time.Time {
-	if a.configDir == "" || clientSessionID == "" {
+	if a.configDir == "" {
+		return time.Time{}
+	}
+	// Defense in depth: only reached via SessionPrepare -> session lookup,
+	// so clientSessionID is whatever was stored when the session was
+	// created. SessionStart validates the character set, but older
+	// sessions may predate that check -- refuse any ID that cannot be
+	// safely joined into a filesystem path. Rejecting here also means a
+	// manual call path that skipped SessionStart can never reach os.Remove
+	// with attacker input.
+	if validateClientSessionID(clientSessionID) != nil {
 		return time.Time{}
 	}
 	flagPath := filepath.Join(a.configDir, "hook-state", clientSessionID+".compacted")
@@ -666,7 +699,11 @@ type precompactUncapturedNudge struct {
 // Returns the nudge if fresh (within compactionFlagTTL), nil otherwise.
 // Single-shot: the flag is deleted whether fresh or stale.
 func (a *API) consumePrecompactUncapturedFlag(clientSessionID string) *precompactUncapturedNudge {
-	if a.configDir == "" || clientSessionID == "" {
+	if a.configDir == "" {
+		return nil
+	}
+	// See consumeCompactionFlag for the rationale.
+	if validateClientSessionID(clientSessionID) != nil {
 		return nil
 	}
 	flagPath := filepath.Join(a.configDir, "hook-state", clientSessionID+".precompact-uncaptured")
@@ -698,20 +735,25 @@ func (a *API) consumePrecompactUncapturedFlag(clientSessionID string) *precompac
 
 // SessionPrepare returns extraction instructions and current session state.
 // Sets an in-memory prepared flag so commit can validate the two-phase flow.
-func (a *API) SessionPrepare(sessionID string) (map[string]any, *APIError) {
+func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]any, *APIError) {
+	_ = ctx
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
 
+	// Snapshot everything we need from the engine under RLock, then drop
+	// the lock before any disk I/O (hook-state flag files, extraction
+	// prompt). Holding the engine lock across filesystem work throttles
+	// every other request.
 	a.engine.RLock()
-	defer a.engine.RUnlock()
-
 	session, svcErr := a.isSession(sessionID)
 	if svcErr != nil {
+		a.engine.RUnlock()
 		return nil, svcErr
 	}
-
 	sessionState := a.buildSessionResponse(sessionID, session)
+	clientSessionID, _ := session.Properties.GetString("client_session_id")
+	a.engine.RUnlock()
 
 	// Set prepared flag (protected by mu since preparedSessions is not engine-locked).
 	// Persist to disk so a restart between prepare and commit doesn't
@@ -747,7 +789,6 @@ func (a *API) SessionPrepare(sessionID string) (map[string]any, *APIError) {
 	// after context compaction; the PreCompact nudge fires when uncaptured
 	// segments existed at the moment of the last compaction. They are
 	// related but distinct -- both can be present and stack.
-	clientSessionID, _ := session.Properties.GetString("client_session_id")
 	var notes []string
 
 	if compactedAt := a.consumeCompactionFlag(clientSessionID); !compactedAt.IsZero() {
@@ -825,7 +866,7 @@ func (c CommitSegment) shouldPromote() bool {
 // SessionCommit appends extracted segments to the session.
 // Validates that prepare was called first. Creates new topics as needed.
 // Phase 2: stores in Session only (no Memory records, no embedding).
-func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[string]any, *APIError) {
+func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []CommitSegment) (map[string]any, *APIError) {
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -835,12 +876,38 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 
 	// Validate all segments before consuming the prepared flag so that a
 	// malformed commit doesn't force the agent to re-prepare.
+	maxContent := a.engine.Config().Limits.MaxContentLength
+	maxSummary := MaxSummaryShort()
 	for i, seg := range segments {
 		if strings.TrimSpace(seg.Content) == "" {
 			return nil, ErrInvalid(fmt.Sprintf("segment %d: content is required", i))
 		}
 		if strings.TrimSpace(seg.TopicName) == "" {
 			return nil, ErrInvalid(fmt.Sprintf("segment %d: topic name is required", i))
+		}
+		if maxContent > 0 && len(seg.Content) > maxContent {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: content exceeds maximum length", i))
+		}
+		if len(seg.TopicName) > MaxTopicLength {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
+		}
+		if len(seg.SummaryShort) > maxSummary {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: summary_short exceeds maximum length of %d", i, maxSummary))
+		}
+		if err := validateFloat64Range("confidence", seg.Confidence, 0.0, 1.0); err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+		}
+		if err := validateEnum("temporality", seg.Temporality, ValidTemporalities); err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+		}
+		if err := validateEnum("knowledge_type", seg.KnowledgeType, ValidKnowledgeTypes); err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+		}
+		if err := validateEnum("epistemic_status", seg.EpistemicStatus, ValidEpistemicStatuses); err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+		}
+		if err := validateKeywords(seg.Keywords); err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 	}
 
@@ -855,11 +922,7 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 
 	if !prepared {
 		a.log.Warn("session commit rejected: prepare not called", "component", "session", "session_id", sessionID)
-		return nil, &APIError{
-			HTTPStatus: 400,
-			Code:       "prepare_required",
-			Message:    "You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.",
-		}
+		return nil, ErrPrepareRequired("You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.")
 	}
 
 	start := time.Now()
@@ -885,7 +948,7 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 			promotedTexts = append(promotedTexts, text)
 		}
 		if len(promotedTexts) > 0 {
-			vecs, err := a.engine.Embedder().Embed(context.Background(), promotedTexts)
+			vecs, err := a.engine.Embedder().Embed(ctx, promotedTexts)
 			if err != nil {
 				a.log.Warn("session commit: embedding failed, continuing without vectors",
 					"component", "session", "session_id", sessionID, "err", err)
@@ -937,7 +1000,9 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 			a.engine.IndexNode(topicNode.ID, "", nil)
 
 			if _, err := a.engine.Graph().AddEdge(topicNode.ID, sessionID, "topic_of", 1.0, nil); err != nil {
-				return nil, ErrInternal(fmt.Sprintf("failed to create topic_of edge: %v", err))
+				a.log.Warn("topic_of edge create failed", "component", "session",
+					"session_id", sessionID, "topic_id", topicNode.ID, "err", err)
+				return nil, ErrInternal("failed to link topic to session")
 			}
 			topicID = topicNode.ID
 			topicMap[seg.TopicName] = topicID
@@ -959,7 +1024,9 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 		a.engine.IndexNode(segNode.ID, seg.Content, nil)
 
 		if _, err := a.engine.Graph().AddEdge(segNode.ID, topicID, "segment_of", 1.0, nil); err != nil {
-			return nil, ErrInternal(fmt.Sprintf("failed to create segment_of edge: %v", err))
+			a.log.Warn("segment_of edge create failed", "component", "session",
+				"session_id", sessionID, "topic_id", topicID, "err", err)
+			return nil, ErrInternal("failed to link segment to topic")
 		}
 		segmentsAdded++
 
@@ -1074,7 +1141,9 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 	}
 
 	if _, err := a.engine.Save("session_commit"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("session commit save failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to save session commit")
 	}
 
 	dur := time.Since(start)
@@ -1101,7 +1170,8 @@ func (a *API) SessionCommit(sessionID string, segments []CommitSegment) (map[str
 // SessionArchive compresses a conversation transcript and stores it
 // as a gzip file referenced from the Session node. The archive is NOT indexed
 // or searchable -- it's a break-glass backup of the raw conversation.
-func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]any, *APIError) {
+func (a *API) SessionArchive(ctx context.Context, sessionID string, sourcePath string) (map[string]any, *APIError) {
+	_ = ctx
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -1115,19 +1185,17 @@ func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]an
 	sourceData, err := os.ReadFile(sourcePath)
 	if err != nil {
 		a.log.Warn("archive: failed to read source", "component", "session",
-			"session_id", sessionID, "path", sourcePath, "err", err)
-		return nil, ErrInvalid(fmt.Sprintf("cannot read source file: %v", err))
+			"session_id", sessionID, "err", err)
+		return nil, ErrInvalid("cannot read source file")
 	}
 	originalSize := len(sourceData)
 
 	// Determine archive directory.
 	archiveDir := filepath.Join(a.configDir, "archives")
 	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-		a.log.Warn("archive: failed to create directory", "component", "session",
-			"path", archiveDir, "err", err)
+		a.log.Warn("archive: failed to create directory", "component", "session", "err", err)
 		return nil, ErrInternal("failed to create archive directory")
 	}
-	a.log.Debug("archive directory ready", "component", "session", "path", archiveDir)
 
 	// Write compressed archive via atomic temp file.
 	archiveName := fmt.Sprintf("%s.gz", sessionID)
@@ -1136,7 +1204,9 @@ func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]an
 
 	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
-		return nil, ErrInternal(fmt.Sprintf("failed to create temp file: %v", err))
+		a.log.Warn("archive: temp file create failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to create archive temp file")
 	}
 
 	gzWriter := gzip.NewWriter(tmpFile)
@@ -1144,22 +1214,30 @@ func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]an
 		gzWriter.Close()
 		tmpFile.Close()
 		os.Remove(tmpPath)
-		return nil, ErrInternal(fmt.Sprintf("gzip write failed: %v", err))
+		a.log.Warn("archive: gzip write failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to compress archive")
 	}
 	if err := gzWriter.Close(); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
-		return nil, ErrInternal(fmt.Sprintf("gzip close failed: %v", err))
+		a.log.Warn("archive: gzip close failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to finalize compression")
 	}
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpPath)
-		return nil, ErrInternal(fmt.Sprintf("file close failed: %v", err))
+		a.log.Warn("archive: file close failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to close archive file")
 	}
 
 	// Atomic rename.
 	if err := os.Rename(tmpPath, archivePath); err != nil {
 		os.Remove(tmpPath)
-		return nil, ErrInternal(fmt.Sprintf("rename failed: %v", err))
+		a.log.Warn("archive: rename failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to rename archive")
 	}
 
 	// Get compressed size.
@@ -1184,7 +1262,9 @@ func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]an
 	a.engine.SetProp(sessionID, "archived_at", graph.TimestampProperty(now))
 
 	if _, err := a.engine.Save("session_archive"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("archive save failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return nil, ErrInternal("failed to save archive metadata")
 	}
 
 	dur := time.Since(start)
@@ -1203,53 +1283,3 @@ func (a *API) SessionArchive(sessionID string, sourcePath string) (map[string]an
 	}, nil
 }
 
-// SessionReadArchive decompresses and returns the raw archive content.
-func (a *API) SessionReadArchive(sessionID string) (map[string]any, *APIError) {
-	if sessionID == "" {
-		return nil, ErrMissing("session_id is required")
-	}
-
-	a.engine.RLock()
-	session, svcErr := a.isSession(sessionID)
-	if svcErr != nil {
-		a.engine.RUnlock()
-		return nil, svcErr
-	}
-	archivePath, ok := session.Properties.GetString("archive_path")
-	a.engine.RUnlock()
-
-	if !ok || archivePath == "" {
-		return nil, ErrNotFound("no archive for this session")
-	}
-
-	a.log.Info("archive read requested", "component", "session",
-		"session_id", sessionID, "archive_path", archivePath)
-
-	f, err := os.Open(archivePath)
-	if err != nil {
-		a.log.Warn("archive read failed", "component", "session",
-			"session_id", sessionID, "path", archivePath, "err", err)
-		return nil, ErrInternal(fmt.Sprintf("cannot open archive: %v", err))
-	}
-	defer f.Close()
-
-	gzReader, err := gzip.NewReader(f)
-	if err != nil {
-		a.log.Warn("archive decompress failed", "component", "session",
-			"session_id", sessionID, "path", archivePath, "err", err)
-		return nil, ErrInternal(fmt.Sprintf("corrupt archive: %v", err))
-	}
-	defer gzReader.Close()
-
-	data, err := io.ReadAll(gzReader)
-	if err != nil {
-		return nil, ErrInternal(fmt.Sprintf("read failed: %v", err))
-	}
-
-	return map[string]any{
-		"session_id":    sessionID,
-		"archive_path":  archivePath,
-		"content_size":  len(data),
-		"content":       string(data),
-	}, nil
-}

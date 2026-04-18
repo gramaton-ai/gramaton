@@ -41,7 +41,7 @@ type preEmbeddedVectors struct {
 // embed (no embedder configured, empty content). Errors travel in the
 // returned struct so the caller can still create the node and attach
 // a warning rather than failing the whole capture.
-func (a *API) preEmbedContent(r CaptureRequest) *preEmbeddedVectors {
+func (a *API) preEmbedContent(ctx context.Context, r CaptureRequest) *preEmbeddedVectors {
 	if a.engine.Embedder() == nil {
 		return nil
 	}
@@ -52,16 +52,16 @@ func (a *API) preEmbedContent(r CaptureRequest) *preEmbeddedVectors {
 	embedText := r.SummaryShort
 	if embedText == "" {
 		embedText = r.Content
-		cap := MaxSummaryShort()
-		if len(embedText) > cap {
-			embedText = embedText[:cap]
+		summaryCap := MaxSummaryShort()
+		if len(embedText) > summaryCap {
+			embedText = embedText[:summaryCap]
 		}
 	}
 	if embedText == "" {
 		return nil
 	}
 
-	vecs, err := a.engine.Embedder().Embed(context.Background(), []string{embedText})
+	vecs, err := a.engine.Embedder().Embed(ctx, []string{embedText})
 	if err != nil {
 		return &preEmbeddedVectors{err: err}
 	}
@@ -124,7 +124,12 @@ func (a *API) setMetaProps(nodeID string, meta map[string]any) {
 		case []any:
 			ss := make([]string, len(val))
 			for i, elem := range val {
-				ss[i] = elem.(string) // validated by validateMeta
+				// validateMeta enforces string elements; a checked assertion
+			// keeps a future validator drift from turning an internal
+			// type error into a panic inside the engine write lock.
+			if s, ok := elem.(string); ok {
+				ss[i] = s
+			}
 			}
 			a.engine.SetProp(nodeID, propKey, graph.StringListProperty(ss))
 		}
@@ -228,6 +233,10 @@ func setOptionalProps(props graph.Properties, r CaptureRequest) {
 	if r.ContextCaptureReason != "" {
 		props["context_capture_reason"] = graph.StringProperty(r.ContextCaptureReason)
 	}
+	// Caller must have passed validateCaptureRequest, which parses all
+	// three date fields up-front, so time.Parse failures here would
+	// indicate a validator/apply drift. We still check err to avoid
+	// writing a zero-value timestamp if that ever regresses.
 	if r.ValidFrom != "" {
 		if t, err := time.Parse(time.RFC3339, r.ValidFrom); err == nil {
 			props["valid_from"] = graph.TimestampProperty(t)

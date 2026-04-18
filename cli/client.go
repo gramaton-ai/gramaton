@@ -200,8 +200,12 @@ func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
 
 	if resp.StatusCode >= 400 {
 		var errResp server.ErrorResponse
-		if json.Unmarshal(data, &errResp) == nil {
-			return nil, fmt.Errorf("%s: %s", errResp.Error.Code, errResp.Error.Message)
+		if json.Unmarshal(data, &errResp) == nil && errResp.Error.Code != "" {
+			// Return the typed error so downstream consumers (notably
+			// the MCP proxy) can preserve Code/Retryable instead of
+			// collapsing to an opaque string.
+			detail := errResp.Error
+			return nil, &detail
 		}
 		return nil, fmt.Errorf("server error: HTTP %d", resp.StatusCode)
 	}

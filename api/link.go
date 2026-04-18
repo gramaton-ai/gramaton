@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // LinkRequest creates an edge from the source record to a target.
@@ -62,7 +65,13 @@ func (a *API) Link(ctx context.Context, req LinkRequest) (LinkResponse, *APIErro
 
 	e, err := a.engine.Graph().AddEdge(req.SourceID, req.TargetID, req.EdgeType, weight, nil)
 	if err != nil {
-		return LinkResponse{}, ErrInternal(err.Error())
+		a.log.Warn("link edge create failed", "component", "link",
+			"source_id", req.SourceID, "target_id", req.TargetID,
+			"edge_type", req.EdgeType, "err", err)
+		if errors.Is(err, graph.ErrNotFound) {
+			return LinkResponse{}, ErrNotFound("record deleted concurrently during link")
+		}
+		return LinkResponse{}, ErrInternal("failed to create edge")
 	}
 
 	if _, err := a.engine.Save("link"); err != nil {

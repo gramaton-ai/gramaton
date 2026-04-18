@@ -17,6 +17,7 @@ type APIError struct {
 	Message    string // human-readable; safe to show end-users
 	HTTPStatus int    // maps directly to HTTP response status
 	Retryable  bool   // true when the caller can retry without changing the request
+	Cause      error  // optional underlying error for errors.Is/As chaining (never serialized)
 }
 
 // Error makes APIError satisfy the error interface for callers that
@@ -27,6 +28,17 @@ func (e *APIError) Error() string {
 		return ""
 	}
 	return e.Code + ": " + e.Message
+}
+
+// Unwrap lets callers use errors.Is / errors.As to reach the underlying
+// cause (e.g. graph.ErrNotFound) without string-matching on Code. Only
+// meaningful when the constructor populates Cause -- most internal
+// callsites don't, and transports never serialize it.
+func (e *APIError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // Helpers. Every api method uses these so error codes are consistent
@@ -68,4 +80,12 @@ func ErrInternal(msg string) *APIError {
 // (e.g. loopback-only endpoint called from a non-loopback origin). 403.
 func ErrForbidden(msg string) *APIError {
 	return &APIError{Code: "forbidden", Message: msg, HTTPStatus: http.StatusForbidden, Retryable: false}
+}
+
+// ErrPrepareRequired signals that gramaton_session_commit was called
+// without a prior gramaton_session_prepare. 409 because the server is
+// in a wrong-state rather than the request being malformed; retryable
+// after the caller prepares.
+func ErrPrepareRequired(msg string) *APIError {
+	return &APIError{Code: "prepare_required", Message: msg, HTTPStatus: http.StatusConflict, Retryable: true}
 }

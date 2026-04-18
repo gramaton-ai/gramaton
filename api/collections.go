@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -109,10 +110,17 @@ func (a *API) setFieldProps(nodeID string, fields map[string]any) {
 			// Explicit null -- remove the property if it exists.
 			a.engine.SetProp(nodeID, propKey, graph.StringProperty(""))
 		case []any:
-			// enum[] -- store as StringList.
-			ss := make([]string, len(val))
-			for i, elem := range val {
-				ss[i] = elem.(string) // validated by schema
+			// enum[] -- store as StringList. Schema validation has
+			// already enforced string elements for typed collections;
+			// for schema-less collections, drop anything that slipped
+			// through as a non-string rather than panic inside a
+			// write-lock hold. validateItemFields mirrors this guard
+			// for schema-less items.
+			ss := make([]string, 0, len(val))
+			for _, elem := range val {
+				if s, ok := elem.(string); ok {
+					ss = append(ss, s)
+				}
 			}
 			a.engine.SetProp(nodeID, propKey, graph.StringListProperty(ss))
 		}
@@ -217,7 +225,8 @@ func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) 
 	if req.Schema != nil {
 		raw, err := serializeCollectionSchema(req.Schema)
 		if err != nil {
-			return nil, ErrInternal(err.Error())
+			a.log.Warn("collection schema serialize failed", "component", "collection", "err", err)
+			return nil, ErrInternal("failed to serialize schema")
 		}
 		props["collection_schema"] = graph.StringProperty(raw)
 	}
@@ -230,7 +239,8 @@ func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) 
 	a.engine.IndexNode(n.ID, bm25Text, nil)
 
 	if _, err := a.engine.Save("collection_create"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "create", "err", err)
+		return nil, ErrInternal("failed to save collection")
 	}
 
 	return map[string]any{"id": n.ID, "name": req.Name}, nil
@@ -241,7 +251,8 @@ type CollectionListRequest struct {
 	Offset int
 }
 
-func (a *API) CollectionList(req *CollectionListRequest) (map[string]any, *APIError) {
+func (a *API) CollectionList(ctx context.Context, req *CollectionListRequest) (map[string]any, *APIError) {
+	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 
@@ -323,7 +334,8 @@ type CollectionItemsRequest struct {
 // CollectionItems is deliberately unpaginated -- exhaustive retrieval is the
 // contract that distinguishes Collections from Memory. If a collection
 // grows large enough to need pagination, it's a signal to split it.
-func (a *API) CollectionItems(collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
+func (a *API) CollectionItems(ctx context.Context, collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
+	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 
@@ -361,17 +373,20 @@ func (a *API) CollectionItems(collectionID string, req *CollectionItemsRequest) 
 			item["created_at"] = ca.Format(time.RFC3339)
 		}
 
-		// Annotate pre-migration items.
+		// Annotate pre-migration items. The "fields" entry is always
+		// set by the caller above, but guard the assertion anyway so
+		// upstream refactors can't turn it into a panic.
 		if migration != nil {
-			migFields := migration["fields"].([]string)
-			var missing []string
-			for _, f := range migFields {
-				if _, has := n.Properties["field."+f]; !has {
-					missing = append(missing, f)
+			if migFields, ok := migration["fields"].([]string); ok {
+				var missing []string
+				for _, f := range migFields {
+					if _, has := n.Properties["field."+f]; !has {
+						missing = append(missing, f)
+					}
 				}
-			}
-			if len(missing) > 0 {
-				item["needs_migration"] = missing
+				if len(missing) > 0 {
+					item["needs_migration"] = missing
+				}
 			}
 		}
 
@@ -390,10 +405,16 @@ func (a *API) CollectionItems(collectionID string, req *CollectionItemsRequest) 
 			vi = items[i]["created_at"]
 			vj = items[j]["created_at"]
 		} else {
-			fi := items[i]["fields"].(map[string]any)
-			fj := items[j]["fields"].(map[string]any)
-			vi = fi[sortField]
-			vj = fj[sortField]
+			// Items are built above with a "fields" entry; the checked
+			// assertion is defensive against future refactors that
+			// could drop the entry for certain rows. A missing entry
+			// sorts as nil.
+			if fi, ok := items[i]["fields"].(map[string]any); ok {
+				vi = fi[sortField]
+			}
+			if fj, ok := items[j]["fields"].(map[string]any); ok {
+				vj = fj[sortField]
+			}
 		}
 		less := compareAny(vi, vj)
 		if descending {
@@ -426,7 +447,7 @@ type CollectionAddRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionAdd(collectionID string, req *CollectionAddRequest) (map[string]any, *APIError) {
+func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *CollectionAddRequest) (map[string]any, *APIError) {
 	if len(req.Fields) == 0 {
 		return nil, ErrMissing("fields are required")
 	}
@@ -442,7 +463,7 @@ func (a *API) CollectionAdd(collectionID string, req *CollectionAddRequest) (map
 		}
 		if len(textParts) > 0 {
 			embedText := strings.Join(textParts, " ")
-			if vecs, err := a.engine.Embedder().Embed(context.Background(), []string{embedText}); err == nil && len(vecs) > 0 {
+			if vecs, err := a.engine.Embedder().Embed(ctx, []string{embedText}); err == nil && len(vecs) > 0 {
 				itemVec = vecs[0]
 			}
 		}
@@ -462,13 +483,18 @@ func (a *API) CollectionAdd(collectionID string, req *CollectionAddRequest) (map
 	// Schema validation.
 	schema, err := loadSchema(coll)
 	if err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
+		return nil, ErrInternal("failed to load schema")
 	}
 	if err := validateItemFields(schema, req.Fields); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
 
-	// Dedup check: look for existing item with same title.
+	// Dedup check: look for existing item with same title. A duplicate
+	// is a state conflict (the caller's add does not commit) rather
+	// than a partial success, so return ErrConflict with the existing
+	// ID in the message. Contract: non-nil APIError iff the op did not
+	// commit. Matches Capture's reject-mode semantics.
 	if title, ok := req.Fields["title"]; ok {
 		titleStr, isStr := title.(string)
 		if isStr && titleStr != "" {
@@ -479,11 +505,7 @@ func (a *API) CollectionAdd(collectionID string, req *CollectionAddRequest) (map
 				}
 				if existing, ok := n.Properties.GetString("field.title"); ok {
 					if strings.EqualFold(existing, titleStr) {
-						return map[string]any{
-							"duplicate": true,
-							"existing_id": e.SourceID,
-							"message": fmt.Sprintf("item with title %q already exists in this collection", titleStr),
-						}, nil
+						return nil, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
 					}
 				}
 			}
@@ -512,20 +534,24 @@ func (a *API) CollectionAdd(collectionID string, req *CollectionAddRequest) (map
 
 	// Create member_of edge.
 	if _, err := a.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("member_of edge create failed", "component", "collection",
+			"collection_id", collectionID, "item_id", n.ID, "err", err)
+		return nil, ErrInternal("failed to add item to collection")
 	}
 	if cc := a.engine.CollCache(); cc != nil {
 		cc.AddMember(collectionID, n.ID)
 	}
 
 	if _, err := a.engine.Save("collection_add"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "add", "err", err)
+		return nil, ErrInternal("failed to save collection item")
 	}
 
 	return map[string]any{"id": n.ID, "collection_id": collectionID}, nil
 }
 
-func (a *API) CollectionRemove(collectionID, itemID string) (map[string]any, *APIError) {
+func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string) (map[string]any, *APIError) {
+	_ = ctx
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -544,7 +570,8 @@ func (a *API) CollectionRemove(collectionID, itemID string) (map[string]any, *AP
 	}
 
 	if _, err := a.engine.Save("collection_remove"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "remove", "err", err)
+		return nil, ErrInternal("failed to save collection removal")
 	}
 
 	return map[string]any{"removed": true, "item_id": itemID, "collection_id": collectionID}, nil
@@ -554,7 +581,8 @@ type CollectionUpdateRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionUpdate(collectionID, itemID string, req *CollectionUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req *CollectionUpdateRequest) (map[string]any, *APIError) {
+	_ = ctx
 	if len(req.Fields) == 0 {
 		return nil, ErrMissing("fields are required")
 	}
@@ -575,7 +603,8 @@ func (a *API) CollectionUpdate(collectionID, itemID string, req *CollectionUpdat
 	// full validation (required fields might already be set).
 	schema, err := loadSchema(coll)
 	if err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
+		return nil, ErrInternal("failed to load schema")
 	}
 	if schema != nil {
 		n, ok := a.engine.Graph().GetNode(itemID)
@@ -594,7 +623,8 @@ func (a *API) CollectionUpdate(collectionID, itemID string, req *CollectionUpdat
 	a.setFieldProps(itemID, req.Fields)
 
 	if _, err := a.engine.Save("collection_update"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "update", "err", err)
+		return nil, ErrInternal("failed to save collection update")
 	}
 
 	return map[string]any{"updated": true, "item_id": itemID}, nil
@@ -604,7 +634,8 @@ type CollectionMoveRequest struct {
 	TargetCollectionID string `json:"target_collection_id"`
 }
 
-func (a *API) CollectionMove(collectionID, itemID string, req *CollectionMoveRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req *CollectionMoveRequest) (map[string]any, *APIError) {
+	_ = ctx
 	if req.TargetCollectionID == "" {
 		return nil, ErrMissing("target_collection_id is required")
 	}
@@ -636,7 +667,8 @@ func (a *API) CollectionMove(collectionID, itemID string, req *CollectionMoveReq
 	// Validate item fields against target schema.
 	targetSchema, err := loadSchema(targetColl)
 	if err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("target schema load failed", "component", "collection", "err", err)
+		return nil, ErrInternal("failed to load target schema")
 	}
 	if targetSchema != nil {
 		n, ok := a.engine.Graph().GetNode(itemID)
@@ -649,10 +681,23 @@ func (a *API) CollectionMove(collectionID, itemID string, req *CollectionMoveReq
 		}
 	}
 
-	// Remove from source, add to target.
-	a.engine.Graph().DeleteEdge(edge.ID)
+	// Remove from source, add to target. Treat DeleteEdge ErrNotFound as
+	// a benign race -- another request already moved or removed the
+	// membership, so the source side is effectively empty. Any other
+	// error must abort before AddEdge, otherwise the item would end up
+	// in both collections.
+	if err := a.engine.Graph().DeleteEdge(edge.ID); err != nil && !errors.Is(err, graph.ErrNotFound) {
+		a.log.Warn("member_of delete failed", "component", "collection",
+			"collection_id", collectionID, "item_id", itemID, "err", err)
+		return nil, ErrInternal("failed to detach item from source collection")
+	}
 	if _, err := a.engine.Graph().AddEdge(itemID, req.TargetCollectionID, "member_of", 1.0, nil); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("member_of add failed", "component", "collection",
+			"collection_id", req.TargetCollectionID, "item_id", itemID, "err", err)
+		if errors.Is(err, graph.ErrNotFound) {
+			return nil, ErrNotFound("target collection or item missing during move")
+		}
+		return nil, ErrInternal("failed to add item to target collection")
 	}
 	if cc := a.engine.CollCache(); cc != nil {
 		cc.RemoveMember(collectionID, itemID)
@@ -660,7 +705,8 @@ func (a *API) CollectionMove(collectionID, itemID string, req *CollectionMoveReq
 	}
 
 	if _, err := a.engine.Save("collection_move"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "move", "err", err)
+		return nil, ErrInternal("failed to save collection move")
 	}
 
 	return map[string]any{
@@ -675,7 +721,8 @@ type CollectionRenameRequest struct {
 	Name string `json:"name"`
 }
 
-func (a *API) CollectionRename(collectionID string, req *CollectionRenameRequest) (map[string]any, *APIError) {
+func (a *API) CollectionRename(ctx context.Context, collectionID string, req *CollectionRenameRequest) (map[string]any, *APIError) {
+	_ = ctx
 	if err := validateCollectionName(req.Name); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
@@ -695,13 +742,15 @@ func (a *API) CollectionRename(collectionID string, req *CollectionRenameRequest
 	a.engine.SetProp(collectionID, "collection_name", graph.StringProperty(req.Name))
 
 	if _, err := a.engine.Save("collection_rename"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "rename", "err", err)
+		return nil, ErrInternal("failed to save rename")
 	}
 
 	return map[string]any{"renamed": true, "id": collectionID, "name": req.Name}, nil
 }
 
-func (a *API) CollectionDelete(collectionID string) (map[string]any, *APIError) {
+func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[string]any, *APIError) {
+	_ = ctx
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -714,7 +763,8 @@ func (a *API) CollectionDelete(collectionID string) (map[string]any, *APIError) 
 		// Already retired -- unretire.
 		a.engine.Graph().RemoveNodeProperty(collectionID, "valid_until")
 		if _, err := a.engine.Save("collection_unretire"); err != nil {
-			return nil, ErrInternal(err.Error())
+			a.log.Warn("collection save failed", "component", "collection", "op", "unretire", "err", err)
+			return nil, ErrInternal("failed to save unretire")
 		}
 		return map[string]any{"unretired": true, "id": collectionID}, nil
 	}
@@ -723,14 +773,16 @@ func (a *API) CollectionDelete(collectionID string) (map[string]any, *APIError) 
 	a.engine.SetProp(collectionID, "valid_until", graph.TimestampProperty(time.Now().UTC()))
 
 	if _, err := a.engine.Save("collection_retire"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "retire", "err", err)
+		return nil, ErrInternal("failed to save retire")
 	}
 
 	itemCount := len(a.collectionItemEdges(collectionID))
 	return map[string]any{"retired": true, "id": collectionID, "items_preserved": itemCount}, nil
 }
 
-func (a *API) CollectionSchemaRead(collectionID string) (map[string]any, *APIError) {
+func (a *API) CollectionSchemaRead(ctx context.Context, collectionID string) (map[string]any, *APIError) {
+	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 
@@ -741,7 +793,8 @@ func (a *API) CollectionSchemaRead(collectionID string) (map[string]any, *APIErr
 
 	schema, err := loadSchema(coll)
 	if err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
+		return nil, ErrInternal("failed to load schema")
 	}
 
 	result := map[string]any{"collection_id": collectionID}
@@ -765,7 +818,8 @@ type CollectionSchemaUpdateRequest struct {
 	Schema CollectionSchema `json:"schema"`
 }
 
-func (a *API) CollectionSchemaUpdate(collectionID string, req *CollectionSchemaUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req *CollectionSchemaUpdateRequest) (map[string]any, *APIError) {
+	_ = ctx
 	if err := validateSchema(&req.Schema); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
@@ -798,7 +852,8 @@ func (a *API) CollectionSchemaUpdate(collectionID string, req *CollectionSchemaU
 	// Store updated schema.
 	raw, err := serializeCollectionSchema(&req.Schema)
 	if err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection schema serialize failed", "component", "collection", "err", err)
+		return nil, ErrInternal("failed to serialize schema")
 	}
 	a.engine.SetProp(collectionID, "collection_schema", graph.StringProperty(raw))
 
@@ -821,7 +876,8 @@ func (a *API) CollectionSchemaUpdate(collectionID string, req *CollectionSchemaU
 	}
 
 	if _, err := a.engine.Save("collection_schema_update"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "schema_update", "err", err)
+		return nil, ErrInternal("failed to save schema update")
 	}
 
 	return result, nil
@@ -832,7 +888,8 @@ type CollectionMigrateRequest struct {
 	Value any    `json:"value"`
 }
 
-func (a *API) CollectionMigrate(collectionID string, req *CollectionMigrateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req *CollectionMigrateRequest) (map[string]any, *APIError) {
+	_ = ctx
 	if req.Field == "" {
 		return nil, ErrMissing("field is required")
 	}
@@ -865,7 +922,8 @@ func (a *API) CollectionMigrate(collectionID string, req *CollectionMigrateReque
 	if req.Value != nil {
 		schema, err := loadSchema(coll)
 		if err != nil {
-			return nil, ErrInternal(err.Error())
+			a.log.Warn("collection schema load failed", "component", "collection", "err", err)
+			return nil, ErrInternal("failed to load schema")
 		}
 		if schema != nil {
 			for _, f := range schema.Fields {
@@ -911,7 +969,8 @@ func (a *API) CollectionMigrate(collectionID string, req *CollectionMigrateReque
 	}
 
 	if _, err := a.engine.Save("collection_migrate"); err != nil {
-		return nil, ErrInternal(err.Error())
+		a.log.Warn("collection save failed", "component", "collection", "op", "migrate", "err", err)
+		return nil, ErrInternal("failed to save migration")
 	}
 
 	return map[string]any{

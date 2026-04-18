@@ -25,7 +25,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("GET /v1/collections", func(w http.ResponseWriter, r *http.Request) {
-		result, apiErr := s.api.CollectionList(&api.CollectionListRequest{
+		result, apiErr := s.api.CollectionList(r.Context(), &api.CollectionListRequest{
 			Limit:  parseIntParam(r, "limit", 50, 500),
 			Offset: parseIntParam(r, "offset", 0, 100000),
 		})
@@ -37,7 +37,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("GET /v1/collections/{id}/items", func(w http.ResponseWriter, r *http.Request) {
-		result, apiErr := s.api.CollectionItems(r.PathValue("id"), &api.CollectionItemsRequest{
+		result, apiErr := s.api.CollectionItems(r.Context(), r.PathValue("id"), &api.CollectionItemsRequest{
 			Sort:           r.URL.Query().Get("sort"),
 			Order:          r.URL.Query().Get("order"),
 			IncludeRetired: r.URL.Query().Get("include_retired") == "true",
@@ -55,7 +55,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionAdd(r.PathValue("id"), &req)
+		result, apiErr := s.api.CollectionAdd(r.Context(), r.PathValue("id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -69,7 +69,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionUpdate(r.PathValue("id"), r.PathValue("item_id"), &req)
+		result, apiErr := s.api.CollectionUpdate(r.Context(), r.PathValue("id"), r.PathValue("item_id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -83,7 +83,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionMove(r.PathValue("id"), r.PathValue("item_id"), &req)
+		result, apiErr := s.api.CollectionMove(r.Context(), r.PathValue("id"), r.PathValue("item_id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -92,7 +92,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("DELETE /v1/collections/{id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
-		result, apiErr := s.api.CollectionRemove(r.PathValue("id"), r.PathValue("item_id"))
+		result, apiErr := s.api.CollectionRemove(r.Context(), r.PathValue("id"), r.PathValue("item_id"))
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -106,7 +106,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionRename(r.PathValue("id"), &req)
+		result, apiErr := s.api.CollectionRename(r.Context(), r.PathValue("id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -115,7 +115,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("DELETE /v1/collections/{id}", func(w http.ResponseWriter, r *http.Request) {
-		result, apiErr := s.api.CollectionDelete(r.PathValue("id"))
+		result, apiErr := s.api.CollectionDelete(r.Context(), r.PathValue("id"))
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -124,7 +124,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("GET /v1/collections/{id}/schema", func(w http.ResponseWriter, r *http.Request) {
-		result, apiErr := s.api.CollectionSchemaRead(r.PathValue("id"))
+		result, apiErr := s.api.CollectionSchemaRead(r.Context(), r.PathValue("id"))
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -138,7 +138,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionSchemaUpdate(r.PathValue("id"), &req)
+		result, apiErr := s.api.CollectionSchemaUpdate(r.Context(), r.PathValue("id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -152,7 +152,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.CollectionMigrate(r.PathValue("id"), &req)
+		result, apiErr := s.api.CollectionMigrate(r.Context(), r.PathValue("id"), &req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -193,7 +193,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_list")
 		defer done(nil)
-		result, apiErr := s.api.CollectionList(&api.CollectionListRequest{Limit: args.Limit, Offset: args.Offset})
+		result, apiErr := s.api.CollectionList(ctx, &api.CollectionListRequest{Limit: args.Limit, Offset: args.Offset})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -212,7 +212,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args itemsArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_items")
 		defer done(nil)
-		result, apiErr := s.api.CollectionItems(args.CollectionID, &api.CollectionItemsRequest{
+		result, apiErr := s.api.CollectionItems(ctx, args.CollectionID, &api.CollectionItemsRequest{
 			Sort: args.Sort, Order: args.Order, IncludeRetired: args.IncludeRetired,
 		})
 		if apiErr != nil {
@@ -231,7 +231,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_add")
 		defer done(nil)
-		result, apiErr := s.api.CollectionAdd(args.CollectionID, &api.CollectionAddRequest{Fields: args.Fields})
+		result, apiErr := s.api.CollectionAdd(ctx, args.CollectionID, &api.CollectionAddRequest{Fields: args.Fields})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -249,7 +249,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args updateArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_update")
 		defer done(nil)
-		result, apiErr := s.api.CollectionUpdate(args.CollectionID, args.ItemID, &api.CollectionUpdateRequest{Fields: args.Fields})
+		result, apiErr := s.api.CollectionUpdate(ctx, args.CollectionID, args.ItemID, &api.CollectionUpdateRequest{Fields: args.Fields})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -267,7 +267,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args moveArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_move")
 		defer done(nil)
-		result, apiErr := s.api.CollectionMove(args.CollectionID, args.ItemID, &api.CollectionMoveRequest{TargetCollectionID: args.TargetCollectionID})
+		result, apiErr := s.api.CollectionMove(ctx, args.CollectionID, args.ItemID, &api.CollectionMoveRequest{TargetCollectionID: args.TargetCollectionID})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -284,7 +284,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args removeArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_remove")
 		defer done(nil)
-		result, apiErr := s.api.CollectionRemove(args.CollectionID, args.ItemID)
+		result, apiErr := s.api.CollectionRemove(ctx, args.CollectionID, args.ItemID)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -301,7 +301,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args renameArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_rename")
 		defer done(nil)
-		result, apiErr := s.api.CollectionRename(args.CollectionID, &api.CollectionRenameRequest{Name: args.Name})
+		result, apiErr := s.api.CollectionRename(ctx, args.CollectionID, &api.CollectionRenameRequest{Name: args.Name})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -317,7 +317,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args deleteArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_delete")
 		defer done(nil)
-		result, apiErr := s.api.CollectionDelete(args.CollectionID)
+		result, apiErr := s.api.CollectionDelete(ctx, args.CollectionID)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -333,7 +333,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args schemaArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_schema")
 		defer done(nil)
-		result, apiErr := s.api.CollectionSchemaRead(args.CollectionID)
+		result, apiErr := s.api.CollectionSchemaRead(ctx, args.CollectionID)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -351,7 +351,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args migrateArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_migrate")
 		defer done(nil)
-		result, apiErr := s.api.CollectionMigrate(args.CollectionID, &api.CollectionMigrateRequest{
+		result, apiErr := s.api.CollectionMigrate(ctx, args.CollectionID, &api.CollectionMigrateRequest{
 			Field: args.Field, Value: args.Value,
 		})
 		if apiErr != nil {

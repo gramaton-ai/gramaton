@@ -21,7 +21,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.SessionStart(req.ClientSessionID, req.Source)
+		result, apiErr := s.api.SessionStart(r.Context(), req.ClientSessionID, req.Source)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -31,7 +31,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		result, apiErr := s.api.SessionGet(id)
+		result, apiErr := s.api.SessionGet(r.Context(), id)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -41,7 +41,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/sessions/{id}/prepare", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		result, apiErr := s.api.SessionPrepare(id)
+		result, apiErr := s.api.SessionPrepare(r.Context(), id)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -59,7 +59,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.SessionCommit(id, req.Segments)
+		result, apiErr := s.api.SessionCommit(r.Context(), id, req.Segments)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -89,11 +89,11 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			return
 		}
 		if !filepath.IsAbs(req.SourcePath) {
-			s.writeError(w, http.StatusBadRequest, "invalid_field",
+			s.writeError(w, http.StatusBadRequest, "input_error",
 				"source_path must be absolute", true)
 			return
 		}
-		result, apiErr := s.api.SessionArchive(id, req.SourcePath)
+		result, apiErr := s.api.SessionArchive(r.Context(), id, req.SourcePath)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -114,7 +114,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionStartArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_start")
 		defer done(nil)
-		result, apiErr := s.api.SessionStart(args.ClientSessionID, args.Source)
+		result, apiErr := s.api.SessionStart(ctx, args.ClientSessionID, args.Source)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -130,7 +130,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionGetArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_get")
 		defer done(nil)
-		result, apiErr := s.api.SessionGet(args.SessionID)
+		result, apiErr := s.api.SessionGet(ctx, args.SessionID)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -146,7 +146,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionPrepareArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_prepare")
 		defer done(nil)
-		result, apiErr := s.api.SessionPrepare(args.SessionID)
+		result, apiErr := s.api.SessionPrepare(ctx, args.SessionID)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -163,7 +163,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_commit")
 		defer done(nil)
-		result, apiErr := s.api.SessionCommit(args.SessionID, args.Segments)
+		result, apiErr := s.api.SessionCommit(ctx, args.SessionID, args.Segments)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

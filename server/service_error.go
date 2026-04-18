@@ -23,7 +23,7 @@ func errMissing(msg string) *serviceError {
 }
 
 func errInvalid(msg string) *serviceError {
-	return &serviceError{Status: http.StatusBadRequest, Code: "invalid_field", Message: msg, Retryable: true}
+	return &serviceError{Status: http.StatusBadRequest, Code: "input_error", Message: msg, Retryable: true}
 }
 
 func errNotFound(msg string) *serviceError {

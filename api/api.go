@@ -43,8 +43,7 @@ type API struct {
 	preparedMu       sync.Mutex
 	preparedSessions map[string]time.Time
 
-	observeSem chan struct{}
-	retrieval  *RetrievalTracker
+	retrieval *RetrievalTracker
 
 	// preparedSweepCancel cancels the prepared-sessions sweeper
 	// goroutine on shutdown. Set by startPreparedSweeper.
@@ -61,19 +60,11 @@ type Dependencies struct {
 	UsageTracker *llm.UsageTracker
 	Log          *slog.Logger
 	ConfigDir    string
-
-	// ObserveConcurrency bounds the number of in-flight observed-mode
-	// intake goroutines. Zero means 3 (historical default).
-	ObserveConcurrency int
 }
 
 // New constructs an API. The returned pointer is safe for concurrent
 // use -- methods acquire engine locks as needed.
 func New(deps Dependencies) *API {
-	obs := deps.ObserveConcurrency
-	if obs <= 0 {
-		obs = 3
-	}
 	a := &API{
 		engine:           deps.Engine,
 		runner:           deps.Runner,
@@ -81,7 +72,6 @@ func New(deps Dependencies) *API {
 		log:              deps.Log,
 		configDir:        deps.ConfigDir,
 		preparedSessions: make(map[string]time.Time),
-		observeSem:       make(chan struct{}, obs),
 		retrieval:        NewRetrievalTracker(),
 	}
 	if a.log == nil {

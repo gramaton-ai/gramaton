@@ -76,6 +76,27 @@ func (a *API) Explore(ctx context.Context, req ExploreRequest) (ExploreResponse,
 	if len(sub.Nodes) > maxNodes {
 		sub.Nodes = sub.Nodes[:maxNodes]
 		truncated = true
+		// Truncating nodes can leave edges pointing at IDs that were
+		// dropped. Filter edges to only those whose endpoints survived
+		// so the caller doesn't get dangling references. The origin
+		// node is always retained (included implicitly in the subgraph
+		// since Traverse starts from it).
+		kept := make(map[string]struct{}, len(sub.Nodes)+1)
+		kept[req.NodeID] = struct{}{}
+		for _, n := range sub.Nodes {
+			kept[n.ID] = struct{}{}
+		}
+		filtered := sub.Edges[:0]
+		for _, e := range sub.Edges {
+			if _, okSrc := kept[e.Source]; !okSrc {
+				continue
+			}
+			if _, okTgt := kept[e.Target]; !okTgt {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		sub.Edges = filtered
 	}
 
 	resp := ExploreResponse{Nodes: sub.Nodes, Edges: sub.Edges}

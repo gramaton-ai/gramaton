@@ -18,9 +18,23 @@ func (s *Server) writeAPIError(w http.ResponseWriter, err *api.APIError) {
 	s.writeError(w, status, err.Code, err.Message, err.Retryable)
 }
 
-// mcpAPIErr converts an api.APIError to the three-tuple MCP tool
-// callback return type. Keeps the message but drops the structured
-// fields -- MCP clients read the text content, not the status code.
+// mcpAPIErr converts an api.APIError to the MCP tool callback return
+// type. The text content carries "code: message" for human readability
+// in clients that only render the text block; the StructuredContent
+// field carries the full APIError shape (code, message, retryable) so
+// machine clients can branch without string-parsing.
 func mcpAPIErr(err *api.APIError) (*mcp.CallToolResult, any, error) {
-	return mcpErr(err.Message)
+	text := err.Message
+	if err.Code != "" {
+		text = err.Code + ": " + err.Message
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		StructuredContent: map[string]any{
+			"code":      err.Code,
+			"message":   err.Message,
+			"retryable": err.Retryable,
+		},
+		IsError: true,
+	}, nil, nil
 }

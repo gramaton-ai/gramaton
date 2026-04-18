@@ -89,7 +89,7 @@ func (s *Server) handleSessionArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !filepath.IsAbs(req.SourcePath) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field",
+		s.writeError(w, http.StatusBadRequest, "input_error",
 			"source_path must be absolute", true)
 		return
 	}

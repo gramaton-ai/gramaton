@@ -799,6 +799,20 @@ type ErrorDetail struct {
 	Retryable bool   `json:"retryable"`
 }
 
+// Error makes ErrorDetail satisfy the error interface so CLI clients can
+// return it verbatim (rather than collapsing to a plain fmt.Errorf) and
+// downstream code can recover Code/Retryable via errors.As. Transports
+// that care only about a human string still get one via "%s: %s".
+func (e *ErrorDetail) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Code == "" {
+		return e.Message
+	}
+	return e.Code + ": " + e.Message
+}
+
 // computeCuration checks pending record count. Caller must hold
 // at least a read lock on the engine. If a runner is provided,
 // enriches with curation state (uses runner's own mutex, not the

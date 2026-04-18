@@ -112,7 +112,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntParam(r, "limit", 50, 1000)
 
 	if len(topic) > maxTopicLength {
-		s.writeError(w, http.StatusBadRequest, "invalid_field", "topic too long", true)
+		s.writeError(w, http.StatusBadRequest, "input_error", "topic too long", true)
 		return
 	}
 
@@ -127,7 +127,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	if sinceStr != "" {
 		sinceTime, err := parseDateArg(sinceStr)
 		if err != nil {
-			s.writeError(w, http.StatusBadRequest, "invalid_field", err.Error(), true)
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
 

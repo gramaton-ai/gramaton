@@ -121,11 +121,11 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate restore path: must be absolute and end with .tar.gz.
 	if !filepath.IsAbs(req.Path) {
-		s.writeError(w, http.StatusBadRequest, "invalid_field", "path must be absolute", true)
+		s.writeError(w, http.StatusBadRequest, "input_error", "path must be absolute", true)
 		return
 	}
 	if filepath.Ext(req.Path) != ".gz" {
-		s.writeError(w, http.StatusBadRequest, "invalid_field", "path must be a .tar.gz file", true)
+		s.writeError(w, http.StatusBadRequest, "input_error", "path must be a .tar.gz file", true)
 		return
 	}
 	if !req.Force {
@@ -182,7 +182,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 	if format != "json" && format != "csv" && format != "markdown" {
-		s.writeError(w, http.StatusBadRequest, "invalid_field", "format must be json, csv, or markdown", true)
+		s.writeError(w, http.StatusBadRequest, "input_error", "format must be json, csv, or markdown", true)
 		return
 	}
 

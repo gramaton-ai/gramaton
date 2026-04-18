@@ -117,13 +117,21 @@ func validateSchema(s *CollectionSchema) error {
 }
 
 // validateItemFields checks that an item's fields satisfy the collection
-// schema. If schema is nil, any fields are accepted.
+// schema. If schema is nil, field names are still validated and list
+// values are type-checked so setFieldProps cannot panic on a non-string
+// element (the schema branch enforces this via validateFieldValue).
 func validateItemFields(schema *CollectionSchema, fields map[string]any) error {
 	if schema == nil {
-		// No schema -- validate field names are safe for property keys.
-		for name := range fields {
+		for name, val := range fields {
 			if !fieldNameRe.MatchString(name) {
 				return fmt.Errorf("field name %q contains invalid characters", name)
+			}
+			if arr, ok := val.([]any); ok {
+				for i, elem := range arr {
+					if _, ok := elem.(string); !ok {
+						return fmt.Errorf("field %q element %d: expected string, got %T", name, i, elem)
+					}
+				}
 			}
 		}
 		return nil

@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -41,6 +43,31 @@ func proxyErr(msg string) (*mcp.CallToolResult, any, error) {
 	}, nil, nil
 }
 
+// proxyServerErr translates an error from the server HTTP client into an
+// MCP tool result. When the underlying error is a typed server.ErrorDetail
+// (returned by parseResponse for well-formed 4xx/5xx responses), the
+// Code/Retryable fields ride along via StructuredContent so an MCP client
+// can branch on them without string-parsing the message.
+func proxyServerErr(err error) (*mcp.CallToolResult, any, error) {
+	var detail *server.ErrorDetail
+	if errors.As(err, &detail) {
+		text := detail.Message
+		if detail.Code != "" {
+			text = detail.Code + ": " + detail.Message
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			StructuredContent: map[string]any{
+				"code":      detail.Code,
+				"message":   detail.Message,
+				"retryable": detail.Retryable,
+			},
+			IsError: true,
+		}, nil, nil
+	}
+	return proxyErr(err.Error())
+}
+
 func proxyResult(data any) (*mcp.CallToolResult, any, error) {
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -54,7 +81,7 @@ func proxyResult(data any) (*mcp.CallToolResult, any, error) {
 func proxyPost(path string, args any) (*mcp.CallToolResult, any, error) {
 	env, err := serverPost(path, args)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
@@ -62,7 +89,7 @@ func proxyPost(path string, args any) (*mcp.CallToolResult, any, error) {
 func proxyGet(path string) (*mcp.CallToolResult, any, error) {
 	env, err := serverGet(path)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
@@ -71,7 +98,7 @@ func proxyGet(path string) (*mcp.CallToolResult, any, error) {
 func proxyPostSlow(path string, args any) (*mcp.CallToolResult, any, error) {
 	env, err := serverPostSlow(path, args)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
@@ -79,7 +106,7 @@ func proxyPostSlow(path string, args any) (*mcp.CallToolResult, any, error) {
 func proxyGetSlow(path string) (*mcp.CallToolResult, any, error) {
 	env, err := serverGetSlow(path)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
@@ -87,7 +114,7 @@ func proxyGetSlow(path string) (*mcp.CallToolResult, any, error) {
 func proxyPatch(path string, args any) (*mcp.CallToolResult, any, error) {
 	env, err := serverPatch(path, args)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
@@ -95,7 +122,7 @@ func proxyPatch(path string, args any) (*mcp.CallToolResult, any, error) {
 func proxyDelete(path string) (*mcp.CallToolResult, any, error) {
 	env, err := serverDelete(path)
 	if err != nil {
-		return proxyErr(err.Error())
+		return proxyServerErr(err)
 	}
 	return proxyResult(env.Data)
 }
