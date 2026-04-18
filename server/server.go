@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/curation"
@@ -52,6 +53,13 @@ type Server struct {
 	httpServer *http.Server
 	log        *slog.Logger
 	runner     *curation.Runner
+
+	// api is the canonical operations surface. Methods migrate here
+	// from the server layer one cluster at a time (T-02); transports
+	// (HTTP / MCP / CLI proxy) will consume api via binding tables.
+	// Currently constructed but only used where operations have been
+	// migrated.
+	api *api.API
 
 	mu                  sync.Mutex
 	lastRequest         time.Time
@@ -170,6 +178,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		logger = slog.Default()
 	}
 	engineCfg := engine.Config()
+	usageTracker := llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession)
 	s := &Server{
 		engine:       engine,
 		cfg:          cfg,
@@ -177,7 +186,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		lastRequest:  time.Now(),
 		retrieval:    newRetrievalTracker(),
 		observeSem:       make(chan struct{}, 3), // max 3 concurrent observe goroutines
-		usageTracker:     llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession),
+		usageTracker:     usageTracker,
 		preparedSessions: make(map[string]time.Time),
 		curationCacheTTL: 5 * time.Second,
 	}
@@ -185,9 +194,25 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	// restart between prepare and commit doesn't break the flow.
 	s.loadPreparedSessions()
 
+	// Construct the canonical API surface. As operations migrate into
+	// the api package (T-02), transports will call s.api.X instead of
+	// s.serviceX. Kept on Server for now; lives past migration as the
+	// shared reference all three transports (HTTP/MCP/CLI-proxy)
+	// consume via binding tables.
+	s.api = api.New(api.Dependencies{
+		Engine:       engine,
+		UsageTracker: usageTracker,
+		Log:          logger,
+		ConfigDir:    cfg.ConfigDir,
+	})
+
 	// Seed validation with the active LimitsConfig so user YAML overrides
-	// take effect on summary_short cap, keyword count, etc.
+	// take effect on summary_short cap, keyword count, etc. Both the
+	// package-level server limits and the api limits are set during
+	// the migration; once all operations move to api, the server
+	// duplicates disappear.
 	setServerLimits(engineCfg.Limits)
+	api.SetLimits(engineCfg.Limits)
 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
@@ -253,6 +278,7 @@ func (s *Server) Run() error {
 			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
 		}
 		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
+		s.api.SetRunner(s.runner)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		defer curationCancel()
 		go s.runner.Start(curationCtx)
@@ -353,6 +379,7 @@ func (s *Server) StartHTTP() error {
 			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
 		}
 		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
+		s.api.SetRunner(s.runner)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		go s.runner.Start(curationCtx)
 
