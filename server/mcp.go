@@ -40,10 +40,11 @@ func (s *Server) MCPServer() *mcp.Server {
 }
 
 func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
-	s.registerMCPSearchTools(mcpServer)
-	// Records cluster: migrated to api package. Tools registered by
-	// bindings_records.go via thin shims over s.api.X methods.
+	// Records cluster: bindings_records.go (api-typed).
 	s.registerRecordsMCPTools(mcpServer)
+	// Search + ops cluster: bindings_search.go (api-typed).
+	// Covers gramaton_search, explore, duplicates, pending, stats, status.
+	s.registerSearchMCPTools(mcpServer)
 	s.registerMCPIntakeTools(mcpServer)
 	s.registerMCPOpsTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)

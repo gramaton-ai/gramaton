@@ -521,12 +521,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// thin shim (parse -> call s.api.X -> write) in bindings_records.go.
 	s.registerRecordsRoutes(mux)
 
-	// Search and traversal
-	mux.HandleFunc("POST /v1/search", s.handleSearch)
-	mux.HandleFunc("POST /v1/explore", s.handleExplore)
-
-	// Pending
-	mux.HandleFunc("GET /v1/pending", s.handlePending)
+	// Search + ops cluster: migrated to api. Shims in bindings_search.go.
+	// Covers /v1/search, /v1/explore, /v1/pending, /v1/stats, /v1/status,
+	// /v1/duplicates.
+	s.registerSearchRoutes(mux)
 
 	// Branches
 	mux.HandleFunc("GET /v1/branches", s.handleListBranches)
@@ -542,16 +540,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Intake (unified write endpoint)
 	mux.HandleFunc("POST /v1/intake", s.handleIntake)
 
-	// Operations
+	// Operations (not yet migrated to api)
 	mux.HandleFunc("POST /v1/revert", s.handleRevert)
 	mux.HandleFunc("POST /v1/reembed", s.handleReembed)
 	mux.HandleFunc("POST /v1/ingest", s.handleIngest)
-	mux.HandleFunc("POST /v1/duplicates", s.handleDuplicates)
 
-	// System
+	// System -- /v1/status, /v1/stats, /v1/duplicates moved to api.
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
-	mux.HandleFunc("GET /v1/status", s.handleStatus)
-	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/stats/llm", s.handleLLMStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)

@@ -9,56 +9,9 @@ import (
 )
 
 func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_pending",
-		Description: "List records awaiting classification (processing_status=captured).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
-		Limit int `json:"limit,omitempty" jsonschema:"max records to return (default 50, max 500)"`
-	}) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_pending")
-		defer done(nil)
-		limit := args.Limit
-		if limit <= 0 {
-			limit = 50
-		}
-		if limit > 500 {
-			limit = 500
-		}
-		result, _ := s.servicePending(limit)
-		return mcpJSONResult(result)
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_status",
-		Description: "Get store health: node/edge counts, embedding status, curation status.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_status")
-		defer done(nil)
-		s.engine.RLock()
-		defer s.engine.RUnlock()
-
-		curation := computeCuration(s.engine, s.runner, s.usageTracker)
-		return mcpJSONResult(map[string]any{
-			"nodes":     s.engine.Graph().NodeCount(),
-			"edges":     s.engine.Graph().EdgeCount(),
-			"embedding": s.engine.Embedder() != nil,
-			"curation":  curation,
-		})
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_stats",
-		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution, and LLM usage.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_stats")
-		defer done(nil)
-		result, _ := s.serviceStats()
-		resp := map[string]any{"stats": result}
-		if s.usageTracker != nil {
-			resp["llm_usage"] = s.usageTracker.Summary()
-		}
-		return mcpJSONResult(resp)
-	})
+	// gramaton_pending, gramaton_status, gramaton_stats moved to
+	// bindings_search.go (T-02). This function now only registers
+	// the ops that haven't migrated yet: reembed, observe, curation.
 
 	type reembedInput struct {
 		Batch int `json:"batch,omitempty" jsonschema:"max records to process (default 50)"`

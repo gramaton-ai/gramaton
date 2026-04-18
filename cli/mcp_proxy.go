@@ -14,22 +14,17 @@ import (
 // the response. The MCP process is stateless -- all state lives in the
 // server process.
 func registerProxyTools(mcpServer *mcp.Server) {
-	registerSearchProxy(mcpServer)
-	// Records cluster: migrated to api-package-typed bindings in
-	// mcp_proxy_records.go. Uses api.XxxRequest directly so fields
-	// can't drift between HTTP / MCP / CLI-proxy.
+	// Records cluster: api-typed bindings in mcp_proxy_records.go.
 	registerRecordsProxyTools(mcpServer)
-	registerExploreProxy(mcpServer)
+	// Search + ops cluster: api-typed bindings in mcp_proxy_search.go.
+	// Covers search, explore, duplicates, pending, stats, status.
+	registerSearchProxyTools(mcpServer)
 	registerObserveProxy(mcpServer)
-	registerPendingProxy(mcpServer)
-	registerStatusProxy(mcpServer)
-	registerStatsProxy(mcpServer)
 	registerCurationProxy(mcpServer)
 	registerBranchProxy(mcpServer)
 	registerDiffProxy(mcpServer)
 	registerLogProxy(mcpServer)
 	registerReembedProxy(mcpServer)
-	registerDuplicatesProxy(mcpServer)
 	registerBackupProxy(mcpServer)
 	// registerDeleteProxy intentionally excluded -- destructive operations
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
