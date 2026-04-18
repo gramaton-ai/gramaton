@@ -16,6 +16,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -44,6 +45,10 @@ type API struct {
 
 	observeSem chan struct{}
 	retrieval  *RetrievalTracker
+
+	// preparedSweepCancel cancels the prepared-sessions sweeper
+	// goroutine on shutdown. Set by startPreparedSweeper.
+	preparedSweepCancel context.CancelFunc
 }
 
 // Dependencies holds the collaborators an API needs at construction.
@@ -82,6 +87,9 @@ func New(deps Dependencies) *API {
 	if a.log == nil {
 		a.log = slog.Default()
 	}
+	// Restore prepared-session flags from disk so a restart between
+	// prepare and commit doesn't break the flow.
+	a.loadPreparedSessions()
 	return a
 }
 
@@ -114,3 +122,16 @@ func (a *API) Log() *slog.Logger { return a.log }
 // ConfigDir returns the configuration directory path (where hook-state
 // files and similar artifacts live).
 func (a *API) ConfigDir() string { return a.configDir }
+
+// StopPreparedSweeper cancels the sweeper goroutine started by
+// StartPreparedSweeper. Safe to call even if the sweeper never
+// started (no-op).
+func (a *API) StopPreparedSweeper() {
+	a.preparedMu.Lock()
+	cancel := a.preparedSweepCancel
+	a.preparedSweepCancel = nil
+	a.preparedMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}

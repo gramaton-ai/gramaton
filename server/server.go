@@ -190,10 +190,6 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		preparedSessions: make(map[string]time.Time),
 		curationCacheTTL: 5 * time.Second,
 	}
-	// Restore any prepared-session flags from a prior process so a
-	// restart between prepare and commit doesn't break the flow.
-	s.loadPreparedSessions()
-
 	// Construct the canonical API surface. As operations migrate into
 	// the api package (T-02), transports will call s.api.X instead of
 	// s.serviceX. Kept on Server for now; lives past migration as the
@@ -268,7 +264,7 @@ func (s *Server) Run() error {
 	s.startAccessFlusher()
 
 	// Start prepared-sessions sweeper.
-	s.startPreparedSweeper()
+	s.api.StartPreparedSweeper()
 
 	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
@@ -320,8 +316,8 @@ func (s *Server) Run() error {
 	if s.accessCancel != nil {
 		s.accessCancel()
 	}
-	if s.preparedSweepCancel != nil {
-		s.preparedSweepCancel()
+	{
+		s.api.StopPreparedSweeper()
 	}
 	s.mu.Unlock()
 
@@ -369,7 +365,7 @@ func (s *Server) StartHTTP() error {
 	s.startAccessFlusher()
 
 	// Start prepared-sessions sweeper.
-	s.startPreparedSweeper()
+	s.api.StartPreparedSweeper()
 
 	// Start curation runner. Wrap LLM with metered provider for usage tracking.
 	engineCfg := s.engine.Config()
@@ -411,7 +407,6 @@ func (s *Server) Shutdown() {
 	s.mu.Lock()
 	curationCancel := s.curationCancel
 	accessCancel := s.accessCancel
-	preparedSweepCancel := s.preparedSweepCancel
 	s.mu.Unlock()
 
 	// Stop access flusher first (triggers final flush).
@@ -419,9 +414,8 @@ func (s *Server) Shutdown() {
 		accessCancel()
 	}
 
-	if preparedSweepCancel != nil {
-		preparedSweepCancel()
-	}
+	// Stop the prepared-sessions sweeper owned by the api layer.
+	s.api.StopPreparedSweeper()
 
 	if curationCancel != nil {
 		curationCancel()
@@ -580,12 +574,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/collections/{id}/schema", s.handleCollectionSchemaUpdate)
 	mux.HandleFunc("POST /v1/collections/{id}/migrate", s.handleCollectionMigrate)
 
-	// Sessions
-	mux.HandleFunc("POST /v1/sessions", s.handleSessionCreate)
-	mux.HandleFunc("GET /v1/sessions/{id}", s.handleSessionGet)
-	mux.HandleFunc("POST /v1/sessions/{id}/prepare", s.handleSessionPrepare)
-	mux.HandleFunc("POST /v1/sessions/{id}/commit", s.handleSessionCommit)
-	mux.HandleFunc("POST /v1/sessions/{id}/archive", s.handleSessionArchive)
+	// Sessions cluster: migrated to api package (T-02). Shims in
+	// bindings_sessions.go. Covers /v1/sessions,
+	// /v1/sessions/{id}, /v1/sessions/{id}/prepare,
+	// /v1/sessions/{id}/commit, /v1/sessions/{id}/archive.
+	s.registerSessionsRoutes(mux)
 }
 
 // Log returns the server's structured logger.
