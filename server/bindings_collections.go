@@ -1,0 +1,362 @@
+package server
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/gramaton-ai/gramaton/api"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// registerCollectionsRoutes wires collection HTTP endpoints to the api.
+func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/collections", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionCreateRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionCreate(r.Context(), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, result)
+	})
+
+	mux.HandleFunc("GET /v1/collections", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CollectionList(&api.CollectionListRequest{
+			Limit:  parseIntParam(r, "limit", 50, 500),
+			Offset: parseIntParam(r, "offset", 0, 100000),
+		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("GET /v1/collections/{id}/items", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CollectionItems(r.PathValue("id"), &api.CollectionItemsRequest{
+			Sort:           r.URL.Query().Get("sort"),
+			Order:          r.URL.Query().Get("order"),
+			IncludeRetired: r.URL.Query().Get("include_retired") == "true",
+		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/collections/{id}/items", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionAddRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionAdd(r.PathValue("id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, result)
+	})
+
+	mux.HandleFunc("PATCH /v1/collections/{id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionUpdateRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionUpdate(r.PathValue("id"), r.PathValue("item_id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/collections/{id}/items/{item_id}/move", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionMoveRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionMove(r.PathValue("id"), r.PathValue("item_id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("DELETE /v1/collections/{id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CollectionRemove(r.PathValue("id"), r.PathValue("item_id"))
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("PATCH /v1/collections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionRenameRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionRename(r.PathValue("id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("DELETE /v1/collections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CollectionDelete(r.PathValue("id"))
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("GET /v1/collections/{id}/schema", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CollectionSchemaRead(r.PathValue("id"))
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("PUT /v1/collections/{id}/schema", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionSchemaUpdateRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionSchemaUpdate(r.PathValue("id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/collections/{id}/migrate", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionMigrateRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionMigrate(r.PathValue("id"), &req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+}
+
+// registerCollectionsMCPTools wires the collections cluster MCP tools.
+func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
+	type createArgs struct {
+		Name        string                `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
+		Description string                `json:"description,omitempty" jsonschema:"optional description"`
+		Schema      *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_create",
+		Description: "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args createArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_create")
+		defer done(nil)
+		result, apiErr := s.api.CollectionCreate(ctx, &api.CollectionCreateRequest{
+			Name: args.Name, Description: args.Description, Schema: args.Schema,
+		})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type listArgs struct {
+		Limit  int `json:"limit,omitempty" jsonschema:"max collections to return (default 50, max 500)"`
+		Offset int `json:"offset,omitempty" jsonschema:"starting position for pagination (default 0)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_list",
+		Description: "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_list")
+		defer done(nil)
+		result, apiErr := s.api.CollectionList(&api.CollectionListRequest{Limit: args.Limit, Offset: args.Offset})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type itemsArgs struct {
+		CollectionID   string `json:"collection_id" jsonschema:"collection ID"`
+		Sort           string `json:"sort,omitempty" jsonschema:"field name to sort by (default: created_at)"`
+		Order          string `json:"order,omitempty" jsonschema:"asc or desc (default: asc)"`
+		IncludeRetired bool   `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_items",
+		Description: "List ALL items in a collection. Returns every item, guaranteed complete. Supports sorting by any field.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args itemsArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_items")
+		defer done(nil)
+		result, apiErr := s.api.CollectionItems(args.CollectionID, &api.CollectionItemsRequest{
+			Sort: args.Sort, Order: args.Order, IncludeRetired: args.IncludeRetired,
+		})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type addArgs struct {
+		CollectionID string         `json:"collection_id" jsonschema:"collection ID"`
+		Fields       map[string]any `json:"fields" jsonschema:"item fields (must match collection schema if defined)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_add",
+		Description: "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns duplicate info if an item with the same title already exists.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_add")
+		defer done(nil)
+		result, apiErr := s.api.CollectionAdd(args.CollectionID, &api.CollectionAddRequest{Fields: args.Fields})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type updateArgs struct {
+		CollectionID string         `json:"collection_id" jsonschema:"collection ID"`
+		ItemID       string         `json:"item_id" jsonschema:"item ID to update"`
+		Fields       map[string]any `json:"fields" jsonschema:"fields to update (merged with existing, validated against schema)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_update",
+		Description: "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args updateArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_update")
+		defer done(nil)
+		result, apiErr := s.api.CollectionUpdate(args.CollectionID, args.ItemID, &api.CollectionUpdateRequest{Fields: args.Fields})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type moveArgs struct {
+		CollectionID       string `json:"collection_id" jsonschema:"source collection ID"`
+		ItemID             string `json:"item_id" jsonschema:"item ID to move"`
+		TargetCollectionID string `json:"target_collection_id" jsonschema:"destination collection ID"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_move",
+		Description: "Move an item from one collection to another. The item's fields are validated against the target collection's schema.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args moveArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_move")
+		defer done(nil)
+		result, apiErr := s.api.CollectionMove(args.CollectionID, args.ItemID, &api.CollectionMoveRequest{TargetCollectionID: args.TargetCollectionID})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type removeArgs struct {
+		CollectionID string `json:"collection_id" jsonschema:"collection ID"`
+		ItemID       string `json:"item_id" jsonschema:"item ID to remove"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_remove",
+		Description: "Remove an item from a collection. The item node is preserved in the graph; only the membership edge is deleted.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args removeArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_remove")
+		defer done(nil)
+		result, apiErr := s.api.CollectionRemove(args.CollectionID, args.ItemID)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type renameArgs struct {
+		CollectionID string `json:"collection_id" jsonschema:"collection ID"`
+		Name         string `json:"name" jsonschema:"new name (must be unique within store)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_rename",
+		Description: "Rename a collection. Name must be unique.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args renameArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_rename")
+		defer done(nil)
+		result, apiErr := s.api.CollectionRename(args.CollectionID, &api.CollectionRenameRequest{Name: args.Name})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type deleteArgs struct {
+		CollectionID string `json:"collection_id" jsonschema:"collection ID to retire (or unretire if already retired)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_delete",
+		Description: "Retire a collection (reversible). Items and edges are preserved. Call again on a retired collection to re-activate it.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args deleteArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_delete")
+		defer done(nil)
+		result, apiErr := s.api.CollectionDelete(args.CollectionID)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type schemaArgs struct {
+		CollectionID string `json:"collection_id" jsonschema:"collection ID"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_schema",
+		Description: "Read a collection's schema and migration status.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args schemaArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_schema")
+		defer done(nil)
+		result, apiErr := s.api.CollectionSchemaRead(args.CollectionID)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type migrateArgs struct {
+		CollectionID string `json:"collection_id" jsonschema:"collection ID"`
+		Field        string `json:"field" jsonschema:"field name to migrate"`
+		Value        any    `json:"value" jsonschema:"value to set on all items missing this field (use null for explicit null)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_migrate",
+		Description: "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args migrateArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_migrate")
+		defer done(nil)
+		result, apiErr := s.api.CollectionMigrate(args.CollectionID, &api.CollectionMigrateRequest{
+			Field: args.Field, Value: args.Value,
+		})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+}

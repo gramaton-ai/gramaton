@@ -560,19 +560,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Observe
 	mux.HandleFunc("POST /v1/observe", s.handleObserve)
 
-	// Collections
-	mux.HandleFunc("POST /v1/collections", s.handleCollectionCreate)
-	mux.HandleFunc("GET /v1/collections", s.handleCollectionList)
-	mux.HandleFunc("GET /v1/collections/{id}/items", s.handleCollectionItems)
-	mux.HandleFunc("POST /v1/collections/{id}/items", s.handleCollectionAdd)
-	mux.HandleFunc("PATCH /v1/collections/{id}/items/{item_id}", s.handleCollectionUpdateItem)
-	mux.HandleFunc("POST /v1/collections/{id}/items/{item_id}/move", s.handleCollectionMoveItem)
-	mux.HandleFunc("DELETE /v1/collections/{id}/items/{item_id}", s.handleCollectionRemoveItem)
-	mux.HandleFunc("PATCH /v1/collections/{id}", s.handleCollectionRename)
-	mux.HandleFunc("DELETE /v1/collections/{id}", s.handleCollectionDelete)
-	mux.HandleFunc("GET /v1/collections/{id}/schema", s.handleCollectionSchemaRead)
-	mux.HandleFunc("PUT /v1/collections/{id}/schema", s.handleCollectionSchemaUpdate)
-	mux.HandleFunc("POST /v1/collections/{id}/migrate", s.handleCollectionMigrate)
+	// Collections cluster: migrated to api package (T-02). Shims in
+	// bindings_collections.go.
+	s.registerCollectionsRoutes(mux)
 
 	// Sessions cluster: migrated to api package (T-02). Shims in
 	// bindings_sessions.go. Covers /v1/sessions,

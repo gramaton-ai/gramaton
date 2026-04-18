@@ -256,39 +256,7 @@ func parseDateArg(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid date (expected RFC3339 or YYYY-MM-DD)")
 }
 
-// nodeCollectionNames returns the collection names a node is a member
-// of, via the "member_of" edges. Used by update/resolve to warn when
-// an agent is modifying a node that belongs to collections (the agent
-// likely meant to use gramaton_collection_update instead).
-func (a *API) nodeCollectionNames(nodeID string) []string {
-	var names []string
-	for _, e := range a.engine.Graph().EdgesFrom(nodeID) {
-		if e.Type != "member_of" {
-			continue
-		}
-		coll, ok := a.engine.Graph().GetNode(e.TargetID)
-		if !ok {
-			continue
-		}
-		if name, ok := coll.Properties.GetString("collection_name"); ok {
-			names = append(names, name)
-		}
-	}
-	return names
-}
 
-// joinCollectionNames formats collection names for inclusion in a
-// warning string.
-func joinCollectionNames(names []string) string {
-	result := ""
-	for i, n := range names {
-		if i > 0 {
-			result += ", "
-		}
-		result += n
-	}
-	return result
-}
 
 // inspectMetadataSummary generates a human-readable metadata summary
 // for an Inspect response. Moved from server/handler_records.go; same
