@@ -100,15 +100,45 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 	// Check if rotation is needed before writing.
 	if w.size+int64(len(p)) > w.rotateAt {
 		if err := w.rotate(); err != nil {
-			// If rotation fails, continue writing to current file.
-			// Better to log than to lose entries.
+			// Rotation may have closed w.file mid-sequence (e.g.,
+			// compress failed after close, open-new failed, etc.)
+			// so writing to w.file would hit a bad fd. Reopen the
+			// log path defensively; if that also fails, surface the
+			// error rather than silently dropping every future
+			// write. (P1-07: previously we ignored the rotate error
+			// and wrote to a stale fd, losing entries indefinitely.)
 			_, _ = fmt.Fprintf(os.Stderr, "log rotation failed: %s\n", err)
+			if reopenErr := w.reopenCurrent(); reopenErr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "log reopen after rotation failure failed: %s\n", reopenErr)
+				return 0, reopenErr
+			}
 		}
 	}
 
 	n, err := w.file.Write(p)
 	w.size += int64(n)
 	return n, err
+}
+
+// reopenCurrent reopens w.path and swaps w.file + w.size. Used after
+// a rotate() failure to guarantee w.file is a valid writable fd.
+// Best-effort closes the existing handle first in case it is still
+// open (double-close is a noop).
+func (w *RotatingWriter) reopenCurrent() error {
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if w.file != nil {
+		_ = w.file.Close()
+	}
+	w.file = f
+	if info, statErr := f.Stat(); statErr == nil {
+		w.size = info.Size()
+	} else {
+		w.size = 0
+	}
+	return nil
 }
 
 // Close closes the current log file.

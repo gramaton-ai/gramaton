@@ -36,9 +36,21 @@ type BboltBM25Index struct {
 
 	// Cached metadata to avoid bbolt reads on every Search.
 	numDocs  int
-	totalLen uint64  // sum of all doc lengths, maintained incrementally
+	totalLen uint64 // sum of all doc lengths, maintained incrementally
 	avgDL    float64
 	batch    *bolt.Tx // non-nil during Batch() call
+
+	// In-batch write cache (P1-25). During a batch, every
+	// addToPostingList previously had to decode -> linear-scan ->
+	// sort -> encode the full posting list for each single-item
+	// write. A common term like "the" with K postings produces
+	// O(K log K) work per insert; N bulk inserts cost O(N*K*log K).
+	//
+	// These maps buffer decoded state. Reads prefer the cache,
+	// mutations stay in the cache, and ClearBatch encodes+writes
+	// each dirty term once. O(N*K_final*log K_final) total.
+	batchPostings map[string][]postingEntry
+	batchReverse  map[string][]string // nodeID -> list of terms
 }
 
 var (
@@ -139,11 +151,112 @@ func (idx *BboltBM25Index) Batch(fn func()) error {
 	})
 }
 
-// SetBatch sets an external bbolt transaction for batching.
-func (idx *BboltBM25Index) SetBatch(tx *bolt.Tx) { idx.batch = tx }
+// SetBatch installs (tx != nil) or clears (tx == nil) the batch tx.
+// Installing initializes the in-batch posting-list cache so repeated
+// writes to the same term only decode/encode once per flush.
+// Clearing (SetBatch(nil)) flushes every dirty term/nodeID back to
+// bbolt via the previously-installed transaction.
+//
+// The engine pattern is SetBatch(tx) + defer SetBatch(nil), so flushing
+// on clear matches the lifecycle naturally.
+func (idx *BboltBM25Index) SetBatch(tx *bolt.Tx) {
+	if tx == nil {
+		idx.flushBatch()
+		return
+	}
+	idx.batch = tx
+	idx.batchPostings = make(map[string][]postingEntry)
+	idx.batchReverse = make(map[string][]string)
+}
 
-// ClearBatch clears the external batch transaction.
-func (idx *BboltBM25Index) ClearBatch() { idx.batch = nil }
+// ClearBatch is the explicit flush entry point used by test harnesses
+// that build a tx themselves. Equivalent to SetBatch(nil).
+func (idx *BboltBM25Index) ClearBatch() { idx.flushBatch() }
+
+func (idx *BboltBM25Index) flushBatch() {
+	if idx.batch != nil {
+		pb := idx.batch.Bucket(bm25PostingsBucket)
+		rb := idx.batch.Bucket(bm25ReverseBucket)
+		for term, entries := range idx.batchPostings {
+			key := []byte(term)
+			if len(entries) == 0 {
+				pb.Delete(key)
+			} else {
+				pb.Put(key, encodePostingList(entries))
+			}
+		}
+		for nodeID, terms := range idx.batchReverse {
+			key := []byte(nodeID)
+			if len(terms) == 0 {
+				rb.Delete(key)
+			} else {
+				rb.Put(key, encodeTermList(terms))
+			}
+		}
+	}
+	idx.batch = nil
+	idx.batchPostings = nil
+	idx.batchReverse = nil
+}
+
+// getPostings returns the current postings for a term, preferring the
+// batch cache if batching. Decoded-in-bbolt postings are hoisted into
+// the cache on first touch so subsequent writes don't re-decode.
+func (idx *BboltBM25Index) getPostings(pb *bolt.Bucket, term string) []postingEntry {
+	if idx.batchPostings != nil {
+		if entries, ok := idx.batchPostings[term]; ok {
+			return entries
+		}
+		entries := decodePostingList(pb.Get([]byte(term)))
+		idx.batchPostings[term] = entries
+		return entries
+	}
+	return decodePostingList(pb.Get([]byte(term)))
+}
+
+// setPostings writes postings for a term. During a batch this only
+// touches the cache; ClearBatch encodes + writes to bbolt.
+func (idx *BboltBM25Index) setPostings(pb *bolt.Bucket, term string, entries []postingEntry) {
+	if idx.batchPostings != nil {
+		idx.batchPostings[term] = entries
+		return
+	}
+	key := []byte(term)
+	if len(entries) == 0 {
+		pb.Delete(key)
+	} else {
+		pb.Put(key, encodePostingList(entries))
+	}
+}
+
+// getReverseTerms returns the term list for a node, preferring the
+// batch cache.
+func (idx *BboltBM25Index) getReverseTerms(rb *bolt.Bucket, nodeID string) []string {
+	if idx.batchReverse != nil {
+		if terms, ok := idx.batchReverse[nodeID]; ok {
+			return terms
+		}
+		terms := decodeTermList(rb.Get([]byte(nodeID)))
+		idx.batchReverse[nodeID] = terms
+		return terms
+	}
+	return decodeTermList(rb.Get([]byte(nodeID)))
+}
+
+// setReverseTerms writes the term list for a node. During a batch this
+// only touches the cache.
+func (idx *BboltBM25Index) setReverseTerms(rb *bolt.Bucket, nodeID string, terms []string) {
+	if idx.batchReverse != nil {
+		idx.batchReverse[nodeID] = terms
+		return
+	}
+	key := []byte(nodeID)
+	if len(terms) == 0 {
+		rb.Delete(key)
+	} else {
+		rb.Put(key, encodeTermList(terms))
+	}
+}
 
 func (idx *BboltBM25Index) Add(nodeID, text string) {
 	tokens := Tokenize(text)
@@ -178,12 +291,12 @@ func (idx *BboltBM25Index) AddPreTokenized(nodeID string, termFreqs map[string]i
 		// Add to posting lists.
 		terms := make([]string, 0, len(termFreqs))
 		for term, count := range termFreqs {
-			addToPostingList(pb, []byte(term), nodeID, count)
+			idx.addToPostings(pb, term, nodeID, count)
 			terms = append(terms, term)
 		}
 
 		// Store reverse index (nodeID -> list of terms).
-		rb.Put([]byte(nodeID), encodeTermList(terms))
+		idx.setReverseTerms(rb, nodeID, terms)
 
 		// Store doc length.
 		var buf [4]byte
@@ -211,7 +324,7 @@ func (idx *BboltBM25Index) Remove(nodeID string) {
 
 		idx.removeFromPostingsViaReverse(tx, nodeID)
 		db.Delete([]byte(nodeID))
-		tx.Bucket(bm25ReverseBucket).Delete([]byte(nodeID))
+		idx.setReverseTerms(tx.Bucket(bm25ReverseBucket), nodeID, nil)
 		idx.numDocs--
 		idx.totalLen -= uint64(oldLen)
 		idx.saveMeta(tx)
@@ -224,20 +337,22 @@ func (idx *BboltBM25Index) Remove(nodeID string) {
 
 // removeFromPostingsViaReverse uses the reverse index (nodeID -> terms)
 // to efficiently remove a node from only the posting lists it appears in.
-// O(terms_per_doc) instead of O(vocabulary).
+// O(terms_per_doc) instead of O(vocabulary). During a batch, writes go
+// through the posting-list cache rather than the per-write encode cycle
+// (P1-25).
 func (idx *BboltBM25Index) removeFromPostingsViaReverse(tx *bolt.Tx, nodeID string) {
 	rb := tx.Bucket(bm25ReverseBucket)
 	pb := tx.Bucket(bm25PostingsBucket)
 
-	terms := decodeTermList(rb.Get([]byte(nodeID)))
+	terms := idx.getReverseTerms(rb, nodeID)
 	for _, term := range terms {
-		key := []byte(term)
-		v := pb.Get(key)
-		newV := removeFromPostingList(v, nodeID)
-		if newV == nil {
-			pb.Delete(key)
-		} else if len(newV) != len(v) {
-			pb.Put(key, newV)
+		entries := idx.getPostings(pb, term)
+		for i, e := range entries {
+			if e.nodeID == nodeID {
+				entries = append(entries[:i], entries[i+1:]...)
+				idx.setPostings(pb, term, entries)
+				break
+			}
 		}
 	}
 }
@@ -416,32 +531,20 @@ func decodePostingList(data []byte) []postingEntry {
 	return entries
 }
 
-func addToPostingList(b *bolt.Bucket, term []byte, nodeID string, tf int) {
-	entries := decodePostingList(b.Get(term))
-	// Check for duplicate.
+// addToPostings inserts or updates a (nodeID, tf) in the posting list
+// for term. Routes through the batch cache when batching so N bulk
+// inserts pay O(N) total instead of O(N*K log K) per-write.
+func (idx *BboltBM25Index) addToPostings(pb *bolt.Bucket, term, nodeID string, tf int) {
+	entries := idx.getPostings(pb, term)
 	for i, e := range entries {
 		if e.nodeID == nodeID {
 			entries[i].tf = tf
-			b.Put(term, encodePostingList(entries))
+			idx.setPostings(pb, term, entries)
 			return
 		}
 	}
 	entries = append(entries, postingEntry{nodeID: nodeID, tf: tf})
-	b.Put(term, encodePostingList(entries))
-}
-
-func removeFromPostingList(data []byte, nodeID string) []byte {
-	entries := decodePostingList(data)
-	for i, e := range entries {
-		if e.nodeID == nodeID {
-			entries = append(entries[:i], entries[i+1:]...)
-			if len(entries) == 0 {
-				return nil
-			}
-			return encodePostingList(entries)
-		}
-	}
-	return data // not found, return unchanged
+	idx.setPostings(pb, term, entries)
 }
 
 // Verify interface compliance.

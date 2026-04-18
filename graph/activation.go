@@ -16,8 +16,14 @@ type ActivationConfig struct {
 // Neighbor activation: for each edge from the accessed node, adds
 // base_amount * edge_weight * attenuation_factor to the neighbor's
 // activation_boost.
+//
+// Lookups go through GetNode so the call works correctly in lazy mode
+// (evicted neighbors are loaded back; previously they would silently
+// be skipped). Mutations of n.Properties assume the engine write lock
+// is held by the caller -- the engine convention for any code path
+// that modifies node state.
 func (g *Graph) RecordAccess(nodeID string, now time.Time, cfg ActivationConfig) {
-	n, ok := g.nodes[nodeID]
+	n, ok := g.GetNode(nodeID)
 	if !ok {
 		return
 	}
@@ -43,7 +49,7 @@ func (g *Graph) RecordAccess(nodeID string, now time.Time, cfg ActivationConfig)
 }
 
 func boostNeighbor(g *Graph, neighborID string, amount float64) {
-	n, ok := g.nodes[neighborID]
+	n, ok := g.GetNode(neighborID)
 	if !ok {
 		return
 	}

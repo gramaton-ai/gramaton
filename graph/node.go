@@ -25,8 +25,10 @@ func (g *Graph) AddNode(props Properties) *Node {
 	if n.Properties == nil {
 		n.Properties = make(Properties)
 	}
+	g.cacheMu.Lock()
 	g.nodes[n.ID] = n
 	g.nodeTotal++
+	g.cacheMu.Unlock()
 	g.markNodeDirty(n.ID)
 	return n
 }
@@ -35,32 +37,51 @@ func (g *Graph) AddNode(props Properties) *Node {
 // When the graph has a backing store (after Load), cache misses trigger a
 // lazy load from the prolly tree. Accessed nodes are promoted in the LRU;
 // eviction may remove a clean (non-dirty) node from the cache.
+//
+// Lazy-load I/O happens outside the cache lock so concurrent cache hits
+// aren't blocked on disk reads. After the load, we re-check under the
+// lock in case another goroutine raced us to populate the same entry.
 func (g *Graph) GetNode(id string) (*Node, bool) {
+	// Fast path: cache hit.
 	g.cacheMu.Lock()
 	if n, ok := g.nodes[id]; ok {
 		g.evictLRU(id)
 		g.cacheMu.Unlock()
 		return n, true
 	}
-	// Lazy load from prolly tree if we have a backing store.
-	if g.store != nil && g.lastNodeTreeRoot != "" {
-		n, err := g.loadNode(id)
-		if err != nil || n == nil {
-			g.cacheMu.Unlock()
-			return nil, false
-		}
-		g.nodes[id] = n
-		g.evictLRU(id)
-		g.cacheMu.Unlock()
-		return n, true
-	}
 	g.cacheMu.Unlock()
-	return nil, false
+
+	// No backing store -> no lazy load possible.
+	if g.store == nil || g.lastNodeTreeRoot == "" {
+		return nil, false
+	}
+
+	// Slow path: load from prolly tree without holding the lock.
+	n, hash, err := g.loadNode(id)
+	if err != nil || n == nil {
+		return nil, false
+	}
+
+	// Re-check: another goroutine may have loaded the same node while
+	// we were doing I/O. If so, return the existing pointer so callers
+	// share state.
+	g.cacheMu.Lock()
+	defer g.cacheMu.Unlock()
+	if existing, ok := g.nodes[id]; ok {
+		g.evictLRU(id)
+		return existing, true
+	}
+	g.nodes[id] = n
+	g.nodeHashes[id] = hash
+	g.evictLRU(id)
+	return n, true
 }
 
 // evictLRU promotes id in the LRU tracker and evicts the least recently
 // used clean node if the cache exceeds capacity. Dirty nodes are never
 // evicted (they must be written first).
+//
+// Caller must hold g.cacheMu (write).
 func (g *Graph) evictLRU(id string) {
 	if g.lru == nil {
 		return
@@ -78,24 +99,25 @@ func (g *Graph) evictLRU(id string) {
 	delete(g.nodes, evictedID)
 }
 
-// loadNode fetches a single node from the prolly tree by ID.
-func (g *Graph) loadNode(id string) (*Node, error) {
+// loadNode fetches a single node from the prolly tree by ID. Returns
+// the node and its content hash so the caller can populate g.nodeHashes
+// under the cache lock; loadNode itself does no map writes and is safe
+// to call without holding cacheMu.
+func (g *Graph) loadNode(id string) (*Node, string, error) {
 	tree := storage.LoadProllyTree(g.store, g.lastNodeTreeRoot)
 	hash, ok := tree.Get(id)
 	if !ok {
-		return nil, nil
+		return nil, "", nil
 	}
 	data, err := g.store.Read(hash)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	n, err := UnmarshalNode(data)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	// Cache the content hash for incremental saves.
-	g.nodeHashes[id] = hash
-	return n, nil
+	return n, hash, nil
 }
 
 // SetNodeProperty sets a single property on a node. Creates the property
@@ -145,6 +167,7 @@ func (g *Graph) DeleteNode(id string) error {
 		g.deleteEdge(eid)
 	}
 
+	g.cacheMu.Lock()
 	delete(g.nodes, id)
 	delete(g.dirtyNodes, id)
 	g.deletedNodes[id] = struct{}{}
@@ -152,6 +175,7 @@ func (g *Graph) DeleteNode(id string) error {
 	if g.lru != nil {
 		g.lru.removeID(id)
 	}
+	g.cacheMu.Unlock()
 	return nil
 }
 
@@ -159,6 +183,8 @@ func (g *Graph) DeleteNode(id string) error {
 // this returns the count from the prolly tree (which includes nodes
 // not yet loaded into the cache).
 func (g *Graph) NodeCount() int {
+	g.cacheMu.RLock()
+	defer g.cacheMu.RUnlock()
 	if g.nodeTotal > 0 {
 		return g.nodeTotal
 	}
@@ -169,6 +195,8 @@ func (g *Graph) NodeCount() int {
 // Uses the in-memory nodeHashes map (populated at Load time) so this
 // is O(n) in IDs only, no disk I/O.
 func (g *Graph) NodeIDSet() map[string]struct{} {
+	g.cacheMu.RLock()
+	defer g.cacheMu.RUnlock()
 	result := make(map[string]struct{}, len(g.nodeHashes)+len(g.nodes))
 	for id := range g.nodeHashes {
 		result[id] = struct{}{}
@@ -202,6 +230,8 @@ func (g *Graph) AllNodeIDs() []string {
 }
 
 func (g *Graph) cachedNodeIDs() []string {
+	g.cacheMu.RLock()
+	defer g.cacheMu.RUnlock()
 	ids := make([]string, 0, len(g.nodes))
 	for id := range g.nodes {
 		ids = append(ids, id)
@@ -225,6 +255,8 @@ func (g *Graph) NodeIterator() NodeIterator {
 }
 
 func (g *Graph) cachedIterator() NodeIterator {
+	g.cacheMu.RLock()
+	defer g.cacheMu.RUnlock()
 	nodes := make([]*Node, 0, len(g.nodes))
 	for _, n := range g.nodes {
 		nodes = append(nodes, n)

@@ -27,16 +27,23 @@ type BboltSecondaryIndex struct {
 }
 
 var (
-	timeCreatedBucket  = []byte("time:created_at")
-	timeAccessedBucket = []byte("time:last_accessed")
-	edgeCountBucket    = []byte("edge_counts")
-	existsPrefix       = "exists:" // + field name
+	timeCreatedBucket     = []byte("time:created_at")
+	timeAccessedBucket    = []byte("time:last_accessed")
+	timeCreatedRevBucket  = []byte("time:created_at:rev")
+	timeAccessedRevBucket = []byte("time:last_accessed:rev")
+	edgeCountBucket       = []byte("edge_counts")
+	existsPrefix          = "exists:" // + field name
 )
 
 // NewBboltSecondaryIndex opens or creates secondary indexes.
 func NewBboltSecondaryIndex(db *bolt.DB) (*BboltSecondaryIndex, error) {
 	err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{timeCreatedBucket, timeAccessedBucket, edgeCountBucket} {
+		buckets := [][]byte{
+			timeCreatedBucket, timeAccessedBucket,
+			timeCreatedRevBucket, timeAccessedRevBucket,
+			edgeCountBucket,
+		}
+		for _, name := range buckets {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -93,9 +100,16 @@ func parseTimeKey(key []byte) (time.Time, string) {
 func (idx *BboltSecondaryIndex) SetCreatedAt(nodeID string, t time.Time) {
 	idx.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(timeCreatedBucket)
-		// Remove old entry if exists (via nodeID lookup in value).
-		idx.removeTimeEntry(b, nodeID)
-		return b.Put(timeKey(t, nodeID), []byte(nodeID))
+		rev := tx.Bucket(timeCreatedRevBucket)
+		idx.removeTimeEntry(b, rev, nodeID)
+		key := timeKey(t, nodeID)
+		if err := b.Put(key, []byte(nodeID)); err != nil {
+			return err
+		}
+		if rev != nil {
+			return rev.Put([]byte(nodeID), key)
+		}
+		return nil
 	})
 }
 
@@ -103,14 +117,35 @@ func (idx *BboltSecondaryIndex) SetCreatedAt(nodeID string, t time.Time) {
 func (idx *BboltSecondaryIndex) SetLastAccessed(nodeID string, t time.Time) {
 	idx.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(timeAccessedBucket)
-		idx.removeTimeEntry(b, nodeID)
-		return b.Put(timeKey(t, nodeID), []byte(nodeID))
+		rev := tx.Bucket(timeAccessedRevBucket)
+		idx.removeTimeEntry(b, rev, nodeID)
+		key := timeKey(t, nodeID)
+		if err := b.Put(key, []byte(nodeID)); err != nil {
+			return err
+		}
+		if rev != nil {
+			return rev.Put([]byte(nodeID), key)
+		}
+		return nil
 	})
 }
 
-// removeTimeEntry removes all entries for a nodeID from a time bucket.
-// Scans the bucket since nodeID appears in the value, not as the sole key.
-func (idx *BboltSecondaryIndex) removeTimeEntry(b *bolt.Bucket, nodeID string) {
+// removeTimeEntry removes a nodeID's entry from a time bucket. Uses the
+// reverse index (nodeID -> timestamp-key) for O(log N) deletion. Falls
+// back to a full-bucket scan if the reverse index is missing for this
+// node -- handles legacy data from before P1-24 landed. After one full
+// update cycle, all nodes have reverse entries and the scan path is
+// unreachable.
+func (idx *BboltSecondaryIndex) removeTimeEntry(b, rev *bolt.Bucket, nodeID string) {
+	if rev != nil {
+		if oldKey := rev.Get([]byte(nodeID)); oldKey != nil {
+			k := append([]byte{}, oldKey...) // bbolt slices are tx-scoped
+			b.Delete(k)
+			rev.Delete([]byte(nodeID))
+			return
+		}
+	}
+	// Legacy path: scan bucket to find entries whose value is nodeID.
 	c := b.Cursor()
 	var toDelete [][]byte
 	for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -209,10 +244,8 @@ func (idx *BboltSecondaryIndex) Orphans() []string {
 // RemoveNode removes a node from all secondary indexes.
 func (idx *BboltSecondaryIndex) RemoveNode(nodeID string) {
 	idx.update(func(tx *bolt.Tx) error {
-		// Remove from time indexes.
-		idx.removeTimeEntry(tx.Bucket(timeCreatedBucket), nodeID)
-		idx.removeTimeEntry(tx.Bucket(timeAccessedBucket), nodeID)
-		// Remove from edge counts.
+		idx.removeTimeEntry(tx.Bucket(timeCreatedBucket), tx.Bucket(timeCreatedRevBucket), nodeID)
+		idx.removeTimeEntry(tx.Bucket(timeAccessedBucket), tx.Bucket(timeAccessedRevBucket), nodeID)
 		tx.Bucket(edgeCountBucket).Delete([]byte(nodeID))
 		return nil
 	})

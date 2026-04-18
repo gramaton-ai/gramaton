@@ -177,25 +177,33 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 		}
 	})
 
-	// Pass 2: create edges between imported records only.
-	for _, rec := range records {
-		newSourceID, ok := idMap[rec.ID]
-		if !ok {
-			continue
-		}
-		for _, edge := range rec.Edges {
-			if edge.Direction != "outbound" {
-				continue // only create outbound edges to avoid duplicates
-			}
-			newTargetID, ok := idMap[edge.TargetID]
+	// Pass 2: create edges between imported records only. Wrapped in
+	// BatchIndexWrites so every AddEdge shares one bbolt tx + fsync
+	// instead of forcing one tx per edge. For a bulk import of N
+	// nodes with ~K edges each, this changes the edge-creation cost
+	// from O(N*K) fsyncs to O(1). (P1-09.)
+	if batchErr := e.BatchIndexWrites(func() {
+		for _, rec := range records {
+			newSourceID, ok := idMap[rec.ID]
 			if !ok {
-				continue // target not in import batch
+				continue
 			}
-			if _, err := e.Graph().AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil); err != nil {
-				slog.Error("failed to add edge during import",
-					"component", "import", "from", newSourceID, "to", newTargetID, "type", edge.Type, "err", err)
+			for _, edge := range rec.Edges {
+				if edge.Direction != "outbound" {
+					continue // only create outbound edges to avoid duplicates
+				}
+				newTargetID, ok := idMap[edge.TargetID]
+				if !ok {
+					continue // target not in import batch
+				}
+				if _, err := e.Graph().AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil); err != nil {
+					slog.Error("failed to add edge during import",
+						"component", "import", "from", newSourceID, "to", newTargetID, "type", edge.Type, "err", err)
+				}
 			}
 		}
+	}); batchErr != nil {
+		return result, fmt.Errorf("batch edge writes: %w", batchErr)
 	}
 
 	if result.Imported > 0 {
@@ -437,27 +445,32 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 		result.Imported++
 	}
 
-	// Pass 2: create edges from wikilinks.
+	// Pass 2: create edges from wikilinks. Same batching rationale as
+	// ImportJSON Pass 2 (P1-09).
 	edgesCreated := 0
-	for _, f := range files {
-		sourceID, ok := nameToID[strings.ToLower(f.name)]
-		if !ok {
-			continue
-		}
-		for _, link := range f.links {
-			targetID, ok := nameToID[strings.ToLower(link)]
+	if batchErr := e.BatchIndexWrites(func() {
+		for _, f := range files {
+			sourceID, ok := nameToID[strings.ToLower(f.name)]
 			if !ok {
-				continue // unresolved link
-			}
-			if sourceID == targetID {
 				continue
 			}
-			if _, err := e.Graph().AddEdge(sourceID, targetID, "related_to", 0.5, nil); err != nil {
-				slog.Error("failed to add wikilink edge during obsidian import",
-					"component", "import", "from", sourceID, "to", targetID, "err", err)
+			for _, link := range f.links {
+				targetID, ok := nameToID[strings.ToLower(link)]
+				if !ok {
+					continue // unresolved link
+				}
+				if sourceID == targetID {
+					continue
+				}
+				if _, err := e.Graph().AddEdge(sourceID, targetID, "related_to", 0.5, nil); err != nil {
+					slog.Error("failed to add wikilink edge during obsidian import",
+						"component", "import", "from", sourceID, "to", targetID, "err", err)
+				}
+				edgesCreated++
 			}
-			edgesCreated++
 		}
+	}); batchErr != nil {
+		return result, fmt.Errorf("batch wikilink edges: %w", batchErr)
 	}
 
 	if result.Imported > 0 {

@@ -179,6 +179,17 @@ func (t *Tokenizer) MaxLen() int {
 	return t.maxLen
 }
 
+// SetMaxLen overrides the tokenizer's maximum sequence length.
+// Used by the provider to clamp tokenizer truncation to the model's
+// MaxPositionEmbeds when tokenizer.json declares a larger value than
+// the model can actually process. Without this clamp, model.Forward
+// panics with a slice-bounds error on the scratch buffers.
+func (t *Tokenizer) SetMaxLen(n int) {
+	if n > 0 {
+		t.maxLen = n
+	}
+}
+
 // wordpiece applies the WordPiece algorithm to a single word.
 // Returns a slice of token IDs. Unknown subwords produce [UNK].
 func (t *Tokenizer) wordpiece(word string) []int32 {
@@ -217,14 +228,11 @@ func (t *Tokenizer) wordpiece(word string) []int32 {
 }
 
 func (t *Tokenizer) validateSpecialTokens() error {
-	if _, ok := t.vocab["[CLS]"]; !ok {
-		return fmt.Errorf("tokenizer: missing required special token [CLS]")
-	}
-	if _, ok := t.vocab["[SEP]"]; !ok {
-		return fmt.Errorf("tokenizer: missing required special token [SEP]")
-	}
-	if _, ok := t.vocab["[UNK]"]; !ok {
-		return fmt.Errorf("tokenizer: missing required special token [UNK]")
+	required := []string{"[CLS]", "[SEP]", "[UNK]", "[PAD]"}
+	for _, tok := range required {
+		if _, ok := t.vocab[tok]; !ok {
+			return fmt.Errorf("tokenizer: missing required special token %s", tok)
+		}
 	}
 	return nil
 }

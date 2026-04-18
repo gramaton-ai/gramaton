@@ -406,7 +406,7 @@ func (s *Server) registerMCPAdminTools(mcpServer *mcp.Server) {
 		case "backup":
 			cfgPath := filepath.Join(s.cfg.ConfigDir, "config.yaml")
 			s.engine.RLock()
-			archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir)
+			archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir, s.cfg.StoreName)
 			s.engine.RUnlock()
 			if err != nil {
 				return mcpErr("backup failed")

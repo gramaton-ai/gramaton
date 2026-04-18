@@ -333,6 +333,47 @@ func TestIsPunct(t *testing.T) {
 	}
 }
 
+// TestValidateSpecialTokensRejectsMissingPAD covers P0-12: a vocab
+// missing [PAD] previously slipped through validation, leaving
+// id("[PAD]") to silently return 0 and collide with whatever real
+// token owned ID 0.
+func TestValidateSpecialTokensRejectsMissingPAD(t *testing.T) {
+	required := []string{"[CLS]", "[SEP]", "[UNK]", "[PAD]"}
+	for _, missing := range required {
+		t.Run("missing_"+missing, func(t *testing.T) {
+			vocab := map[string]int32{
+				"[CLS]": 0, "[SEP]": 1, "[UNK]": 2, "[PAD]": 3, "hello": 4,
+			}
+			delete(vocab, missing)
+			tok := &Tokenizer{vocab: vocab}
+			if err := tok.validateSpecialTokens(); err == nil {
+				t.Errorf("expected error for missing %s, got nil", missing)
+			}
+		})
+	}
+}
+
+// TestSetMaxLen covers the clamp path used by Provider to enforce
+// tokenizer.maxLen <= model.MaxPositionEmbeds (P0-10).
+func TestSetMaxLen(t *testing.T) {
+	tok, err := NewTokenizerFromJSON([]byte(buildTestTokenizerJSON()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.MaxLen() != 512 {
+		t.Fatalf("expected default 512, got %d", tok.MaxLen())
+	}
+	tok.SetMaxLen(128)
+	if tok.MaxLen() != 128 {
+		t.Errorf("expected 128 after SetMaxLen, got %d", tok.MaxLen())
+	}
+	// Zero or negative is ignored (defensive).
+	tok.SetMaxLen(0)
+	if tok.MaxLen() != 128 {
+		t.Errorf("SetMaxLen(0) should be ignored, got %d", tok.MaxLen())
+	}
+}
+
 func TestTokenizerFromJSONMatchesVocab(t *testing.T) {
 	// Ensure both loading methods produce the same tokenization.
 	tokJSON, _ := NewTokenizerFromJSON([]byte(buildTestTokenizerJSON()))

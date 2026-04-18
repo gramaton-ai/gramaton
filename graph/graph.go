@@ -54,7 +54,18 @@ type Graph struct {
 
 	entropy *ulid.MonotonicEntropy
 	mu      sync.Mutex // protects entropy only
-	cacheMu sync.Mutex // protects nodes map and lru for concurrent GetNode
+
+	// cacheMu protects g.nodes, g.nodeHashes, and the LRU tracker.
+	// Read-locked for snapshot iteration (cachedIterator, cachedNodeIDs,
+	// Save's full-node walk). Write-locked for AddNode, GetNode (always,
+	// since LRU touch mutates), DeleteNode, eviction, and lazy load.
+	//
+	// This lock is independent of the engine RWMutex above it. Engine
+	// callers must still serialize higher-level writes (multi-step
+	// mutations like dedup, reembed) via engine.Lock(); cacheMu only
+	// guarantees that the node map itself never observes a concurrent
+	// read+write that would panic the runtime.
+	cacheMu sync.RWMutex
 }
 
 // DefaultCacheCapacity is the default maximum number of nodes held in

@@ -106,30 +106,31 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 		return nil
 	}
 
-	// Rebuild scored results in LLM-specified order.
-	seen := make(map[int]bool)
+	// Rebuild scored results in LLM-specified order. Track which
+	// original-candidates indices we've already emitted so duplicates
+	// in the LLM response don't produce duplicate entries AND so the
+	// "unmentioned" pass below can use a simple origIdx lookup.
+	// (P1-35: the previous implementation mixed cands-index and
+	// candidates-index in a single map, producing duplicates.)
+	emitted := make(map[int]bool)
 	var reranked []scored
 	for _, idx := range indices {
-		// Convert from 1-based to 0-based.
-		i := idx - 1
-		if i < 0 || i >= len(cands) || seen[i] {
+		i := idx - 1 // 1-based -> 0-based cands index
+		if i < 0 || i >= len(cands) {
 			continue
 		}
-		seen[i] = true
 		origIdx := cands[i].idx
+		if emitted[origIdx] {
+			continue
+		}
+		emitted[origIdx] = true
 		reranked = append(reranked, candidates[origIdx])
 	}
 
-	// Append any candidates the LLM didn't mention (preserve their original order).
+	// Append any candidates the LLM didn't mention, preserving their
+	// original relative order.
 	for i, sr := range candidates {
-		mentioned := false
-		for _, c := range cands {
-			if c.idx == i && seen[c.idx] {
-				mentioned = true
-				break
-			}
-		}
-		if !mentioned {
+		if !emitted[i] {
 			reranked = append(reranked, sr)
 		}
 	}

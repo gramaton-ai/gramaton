@@ -86,6 +86,15 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 		return nil, fmt.Errorf("bert: load tokenizer: %w", err)
 	}
 
+	// Clamp tokenizer.maxLen to the model's MaxPositionEmbeds. Scratch
+	// buffers in model.Forward are sized from MaxPositionEmbeds; if the
+	// tokenizer emits a longer sequence the buffer slicing panics.
+	// (P0-10: tokenizer.json's truncation.max_length defaults to 512
+	// but custom models may declare higher.)
+	if tok.MaxLen() > modelCfg.MaxPositionEmbeds {
+		tok.SetMaxLen(modelCfg.MaxPositionEmbeds)
+	}
+
 	return &Provider{
 		model:     m,
 		tokenizer: tok,

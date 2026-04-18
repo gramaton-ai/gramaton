@@ -12,10 +12,19 @@ func (s *Server) registerMCPOpsTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_pending",
 		Description: "List records awaiting classification (processing_status=captured).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		Limit int `json:"limit,omitempty" jsonschema:"max records to return (default 50, max 500)"`
+	}) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_pending")
 		defer done(nil)
-		result, _ := s.servicePending(50)
+		limit := args.Limit
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 500 {
+			limit = 500
+		}
+		result, _ := s.servicePending(limit)
 		return mcpJSONResult(result)
 	})
 

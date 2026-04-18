@@ -139,19 +139,34 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		}
 
 		var vecs [][]float32
-		if emb := e.Embedder(); emb != nil && len(texts) > 0 {
+		embedFailed := false
+		haveEmbedder := e.Embedder() != nil
+		if haveEmbedder && len(texts) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			var err error
-			vecs, err = emb.Embed(ctx, texts)
+			vecs, err = e.Embedder().Embed(ctx, texts)
 			cancel()
 			if err != nil {
-				logger.Warn("observation embedding failed, creating without vectors",
+				logger.Warn("observation embedding failed, skipping parent this cycle",
 					"component", "curation",
 					"parent", c.id,
 					"err", err)
 				vecs = nil
+				embedFailed = true
 				embedErrors++
 			}
+		}
+
+		// If the embedder is configured but failed, skip this parent's
+		// observations for this cycle. Creating vector-less nodes in
+		// an embedding-enabled store produces orphans that duplicate
+		// detection and vector search silently miss. Observations are
+		// re-extracted on the next curation tick when the embedder
+		// recovers, so no data is lost. Stores running without an
+		// embedder at all (haveEmbedder=false) still create nodes --
+		// vector-less is the only option there. (P1-06.)
+		if embedFailed {
+			continue
 		}
 
 		for i, o := range obs {
