@@ -13,14 +13,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
-	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
@@ -198,6 +196,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		UsageTracker: usageTracker,
 		Log:          logger,
 		ConfigDir:    cfg.ConfigDir,
+		StoreName:    cfg.StoreName,
 	})
 
 	// Seed validation with the active LimitsConfig so user YAML overrides
@@ -518,12 +517,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// /v1/duplicates.
 	s.registerSearchRoutes(mux)
 
-	// Branches
-	mux.HandleFunc("GET /v1/branches", s.handleListBranches)
-	mux.HandleFunc("POST /v1/branches", s.handleCreateBranch)
-	mux.HandleFunc("POST /v1/branches/{name}/checkout", s.handleCheckoutBranch)
-	mux.HandleFunc("POST /v1/branches/{name}/merge", s.handleMergeBranch)
-	mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDiscardBranch)
+	// Admin cluster: branches + backup + restore + export + import
+	// migrated to api (PR #3 of admin-cluster migration). Shims in
+	// bindings_admin.go. Backup create uses snapshot-consistent
+	// phase split -- RLock snapshot HEAD/refs, release, then
+	// compress off-lock.
+	s.registerAdminRoutes(mux)
 
 	// History cluster: log + diff + per-record history migrated to api
 	// (PR #2 of admin-cluster migration). Shims in bindings_history.go.
@@ -541,13 +540,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/stats/llm", s.handleLLMStats)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /debug/goroutines", s.handleDebugGoroutines)
-
-	// Backup/Export/Import
-	mux.HandleFunc("GET /v1/backup", s.handleBackupStatus)
-	mux.HandleFunc("POST /v1/backup", s.handleBackup)
-	mux.HandleFunc("POST /v1/restore", s.handleRestore)
-	mux.HandleFunc("POST /v1/export", s.handleExport)
-	mux.HandleFunc("POST /v1/import", s.handleImport)
 
 	// Maintenance cluster: curation + reembed migrated to api (PR #1
 	// of admin-cluster migration). Shims in bindings_maintenance.go.
@@ -583,23 +575,13 @@ func (s *Server) runAutoBackup() {
 		return
 	}
 
-	backupDir := cfg.Backup.Dir
-	if backupDir == "" {
-		backupDir = backup.DefaultBackupDir()
-	}
-
-	cfgPath := filepath.Join(s.cfg.ConfigDir, "config.yaml")
-
-	s.engine.RLock()
-	archivePath, err := backup.Create(cfg.DataDir, cfgPath, backupDir, s.cfg.StoreName)
-	s.engine.RUnlock()
-
-	if err != nil {
-		s.log.Error("auto-backup failed", "err", err)
+	result, apiErr := s.api.BackupCreate(context.Background())
+	if apiErr != nil {
+		s.log.Error("auto-backup failed", "err", apiErr.Code, "msg", apiErr.Message)
 		return
 	}
-
-	deleted, _ := backup.ApplyRetention(backupDir, cfg.Backup.Retain)
+	archivePath := result.Path
+	deleted := result.DeletedOld
 
 	s.mu.Lock()
 	s.lastBackup = time.Now()

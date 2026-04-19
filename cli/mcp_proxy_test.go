@@ -71,9 +71,9 @@ func callProxy(t *testing.T, toolName string, args any) map[string]any {
 }
 
 func TestProxySearch(t *testing.T) {
-	data := callProxy(t, "gramaton_search", proxySearchInput{
-		Top:         5,
-		Temporality: "immutable",
+	data := callProxy(t, "gramaton_search", map[string]any{
+		"top":         5,
+		"temporality": "immutable",
 	})
 	results, ok := data["results"].([]any)
 	if !ok {
@@ -91,10 +91,10 @@ func TestProxySearch(t *testing.T) {
 }
 
 func TestProxyCapture(t *testing.T) {
-	data := callProxy(t, "gramaton_capture", proxyCaptureInput{
-		Content:     "Test proxy capture: the sky is blue",
-		Temporality: "immutable",
-		Keywords:    []string{"test", "proxy"},
+	data := callProxy(t, "gramaton_capture", map[string]any{
+		"content":     "Test proxy capture: the sky is blue",
+		"temporality": "immutable",
+		"keywords":    []string{"test", "proxy"},
 	})
 	id, ok := data["id"].(string)
 	if !ok || id == "" {
@@ -103,8 +103,8 @@ func TestProxyCapture(t *testing.T) {
 }
 
 func TestProxyInspect(t *testing.T) {
-	data := callProxy(t, "gramaton_inspect", proxyInspectInput{
-		ID: testStore.HealthAllergy,
+	data := callProxy(t, "gramaton_inspect", map[string]any{
+		"id": testStore.HealthAllergy,
 	})
 	if data["id"] != testStore.HealthAllergy {
 		t.Fatalf("expected id %s, got %v", testStore.HealthAllergy, data["id"])
@@ -117,9 +117,9 @@ func TestProxyInspect(t *testing.T) {
 
 func TestProxyUpdate(t *testing.T) {
 	conf := 0.75
-	data := callProxy(t, "gramaton_update", proxyUpdateInput{
-		ID:         testStore.WorkReorg,
-		Confidence: &conf,
+	data := callProxy(t, "gramaton_update", map[string]any{
+		"id":         testStore.WorkReorg,
+		"confidence": &conf,
 	})
 	if data["updated"] != true {
 		t.Fatal("expected updated=true")
@@ -128,16 +128,16 @@ func TestProxyUpdate(t *testing.T) {
 
 func TestProxyResolve(t *testing.T) {
 	// First capture a record to resolve.
-	cap := callProxy(t, "gramaton_capture", proxyCaptureInput{
-		Content:  "TODO: test proxy resolve lifecycle",
-		Keywords: []string{"test", "proxy", "todo"},
+	cap := callProxy(t, "gramaton_capture", map[string]any{
+		"content":  "TODO: test proxy resolve lifecycle",
+		"keywords": []string{"test", "proxy", "todo"},
 	})
 	id := cap["id"].(string)
 
-	data := callProxy(t, "gramaton_resolve", proxyResolveInput{
-		ID:             id,
-		Resolution:     "completed",
-		ResolutionNote: "tested via proxy",
+	data := callProxy(t, "gramaton_resolve", map[string]any{
+		"id":              id,
+		"resolution":      "completed",
+		"resolution_note": "tested via proxy",
 	})
 	if data["resolved"] != true {
 		t.Fatal("expected resolved=true")
@@ -146,11 +146,11 @@ func TestProxyResolve(t *testing.T) {
 
 func TestProxyLink(t *testing.T) {
 	w := 0.9
-	data := callProxy(t, "gramaton_link", proxyLinkInput{
-		ID:         testStore.WorkReorg,
-		TargetID:   testStore.HealthExercise,
-		EdgeType:   "relates_to",
-		EdgeWeight: &w,
+	data := callProxy(t, "gramaton_link", map[string]any{
+		"id":          testStore.WorkReorg,
+		"target_id":   testStore.HealthExercise,
+		"edge_type":   "relates_to",
+		"edge_weight": &w,
 	})
 	if data["edge_id"] == nil || data["edge_id"] == "" {
 		t.Fatal("expected non-empty edge_id")
@@ -158,9 +158,9 @@ func TestProxyLink(t *testing.T) {
 }
 
 func TestProxyExplore(t *testing.T) {
-	data := callProxy(t, "gramaton_explore", proxyExploreInput{
-		NodeID: testStore.WorkReorg,
-		Depth:  2,
+	data := callProxy(t, "gramaton_explore", map[string]any{
+		"node_id": testStore.WorkReorg,
+		"depth":   2,
 	})
 	nodes, ok := data["nodes"].([]any)
 	if !ok {
@@ -274,13 +274,13 @@ func TestProxyDeleteNotExposed(t *testing.T) {
 
 func TestProxyUnlink(t *testing.T) {
 	// Capture two records and link them.
-	dataA := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record A"})
-	dataB := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record B"})
+	dataA := callProxy(t, "gramaton_capture", map[string]any{"content": "Record A"})
+	dataB := callProxy(t, "gramaton_capture", map[string]any{"content": "Record B"})
 	idA, _ := dataA["id"].(string)
 	idB, _ := dataB["id"].(string)
 
-	linkData := callProxy(t, "gramaton_link", proxyLinkInput{
-		ID: idA, TargetID: idB, EdgeType: "related_to", EdgeWeight: floatPtr(0.8),
+	linkData := callProxy(t, "gramaton_link", map[string]any{
+		"id": idA, "target_id": idB, "edge_type": "related_to", "edge_weight": floatPtr(0.8),
 	})
 	edgeID, _ := linkData["edge_id"].(string)
 	if edgeID == "" {
@@ -288,7 +288,7 @@ func TestProxyUnlink(t *testing.T) {
 	}
 
 	// Unlink it.
-	unlinkData := callProxy(t, "gramaton_unlink", proxyUnlinkInput{EdgeID: edgeID})
+	unlinkData := callProxy(t, "gramaton_unlink", map[string]any{"edge_id": edgeID})
 	if deleted, ok := unlinkData["deleted"].(bool); !ok || !deleted {
 		t.Fatal("expected deleted=true")
 	}
@@ -296,7 +296,7 @@ func TestProxyUnlink(t *testing.T) {
 
 func TestProxyHistory(t *testing.T) {
 	// Capture and then inspect history.
-	data := callProxy(t, "gramaton_capture", proxyCaptureInput{Content: "Record with history"})
+	data := callProxy(t, "gramaton_capture", map[string]any{"content": "Record with history"})
 	id, _ := data["id"].(string)
 	if id == "" {
 		t.Fatal("capture returned no id")

@@ -292,6 +292,23 @@ func (e *Engine) HeadHashLocked() string {
 // appropriate lock via RLock/RUnlock or Lock/Unlock.
 func (e *Engine) Graph() *graph.Graph { return e.graph }
 
+// SwapGraph replaces the engine's graph with g. The replacement is
+// a single pointer assignment; the old graph becomes GC-eligible as
+// soon as no one retains a reference. Caller MUST hold the write
+// lock (Lock/Unlock).
+//
+// This is the primitive for "load a new state off-lock, then apply
+// under lock" -- callers construct a fresh *graph.Graph via
+// graph.New() + Load(store, hash) outside the lock, then take the
+// write lock, call SwapGraph, write HEAD/refs, call
+// RebuildAllIndexes, release. BranchCheckout/Merge use this to keep
+// the expensive parse off-lock.
+//
+// Incremental-commit state (lastNodeTreeRoot/lastEdgeTreeRoot) is
+// carried on the graph itself and was set by Load, so subsequent
+// saves on the swapped-in graph commit correctly.
+func (e *Engine) SwapGraph(g *graph.Graph) { e.graph = g }
+
 // PropIdx returns the property index.
 func (e *Engine) PropIdx() index.PropertyIndex { return e.propIdx }
 

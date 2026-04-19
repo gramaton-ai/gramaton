@@ -385,24 +385,34 @@ embedding:
 	}
 }
 
-func TestExcludedFiles(t *testing.T) {
+func TestExcludedFilesSnapshot(t *testing.T) {
 	tests := []struct {
-		name     string
+		rel      string
 		excluded bool
 	}{
+		// Transients (excluded).
 		{"gramaton.log", true},
 		{"gramaton.log.1.gz", true},
 		{"server.json", true},
 		{".gramaton-tmp-123", true},
 		{".chunk-abc", true},
-		{"HEAD", false},
-		{"BRANCH", false},
-		{"abc123hash", false},
+		// Snapshot-injected (excluded from walk -- re-added from memory).
+		{"HEAD", true},
+		{"FORMAT", true},
+		{"refs", true},
+		{"refs/main", true},
+		{"refs/experiment", true},
+		// Derived index state (excluded -- rebuilt on restore).
+		{"indexes.db", true},
+		{"vec.flat", true},
+		// Content-addressed chunks (kept).
+		{"ab/abc123hash", false},
+		{"00/000dd47654af104be2c54ac4e9028749e0fc114fb9ade0e8df88bd4e354dd909", false},
 	}
 
 	for _, tt := range tests {
-		if got := shouldExclude(tt.name); got != tt.excluded {
-			t.Errorf("shouldExclude(%q) = %v, want %v", tt.name, got, tt.excluded)
+		if got := shouldExcludeSnapshot(tt.rel, nil); got != tt.excluded {
+			t.Errorf("shouldExcludeSnapshot(%q) = %v, want %v", tt.rel, got, tt.excluded)
 		}
 	}
 }

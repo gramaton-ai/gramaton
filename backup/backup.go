@@ -16,11 +16,92 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Create creates a compressed tar.gz backup of the data directory.
-// If storeName is provided and non-empty, it is included in the
-// backup filename for identification. Returns the path to the
-// created archive.
+// Snapshot captures the mutable store pointers that must be read
+// atomically under the engine read lock. Callers snapshot these,
+// release the lock, and hand the snapshot to CreateSnapshot -- the
+// tar archive then contains the exact HEAD/refs/FORMAT values from
+// the snapshot moment instead of whatever was on disk when the
+// file walk got there.
+type Snapshot struct {
+	// HEAD is the commit hash that HEAD pointed at when the
+	// snapshot was taken.
+	HEAD string
+	// Refs maps branch name to commit hash at snapshot time.
+	Refs map[string]string
+	// Format is the contents of the FORMAT file (store format
+	// version). Stable between commits but snapshotted anyway so
+	// the archive is a single coherent moment.
+	Format string
+}
+
+// Create is a convenience wrapper for non-concurrent callers (tests,
+// one-shot CLI invocations). It reads the snapshot from disk and
+// runs CreateSnapshot in one call. Not safe for use alongside a
+// running server that can mutate HEAD/refs -- those callers must
+// call ReadSnapshot under the engine read lock, release, and then
+// call CreateSnapshot explicitly.
 func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, error) {
+	snap, err := ReadSnapshot(dataDir)
+	if err != nil {
+		return "", err
+	}
+	return CreateSnapshot(snap, dataDir, cfgPath, outputDir, storeName...)
+}
+
+// ReadSnapshot reads HEAD, all refs, and FORMAT from dataDir into a
+// Snapshot value. Callers that need snapshot-consistent semantics
+// must call this while holding the engine read lock so the reads
+// don't race with concurrent commits; tests (which run single-
+// threaded) can call it without a lock.
+func ReadSnapshot(dataDir string) (Snapshot, error) {
+	var snap Snapshot
+
+	headBytes, err := os.ReadFile(filepath.Join(dataDir, "HEAD"))
+	if err != nil && !os.IsNotExist(err) {
+		return snap, fmt.Errorf("read HEAD: %w", err)
+	}
+	snap.HEAD = strings.TrimSpace(string(headBytes))
+
+	formatBytes, err := os.ReadFile(filepath.Join(dataDir, "FORMAT"))
+	if err != nil && !os.IsNotExist(err) {
+		return snap, fmt.Errorf("read FORMAT: %w", err)
+	}
+	snap.Format = string(formatBytes)
+
+	snap.Refs = make(map[string]string)
+	refsDir := filepath.Join(dataDir, "refs")
+	entries, err := os.ReadDir(refsDir)
+	if err != nil && !os.IsNotExist(err) {
+		return snap, fmt.Errorf("read refs dir: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(refsDir, e.Name()))
+		if err != nil {
+			continue // skip unreadable refs -- they'll be missing in the archive
+		}
+		snap.Refs[e.Name()] = strings.TrimSpace(string(b))
+	}
+	return snap, nil
+}
+
+// CreateSnapshot writes a tar.gz backup using the provided snapshot
+// for HEAD, refs, and FORMAT. The walk over dataDir reads content-
+// addressed chunks off-lock (safe because chunks are immutable by
+// hash) and skips derived index files (rebuilt on restore). This
+// lets callers release the engine read lock before the slow
+// compression step.
+//
+// Files excluded from the archive:
+//   - HEAD, refs/*, FORMAT: injected from snapshot instead
+//   - indexes.db, vec.flat: derived state, rebuilt by Restore
+//   - server.json, gramaton.log*, .gramaton-*, .chunk-*: transient
+//
+// If storeName is provided and non-empty, it is included in the
+// filename. Returns the archive path.
+func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName ...string) (string, error) {
 	if outputDir == "" {
 		outputDir = DefaultBackupDir()
 	}
@@ -72,9 +153,10 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 			return err
 		}
 
-		// Skip excluded files.
-		base := filepath.Base(path)
-		if shouldExclude(base) {
+		// Skip files we inject from the snapshot (HEAD/FORMAT and
+		// anything under refs/) plus derived indexes rebuilt on
+		// restore and the always-transient files.
+		if shouldExcludeSnapshot(rel, info) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -107,6 +189,33 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 		return "", fmt.Errorf("archive data: %w", err)
 	}
 
+	// Inject snapshotted HEAD, FORMAT, and refs. These are the
+	// mutable pointers the snapshot captured atomically; writing
+	// them from memory (instead of re-reading disk) guarantees the
+	// archive represents exactly the snapshot moment.
+	if err := writeSnapshotFile(tw, "data/HEAD", []byte(snap.HEAD)); err != nil {
+		return "", fmt.Errorf("archive HEAD: %w", err)
+	}
+	if snap.Format != "" {
+		if err := writeSnapshotFile(tw, "data/FORMAT", []byte(snap.Format)); err != nil {
+			return "", fmt.Errorf("archive FORMAT: %w", err)
+		}
+	}
+	if len(snap.Refs) > 0 {
+		// Deterministic ordering so tests get a stable archive.
+		refNames := make([]string, 0, len(snap.Refs))
+		for name := range snap.Refs {
+			refNames = append(refNames, name)
+		}
+		sort.Strings(refNames)
+		for _, name := range refNames {
+			path := filepath.Join("data", "refs", name)
+			if err := writeSnapshotFile(tw, path, []byte(snap.Refs[name])); err != nil {
+				return "", fmt.Errorf("archive ref %q: %w", name, err)
+			}
+		}
+	}
+
 	// Include sanitized config if available. Distinguish file-read
 	// errors (non-fatal: backup works without the config sidecar)
 	// from tar-write errors (fatal: archive is now corrupt).
@@ -116,8 +225,8 @@ func Create(dataDir, cfgPath, outputDir string, storeName ...string) (string, er
 				return "", fmt.Errorf("archive config: %w", err)
 			}
 			// File-read failure -- log via a hint in the error path
-			// would be ideal, but Create has no logger. Silent skip
-			// matches the prior policy.
+			// would be ideal, but CreateSnapshot has no logger.
+			// Silent skip matches the prior policy.
 		}
 	}
 
@@ -424,19 +533,57 @@ func listBackups(dir string) ([]string, error) {
 	return result, nil
 }
 
-// shouldExclude returns true for files that should not be in backups.
-func shouldExclude(name string) bool {
+// shouldExcludeSnapshot returns true for files that the snapshot-
+// aware walk should skip. Covers three categories:
+//  1. Files we re-inject from the snapshot: HEAD, FORMAT, refs/*.
+//  2. Derived index state that Restore rebuilds from chunks:
+//     indexes.db, vec.flat.
+//  3. Transient files that never belong in a backup: server.json,
+//     gramaton.log*, .gramaton-*, .chunk-*.
+func shouldExcludeSnapshot(rel string, info os.FileInfo) bool {
+	if rel == "" || rel == "." {
+		return false // preserve the root dir entry itself
+	}
+	base := filepath.Base(rel)
+
+	// Injected from snapshot.
+	if rel == "HEAD" || rel == "FORMAT" || rel == "refs" ||
+		strings.HasPrefix(rel, "refs"+string(filepath.Separator)) {
+		return true
+	}
+	// Derived index state.
+	if rel == "indexes.db" || rel == "vec.flat" {
+		return true
+	}
+	// Transients.
 	switch {
-	case name == "server.json":
+	case base == "server.json":
 		return true
-	case strings.HasPrefix(name, "gramaton.log"):
+	case strings.HasPrefix(base, "gramaton.log"):
 		return true
-	case strings.HasPrefix(name, ".gramaton-"):
-		return true // temp files
-	case strings.HasPrefix(name, ".chunk-"):
+	case strings.HasPrefix(base, ".gramaton-"):
+		return true
+	case strings.HasPrefix(base, ".chunk-"):
 		return true
 	}
 	return false
+}
+
+// writeSnapshotFile writes a single in-memory buffer into the tar
+// archive at the given path, using unix permissions consistent with
+// the on-disk files we replace.
+func writeSnapshotFile(tw *tar.Writer, path string, data []byte) error {
+	header := &tar.Header{
+		Name:    path,
+		Mode:    0o600,
+		Size:    int64(len(data)),
+		ModTime: time.Now().UTC(),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+	_, err := tw.Write(data)
+	return err
 }
 
 // addSanitizedConfig reads the config file, strips sensitive fields,

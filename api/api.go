@@ -35,6 +35,7 @@ type API struct {
 	usageTracker *llm.UsageTracker
 	log          *slog.Logger
 	configDir    string
+	storeName    string
 
 	// In-memory state that outlives a single request. Moved from the
 	// old server.Server per-method ownership so API methods can own
@@ -60,6 +61,7 @@ type Dependencies struct {
 	UsageTracker *llm.UsageTracker
 	Log          *slog.Logger
 	ConfigDir    string
+	StoreName    string
 }
 
 // New constructs an API. The returned pointer is safe for concurrent
@@ -71,6 +73,7 @@ func New(deps Dependencies) *API {
 		usageTracker:     deps.UsageTracker,
 		log:              deps.Log,
 		configDir:        deps.ConfigDir,
+		storeName:        deps.StoreName,
 		preparedSessions: make(map[string]time.Time),
 		retrieval:        NewRetrievalTracker(),
 	}
