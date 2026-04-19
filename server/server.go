@@ -525,9 +525,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/branches/{name}/merge", s.handleMergeBranch)
 	mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDiscardBranch)
 
-	// History
-	mux.HandleFunc("GET /v1/log", s.handleLog)
-	mux.HandleFunc("GET /v1/diff", s.handleDiff)
+	// History cluster: log + diff + per-record history migrated to api
+	// (PR #2 of admin-cluster migration). Shims in bindings_history.go.
+	s.registerHistoryRoutes(mux)
 
 	// Intake (unified write endpoint)
 	mux.HandleFunc("POST /v1/intake", s.handleIntake)

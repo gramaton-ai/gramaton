@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
-	"github.com/gramaton-ai/gramaton/graph"
 )
 
 func TestParseJSON(t *testing.T) {
@@ -95,39 +94,6 @@ func TestValidateEnumEmpty(t *testing.T) {
 	err := validateEnum("test", "", validTemporalities)
 	if err != nil {
 		t.Fatalf("empty should pass: %v", err)
-	}
-}
-
-func TestMatchesTopic(t *testing.T) {
-	srv, eng := setupTestServer(t)
-
-	eng.Lock()
-	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":     graph.StringProperty("About Kafka streaming"),
-		"content_short":    graph.StringProperty("Kafka setup"),
-		"content_keywords": graph.StringListProperty([]string{"kafka", "streaming"}),
-	})
-	for k, v := range n.Properties {
-		eng.PropIdx().Add(n.ID, k, v)
-	}
-	eng.Save("test")
-	eng.Unlock()
-
-	// Should match by keyword.
-	if !matchesTopic(srv, n.ID, "kafka") {
-		t.Fatal("should match topic 'kafka' via keyword")
-	}
-	// Should match by summary (case-insensitive).
-	if !matchesTopic(srv, n.ID, "kafka") {
-		t.Fatal("should match topic via summary")
-	}
-	// Should not match unrelated topic.
-	if matchesTopic(srv, n.ID, "redis") {
-		t.Fatal("should not match unrelated topic")
-	}
-	// Non-existent node.
-	if matchesTopic(srv, "nonexistent", "kafka") {
-		t.Fatal("should not match nonexistent node")
 	}
 }
 

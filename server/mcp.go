@@ -47,6 +47,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerSearchMCPTools(mcpServer)
 	s.registerMCPIntakeTools(mcpServer)
 	s.registerMaintenanceMCPTools(mcpServer)
+	s.registerHistoryMCPTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
 	// Collections cluster: bindings_collections.go (api-typed).
 	s.registerCollectionsMCPTools(mcpServer)

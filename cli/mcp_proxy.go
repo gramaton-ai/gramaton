@@ -23,9 +23,10 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	registerSearchProxyTools(mcpServer)
 	// Maintenance cluster: curation + reembed in mcp_proxy_maintenance.go.
 	registerMaintenanceProxyTools(mcpServer)
+	// History cluster: log + diff in mcp_proxy_history.go.
+	// gramaton_history (per-record) lives in mcp_proxy_records.go.
+	registerHistoryProxyTools(mcpServer)
 	registerBranchProxy(mcpServer)
-	registerDiffProxy(mcpServer)
-	registerLogProxy(mcpServer)
 	registerBackupProxy(mcpServer)
 	// registerDeleteProxy intentionally excluded -- destructive operations
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
@@ -400,64 +401,6 @@ func registerBranchProxy(s *mcp.Server) {
 	})
 }
 
-// --- diff ---
-
-type proxyDiffInput struct {
-	Since string `json:"since,omitempty" jsonschema:"show changes after date (YYYY-MM-DD)"`
-	Topic string `json:"topic,omitempty" jsonschema:"filter by topic keyword"`
-	Limit int    `json:"limit,omitempty" jsonschema:"max changes to return (default 50)"`
-}
-
-func registerDiffProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_diff",
-		Description: "Show what changed since a date: added, modified, and removed records with summaries. Use to audit curation, catch up after time away, or review what other agents captured.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyDiffInput) (*mcp.CallToolResult, any, error) {
-		params := url.Values{}
-		if args.Since != "" {
-			params.Set("since", args.Since)
-		}
-		if args.Topic != "" {
-			params.Set("topic", args.Topic)
-		}
-		if args.Limit > 0 {
-			params.Set("limit", fmt.Sprintf("%d", args.Limit))
-		}
-		path := "/v1/diff"
-		if len(params) > 0 {
-			path += "?" + params.Encode()
-		}
-		return proxyGet(path)
-	})
-}
-
-// --- log ---
-
-type proxyLogInput struct {
-	Limit  int    `json:"limit,omitempty" jsonschema:"max entries (default 20)"`
-	Record string `json:"record,omitempty" jsonschema:"record ID for per-record history"`
-}
-
-func registerLogProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_log",
-		Description: "View commit history. Use to see what operations modified the store and when. For per-record history, use gramaton_history instead.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyLogInput) (*mcp.CallToolResult, any, error) {
-		params := url.Values{}
-		if args.Limit > 0 {
-			params.Set("limit", fmt.Sprintf("%d", args.Limit))
-		}
-		if args.Record != "" {
-			params.Set("record", args.Record)
-		}
-		path := "/v1/log"
-		if len(params) > 0 {
-			path += "?" + params.Encode()
-		}
-		return proxyGet(path)
-	})
-}
-
 // --- duplicates ---
 
 type proxyDuplicatesInput struct {
@@ -529,17 +472,3 @@ func registerUnlinkProxy(s *mcp.Server) {
 	})
 }
 
-// --- record history ---
-
-type proxyHistoryInput struct {
-	ID string `json:"id" jsonschema:"record ID to view history for"`
-}
-
-func registerHistoryProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_history",
-		Description: "View how a specific record changed over time: what fields were added, modified, or removed at each commit.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyHistoryInput) (*mcp.CallToolResult, any, error) {
-		return proxyGet(fmt.Sprintf("/v1/records/%s/history", url.PathEscape(args.ID)))
-	})
-}

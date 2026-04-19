@@ -302,7 +302,7 @@ func TestProxyHistory(t *testing.T) {
 		t.Fatal("capture returned no id")
 	}
 
-	histData := callProxy(t, "gramaton_history", proxyHistoryInput{ID: id})
+	histData := callProxy(t, "gramaton_history", map[string]any{"id": id})
 	// History should have at least the creation entry.
 	if _, ok := histData["changes"]; !ok {
 		if _, ok := histData["error"]; ok {

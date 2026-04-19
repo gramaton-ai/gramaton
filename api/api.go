@@ -105,9 +105,9 @@ func (a *API) Runner() *curation.Runner { return a.runner }
 // curation operations are invoked.
 func (a *API) SetRunner(r *curation.Runner) { a.runner = r }
 
-// Log returns the API's logger. Transports should use this for
+// Logger returns the API's logger. Transports should use this for
 // anything emitted under the api component namespace.
-func (a *API) Log() *slog.Logger { return a.log }
+func (a *API) Logger() *slog.Logger { return a.log }
 
 // ConfigDir returns the configuration directory path (where hook-state
 // files and similar artifacts live).
