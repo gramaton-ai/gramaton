@@ -21,12 +21,11 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	// Search + ops cluster: api-typed bindings in mcp_proxy_search.go.
 	// Covers search, explore, duplicates, pending, stats, status.
 	registerSearchProxyTools(mcpServer)
-	registerObserveProxy(mcpServer)
-	registerCurationProxy(mcpServer)
+	// Maintenance cluster: curation + reembed in mcp_proxy_maintenance.go.
+	registerMaintenanceProxyTools(mcpServer)
 	registerBranchProxy(mcpServer)
 	registerDiffProxy(mcpServer)
 	registerLogProxy(mcpServer)
-	registerReembedProxy(mcpServer)
 	registerBackupProxy(mcpServer)
 	// registerDeleteProxy intentionally excluded -- destructive operations
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
@@ -339,30 +338,6 @@ func registerExploreProxy(s *mcp.Server) {
 	})
 }
 
-// --- observe ---
-
-type proxyObserveMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type proxyObserveInput struct {
-	Messages []proxyObserveMessage `json:"messages,omitempty" jsonschema:"conversation turns [{role, content}]. Server extracts facts (requires LLM)."`
-	Facts    []string              `json:"facts,omitempty" jsonschema:"pre-extracted facts. Server runs quality gates only (no LLM needed)."`
-}
-
-func registerObserveProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name: "gramaton_observe",
-		Description: `DEPRECATED: Use gramaton_session_prepare/commit for knowledge extraction instead. This tool still works but will be removed in a future version.
-
-Send conversation for knowledge extraction. Fire-and-forget: returns immediately, processes async.
-Extracted knowledge enters Memory as ephemeral, low-confidence records.`,
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyObserveInput) (*mcp.CallToolResult, any, error) {
-		return proxyPost("/v1/observe", args)
-	})
-}
-
 // --- pending ---
 
 func registerPendingProxy(s *mcp.Server) {
@@ -393,28 +368,6 @@ func registerStatsProxy(s *mcp.Server) {
 		Description: "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return proxyGet("/v1/stats")
-	})
-}
-
-// --- curation ---
-
-type proxyCurationInput struct {
-	Action string `json:"action" jsonschema:"status|trigger|dry_run"`
-}
-
-func registerCurationProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_curation",
-		Description: "View curation status, trigger a curation cycle, or dry-run to see what autonomous curation would change without applying.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCurationInput) (*mcp.CallToolResult, any, error) {
-		switch args.Action {
-		case "trigger":
-			return proxyPost("/v1/curation/trigger", nil)
-		case "dry_run":
-			return proxyPost("/v1/curation/trigger", map[string]bool{"dry_run": true})
-		default:
-			return proxyGet("/v1/curation")
-		}
 	})
 }
 
@@ -502,21 +455,6 @@ func registerLogProxy(s *mcp.Server) {
 			path += "?" + params.Encode()
 		}
 		return proxyGet(path)
-	})
-}
-
-// --- reembed ---
-
-type proxyReembedInput struct {
-	Batch int `json:"batch,omitempty" jsonschema:"max records to process (default 50)"`
-}
-
-func registerReembedProxy(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_reembed",
-		Description: "Regenerate stale embeddings (model changed or missing).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyReembedInput) (*mcp.CallToolResult, any, error) {
-		return proxyPostSlow("/v1/reembed", args)
 	})
 }
 

@@ -69,7 +69,6 @@ type Server struct {
 	preparedSweepCancel context.CancelFunc
 
 	retrieval    *retrievalTracker
-	observeSem   chan struct{} // bounded semaphore for observe goroutines
 	usageTracker *llm.UsageTracker
 
 	// Session prepare/commit state. In-memory; lost on restart (B2 resolution).
@@ -184,8 +183,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		cfg:          cfg,
 		log:          logger,
 		lastRequest:  time.Now(),
-		retrieval:    newRetrievalTracker(),
-		observeSem:       make(chan struct{}, 3), // max 3 concurrent observe goroutines
+		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
 		preparedSessions: make(map[string]time.Time),
 		curationCacheTTL: 5 * time.Second,
@@ -536,7 +534,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Operations (not yet migrated to api)
 	mux.HandleFunc("POST /v1/revert", s.handleRevert)
-	mux.HandleFunc("POST /v1/reembed", s.handleReembed)
 	mux.HandleFunc("POST /v1/ingest", s.handleIngest)
 
 	// System -- /v1/status, /v1/stats, /v1/duplicates moved to api.
@@ -552,13 +549,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/export", s.handleExport)
 	mux.HandleFunc("POST /v1/import", s.handleImport)
 
-	// Curation
-	mux.HandleFunc("GET /v1/curation", s.handleCurationStatus)
-	mux.HandleFunc("POST /v1/curation/trigger", s.handleCurationTrigger)
-	mux.HandleFunc("POST /v1/curation/batch", s.handleCurationBatch)
-
-	// Observe
-	mux.HandleFunc("POST /v1/observe", s.handleObserve)
+	// Maintenance cluster: curation + reembed migrated to api (PR #1
+	// of admin-cluster migration). Shims in bindings_maintenance.go.
+	s.registerMaintenanceRoutes(mux)
 
 	// Collections cluster: migrated to api package (T-02). Shims in
 	// bindings_collections.go.

@@ -1,0 +1,220 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/embed"
+	"github.com/gramaton-ai/gramaton/graph"
+)
+
+// ReembedRequest bounds how many records the cycle processes per call.
+// Reembed is idempotent and pageable: callers can drive the store to
+// completion by looping until reembedded+errors == 0.
+type ReembedRequest struct {
+	Batch int `json:"batch,omitempty" jsonschema:"max records to process (default 50, max 500)"`
+}
+
+// ReembedResponse summarises one batch. ErrorIDs is omitted when no
+// records failed.
+type ReembedResponse struct {
+	Reembedded int      `json:"reembedded"`
+	Skipped    int      `json:"skipped"`
+	Errors     int      `json:"errors"`
+	ErrorIDs   []string `json:"error_ids,omitempty"`
+}
+
+// ReembedDescription is shared by HTTP, MCP, and CLI proxy.
+const ReembedDescription = "Regenerate stale embeddings (model changed or missing). Bounded batch processing -- call repeatedly until reembedded+errors hit zero."
+
+// Reembed regenerates embeddings for records whose stored
+// embedding_model differs from the current embedder, or whose
+// content_short embedding is missing. Three-phase to avoid holding
+// the engine lock during embedding I/O:
+//  1. RLock: identify candidates and gather embedding source texts.
+//  2. (no lock): run the embedder; on context-length errors, retry
+//     each text individually with halving truncation.
+//  3. Lock: apply vectors and persist.
+func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse, *APIError) {
+	start := time.Now()
+	batch := req.Batch
+	if batch <= 0 {
+		batch = 50
+	}
+	if batch > MaxReembedBatch {
+		batch = MaxReembedBatch
+	}
+
+	// Phase 1: Identify stale IDs and gather content under read lock.
+	a.engine.RLock()
+	if a.engine.Embedder() == nil {
+		a.engine.RUnlock()
+		return ReembedResponse{}, ErrUnavailable("no embedding provider configured")
+	}
+
+	currentModel := a.engine.Embedder().ModelID()
+
+	type reembedTarget struct {
+		nodeID string
+		texts  []string
+		keys   []string
+	}
+	var targets []reembedTarget
+
+	rit := a.engine.Graph().NodeIterator()
+	for rit.Next() {
+		if len(targets) >= batch {
+			break
+		}
+		n := rit.Node()
+		id := n.ID
+		_, hasContent := n.Properties.GetString("content_full")
+		if !hasContent {
+			continue
+		}
+		model, ok := n.Properties.GetString("embedding_model")
+		if ok && model == currentModel {
+			hasGap := false
+			if _, has := n.Properties.GetString("content_short"); has {
+				if _, has := n.Properties["embedding_short"]; !has {
+					hasGap = true
+				}
+			}
+			if !hasGap {
+				continue
+			}
+		}
+
+		// Embed three sources when present: full, keywords, short.
+		// The short embedding wins as the node's primary vector
+		// (it is the semantic anchor used by the vec index).
+		embedSources := []struct {
+			sourceKey string
+			embedKey  string
+		}{
+			{"content_full", "embedding_full"},
+			{"content_keywords", "embedding_keywords"},
+			{"content_short", "embedding_short"},
+		}
+
+		var texts []string
+		var keys []string
+		for _, src := range embedSources {
+			var text string
+			if sl, ok := n.Properties.GetStringList(src.sourceKey); ok {
+				text = strings.Join(sl, " ")
+			} else if s, ok := n.Properties.GetString(src.sourceKey); ok {
+				text = s
+			}
+			if text != "" {
+				texts = append(texts, text)
+				keys = append(keys, src.embedKey)
+			}
+		}
+
+		if len(texts) > 0 {
+			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys})
+		}
+	}
+	rit.Close()
+	a.engine.RUnlock()
+
+	// Phase 2: Embed all texts outside the lock.
+	type reembedResult struct {
+		target  reembedTarget
+		vectors [][]float32
+		err     error
+	}
+	results := make([]reembedResult, 0, len(targets))
+	for _, t := range targets {
+		if len(t.texts) == 0 {
+			results = append(results, reembedResult{target: t})
+			continue
+		}
+		vecs, err := a.engine.Embedder().Embed(ctx, t.texts)
+		if err != nil && core.IsContextLengthError(err) {
+			vecs = make([][]float32, len(t.texts))
+			err = nil
+			for i, text := range t.texts {
+				v, e := reembedWithRetry(ctx, a.engine.Embedder(), text)
+				if e != nil {
+					err = e
+					break
+				}
+				vecs[i] = v
+			}
+		}
+		results = append(results, reembedResult{target: t, vectors: vecs, err: err})
+	}
+
+	// Phase 3: Apply embeddings under write lock.
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	resp := ReembedResponse{}
+	for _, res := range results {
+		if res.err != nil {
+			resp.Errors++
+			resp.ErrorIDs = append(resp.ErrorIDs, res.target.nodeID)
+			a.log.Warn("reembed failed", "component", "reembed", "node", res.target.nodeID, "err", res.err)
+			continue
+		}
+		if _, ok := a.engine.Graph().GetNode(res.target.nodeID); !ok {
+			resp.Errors++
+			resp.ErrorIDs = append(resp.ErrorIDs, res.target.nodeID)
+			continue
+		}
+
+		for i, vec := range res.vectors {
+			prop := graph.VectorProperty(vec)
+			a.engine.Graph().SetNodeProperty(res.target.nodeID, res.target.keys[i], prop)
+			a.engine.PropIdx().Add(res.target.nodeID, res.target.keys[i], prop)
+		}
+		if len(res.vectors) > 0 {
+			a.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
+		}
+
+		modelProp := graph.StringProperty(currentModel)
+		a.engine.Graph().SetNodeProperty(res.target.nodeID, "embedding_model", modelProp)
+		a.engine.PropIdx().Add(res.target.nodeID, "embedding_model", modelProp)
+
+		resp.Reembedded++
+	}
+	resp.Skipped = len(targets) - resp.Reembedded - resp.Errors
+
+	if resp.Reembedded > 0 {
+		if _, err := a.engine.Save("reembed"); err != nil {
+			a.log.Error("reembed save failed", "component", "reembed", "err", err, "reembedded", resp.Reembedded)
+			return ReembedResponse{}, ErrInternal("save after reembed failed")
+		}
+	}
+
+	a.log.Info("reembed complete",
+		"component", "reembed",
+		"reembedded", resp.Reembedded,
+		"errors", resp.Errors,
+		"duration_ms", time.Since(start).Milliseconds())
+	return resp, nil
+}
+
+// reembedWithRetry embeds a single text, halving its length on each
+// context-length error until it fits or runs out.
+func reembedWithRetry(ctx context.Context, emb embed.Provider, text string) ([]float32, error) {
+	for range 5 {
+		vecs, err := emb.Embed(ctx, []string{text})
+		if err == nil && len(vecs) > 0 {
+			return vecs[0], nil
+		}
+		if !core.IsContextLengthError(err) {
+			return nil, err
+		}
+		text = text[:len(text)/2]
+		if len(text) == 0 {
+			return nil, fmt.Errorf("text too short after truncation")
+		}
+	}
+	return nil, fmt.Errorf("exceeded retry limit for context length")
+}

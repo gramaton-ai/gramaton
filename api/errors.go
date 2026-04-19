@@ -89,3 +89,12 @@ func ErrForbidden(msg string) *APIError {
 func ErrPrepareRequired(msg string) *APIError {
 	return &APIError{Code: "prepare_required", Message: msg, HTTPStatus: http.StatusConflict, Retryable: true}
 }
+
+// ErrUnavailable signals that an operation cannot proceed because a
+// required dependency is not configured (e.g. curation runner is off,
+// LLM provider is missing, no embedder). 503 because the server is
+// healthy but the feature is not. Not retryable: the caller cannot
+// fix this without an operator changing config.
+func ErrUnavailable(msg string) *APIError {
+	return &APIError{Code: "unavailable", Message: msg, HTTPStatus: http.StatusServiceUnavailable, Retryable: false}
+}

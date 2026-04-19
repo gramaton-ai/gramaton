@@ -15,10 +15,6 @@ type revertRequest struct {
 	Hash string `json:"hash"`
 }
 
-type reembedRequest struct {
-	Batch int `json:"batch,omitempty"`
-}
-
 type ingestRequest struct {
 	Path  string       `json:"path,omitempty"`
 	Files []ingestFile `json:"files,omitempty"`
@@ -78,22 +74,6 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		"reverted_to": core.TruncHash(fullHash),
 		"new_hash":    core.TruncHash(commit.Hash),
 	})
-}
-
-func (s *Server) handleReembed(w http.ResponseWriter, r *http.Request) {
-	var req reembedRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		// Allow empty body -- no required fields.
-		req = reembedRequest{}
-	}
-
-	result, svcErr := s.serviceReembed(r.Context(), req.Batch)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {

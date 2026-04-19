@@ -3,7 +3,6 @@ package server
 import (
 	"net/http"
 	"testing"
-	"time"
 )
 
 func TestIntakeDeliberateCapture(t *testing.T) {
@@ -45,31 +44,19 @@ func TestIntakeDeliberateCapture(t *testing.T) {
 	}
 }
 
-func TestIntakeObservedMode(t *testing.T) {
+func TestIntakeObservedModeRetired(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequest(t, srv, "POST", "/v1/intake", map[string]any{
-		"mode":  "observed",
-		"facts": []string{"User prefers dark mode", "Project uses Go 1.22 with generics"},
+		"mode":    "observed",
+		"content": "anything",
 	})
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf(`mode="observed" should be rejected after retirement, got %d: %s`, w.Code, w.Body.String())
 	}
-
-	resp := parseResponse(t, w)
-	data := resp["data"].(map[string]any)
-	if data["route"] != "observed" {
-		t.Fatalf("expected route=observed, got %v", data["route"])
-	}
-	if data["accepted"] != true {
-		t.Fatal("expected accepted=true")
-	}
-
-	// Let the background goroutine complete before TempDir cleanup.
-	time.Sleep(500 * time.Millisecond)
 }
 
-func TestIntakeRequiresContentOrFacts(t *testing.T) {
+func TestIntakeRequiresContent(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequest(t, srv, "POST", "/v1/intake", map[string]any{})
 

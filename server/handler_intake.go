@@ -2,22 +2,18 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"time"
 )
 
 // intakeRequest is the unified write endpoint. The server triages
-// based on content, mode, and collection hints.
+// based on content and (future) collection hints.
 type intakeRequest struct {
-	// Content to store (required unless facts are provided).
+	// Content to store (required).
 	Content string `json:"content,omitempty"`
 
-	// Facts for observed mode (alternative to content).
-	Facts []string `json:"facts,omitempty"`
-
-	// Mode: "" (deliberate capture) or "observed" (ambient extraction
-	// with quality gates). Hooks use mode="observed".
+	// Mode is retained as a tombstone field so the server can return
+	// a clear "removed" error when older callers still send
+	// mode="observed".
 	Mode string `json:"mode,omitempty"`
 
 	// Context signals for the server LLM classifier. These replace
@@ -64,24 +60,18 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 }
 
 // serviceIntake is the unified write service. It triages:
-//   - mode="observed" + facts: quality gates -> deferred capture
-//   - mode="observed" + content: quality gates -> deferred capture
 //   - content + collection hint: route to collection (add or link)
 //   - content (default): capture as knowledge record
+//
+// mode="observed" was retired with the observe pipeline; sessions
+// (gramaton_session_prepare/commit) are the supported autonomous
+// capture path.
 func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[string]any, *serviceError) {
-	// Validate: must have content or facts.
-	if req.Content == "" && len(req.Facts) == 0 {
-		return nil, errMissing("content or facts is required")
-	}
-
-	// Observed mode: route through quality gates (fire-and-forget).
-	if req.Mode == "observed" {
-		return s.intakeObserved(req)
-	}
-
-	// Deliberate capture mode.
 	if req.Content == "" {
-		return nil, errMissing("content is required for deliberate capture (use mode=observed for facts)")
+		return nil, errMissing("content is required")
+	}
+	if req.Mode == "observed" {
+		return nil, errInvalid(`mode="observed" was removed; use gramaton_session_prepare/commit for autonomous capture`)
 	}
 
 	// Build a captureRequest from the intake fields.
@@ -104,7 +94,6 @@ func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[str
 		Meta:                   req.Meta,
 	}
 
-	// Delegate to existing capture service.
 	result, svcErr := s.serviceCapture(ctx, capReq)
 	if svcErr != nil {
 		return nil, svcErr
@@ -112,58 +101,4 @@ func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[str
 
 	result["route"] = "knowledge"
 	return result, nil
-}
-
-// intakeObserved routes through the observe pipeline with quality gates.
-func (s *Server) intakeObserved(req *intakeRequest) (map[string]any, *serviceError) {
-	cfg := s.engine.Config()
-	if !cfg.Observe.Enabled {
-		return nil, errUnavailable("observe pipeline is not enabled")
-	}
-
-	// Build facts list: either provided directly or from content.
-	var facts []string
-	if len(req.Facts) > 0 {
-		facts = req.Facts
-	} else if req.Content != "" {
-		facts = []string{req.Content}
-	}
-
-	// Validate per-fact length.
-	for i, f := range facts {
-		if len(f) > maxFactLen {
-			return nil, errInvalid(fmt.Sprintf("facts[%d] exceeds %d bytes", i, maxFactLen))
-		}
-	}
-
-	maxFacts := cfg.Observe.MaxFactsPerCall
-	if maxFacts <= 0 {
-		maxFacts = 20
-	}
-	if len(facts) > maxFacts {
-		facts = facts[:maxFacts]
-	}
-
-	// Fire-and-forget through observe pipeline.
-	select {
-	case s.observeSem <- struct{}{}:
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					s.log.Error("intakeObserved panic", "err", r)
-				}
-				<-s.observeSem
-			}()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			s.applyQualityGates(ctx, facts, cfg)
-		}()
-		return map[string]any{
-			"accepted": true,
-			"route":    "observed",
-			"facts":    len(facts),
-		}, nil
-	default:
-		return nil, errTooMany("too many concurrent observe operations, try again later")
-	}
 }

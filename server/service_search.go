@@ -300,29 +300,3 @@ func (s *Server) serviceExplore(req *exploreRequest) (map[string]any, *serviceEr
 	return resp, nil
 }
 
-// serviceDuplicates finds near-duplicate records by embedding similarity.
-func (s *Server) serviceDuplicates(threshold float64, maxPairs int) (map[string]any, *serviceError) {
-	if threshold <= 0 || threshold > 1.0 {
-		threshold = 0.92
-	}
-	if maxPairs <= 0 {
-		maxPairs = 50
-	}
-	if maxPairs > maxDuplicatePairs {
-		maxPairs = maxDuplicatePairs
-	}
-
-	s.engine.RLock()
-	pairs := search.FindDuplicates(s.engine.Graph(), s.engine.VecIdx(), threshold, maxPairs)
-	s.engine.RUnlock()
-
-	if pairs == nil {
-		pairs = []search.DuplicatePair{}
-	}
-
-	return map[string]any{
-		"pairs":     pairs,
-		"threshold": threshold,
-		"count":     len(pairs),
-	}, nil
-}

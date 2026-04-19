@@ -84,7 +84,6 @@ func TestMCPToolRegistry(t *testing.T) {
 		"gramaton_intake",
 		"gramaton_link",
 		"gramaton_log",
-		"gramaton_observe",
 		"gramaton_pending",
 		"gramaton_reembed",
 		"gramaton_resolve",

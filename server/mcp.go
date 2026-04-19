@@ -46,7 +46,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	// Covers gramaton_search, explore, duplicates, pending, stats, status.
 	s.registerSearchMCPTools(mcpServer)
 	s.registerMCPIntakeTools(mcpServer)
-	s.registerMCPOpsTools(mcpServer)
+	s.registerMaintenanceMCPTools(mcpServer)
 	s.registerMCPAdminTools(mcpServer)
 	// Collections cluster: bindings_collections.go (api-typed).
 	s.registerCollectionsMCPTools(mcpServer)
