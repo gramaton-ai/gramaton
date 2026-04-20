@@ -27,25 +27,17 @@ const maxIngestBodySize = 200 << 20 // 200MB
 
 // Search input limits.
 const (
-	maxSearchTop      = 1000
-	maxMissingFields  = 50
-	maxMatchLength    = 1024
-	maxExploreDepth   = 10
-	maxEdgeTypes      = 50
-	maxDuplicatePairs = 1000
-	maxLogLimit       = 500
-	maxLogTraversal   = 5000
-	maxTopicLength    = 1024
-	maxSearchHops     = 10
-	maxExploreNodes   = 10000
-	maxEdgeTypeLen    = 256
-	maxFactLen        = 10000
+	maxSearchTop     = 1000
+	maxMissingFields = 50
+	maxMatchLength   = 1024
+	maxLogLimit      = 500
+	maxSearchHops    = 10
+	maxEdgeTypeLen   = 256
 )
 
 // Per-field length limits that aren't in LimitsConfig.
 const (
 	maxKeywordLength   = 256
-	maxReembedBatch    = 500
 	maxSourceRefLen    = 2048
 	maxContextFieldLen = 2048
 )

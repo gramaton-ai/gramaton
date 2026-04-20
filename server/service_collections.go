@@ -730,37 +730,6 @@ func (s *Server) serviceCollectionDelete(collectionID string) (map[string]any, *
 	return map[string]any{"retired": true, "id": collectionID, "items_preserved": itemCount}, nil
 }
 
-func (s *Server) serviceCollectionSchemaRead(collectionID string) (map[string]any, *serviceError) {
-	s.engine.RLock()
-	defer s.engine.RUnlock()
-
-	coll, svcErr := s.isCollection(collectionID)
-	if svcErr != nil {
-		return nil, svcErr
-	}
-
-	schema, err := loadSchema(coll)
-	if err != nil {
-		return nil, errInternal(err.Error())
-	}
-
-	result := map[string]any{"collection_id": collectionID}
-	if schema != nil {
-		result["schema"] = schema
-	}
-
-	// Include migration state if active.
-	if migFields, ok := coll.Properties.GetStringList("collection_migration_fields"); ok && len(migFields) > 0 {
-		total, _ := coll.Properties.GetInt64("collection_migration_total")
-		result["migration"] = map[string]any{
-			"fields": migFields,
-			"total":  total,
-		}
-	}
-
-	return result, nil
-}
-
 type collectionSchemaUpdateRequest struct {
 	Schema CollectionSchema `json:"schema"`
 }

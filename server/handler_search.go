@@ -41,14 +41,6 @@ type searchRequest struct {
 	Store               string            `json:"store,omitempty"`
 }
 
-type exploreRequest struct {
-	NodeID    string   `json:"node_id"`
-	Depth     int      `json:"depth"`
-	EdgeTypes []string `json:"edge_types,omitempty"`
-	MinWeight float64  `json:"min_weight,omitempty"`
-	MaxNodes  int      `json:"max_nodes,omitempty"`
-}
-
 // parseDateArg parses a date string in YYYY-MM-DD or RFC3339 format.
 func parseDateArg(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {

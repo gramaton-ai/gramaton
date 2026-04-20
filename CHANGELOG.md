@@ -112,6 +112,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **T-02 cascade cleanup stage A (isolated orphans).** Deleted the
+  three T-02 service orphans that were safely isolated (no test
+  references): `serviceExplore` (`server/service_search.go`) and
+  its `exploreRequest` type (`server/handler_search.go`);
+  `servicePending` (entire `server/service_ops.go` file, 46 lines);
+  `serviceCollectionSchemaRead` (`server/service_collections.go`).
+  Also removed the consts in `server/validation.go` that became
+  unused after the function deletions: `maxExploreDepth`,
+  `maxEdgeTypes`, `maxExploreNodes`, plus the already-orphaned
+  `maxDuplicatePairs`, `maxLogTraversal`, `maxTopicLength`,
+  `maxFactLen`, `maxReembedBatch`. Build and full server test
+  suite pass unchanged. Stage B (port
+  `server/service_sessions_test.go` to `api/sessions_test.go`
+  before deleting `server/service_sessions.go`) and stage C
+  (records/search/collections equivalents) tracked as separate
+  tasks.
 - **T-02 dead code cleanup (server handlers + mcp wrappers).** Deleted
   941 lines across 8 files that were orphaned by the T-02 api/
   migration: `server/mcp_records.go`, `server/mcp_collections.go`
