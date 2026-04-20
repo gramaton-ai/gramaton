@@ -1,35 +1,36 @@
-package server
+package api
 
 import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
-
-	"github.com/gramaton-ai/gramaton/api"
 )
 
+// Collection tests ported from server/service_collections_test.go when the
+// dead server-level collection services were retired. Tests that required
+// the HTTP boundary (doRequest) stayed in bindings_collections_test.go.
+
 func TestCollectionCreateAndList(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	// Create a collection.
-	result, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{
+	result, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
 		Name:        "Sprint 23",
 		Description: "Current sprint backlog",
 	})
-	if svcErr != nil {
-		t.Fatalf("create: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
 	}
 	id, ok := result["id"].(string)
 	if !ok || id == "" {
 		t.Fatal("expected id in result")
 	}
 
-	// List should return it.
-	list, svcErr := srv.serviceCollectionList(&collectionListRequest{})
-	if svcErr != nil {
-		t.Fatalf("list: %v", svcErr)
+	list, apiErr := a.CollectionList(ctx, &CollectionListRequest{})
+	if apiErr != nil {
+		t.Fatalf("list: %v", apiErr)
 	}
 	colls := list["collections"].([]map[string]any)
 	if len(colls) != 1 {
@@ -41,32 +42,30 @@ func TestCollectionCreateAndList(t *testing.T) {
 }
 
 func TestCollectionNameUniqueness(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	_, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Backlog"})
-	if svcErr != nil {
-		t.Fatalf("first create: %v", svcErr)
+	_, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
+	if apiErr != nil {
+		t.Fatalf("first create: %v", apiErr)
 	}
 
-	// Same name should fail.
-	_, svcErr = srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Backlog"})
-	if svcErr == nil {
+	_, apiErr = a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
+	if apiErr == nil {
 		t.Fatal("expected conflict error for duplicate name")
 	}
-	if svcErr.Code != "duplicate" {
-		t.Errorf("expected duplicate code, got %s", svcErr.Code)
+	if apiErr.Code != "conflict" {
+		t.Errorf("expected conflict code, got %s", apiErr.Code)
 	}
 
-	// Case-insensitive.
-	_, svcErr = srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "backlog"})
-	if svcErr == nil {
+	_, apiErr = a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "backlog"})
+	if apiErr == nil {
 		t.Fatal("expected conflict error for case-insensitive duplicate")
 	}
 }
 
 func TestCollectionWithSchema(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	schema := &CollectionSchema{
@@ -77,72 +76,66 @@ func TestCollectionWithSchema(t *testing.T) {
 		},
 	}
 
-	result, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{
+	result, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
 		Name:   "Tasks",
 		Schema: schema,
 	})
-	if svcErr != nil {
-		t.Fatalf("create: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
 	}
 	collID := result["id"].(string)
 
-	// Add valid item.
-	addResult, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	addResult, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Do the thing", "status": "open"},
 	})
-	if svcErr != nil {
-		t.Fatalf("add: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("add: %v", apiErr)
 	}
 	if addResult["id"] == nil {
 		t.Fatal("expected item id")
 	}
 
-	// Missing required field should fail.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "No status"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for missing required field")
 	}
 
-	// Invalid enum value should fail.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Bad status", "status": "invalid"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for invalid enum value")
 	}
 
-	// Unknown field should fail.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Extra", "status": "open", "unknown": "value"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for unknown field")
 	}
 }
 
 func TestCollectionItemsExhaustive(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	// Add 5 items.
 	for i := 0; i < 5; i++ {
-		_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+		_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 			Fields: map[string]any{"title": fmt.Sprintf("Item %d", i)},
 		})
-		if svcErr != nil {
-			t.Fatalf("add %d: %v", i, svcErr)
+		if apiErr != nil {
+			t.Fatalf("add %d: %v", i, apiErr)
 		}
 	}
 
-	// List should return all 5.
-	items, svcErr := srv.serviceCollectionItems(collID, &collectionItemsRequest{})
-	if svcErr != nil {
-		t.Fatalf("items: %v", svcErr)
+	items, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
 	}
 	count := items["count"].(int)
 	if count != 5 {
@@ -151,9 +144,8 @@ func TestCollectionItemsExhaustive(t *testing.T) {
 }
 
 // collectionItemsFixture builds a 4-item schema'd collection for
-// projection + filter tests: two open/P1 items, one open/P2, one
-// closed/P3. Returns the collection id.
-func collectionItemsFixture(t *testing.T, srv *Server) string {
+// projection + filter tests.
+func collectionItemsFixture(t *testing.T, a *API) string {
 	t.Helper()
 	ctx := context.Background()
 	schema := &CollectionSchema{
@@ -164,9 +156,9 @@ func collectionItemsFixture(t *testing.T, srv *Server) string {
 			{Name: "details", Type: FieldTypeString, Required: false},
 		},
 	}
-	cc, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Bugs", Schema: schema})
-	if svcErr != nil {
-		t.Fatalf("create: %v", svcErr)
+	cc, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Bugs", Schema: schema})
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
 	}
 	collID := cc["id"].(string)
 	rows := []map[string]any{
@@ -176,7 +168,7 @@ func collectionItemsFixture(t *testing.T, srv *Server) string {
 		{"title": "Taxonomy drift", "status": "open", "severity": "P1", "details": "more notes"},
 	}
 	for _, row := range rows {
-		if _, err := srv.serviceCollectionAdd(collID, &collectionAddRequest{Fields: row}); err != nil {
+		if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: row}); err != nil {
 			t.Fatalf("add %q: %v", row["title"], err)
 		}
 	}
@@ -184,11 +176,11 @@ func collectionItemsFixture(t *testing.T, srv *Server) string {
 }
 
 func TestCollectionItemsFieldProjection(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Fields: []string{"title", "status"},
 	})
 	if apiErr != nil {
@@ -200,7 +192,6 @@ func TestCollectionItemsFieldProjection(t *testing.T) {
 	}
 	for _, item := range items {
 		fields := item["fields"].(map[string]any)
-		// Whitelist respected.
 		for k := range fields {
 			if k != "title" && k != "status" {
 				t.Errorf("projection leaked field %q", k)
@@ -212,14 +203,12 @@ func TestCollectionItemsFieldProjection(t *testing.T) {
 		if _, ok := fields["status"]; !ok {
 			t.Errorf("status missing from projected fields")
 		}
-		// details + severity must be dropped.
 		if _, ok := fields["details"]; ok {
 			t.Errorf("details should be absent from projection")
 		}
 		if _, ok := fields["severity"]; ok {
 			t.Errorf("severity should be absent from projection")
 		}
-		// Top-level id always present.
 		if item["id"] == nil {
 			t.Error("top-level id missing")
 		}
@@ -227,11 +216,11 @@ func TestCollectionItemsFieldProjection(t *testing.T) {
 }
 
 func TestCollectionItemsFilterExact(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Filter: map[string]any{"status": "closed"},
 	})
 	if apiErr != nil {
@@ -247,11 +236,11 @@ func TestCollectionItemsFilterExact(t *testing.T) {
 }
 
 func TestCollectionItemsFilterAnyOf(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Filter: map[string]any{"severity": []string{"P1", "P2"}},
 	})
 	if apiErr != nil {
@@ -270,11 +259,11 @@ func TestCollectionItemsFilterAnyOf(t *testing.T) {
 }
 
 func TestCollectionItemsFilterAndProjection(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Filter: map[string]any{"status": "open", "severity": "P1"},
 		Fields: []string{"title"},
 	})
@@ -297,11 +286,11 @@ func TestCollectionItemsFilterAndProjection(t *testing.T) {
 }
 
 func TestCollectionItemsFilterUnknownFieldReturnsEmpty(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Filter: map[string]any{"status": "nonexistent"},
 	})
 	if apiErr != nil {
@@ -313,12 +302,12 @@ func TestCollectionItemsFilterUnknownFieldReturnsEmpty(t *testing.T) {
 }
 
 func TestCollectionItemsFilterInvalidValueTypeRejected(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
-		Filter: map[string]any{"severity": 42}, // not string, not []string
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+		Filter: map[string]any{"severity": 42},
 	})
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid for numeric filter value")
@@ -328,46 +317,16 @@ func TestCollectionItemsFilterInvalidValueTypeRejected(t *testing.T) {
 	}
 }
 
-func TestCollectionItemsHTTPProjectionAndFilter(t *testing.T) {
-	srv, _ := setupTestServer(t)
-	collID := collectionItemsFixture(t, srv)
-
-	// fields=title,status  (comma-separated) + filter.status=open&filter.severity=P1,P2
-	path := fmt.Sprintf("/v1/collections/%s/items?fields=title,status&filter.status=open&filter.severity=P1,P2", collID)
-	w := doRequest(t, srv, "GET", path, nil)
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-	env := parseResponse(t, w)
-	data := env["data"].(map[string]any)
-	items := data["items"].([]any)
-	// 3 open items, of which 2 are P1 and 1 is P2 -> all 3 match "open AND P1|P2".
-	if len(items) != 3 {
-		t.Fatalf("expected 3 matching items, got %d: %v", len(items), items)
-	}
-	for _, it := range items {
-		fields := it.(map[string]any)["fields"].(map[string]any)
-		for k := range fields {
-			if k != "title" && k != "status" {
-				t.Errorf("projection leaked field %q via HTTP", k)
-			}
-		}
-		if fields["status"] != "open" {
-			t.Errorf("filter failed: status=%v", fields["status"])
-		}
-	}
-}
-
 func TestCollectionItemsProjectionCapExceeded(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	tooMany := make([]string, api.MaxProjectionFields+1)
+	tooMany := make([]string, MaxProjectionFields+1)
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("f%d", i)
 	}
-	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{Fields: tooMany})
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Fields: tooMany})
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid for projection cap")
 	}
@@ -377,15 +336,15 @@ func TestCollectionItemsProjectionCapExceeded(t *testing.T) {
 }
 
 func TestCollectionItemsFilterKeyCapExceeded(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	filter := make(map[string]any, api.MaxFilterKeys+1)
-	for i := 0; i <= api.MaxFilterKeys; i++ {
+	filter := make(map[string]any, MaxFilterKeys+1)
+	for i := 0; i <= MaxFilterKeys; i++ {
 		filter[fmt.Sprintf("f%d", i)] = "x"
 	}
-	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{Filter: filter})
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Filter: filter})
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid for filter key cap")
 	}
@@ -395,15 +354,15 @@ func TestCollectionItemsFilterKeyCapExceeded(t *testing.T) {
 }
 
 func TestCollectionItemsFilterValueCapExceeded(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	tooMany := make([]string, api.MaxFilterValuesPerKey+1)
+	tooMany := make([]string, MaxFilterValuesPerKey+1)
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("v%d", i)
 	}
-	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Filter: map[string]any{"status": tooMany},
 	})
 	if apiErr == nil {
@@ -415,11 +374,11 @@ func TestCollectionItemsFilterValueCapExceeded(t *testing.T) {
 }
 
 func TestCollectionItemsProjectionInvalidFieldNameRejected(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	_, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Fields: []string{"title", "not a field name"},
 	})
 	if apiErr == nil {
@@ -431,13 +390,11 @@ func TestCollectionItemsProjectionInvalidFieldNameRejected(t *testing.T) {
 }
 
 func TestCollectionItemsSortOnExcludedField(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	collID := collectionItemsFixture(t, srv)
+	collID := collectionItemsFixture(t, a)
 
-	// Sort by severity but only project title -- sort still works,
-	// severity doesn't bleed into the projected output.
-	res, apiErr := srv.api.CollectionItems(ctx, collID, &api.CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
 		Fields: []string{"title"},
 		Sort:   "severity",
 		Order:  "asc",
@@ -449,7 +406,6 @@ func TestCollectionItemsSortOnExcludedField(t *testing.T) {
 	if len(items) != 4 {
 		t.Fatalf("expected 4 items, got %d", len(items))
 	}
-	// severity should NOT be present in any projected fields.
 	for _, item := range items {
 		fields := item["fields"].(map[string]any)
 		if _, present := fields["severity"]; present {
@@ -459,40 +415,37 @@ func TestCollectionItemsSortOnExcludedField(t *testing.T) {
 }
 
 func TestCollectionRemovePreservesNode(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	addResult, _ := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Keep me"},
 	})
 	itemID := addResult["id"].(string)
 
-	// Remove from collection.
-	_, svcErr := srv.serviceCollectionRemove(collID, itemID)
-	if svcErr != nil {
-		t.Fatalf("remove: %v", svcErr)
+	_, apiErr := a.CollectionRemove(ctx, collID, itemID)
+	if apiErr != nil {
+		t.Fatalf("remove: %v", apiErr)
 	}
 
-	// Item count should be 0.
-	items, _ := srv.serviceCollectionItems(collID, &collectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
 	if items["count"].(int) != 0 {
 		t.Fatal("expected 0 items after remove")
 	}
 
-	// But the node should still exist in the graph.
-	srv.engine.RLock()
-	_, ok := srv.engine.Graph().GetNode(itemID)
-	srv.engine.RUnlock()
+	eng.RLock()
+	_, ok := eng.Graph().GetNode(itemID)
+	eng.RUnlock()
 	if !ok {
 		t.Fatal("node should still exist after remove")
 	}
 }
 
 func TestCollectionUpdate(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	schema := &CollectionSchema{
@@ -502,88 +455,81 @@ func TestCollectionUpdate(t *testing.T) {
 		},
 	}
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Tasks", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Tasks", Schema: schema})
 	collID := result["id"].(string)
 
-	addResult, _ := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Task 1", "status": "open"},
 	})
 	itemID := addResult["id"].(string)
 
-	// Update status.
-	_, svcErr := srv.serviceCollectionUpdate(collID, itemID, &collectionUpdateRequest{
+	_, apiErr := a.CollectionUpdate(ctx, collID, itemID, &CollectionUpdateRequest{
 		Fields: map[string]any{"status": "done"},
 	})
-	if svcErr != nil {
-		t.Fatalf("update: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("update: %v", apiErr)
 	}
 
-	// Verify.
-	items, _ := srv.serviceCollectionItems(collID, &collectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
 	itemList := items["items"].([]map[string]any)
 	fields := itemList[0]["fields"].(map[string]any)
 	if fields["status"] != "done" {
 		t.Errorf("status = %v, want done", fields["status"])
 	}
 
-	// Invalid update should fail.
-	_, svcErr = srv.serviceCollectionUpdate(collID, itemID, &collectionUpdateRequest{
+	_, apiErr = a.CollectionUpdate(ctx, collID, itemID, &CollectionUpdateRequest{
 		Fields: map[string]any{"status": "invalid"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for invalid enum value")
 	}
 }
 
 func TestCollectionMove(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Backlog"})
-	r2, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Active"})
+	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
+	r2, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Active"})
 	backlogID := r1["id"].(string)
 	activeID := r2["id"].(string)
 
-	addResult, _ := srv.serviceCollectionAdd(backlogID, &collectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, backlogID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Do it"},
 	})
 	itemID := addResult["id"].(string)
 
-	// Move to Active.
-	_, svcErr := srv.serviceCollectionMove(backlogID, itemID, &collectionMoveRequest{
+	_, apiErr := a.CollectionMove(ctx, backlogID, itemID, &CollectionMoveRequest{
 		TargetCollectionID: activeID,
 	})
-	if svcErr != nil {
-		t.Fatalf("move: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("move: %v", apiErr)
 	}
 
-	// Backlog should be empty, Active should have 1.
-	backlogItems, _ := srv.serviceCollectionItems(backlogID, &collectionItemsRequest{})
+	backlogItems, _ := a.CollectionItems(ctx, backlogID, &CollectionItemsRequest{})
 	if backlogItems["count"].(int) != 0 {
 		t.Error("backlog should be empty after move")
 	}
-	activeItems, _ := srv.serviceCollectionItems(activeID, &collectionItemsRequest{})
+	activeItems, _ := a.CollectionItems(ctx, activeID, &CollectionItemsRequest{})
 	if activeItems["count"].(int) != 1 {
 		t.Error("active should have 1 item after move")
 	}
 }
 
 func TestCollectionRetireUnretire(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Temp"})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Temp"})
 	collID := result["id"].(string)
 
-	// Add an item.
-	srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Item"},
 	})
 
-	// Retire.
-	retireResult, svcErr := srv.serviceCollectionDelete(collID)
-	if svcErr != nil {
-		t.Fatalf("retire: %v", svcErr)
+	retireResult, apiErr := a.CollectionDelete(ctx, collID)
+	if apiErr != nil {
+		t.Fatalf("retire: %v", apiErr)
 	}
 	if retireResult["retired"] != true {
 		t.Fatal("expected retired=true")
@@ -592,56 +538,59 @@ func TestCollectionRetireUnretire(t *testing.T) {
 		t.Error("expected 1 item preserved")
 	}
 
-	// Can't add to retired collection.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Nope"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error adding to retired collection")
 	}
 
-	// Unretire (call delete again).
-	unretireResult, svcErr := srv.serviceCollectionDelete(collID)
-	if svcErr != nil {
-		t.Fatalf("unretire: %v", svcErr)
+	unretireResult, apiErr := a.CollectionDelete(ctx, collID)
+	if apiErr != nil {
+		t.Fatalf("unretire: %v", apiErr)
 	}
 	if unretireResult["unretired"] != true {
 		t.Fatal("expected unretired=true")
 	}
 
-	// Should be able to add again.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Back in business"},
 	})
-	if svcErr != nil {
-		t.Fatalf("add after unretire: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("add after unretire: %v", apiErr)
 	}
 }
 
 func TestCollectionMultiMembership(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Sprint 23"})
-	r2, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Security"})
+	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Sprint 23"})
+	r2, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Security"})
 	sprintID := r1["id"].(string)
 	securityID := r2["id"].(string)
 
-	// Add item to Sprint.
-	addResult, _ := srv.serviceCollectionAdd(sprintID, &collectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, sprintID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Fix auth bug"},
 	})
 	itemID := addResult["id"].(string)
 
-	// Also add to Security (create edge manually since item already exists).
-	srv.engine.Lock()
-	srv.engine.Graph().AddEdge(itemID, securityID, "member_of", 1.0, nil)
-	srv.engine.Save("test_multi_membership")
-	srv.engine.Unlock()
+	// Create the second membership edge manually: api doesn't expose an
+	// "add to additional collection" operation, but member_of edges are
+	// the underlying representation.
+	eng.Lock()
+	if _, err := eng.Graph().AddEdge(itemID, securityID, "member_of", 1.0, nil); err != nil {
+		eng.Unlock()
+		t.Fatalf("add membership edge: %v", err)
+	}
+	if _, err := eng.Save("test_multi_membership"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
 
-	// Both should show the item.
-	sprintItems, _ := srv.serviceCollectionItems(sprintID, &collectionItemsRequest{})
-	securityItems, _ := srv.serviceCollectionItems(securityID, &collectionItemsRequest{})
+	sprintItems, _ := a.CollectionItems(ctx, sprintID, &CollectionItemsRequest{})
+	securityItems, _ := a.CollectionItems(ctx, securityID, &CollectionItemsRequest{})
 	if sprintItems["count"].(int) != 1 {
 		t.Error("sprint should have 1 item")
 	}
@@ -649,10 +598,9 @@ func TestCollectionMultiMembership(t *testing.T) {
 		t.Error("security should have 1 item")
 	}
 
-	// Remove from sprint -- should still be in security.
-	srv.serviceCollectionRemove(sprintID, itemID)
-	sprintItems, _ = srv.serviceCollectionItems(sprintID, &collectionItemsRequest{})
-	securityItems, _ = srv.serviceCollectionItems(securityID, &collectionItemsRequest{})
+	a.CollectionRemove(ctx, sprintID, itemID)
+	sprintItems, _ = a.CollectionItems(ctx, sprintID, &CollectionItemsRequest{})
+	securityItems, _ = a.CollectionItems(ctx, securityID, &CollectionItemsRequest{})
 	if sprintItems["count"].(int) != 0 {
 		t.Error("sprint should be empty")
 	}
@@ -662,38 +610,31 @@ func TestCollectionMultiMembership(t *testing.T) {
 }
 
 func TestCollectionSchemaEvolution(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	// Create with simple schema.
 	schema := &CollectionSchema{
 		Fields: []SchemaField{
 			{Name: "title", Type: FieldTypeString, Required: true},
 		},
 	}
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Tasks", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Tasks", Schema: schema})
 	collID := result["id"].(string)
 
-	// Add items.
-	srv.serviceCollectionAdd(collID, &collectionAddRequest{
-		Fields: map[string]any{"title": "Task A"},
-	})
-	srv.serviceCollectionAdd(collID, &collectionAddRequest{
-		Fields: map[string]any{"title": "Task B"},
-	})
+	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Task A"}})
+	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Task B"}})
 
-	// Update schema to add required field.
 	newSchema := CollectionSchema{
 		Fields: []SchemaField{
 			{Name: "title", Type: FieldTypeString, Required: true},
 			{Name: "priority", Type: FieldTypeEnum, Required: true, Values: []string{"p0", "p1", "p2"}},
 		},
 	}
-	updateResult, svcErr := srv.serviceCollectionSchemaUpdate(collID, &collectionSchemaUpdateRequest{
+	updateResult, apiErr := a.CollectionSchemaUpdate(ctx, collID, &CollectionSchemaUpdateRequest{
 		Schema: newSchema,
 	})
-	if svcErr != nil {
-		t.Fatalf("schema update: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("schema update: %v", apiErr)
 	}
 	migration := updateResult["migration"].(map[string]any)
 	total := migration["total"]
@@ -710,8 +651,7 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		t.Fatalf("unexpected type for total: %T", total)
 	}
 
-	// Items should show needs_migration.
-	items, _ := srv.serviceCollectionItems(collID, &collectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
 	itemList := items["items"].([]map[string]any)
 	for _, item := range itemList {
 		if item["needs_migration"] == nil {
@@ -719,13 +659,12 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		}
 	}
 
-	// Migrate all items.
-	migrateResult, svcErr := srv.serviceCollectionMigrate(collID, &collectionMigrateRequest{
+	migrateResult, apiErr := a.CollectionMigrate(ctx, collID, &CollectionMigrateRequest{
 		Field: "priority",
 		Value: "p2",
 	})
-	if svcErr != nil {
-		t.Fatalf("migrate: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("migrate: %v", apiErr)
 	}
 	if migrateResult["migrated"].(int) != 2 {
 		t.Errorf("expected 2 migrated, got %v", migrateResult["migrated"])
@@ -734,119 +673,112 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		t.Error("expected migration_complete=true")
 	}
 
-	// Items should no longer need migration.
-	items, _ = srv.serviceCollectionItems(collID, &collectionItemsRequest{})
+	items, _ = a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
 	if items["migration"] != nil {
 		t.Error("expected no migration state after completion")
 	}
 }
 
+// TestCollectionDedup pins the T-02 behavior change: CollectionAdd
+// rejects a duplicate-title add with ErrConflict (instead of the
+// pre-T-02 success-with-duplicate=true map). The existing item's ID
+// is surfaced in the error message.
 func TestCollectionDedup(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	srv.serviceCollectionAdd(collID, &collectionAddRequest{
-		Fields: map[string]any{"title": "Buy milk"},
-	})
+	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Buy milk"}})
 
-	// Same title should return duplicate info.
-	dupResult, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Buy milk"},
 	})
-	if svcErr != nil {
-		t.Fatalf("dedup should not error: %v", svcErr)
+	if apiErr == nil {
+		t.Fatal("expected conflict error on duplicate add")
 	}
-	if dupResult["duplicate"] != true {
-		t.Fatal("expected duplicate=true")
+	if apiErr.Code != "conflict" {
+		t.Errorf("expected conflict code, got %s", apiErr.Code)
 	}
-	if dupResult["existing_id"] == nil {
-		t.Fatal("expected existing_id in duplicate response")
+	if !strings.Contains(apiErr.Message, "already exists") {
+		t.Errorf("expected 'already exists' in error message, got %q", apiErr.Message)
 	}
 }
 
 func TestCollectionRename(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Old Name"})
-	srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Taken"})
+	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Old Name"})
+	a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Taken"})
 	collID := r1["id"].(string)
 
-	// Rename to new name.
-	_, svcErr := srv.serviceCollectionRename(collID, &collectionRenameRequest{Name: "New Name"})
-	if svcErr != nil {
-		t.Fatalf("rename: %v", svcErr)
+	_, apiErr := a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "New Name"})
+	if apiErr != nil {
+		t.Fatalf("rename: %v", apiErr)
 	}
 
-	// Rename to taken name should fail.
-	_, svcErr = srv.serviceCollectionRename(collID, &collectionRenameRequest{Name: "Taken"})
-	if svcErr == nil {
+	_, apiErr = a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "Taken"})
+	if apiErr == nil {
 		t.Fatal("expected conflict error")
 	}
 
-	// Rename to same name (self) should succeed.
-	_, svcErr = srv.serviceCollectionRename(collID, &collectionRenameRequest{Name: "New Name"})
-	if svcErr != nil {
-		t.Fatalf("rename to self: %v", svcErr)
+	_, apiErr = a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "New Name"})
+	if apiErr != nil {
+		t.Fatalf("rename to self: %v", apiErr)
 	}
 }
 
 func TestCollectionFieldNameValidation(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	// Field name with dots should be rejected (property key injection).
-	_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title.evil": "injected"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for field name with dots")
 	}
 
-	// Field name with slashes should be rejected.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"../escape": "bad"},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for field name with slashes")
 	}
 
-	// Valid field name should work.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"valid_field_name": "good"},
 	})
-	if svcErr != nil {
-		t.Fatalf("valid field name rejected: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("valid field name rejected: %v", apiErr)
 	}
 }
 
 func TestCollectionSchemaFieldNameValidation(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	// Schema with invalid field name should be rejected.
 	schema := &CollectionSchema{
 		Fields: []SchemaField{
 			{Name: "field.with.dots", Type: FieldTypeString, Required: true},
 		},
 	}
-	_, svcErr := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{
+	_, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
 		Name:   "Bad Schema",
 		Schema: schema,
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for schema field name with dots")
 	}
 }
 
 func TestCollectionNaNRejection(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	schema := &CollectionSchema{
@@ -854,31 +786,28 @@ func TestCollectionNaNRejection(t *testing.T) {
 			{Name: "score", Type: FieldTypeNumber, Required: true},
 		},
 	}
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Scores", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Scores", Schema: schema})
 	collID := result["id"].(string)
 
-	// NaN should be rejected.
-	_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"score": math.NaN()},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for NaN value")
 	}
 
-	// Inf should be rejected.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"score": math.Inf(1)},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for Inf value")
 	}
 
-	// Normal number should work.
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"score": 42.5},
 	})
-	if svcErr != nil {
-		t.Fatalf("valid number rejected: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("valid number rejected: %v", apiErr)
 	}
 }
 
@@ -886,7 +815,7 @@ func TestCollectionPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping performance test")
 	}
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	schema := &CollectionSchema{
@@ -896,38 +825,34 @@ func TestCollectionPerformance(t *testing.T) {
 			{Name: "priority", Type: FieldTypeNumber, Required: false},
 		},
 	}
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Perf Test", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Perf Test", Schema: schema})
 	collID := result["id"].(string)
 
-	// Add 100 items. (Reduced from 500 to avoid timeout under parallel
-	// test execution where CPU contention slows gzip compression.)
 	const numItems = 100
 	for i := 0; i < numItems; i++ {
-		_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+		_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 			Fields: map[string]any{
 				"title":    fmt.Sprintf("Task %d", i),
 				"status":   "open",
 				"priority": float64(i % 4),
 			},
 		})
-		if svcErr != nil {
-			t.Fatalf("add %d: %v", i, svcErr)
+		if apiErr != nil {
+			t.Fatalf("add %d: %v", i, apiErr)
 		}
 	}
 
-	// List all items.
-	items, svcErr := srv.serviceCollectionItems(collID, &collectionItemsRequest{Sort: "priority"})
-	if svcErr != nil {
-		t.Fatalf("items: %v", svcErr)
+	items, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Sort: "priority"})
+	if apiErr != nil {
+		t.Fatalf("items: %v", apiErr)
 	}
 	if items["count"].(int) != numItems {
 		t.Fatalf("expected %d items, got %d", numItems, items["count"])
 	}
 
-	// List collections (with item count computation).
-	list, svcErr := srv.serviceCollectionList(&collectionListRequest{})
-	if svcErr != nil {
-		t.Fatalf("list: %v", svcErr)
+	list, apiErr := a.CollectionList(ctx, &CollectionListRequest{})
+	if apiErr != nil {
+		t.Fatalf("list: %v", apiErr)
 	}
 	colls := list["collections"].([]map[string]any)
 	if colls[0]["item_count"].(int) != numItems {
@@ -936,7 +861,7 @@ func TestCollectionPerformance(t *testing.T) {
 }
 
 func TestCollectionEnumSet(t *testing.T) {
-	srv, _ := setupTestServer(t)
+	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	schema := &CollectionSchema{
@@ -946,22 +871,20 @@ func TestCollectionEnumSet(t *testing.T) {
 		},
 	}
 
-	result, _ := srv.serviceCollectionCreate(ctx, &collectionCreateRequest{Name: "Issues", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Issues", Schema: schema})
 	collID := result["id"].(string)
 
-	// Valid enum[].
-	_, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Fix crash", "labels": []any{"bug", "security"}},
 	})
-	if svcErr != nil {
-		t.Fatalf("add with enum[]: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("add with enum[]: %v", apiErr)
 	}
 
-	// Invalid value in enum[].
-	_, svcErr = srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
 		Fields: map[string]any{"title": "Bad label", "labels": []any{"bug", "invalid"}},
 	})
-	if svcErr == nil {
+	if apiErr == nil {
 		t.Fatal("expected error for invalid enum[] value")
 	}
 }

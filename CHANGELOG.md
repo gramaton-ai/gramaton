@@ -112,6 +112,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **T-02 cascade cleanup stage C3 (collections).** Deleted
+  `server/service_collections.go` (928 lines) and
+  `server/service_collections_test.go` (967 lines), plus the
+  duplicate `server/collections.go` (289 lines) whose schema
+  types and field-type constants already live in
+  `api/collection_schema.go`. All 12 server-level collection
+  methods were unreachable via bindings after T-02 routed
+  `bindings_collections.go` through `s.api.CollectionXxx`.
+  Coverage ported to `api/collections_test.go`: 27 tests over
+  Create/List/Items/Add/Remove/Update/Move/Rename/Delete/
+  SchemaUpdate/Migrate, including schema validation, projection
+  + filter edge cases, multi-membership, dedup, and schema
+  evolution. Two tests pinned T-02 behavior changes: duplicate
+  name and duplicate title now surface as `conflict` rather
+  than `duplicate`-code or success-with-`duplicate=true` maps.
+  The HTTP-boundary test (`TestCollectionItemsHTTPProjectionAndFilter`)
+  stayed in `bindings_collections_test.go`; the
+  `TestCollectionPerformance` test was preserved too.
 - **T-02 cascade cleanup stage C2 (records).** Removed seven dead
   server-level record services from `server/service_records.go`
   (`serviceInspect`, `serviceUpdate`, `serviceClassify`,
