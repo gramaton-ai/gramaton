@@ -37,40 +37,6 @@ type captureRequest struct {
 	Meta              map[string]any `json:"meta,omitempty"`
 }
 
-type updateRequest struct {
-	Confidence      *float64       `json:"confidence,omitempty"`
-	Temporality     string         `json:"temporality,omitempty"`
-	KnowledgeType   string         `json:"knowledge_type,omitempty"`
-	EpistemicStatus string         `json:"epistemic_status,omitempty"`
-	Importance      *float64       `json:"importance,omitempty"`
-	Keywords        []string       `json:"keywords,omitempty"`
-	SummaryShort    string         `json:"summary_short,omitempty"`
-	ValidUntil      string         `json:"valid_until,omitempty"`
-	AssertedAsOf    string         `json:"asserted_as_of,omitempty"`
-	Meta            map[string]any `json:"meta,omitempty"`
-}
-
-type classifyRequest struct {
-	Temporality     string   `json:"temporality,omitempty"`
-	Confidence      *float64 `json:"confidence,omitempty"`
-	KnowledgeType   string   `json:"knowledge_type,omitempty"`
-	EpistemicStatus string   `json:"epistemic_status,omitempty"`
-	Importance      *float64 `json:"importance,omitempty"`
-	Keywords        []string `json:"keywords,omitempty"`
-	SummaryShort    string   `json:"summary_short,omitempty"`
-}
-
-type resolveRequest struct {
-	Resolution     string `json:"resolution"`
-	ResolutionNote string `json:"resolution_note,omitempty"`
-}
-
-type edgeRequest struct {
-	TargetID   string   `json:"target_id"`
-	EdgeType   string   `json:"edge_type"`
-	EdgeWeight *float64 `json:"edge_weight,omitempty"`
-}
-
 // preEmbeddedVectors holds vectors computed outside the lock.
 type preEmbeddedVectors struct {
 	vectors map[string][]float32 // embedKey -> vector
@@ -251,56 +217,6 @@ func validateCaptureRequest(req *captureRequest) error {
 	return nil
 }
 
-func validateUpdateRequest(req *updateRequest) error {
-	if err := validateFloat64Range("confidence", req.Confidence, 0.0, 1.0); err != nil {
-		return err
-	}
-	if err := validateFloat64Range("importance", req.Importance, 0.0, 1.0); err != nil {
-		return err
-	}
-	if err := validateEnum("temporality", req.Temporality, validTemporalities); err != nil {
-		return err
-	}
-	if err := validateEnum("knowledge_type", req.KnowledgeType, validKnowledgeTypes); err != nil {
-		return err
-	}
-	if err := validateEnum("epistemic_status", req.EpistemicStatus, validEpistemicStatuses); err != nil {
-		return err
-	}
-	if err := validateKeywords(req.Keywords); err != nil {
-		return err
-	}
-	if len(req.SummaryShort) > getMaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
-	}
-	return nil
-}
-
-func validateClassifyRequest(req *classifyRequest) error {
-	if err := validateFloat64Range("confidence", req.Confidence, 0.0, 1.0); err != nil {
-		return err
-	}
-	if err := validateFloat64Range("importance", req.Importance, 0.0, 1.0); err != nil {
-		return err
-	}
-	if err := validateEnum("temporality", req.Temporality, validTemporalities); err != nil {
-		return err
-	}
-	if err := validateEnum("knowledge_type", req.KnowledgeType, validKnowledgeTypes); err != nil {
-		return err
-	}
-	if err := validateEnum("epistemic_status", req.EpistemicStatus, validEpistemicStatuses); err != nil {
-		return err
-	}
-	if err := validateKeywords(req.Keywords); err != nil {
-		return err
-	}
-	if len(req.SummaryShort) > getMaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
-	}
-	return nil
-}
-
 func setOptionalProps(props graph.Properties, req *captureRequest) {
 	if req.Temporality != "" {
 		props["temporality"] = graph.StringProperty(req.Temporality)
@@ -376,60 +292,3 @@ func setOptionalProps(props graph.Properties, req *captureRequest) {
 	}
 }
 
-// inspectMetadataSummary generates a human-readable metadata summary.
-func inspectMetadataSummary(props graph.Properties) string {
-	now := time.Now().UTC()
-	var parts []string
-
-	if vu, ok := props.GetTimestamp("valid_until"); ok {
-		if vu.Before(now) {
-			days := int(now.Sub(vu).Hours() / 24)
-			if days == 0 {
-				parts = append(parts, "Historical (expired today).")
-			} else if days == 1 {
-				parts = append(parts, "Historical (expired yesterday).")
-			} else {
-				parts = append(parts, fmt.Sprintf("Historical (expired %d days ago).", days))
-			}
-		} else {
-			days := int(vu.Sub(now).Hours() / 24)
-			if days == 0 {
-				parts = append(parts, "Current (expires today).")
-			} else if days == 1 {
-				parts = append(parts, "Current (expires tomorrow).")
-			} else {
-				parts = append(parts, fmt.Sprintf("Current (expires in %d days).", days))
-			}
-		}
-	} else {
-		parts = append(parts, "Current.")
-	}
-
-	if v, ok := props.GetString("temporality"); ok {
-		parts = append(parts, v)
-	}
-	if c, ok := props.GetFloat64("confidence"); ok {
-		parts = append(parts, fmt.Sprintf("confidence %.2f", c))
-	}
-	if s, ok := props.GetString("epistemic_status"); ok {
-		if s == "well_established" {
-			s = "well-established"
-		}
-		parts = append(parts, s)
-	}
-	if v, ok := props.GetString("resolution"); ok {
-		parts = append(parts, fmt.Sprintf("resolved: %s", v))
-	}
-
-	result := ""
-	for i, p := range parts {
-		if i == 0 {
-			result = p
-		} else if i == 1 {
-			result += " " + p
-		} else {
-			result += ", " + p
-		}
-	}
-	return result
-}

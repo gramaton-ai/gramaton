@@ -25,14 +25,10 @@ const maxJSONBodySize = 1 << 20 // 1MB
 // maxIngestBodySize is the max request body size for ingest uploads.
 const maxIngestBodySize = 200 << 20 // 200MB
 
-// Search input limits.
+// Server-level limits still consumed by live handlers.
 const (
-	maxSearchTop     = 1000
-	maxMissingFields = 50
-	maxMatchLength   = 1024
-	maxLogLimit      = 500
-	maxSearchHops    = 10
-	maxEdgeTypeLen   = 256
+	maxLogLimit    = 500
+	maxEdgeTypeLen = 256
 )
 
 // Per-field length limits that aren't in LimitsConfig.

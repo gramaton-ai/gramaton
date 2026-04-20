@@ -8,39 +8,6 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
-func TestInspectMetadataSummary(t *testing.T) {
-	props := graph.Properties{
-		"temporality":     graph.StringProperty("durable"),
-		"confidence":      graph.Float64Property(0.9),
-		"epistemic_status": graph.StringProperty("well_established"),
-	}
-
-	summary := inspectMetadataSummary(props)
-	if summary == "" {
-		t.Fatal("summary should not be empty")
-	}
-	if !containsStr(summary, "Current") {
-		t.Fatal("should contain 'Current'")
-	}
-	if !containsStr(summary, "durable") {
-		t.Fatal("should contain temporality")
-	}
-	if !containsStr(summary, "0.90") {
-		t.Fatal("should contain confidence")
-	}
-}
-
-func TestInspectMetadataSummaryHistorical(t *testing.T) {
-	props := graph.Properties{
-		"valid_until": graph.TimestampProperty(time.Now().UTC().Add(-24 * time.Hour)),
-	}
-
-	summary := inspectMetadataSummary(props)
-	if !containsStr(summary, "Historical") {
-		t.Fatal("should contain 'Historical' for expired record")
-	}
-}
-
 func TestSetOptionalProps(t *testing.T) {
 	req := &captureRequest{
 		Content:         "Test",
@@ -149,53 +116,6 @@ func TestValidateCaptureRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		err := validateCaptureRequest(&tt.req)
-		if tt.wantErr && err == nil {
-			t.Errorf("%s: expected error", tt.name)
-		}
-		if !tt.wantErr && err != nil {
-			t.Errorf("%s: unexpected error: %v", tt.name, err)
-		}
-	}
-}
-
-func TestValidateUpdateRequest(t *testing.T) {
-	tests := []struct {
-		name    string
-		req     updateRequest
-		wantErr bool
-	}{
-		{"valid", updateRequest{Temporality: "temporal"}, false},
-		{"invalid temporality", updateRequest{Temporality: "bad"}, true},
-		{"confidence out of range", updateRequest{Confidence: ptrFloat64(5.0)}, true},
-		{"empty is valid", updateRequest{}, false},
-	}
-
-	for _, tt := range tests {
-		err := validateUpdateRequest(&tt.req)
-		if tt.wantErr && err == nil {
-			t.Errorf("%s: expected error", tt.name)
-		}
-		if !tt.wantErr && err != nil {
-			t.Errorf("%s: unexpected error: %v", tt.name, err)
-		}
-	}
-}
-
-func TestValidateClassifyRequest(t *testing.T) {
-	tests := []struct {
-		name    string
-		req     classifyRequest
-		wantErr bool
-	}{
-		{"valid", classifyRequest{Temporality: "immutable", Confidence: ptrFloat64(0.99)}, false},
-		{"invalid temporality", classifyRequest{Temporality: "bad"}, true},
-		{"all valid enums", classifyRequest{
-			Temporality: "ephemeral", KnowledgeType: "reference", EpistemicStatus: "contested",
-		}, false},
-	}
-
-	for _, tt := range tests {
-		err := validateClassifyRequest(&tt.req)
 		if tt.wantErr && err == nil {
 			t.Errorf("%s: expected error", tt.name)
 		}
@@ -383,19 +303,6 @@ func TestResolveRecordWithoutNote(t *testing.T) {
 	n, _ := eng.Graph().GetNode(id)
 	if _, ok := n.Properties.GetString("resolution_note"); ok {
 		t.Fatal("resolution_note should not be set when not provided")
-	}
-}
-
-func TestInspectMetadataSummaryResolution(t *testing.T) {
-	props := graph.Properties{
-		"temporality": graph.StringProperty("durable"),
-		"confidence":  graph.Float64Property(0.9),
-		"resolution":  graph.StringProperty("completed"),
-	}
-
-	summary := inspectMetadataSummary(props)
-	if !containsStr(summary, "resolved: completed") {
-		t.Fatalf("summary should contain resolution, got %q", summary)
 	}
 }
 

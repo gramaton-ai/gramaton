@@ -112,6 +112,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **T-02 cascade cleanup stage C2 (records).** Removed seven dead
+  server-level record services from `server/service_records.go`
+  (`serviceInspect`, `serviceUpdate`, `serviceClassify`,
+  `serviceResolve`, `serviceLink`, `serviceDeleteEdge`,
+  `serviceDeleteRecord`), their supporting types
+  (`updateRequest`, `classifyRequest`, `resolveRequest`,
+  `edgeRequest`) and validators (`validateUpdateRequest`,
+  `validateClassifyRequest`) in `handler_records.go`, and the
+  duplicate `inspectMetadataSummary` helper (live copy lives in
+  `api/internal.go`). Coverage ported to new
+  `api/records_test.go`: 10 tests over api.Inspect, api.Update,
+  api.Classify, api.Resolve, api.Link, api.Unlink, and
+  api.DeleteRecord. Kept `serviceCapture` + its helpers
+  (`preEmbedContent`, `applyPreEmbedded`, `validateCaptureRequest`,
+  `setOptionalProps`) since `handler_intake.go`'s `serviceIntake`
+  still calls through to them; five capture tests retained in
+  `service_records_test.go`. Also dropped four consts in
+  `server/validation.go` that became unused after `serviceSearch`
+  went in stage C1: `maxSearchTop`, `maxMissingFields`,
+  `maxMatchLength`, `maxSearchHops`.
 - **T-02 cascade cleanup stage C1 (search + test rewires).** Deleted
   `server/service_search.go` (the last method `serviceSearch` was
   unreachable via bindings since T-02 routed `bindings_search.go`
