@@ -50,6 +50,12 @@ const (
 	MaxMetaKeyLen      = 64
 	MaxMetaValueLen    = 1024
 	MaxReembedBatch    = 500
+	// MaxCollectionBatchSize caps how many items a single bulk add
+	// can commit. Bigger batches would tie up the engine write lock
+	// for an extended period and potentially exceed provider
+	// batch-embed limits. 500 is a starting point -- raise it only
+	// after profiling.
+	MaxCollectionBatchSize = 500
 )
 
 // Search input cardinality limits.

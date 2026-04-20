@@ -15,6 +15,7 @@ func registerCollectionProxyTools(mcpServer *mcp.Server) {
 	registerCollectionListProxy(mcpServer)
 	registerCollectionItemsProxy(mcpServer)
 	registerCollectionAddProxy(mcpServer)
+	registerCollectionAddBatchProxy(mcpServer)
 	registerCollectionUpdateProxy(mcpServer)
 	registerCollectionMoveProxy(mcpServer)
 	registerCollectionRemoveProxy(mcpServer)
@@ -155,6 +156,29 @@ func registerCollectionAddProxy(s *mcp.Server) {
 		}
 		path := fmt.Sprintf("/v1/collections/%s/items", url.PathEscape(args.CollectionID))
 		return proxyPost(path, map[string]any{"fields": args.Fields})
+	})
+}
+
+// --- add batch ---
+
+type proxyCollectionAddBatchInput struct {
+	CollectionID string                  `json:"collection_id" jsonschema:"collection ID"`
+	Items        []api.CollectionAddItem `json:"items" jsonschema:"array of items to add (max 500)"`
+}
+
+func registerCollectionAddBatchProxy(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_collection_add_batch",
+		Description: api.CollectionAddBatchDescription,
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionAddBatchInput) (*mcp.CallToolResult, any, error) {
+		if args.CollectionID == "" {
+			return proxyErr("collection_id is required")
+		}
+		if len(args.Items) == 0 {
+			return proxyErr("items is required")
+		}
+		path := fmt.Sprintf("/v1/collections/%s/items/batch", url.PathEscape(args.CollectionID))
+		return proxyPost(path, map[string]any{"items": args.Items})
 	})
 }
 

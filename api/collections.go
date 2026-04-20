@@ -216,6 +216,8 @@ const CollectionSchemaDescription = "Read a collection's schema and migration st
 
 const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
 
+const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Returns per-item {index, client_ref, id} on success and {index, client_ref, code, message} on failure."
+
 // --- service methods ---
 
 type CollectionCreateRequest struct {
@@ -763,6 +765,283 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *Colle
 	}
 
 	return map[string]any{"id": n.ID, "collection_id": collectionID}, nil
+}
+
+// CollectionAddItem is one item inside a CollectionAddBatchRequest.
+// The optional ClientRef is echoed back in the per-item result so
+// callers can correlate outcomes with their own records without
+// relying on positional order.
+type CollectionAddItem struct {
+	Fields    map[string]any `json:"fields" jsonschema:"item fields (must match collection schema if defined)"`
+	ClientRef string         `json:"client_ref,omitempty" jsonschema:"optional caller handle echoed in the per-item result"`
+}
+
+type CollectionAddBatchRequest struct {
+	Items []CollectionAddItem `json:"items" jsonschema:"array of items to add (max 500)"`
+}
+
+// BatchAddSuccess is one entry in CollectionAddBatchResponse.Added.
+// Exactly one of {ID} or {Code, Message} is populated per item.
+type BatchAddSuccess struct {
+	Index     int    `json:"index"`
+	ClientRef string `json:"client_ref,omitempty"`
+	ID        string `json:"id"`
+}
+
+// BatchAddFailure is one entry in CollectionAddBatchResponse.Failed.
+// Code matches the APIError codes ("input_error", "duplicate", etc.).
+type BatchAddFailure struct {
+	Index     int    `json:"index"`
+	ClientRef string `json:"client_ref,omitempty"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+}
+
+type CollectionAddBatchResponse struct {
+	CollectionID string            `json:"collection_id"`
+	Added        []BatchAddSuccess `json:"added"`
+	Failed       []BatchAddFailure `json:"failed"`
+}
+
+// CollectionAddBatch adds many items to a collection in one call. The
+// implementation runs in two phases:
+//
+//   Phase 1 (off-lock): schema-validate every item and batch-embed
+//   the concatenated text per item in a single provider call. Per-
+//   item validation failures are recorded without engaging the
+//   engine. An embed-call failure is tolerated -- items that would
+//   have been embedded fall back to embed-less add, preserving the
+//   rest of the batch.
+//
+//   Phase 2 (write lock): load the collection + schema, run the
+//   dedup pass (existing members via CollCache plus intra-batch
+//   titles) and commit all passing items inside a single
+//   BatchIndexWrites transaction. One Save at the end.
+//
+// Best-effort semantics: per-item validation and dedup failures are
+// reported in Failed; items that pass pre-checks commit atomically.
+// A Save-phase failure aborts the whole batch with a top-level
+// APIError; it does not produce partial per-item results.
+func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req CollectionAddBatchRequest) (CollectionAddBatchResponse, *APIError) {
+	if len(req.Items) == 0 {
+		return CollectionAddBatchResponse{}, ErrMissing("items is required")
+	}
+	if len(req.Items) > MaxCollectionBatchSize {
+		return CollectionAddBatchResponse{}, ErrInvalid(fmt.Sprintf("items exceeds %d; split into smaller batches", MaxCollectionBatchSize))
+	}
+
+	// Phase 1: schema-validate off-lock. Items that fail validation
+	// short-circuit here and never touch the engine. Passing items
+	// accumulate in survivors with their original request index for
+	// stable result ordering.
+	type prepared struct {
+		reqIdx  int
+		item    CollectionAddItem
+		vec     []float32
+		vecText string // concatenated string fields; empty if none
+	}
+	// Schema lookup has to wait for the write lock so we don't race
+	// with CollectionSchemaUpdate. Validate the per-item SHAPE
+	// (non-empty Fields) here; defer schema conformance to phase 2.
+	failed := make([]BatchAddFailure, 0)
+	survivors := make([]prepared, 0, len(req.Items))
+	for i, item := range req.Items {
+		if len(item.Fields) == 0 {
+			failed = append(failed, BatchAddFailure{
+				Index:     i,
+				ClientRef: item.ClientRef,
+				Code:      "input_error",
+				Message:   "fields is required",
+			})
+			continue
+		}
+		var parts []string
+		for _, v := range item.Fields {
+			if s, ok := v.(string); ok && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		survivors = append(survivors, prepared{
+			reqIdx:  i,
+			item:    item,
+			vecText: strings.Join(parts, " "),
+		})
+	}
+
+	// Phase 1 (continued): batch-embed survivors' text. One provider
+	// call instead of N. An embed error is logged and tolerated --
+	// we proceed with empty vectors, matching the single-add
+	// degraded-embed behavior.
+	if a.engine.Embedder() != nil && len(survivors) > 0 {
+		texts := make([]string, len(survivors))
+		for i, s := range survivors {
+			texts[i] = s.vecText
+		}
+		vecs, err := a.engine.Embedder().Embed(ctx, texts)
+		if err != nil {
+			a.log.Warn("collection batch embed failed", "component", "collection",
+				"n", len(survivors), "err", err)
+		} else if len(vecs) == len(survivors) {
+			for i := range survivors {
+				if survivors[i].vecText != "" {
+					survivors[i].vec = vecs[i]
+				}
+			}
+		} else {
+			a.log.Warn("collection batch embed returned wrong count",
+				"component", "collection", "want", len(survivors), "got", len(vecs))
+		}
+	}
+
+	// Phase 2: engine write lock. Collection existence, schema load,
+	// dedup, and commit all happen under the same lock so nothing
+	// races with a concurrent CollectionSchemaUpdate or a sibling
+	// CollectionAdd with the same title.
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	coll, svcErr := a.isCollection(collectionID)
+	if svcErr != nil {
+		return CollectionAddBatchResponse{}, svcErr
+	}
+	if isRetired(coll) {
+		return CollectionAddBatchResponse{}, ErrInvalid("cannot add to retired collection")
+	}
+	schema, err := loadSchema(coll)
+	if err != nil {
+		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
+		return CollectionAddBatchResponse{}, ErrInternal("failed to load schema")
+	}
+
+	// Build the existing-title set once. Iterating collectionItemEdges
+	// per item would be O(N*M); doing it once is O(M).
+	existingTitles := make(map[string]string) // lowercased title -> existing item ID
+	for _, e := range a.collectionItemEdges(collectionID) {
+		n, ok := a.engine.Graph().GetNode(e.SourceID)
+		if !ok {
+			continue
+		}
+		if existing, ok := n.Properties.GetString("field.title"); ok {
+			existingTitles[strings.ToLower(existing)] = e.SourceID
+		}
+	}
+
+	added := make([]BatchAddSuccess, 0, len(survivors))
+	emb := a.engine.Embedder()
+	var modelID string
+	if emb != nil {
+		modelID = emb.ModelID()
+	}
+
+	// CollCache.AddMember opens its own bbolt write transaction, which
+	// would deadlock if called inside the BatchIndexWrites closure
+	// (which already holds the shared tx). Collect the IDs during the
+	// closure and apply them after it returns.
+	cachePending := make([]string, 0, len(survivors))
+
+	batchErr := a.engine.BatchIndexWrites(func() {
+		for _, s := range survivors {
+			// Per-item schema validation. Runs under lock so the
+			// schema we validate against matches the schema we commit
+			// under.
+			if verr := validateItemFields(schema, s.item.Fields); verr != nil {
+				failed = append(failed, BatchAddFailure{
+					Index:     s.reqIdx,
+					ClientRef: s.item.ClientRef,
+					Code:      "input_error",
+					Message:   verr.Error(),
+				})
+				continue
+			}
+
+			// Dedup pass: check against existing members AND against
+			// prior items in this batch (first-write-wins).
+			if title, ok := s.item.Fields["title"]; ok {
+				if titleStr, isStr := title.(string); isStr && titleStr != "" {
+					if existingID, dup := existingTitles[strings.ToLower(titleStr)]; dup {
+						failed = append(failed, BatchAddFailure{
+							Index:     s.reqIdx,
+							ClientRef: s.item.ClientRef,
+							Code:      "duplicate",
+							Message:   fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, existingID),
+						})
+						continue
+					}
+				}
+			}
+
+			// Create item node. Same shape as single CollectionAdd.
+			props := graph.Properties{
+				"created_at":   graph.TimestampProperty(time.Now().UTC()),
+				"access_count": graph.Int64Property(0),
+			}
+			n := a.engine.Graph().AddNode(props)
+			a.setFieldProps(n.ID, s.item.Fields)
+
+			// Index + BM25 from string field values.
+			var bm25Parts []string
+			for _, v := range s.item.Fields {
+				if str, ok := v.(string); ok {
+					bm25Parts = append(bm25Parts, str)
+				}
+			}
+			a.engine.IndexNode(n.ID, strings.Join(bm25Parts, " "), s.vec)
+			if s.vec != nil && modelID != "" {
+				a.engine.SetProp(n.ID, "embedding_model", graph.StringProperty(modelID))
+			}
+
+			if _, err := a.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
+				a.log.Warn("collection batch member_of edge failed",
+					"component", "collection", "collection_id", collectionID,
+					"item_id", n.ID, "err", err)
+				failed = append(failed, BatchAddFailure{
+					Index:     s.reqIdx,
+					ClientRef: s.item.ClientRef,
+					Code:      "internal_error",
+					Message:   "failed to add item to collection",
+				})
+				continue
+			}
+			cachePending = append(cachePending, n.ID)
+
+			// Register intra-batch title so later items see this one
+			// as a duplicate.
+			if title, ok := s.item.Fields["title"]; ok {
+				if titleStr, isStr := title.(string); isStr && titleStr != "" {
+					existingTitles[strings.ToLower(titleStr)] = n.ID
+				}
+			}
+
+			added = append(added, BatchAddSuccess{
+				Index:     s.reqIdx,
+				ClientRef: s.item.ClientRef,
+				ID:        n.ID,
+			})
+		}
+	})
+	if batchErr != nil {
+		a.log.Error("collection batch tx failed", "component", "collection",
+			"collection_id", collectionID, "err", batchErr)
+		return CollectionAddBatchResponse{}, ErrInternal("failed to commit batch")
+	}
+
+	// Apply queued member-cache updates outside the batch tx.
+	if cc := a.engine.CollCache(); cc != nil {
+		for _, id := range cachePending {
+			cc.AddMember(collectionID, id)
+		}
+	}
+
+	if _, err := a.engine.Save("collection_add_batch"); err != nil {
+		a.log.Warn("collection batch save failed", "component", "collection", "err", err)
+		return CollectionAddBatchResponse{}, ErrInternal("failed to save batch")
+	}
+
+	return CollectionAddBatchResponse{
+		CollectionID: collectionID,
+		Added:        added,
+		Failed:       failed,
+	}, nil
 }
 
 func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string) (map[string]any, *APIError) {

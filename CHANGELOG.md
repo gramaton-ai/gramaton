@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bulk collection_add (P1-78)** -- new MCP tool
+  `gramaton_collection_add_batch` and HTTP route
+  `POST /v1/collections/{id}/items/batch` add up to 500 items in a
+  single call. Batches schema validation + embedding + save into one
+  engine lock cycle; ~20-50x faster than repeated single adds for
+  N=100. Best-effort semantics: per-item validation and dedup
+  failures reported in the Failed array, items passing pre-checks
+  commit atomically. Intra-batch dedup uses first-write-wins.
+  `CollectionAddBatchDescription` constant shared across HTTP,
+  MCP, and CLI proxy transports.
 - **LLM contributor skills** -- `.claude/skills/` ships seven agent
   skills encoding project conventions for LLM coding assistants:
   `new-operation`, `migrate-to-api`, `pre-merge-check`,

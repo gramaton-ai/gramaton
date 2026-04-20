@@ -106,6 +106,20 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusCreated, result)
 	})
 
+	mux.HandleFunc("POST /v1/collections/{id}/items/batch", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CollectionAddBatchRequest
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CollectionAddBatch(r.Context(), r.PathValue("id"), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
 	mux.HandleFunc("PATCH /v1/collections/{id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionUpdateRequest
 		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
@@ -281,6 +295,23 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_collection_add")
 		defer done(nil)
 		result, apiErr := s.api.CollectionAdd(ctx, args.CollectionID, &api.CollectionAddRequest{Fields: args.Fields})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type addBatchArgs struct {
+		CollectionID string                  `json:"collection_id" jsonschema:"collection ID"`
+		Items        []api.CollectionAddItem `json:"items" jsonschema:"array of items to add (max 500)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_collection_add_batch",
+		Description: api.CollectionAddBatchDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addBatchArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_collection_add_batch")
+		defer done(nil)
+		result, apiErr := s.api.CollectionAddBatch(ctx, args.CollectionID, api.CollectionAddBatchRequest{Items: args.Items})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
