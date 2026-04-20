@@ -19,12 +19,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commit atomically. Intra-batch dedup uses first-write-wins.
   `CollectionAddBatchDescription` constant shared across HTTP,
   MCP, and CLI proxy transports.
-- **LLM contributor skills** -- `.claude/skills/` ships seven agent
-  skills encoding project conventions for LLM coding assistants:
+- **LLM contributor skills** -- `.claude/skills/` ships agent skills
+  encoding project conventions for LLM coding assistants:
   `new-operation`, `migrate-to-api`, `pre-merge-check`,
   `gramaton-review`, `gramaton-security-review`, `store-health`,
-  `curation-sweep`. Claude Code auto-discovers them; other tools
-  reading agent-skill markdown can adapt. Skills cite CONTRIBUTING.md
+  `curation-sweep`, `benchmark-extract`. Claude Code auto-discovers
+  them; other tools reading agent-skill markdown can adapt. Skills cite CONTRIBUTING.md
   as the source of truth rather than duplicating conventions. Added
   `CLAUDE.md` at the repo root as a short skill index and governance
   reference. `.gitignore` narrowed from a blanket `.claude/` rule to

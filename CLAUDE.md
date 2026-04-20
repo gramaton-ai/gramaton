@@ -18,7 +18,7 @@ project overview and contribution conventions, read
 
 ## Skills
 
-Seven procedures under [.claude/skills/](.claude/skills/) encode
+Procedures under [.claude/skills/](.claude/skills/) encode
 CONTRIBUTING.md conventions in invocable form. Claude Code
 auto-discovers them; invoke via the Skill tool.
 
@@ -31,6 +31,7 @@ auto-discovers them; invoke via the Skill tool.
 | `gramaton-security-review` | Security review for diffs touching filesystem paths, auth gates, user identifiers, or error surfaces. Wraps `/security-review`. |
 | `store-health` | Diagnose the health of a Gramaton store. |
 | `curation-sweep` | **Self-trigger when an MCP response shows `curation.overdue: true` AND `autonomous: false`.** Once per session at a natural breakpoint. |
+| `benchmark-extract` | Ingest a benchmark dataset (LongMemEval, etc.) into the `gramaton-bench` store via sub-agents. Requires bench server on port 7338. |
 
 Two skills are **self-triggered** — invoke them without being asked
 when the trigger condition holds. The rest are user-triggered.
