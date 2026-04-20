@@ -112,6 +112,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Leaner `session_prepare` extraction prompt.** The prompt returned
+  by `gramaton_session_prepare` dropped from 202 lines (~9360 bytes)
+  to 51 lines (~2525 bytes). Detailed content (field-role framework,
+  classification heuristics per axis, question-type mapping, two-tier
+  semantics) has been delegated to `gramaton_guide(topic="capture")`,
+  `(topic="metadata")`, and `(topic="sessions")` -- the topics already
+  carry the same material as the authoritative reference. The prompt
+  retains the must-haves: the submission tool name, the full segment
+  field list, the four core principles (synthesize-not-summarize,
+  capture-don't-suppress, prospective-findability, skip-only-low-
+  value), and explicit guide pointers. Per-call cognitive load on the
+  LLM drops by ~73%; extraction quality shouldn't change because the
+  reference material is now one guide call away. Updated in both
+  embedded prompt files (`api/prompts/extraction.md`,
+  `server/prompts/extraction.md`). Test
+  `TestPrepareReturnsExtractionPromptWithSections` updated to assert
+  the new contract (field names + principles + guide pointers),
+  replacing the old per-section checklist.
 - **`benchmark-extract` skill sub-agent contract refined.** Updated
   the sub-agent template in `.claude/skills/benchmark-extract/SKILL.md`
   to reflect the actual flow used during the 2026-04-20 pilot: read

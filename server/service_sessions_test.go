@@ -1076,23 +1076,37 @@ func TestPrepareReturnsExtractionPromptWithSections(t *testing.T) {
 	}
 	instructions := prepResult["instructions"].(string)
 
-	// Lock in the structural sections of the rewritten extraction prompt.
-	// These names are load-bearing -- the prompt's effectiveness depends on
-	// the question-type framework, the field-roles distinction, and the
-	// promote_to_memory two-tier guidance all being present.
-	for _, section := range []string{
-		"Question Types",                  // question-type framework
-		"Field Roles",                     // content / summary_short / keywords distinction
-		"Synthesis, Not Summarization",    // anti-TF-IDF principle
-		"Classification Heuristics",       // per-field choice guidance
-		"promote_to_memory",               // two-tier flag guidance
-		"Dedup vs. Supersession",          // distinguishes the two
-		"What to Skip",                    // narrowed skip list
-		"Call to Action",
+	// Lock in the must-haves of the leaner extraction prompt. The detailed
+	// sections (question-type framework, field-roles distinction,
+	// classification heuristics) have been delegated to gramaton_guide
+	// topics; the prompt itself stays lean but MUST still cover: the
+	// submission tool, the field names a segment needs, the two-tier
+	// promote_to_memory flag, the core principles agents must follow
+	// even without reading the guide, and explicit guide pointers.
+	for _, required := range []string{
+		// Tool + field contract (must be here for agents to produce valid segments)
 		"gramaton_session_commit",
+		"content",
+		"summary_short",
+		"keywords",
+		"topic",
+		"temporality",
+		"confidence",
+		"knowledge_type",
+		"epistemic_status",
+		"promote_to_memory",
+		// Core principles (cannot be deferred to guide -- these are must-follow)
+		"Synthesize",     // synthesis-not-summarization
+		"Capture",        // do not suppress
+		"Findability",    // prospective search vocabulary
+		"Skip",           // only-low-value skip rule
+		// Guide pointers (leaner prompt delegates depth to the guide)
+		`gramaton_guide(topic="capture")`,
+		`gramaton_guide(topic="metadata")`,
+		`gramaton_guide(topic="sessions")`,
 	} {
-		if !strings.Contains(instructions, section) {
-			t.Errorf("extraction prompt missing section: %q", section)
+		if !strings.Contains(instructions, required) {
+			t.Errorf("extraction prompt missing required content: %q", required)
 		}
 	}
 }
