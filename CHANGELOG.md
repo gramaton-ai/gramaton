@@ -110,6 +110,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and any compatible API. API key is optional (local servers often don't
   need one). Config: `embedding.provider: openai` / `llm.provider: openai`.
 
+### Removed
+
+- **T-02 dead code cleanup (server handlers + mcp wrappers).** Deleted
+  941 lines across 8 files that were orphaned by the T-02 api/
+  migration: `server/mcp_records.go`, `server/mcp_collections.go`
+  (both entirely unreachable; `registerMCPTools` in `server/mcp.go`
+  routes exclusively through the `bindings_*.go` path), plus
+  `server/handler_sessions.go` and `server/handler_collections.go`
+  (all contained only pre-T02 HTTP handlers with no live callers).
+  Surgical deletes from `server/handler_records.go` (8 dead
+  `handle*Record` / `handle*Edge` methods; kept the captureRequest/
+  updateRequest/classifyRequest/resolveRequest/edgeRequest types and
+  the live helpers `preEmbedContent`, `applyPreEmbedded`,
+  `validateCaptureRequest`, `validateUpdateRequest`,
+  `validateClassifyRequest`, `setOptionalProps`,
+  `inspectMetadataSummary` used by `service_records.go`),
+  `server/handler_search.go` (`handleSearch`, `handleExplore`; kept
+  `parseDateArg` used by `service_search.go`),
+  `server/handler_ops.go` (`handlePending`; kept `handleRevert`,
+  `handleIngest`, ingest helpers), and `server/handlers.go`
+  (`handleStatus`; kept `handleHealth`, `handleShutdown`,
+  `handleDebugGoroutines`, `handleLLMStats`, `isLoopback`,
+  `loopbackOnly`). No behavior change -- routing was already going
+  through `bindings_*.go` paths. Follow-up candidates: the cascade
+  of newly-exposed orphans (`serviceExplore`, `servicePending`,
+  `serviceCollectionSchemaRead`, `startPreparedSweeper`, unused
+  constants in `server/validation.go`) will need their own pass.
+
 ### Changed
 
 - **Session tool descriptions migrated to `api.SessionXxxDescription`

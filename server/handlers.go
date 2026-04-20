@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/internal/version"
 )
 
@@ -16,40 +15,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":  "ok",
 		"version": version.Version,
 	})
-}
-
-// handleStatus returns server health and store stats.
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.engine.RLock()
-	defer s.engine.RUnlock()
-
-	storeChunks, _ := s.engine.Store().List()
-	embProvider := s.engine.Config().Embedding.Provider
-	embModel := s.engine.Config().Embedding.Model
-
-	embedding := map[string]any{
-		"provider": embProvider,
-		"model":    embModel,
-		"healthy":  s.engine.Embedder() != nil,
-	}
-
-	storeName := s.cfg.StoreName
-	if storeName == "" {
-		storeName = "(default)"
-	}
-
-	status := map[string]any{
-		"store": map[string]any{
-			"name":    storeName,
-			"nodes":   s.engine.Graph().NodeCount(),
-			"edges":   s.engine.Graph().EdgeCount(),
-			"commits": len(storeChunks),
-		},
-		"branch":    core.ActiveBranch(s.engine.Config().DataDir),
-		"embedding": embedding,
-	}
-
-	s.writeJSONLocked(w, http.StatusOK, status)
 }
 
 // handleShutdown triggers graceful server shutdown.

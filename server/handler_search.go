@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 )
 
@@ -48,38 +47,6 @@ type exploreRequest struct {
 	EdgeTypes []string `json:"edge_types,omitempty"`
 	MinWeight float64  `json:"min_weight,omitempty"`
 	MaxNodes  int      `json:"max_nodes,omitempty"`
-}
-
-func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	var req searchRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceSearch(r.Context(), &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleExplore(w http.ResponseWriter, r *http.Request) {
-	var req exploreRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceExplore(&req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
 }
 
 // parseDateArg parses a date string in YYYY-MM-DD or RFC3339 format.

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -70,24 +69,6 @@ type edgeRequest struct {
 	TargetID   string   `json:"target_id"`
 	EdgeType   string   `json:"edge_type"`
 	EdgeWeight *float64 `json:"edge_weight,omitempty"`
-}
-
-// --- Handlers ---
-
-func (s *Server) handleCreateRecord(w http.ResponseWriter, r *http.Request) {
-	var req captureRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceCapture(r.Context(), &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusCreated, result)
 }
 
 // preEmbeddedVectors holds vectors computed outside the lock.
@@ -208,116 +189,6 @@ func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error 
 	s.engine.PropIdx().Add(nodeID, "embedding_model", modelProp)
 
 	return nil
-}
-
-func (s *Server) handleGetRecord(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	includeContent := r.URL.Query().Get("include_content") != "false"
-
-	result, svcErr := s.serviceInspect(id, includeContent)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req updateRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceUpdate(id, &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	reason := r.URL.Query().Get("reason")
-
-	result, svcErr := s.serviceDeleteRecord(id, reason)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleCreateEdge(w http.ResponseWriter, r *http.Request) {
-	sourceID := r.PathValue("id")
-
-	var req edgeRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceLink(sourceID, &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusCreated, result)
-}
-
-func (s *Server) handleDeleteEdge(w http.ResponseWriter, r *http.Request) {
-	edgeID := r.PathValue("edge_id")
-
-	result, svcErr := s.serviceDeleteEdge(edgeID)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleClassifyRecord(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req classifyRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceClassify(id, &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) handleResolveRecord(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req resolveRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
-		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
-		return
-	}
-
-	result, svcErr := s.serviceResolve(id, &req)
-	if svcErr != nil {
-		s.writeServiceError(w, svcErr)
-		return
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
 }
 
 // --- Helpers ---

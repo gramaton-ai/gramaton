@@ -25,12 +25,6 @@ type ingestFile struct {
 	Content  string `json:"content"`
 }
 
-func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
-	limit := parseIntParam(r, "limit", 50, 500)
-	result, _ := s.servicePending(limit)
-	s.writeJSON(w, http.StatusOK, result)
-}
-
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	var req revertRequest
 	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
