@@ -17,7 +17,9 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
+	"github.com/gramaton-ai/gramaton/chunking"
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/dedup"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
@@ -483,426 +485,36 @@ func (e *Engine) Close() error {
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing
-// records. Uses the vector index (uint8 quantized) for candidate
-// retrieval, then recomputes similarity with float32 embeddings for
-// the threshold decision. A Jaccard verification step prevents false
-// positives on long documents with similar structure but different content.
+// records. Delegates to dedup.Check; the Engine method exists to
+// provide the natural entry point and preserve the historical API.
 // Caller must hold at least a read lock.
 func (e *Engine) CheckDedup(nodeID string) (string, float64) {
-	if e.indexes.vecIdx.Len() < 2 {
-		return "", 0
-	}
-
-	n, ok := e.graph.GetNode(nodeID)
-	if !ok {
-		return "", 0
-	}
-
-	var vec []float32
-	for _, key := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
-		if v, ok := n.Properties.GetVector(key); ok {
-			vec = v
-			break
-		}
-	}
-	if vec == nil {
-		return "", 0
-	}
-
-	// Use vector index for candidate retrieval (uint8, approximate).
-	// Request extra candidates since one will be self (skipped) and
-	// others may fail verification.
-	results := e.indexes.vecIdx.Search(vec, 10, nil)
-	for _, r := range results {
-		if r.NodeID == nodeID {
-			continue
-		}
-
-		// Recompute similarity with float32 embeddings for accurate
-		// threshold comparison. The uint8 quantized similarity from
-		// the vector index is too coarse for the 0.92 dedup threshold.
-		// Fall back to the uint8 similarity if float32 is unavailable
-		// (legacy records added directly to the vector index).
-		sim := float64(r.Similarity)
-		candidate, ok := e.graph.GetNode(r.NodeID)
-		if ok {
-			for _, key := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
-				if candidateVec, ok := candidate.Properties.GetVector(key); ok {
-					sim = float64(index.CosineSimilarity(vec, candidateVec))
-					break
-				}
-			}
-		}
-
-		if sim >= e.cfg.Dedup.SimilarityThreshold {
-			if !e.verifyJaccard(n, r.NodeID) {
-				continue
-			}
-			return r.NodeID, sim
-		}
-	}
-	return "", 0
+	return dedup.Check(e.graph, e.indexes.vecIdx, e.cfg.Dedup, nodeID)
 }
 
-// verifyJaccard confirms a cosine-similarity duplicate match by
-// checking word-level Jaccard similarity on actual content. Returns
-// false (reject) if the texts are too dissimilar, preventing false
-// positives on structurally similar but semantically different docs.
-func (e *Engine) verifyJaccard(node *graph.Node, candidateID string) bool {
-	candidate, ok := e.graph.GetNode(candidateID)
-	if !ok {
-		return false
-	}
-
-	textA := nodeContentText(node)
-	textB := nodeContentText(candidate)
-
-	// Skip Jaccard check for very short content where cosine alone
-	// is reliable. The false positive problem is specific to long docs.
-	if len(textA) < 200 && len(textB) < 200 {
-		return true
-	}
-
-	tokA := index.Tokenize(textA)
-	tokB := index.Tokenize(textB)
-	return index.JaccardSimilarity(tokA, tokB) >= dedupJaccardMin
-}
-
-// dedupJaccardMin is the minimum Jaccard similarity required to
-// confirm a cosine-based duplicate match. Set conservatively low --
-// true duplicates easily exceed this even with minor edits.
-const dedupJaccardMin = 0.3
-
-// nodeContentText returns the best available text content for a node,
-// preferring content_full over content_short.
-func nodeContentText(n *graph.Node) string {
-	if n == nil {
-		return ""
-	}
-	if s, ok := n.Properties.GetString("content_full"); ok {
-		return s
-	}
-	if s, ok := n.Properties.GetString("content_short"); ok {
-		return s
-	}
-	return ""
-}
-
-// PreChunkResult holds section/chunk data and their pre-computed
-// embeddings, ready to be applied under the write lock without I/O.
-type PreChunkResult struct {
-	Sections  []graph.Section // structural sections (preferred)
-	Texts     []string        // fallback: dumb chunk texts
-	Vectors   [][]float32     // one embedding per section/chunk, may be nil
-	Model     string
-	ParentVec []float32 // fallback embedding for parent (truncated content)
-}
-
-// embedContextWindow returns the effective context window in tokens
-// for the configured embedding provider. Priority: config override >
-// auto-detected from provider > default.
-func (e *Engine) embedContextWindow() int {
-	if e.cfg.Embedding.MaxTokens > 0 {
-		return e.cfg.Embedding.MaxTokens
-	}
-	if e.prov.embedder != nil {
-		if cw := e.prov.embedder.ContextWindow(); cw > 0 {
-			return cw
-		}
-	}
-	return embed.DefaultContextWindow
-}
+// PreChunkResult is an alias for chunking.Result, preserved so
+// callers that reference the historical name continue to compile.
+type PreChunkResult = chunking.Result
 
 // IsContextLengthError reports whether an embedding error indicates
-// the input exceeded the model's context window.
+// the input exceeded the model's context window. Delegates to the
+// chunking package which owns the detection logic.
 func IsContextLengthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "context length") ||
-		strings.Contains(msg, "too many tokens") ||
-		strings.Contains(msg, "maximum context") ||
-		strings.Contains(msg, "token limit")
+	return chunking.IsContextLengthError(err)
 }
 
-// maxChunkRetries limits how many times PreChunk will reduce chunk
-// size before giving up on embedding.
-const maxChunkRetries = 4
-
-// PreChunk determines if content needs sectioning/chunking and pre-embeds
-// outside the lock. Uses structural splitting first (SplitSections),
-// falls back to dumb chunking (ChunkText) if no structure is detected.
-//
-// If embedding fails due to context length, PreChunk reduces the chunk
-// size and re-splits until the chunks fit the model. This adapts to
-// any embedding model's context window without configuration.
-//
-// medium is the content_medium text (~1500 chars) used as the preferred
-// source for the parent embedding when available (better than truncated
-// content_full). summary is content_short (~200 chars), used as fallback.
-//
-// Call this BEFORE acquiring the write lock. Returns nil if no splitting needed.
+// PreChunk determines whether content needs splitting and pre-embeds
+// the pieces. Runs OUTSIDE the engine lock (embedding is I/O-bound);
+// call ApplyChunks with the result under the write lock. Returns nil
+// when content fits in a single embedding.
 func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) *PreChunkResult {
-	cfg := e.cfg.Chunking
-
-	// Use the model's context window to determine threshold in chars.
-	// Conservative: 3 chars/token to avoid exceeding the real limit.
-	ctxTokens := e.embedContextWindow()
-	charsPerToken := 3
-	thresholdChars := ctxTokens * charsPerToken
-	if len(content) <= thresholdChars {
-		return nil
-	}
-
-	// Try structural splitting first.
-	sections := graph.SplitSections(content, cfg.SectionMin, cfg.SectionMax)
-	if sections != nil {
-		return e.preChunkSections(ctx, content, medium, summary, sections)
-	}
-
-	// Fallback to dumb chunking with adaptive sizing.
-	return e.preChunkAdaptive(ctx, content, medium, summary, cfg)
+	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, medium, summary)
 }
 
-// preChunkSections embeds structurally-split sections. If any section
-// exceeds the model's context, falls back to adaptive dumb chunking.
-func (e *Engine) preChunkSections(ctx context.Context, content, medium, summary string, sections []graph.Section) *PreChunkResult {
-	result := &PreChunkResult{Sections: sections}
-
-	if e.prov.embedder == nil {
-		return result
-	}
-
-	texts := make([]string, len(sections))
-	for i, s := range sections {
-		texts[i] = s.Text
-	}
-
-	vecs, err := e.prov.embedder.Embed(ctx, texts)
-	if err == nil {
-		result.Vectors = vecs
-		result.Model = e.prov.embedder.ModelID()
-		e.preChunkParent(ctx, result, content, medium, summary)
-		return result
-	}
-
-	if IsContextLengthError(err) {
-		// Sections are too large for the model. Fall back to
-		// adaptive dumb chunking which will find the right size.
-		return e.preChunkAdaptive(ctx, content, medium, summary, e.cfg.Chunking)
-	}
-
-	// Non-context error (network, etc.) -- return sections without embeddings.
-	return result
-}
-
-// preChunkAdaptive splits content into overlapping chunks and embeds
-// them. If chunks exceed the model's context window, reduces chunk
-// size and re-splits until they fit.
-func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary string, cfg config.ChunkingConfig) *PreChunkResult {
-	// Start with chunk_size from config, but cap to the model's
-	// context window so initial chunks are likely to fit.
-	chunkSize := cfg.ChunkSize
-	ctxTokens := e.embedContextWindow()
-	if chunkSize > ctxTokens {
-		chunkSize = ctxTokens
-	}
-	overlap := cfg.Overlap
-
-	for attempt := 0; attempt <= maxChunkRetries; attempt++ {
-		chunks := graph.ChunkText(content, cfg.Threshold, chunkSize, overlap)
-		if len(chunks) == 0 {
-			return nil
-		}
-
-		result := &PreChunkResult{Texts: chunks}
-
-		if e.prov.embedder == nil {
-			return result
-		}
-
-		// Test the longest chunk first (canary).
-		longest := chunks[0]
-		for _, c := range chunks[1:] {
-			if len(c) > len(longest) {
-				longest = c
-			}
-		}
-
-		_, err := e.prov.embedder.Embed(ctx, []string{longest})
-		if err != nil && IsContextLengthError(err) {
-			// Chunks too large -- reduce by 25% and retry.
-			chunkSize = chunkSize * 3 / 4
-			if chunkSize < 64 {
-				chunkSize = 64
-			}
-			overlap = overlap * 3 / 4
-			continue
-		}
-
-		// Canary passed (or non-context error). Embed all chunks.
-		vecs, err := e.prov.embedder.Embed(ctx, chunks)
-		if err == nil {
-			result.Vectors = vecs
-			result.Model = e.prov.embedder.ModelID()
-		}
-
-		e.preChunkParent(ctx, result, content, medium, summary)
-		return result
-	}
-
-	// Exhausted retries -- return chunks without embeddings.
-	chunks := graph.ChunkText(content, cfg.Threshold, chunkSize, overlap)
-	return &PreChunkResult{Texts: chunks}
-}
-
-// preChunkParent computes the parent embedding for chunked records.
-// Preference order: content_medium (purpose-built for the model's
-// context window), then content_short, then truncated content_full.
-func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, content, medium, summary string) {
-	if e.prov.embedder == nil {
-		return
-	}
-	// Prefer content_medium: it's purpose-built to represent the
-	// document's identity within the model's context window.
-	parentText := medium
-	if parentText == "" {
-		parentText = summary
-	}
-	if parentText == "" {
-		// Last resort: use first portion of content_full.
-		parentText = content
-		if len(parentText) > 2000 {
-			parentText = parentText[:2000]
-		}
-	}
-	if parentText == "" {
-		return
-	}
-	for attempt := 0; attempt <= maxChunkRetries; attempt++ {
-		pvecs, err := e.prov.embedder.Embed(ctx, []string{parentText})
-		if err == nil && len(pvecs) > 0 {
-			result.ParentVec = pvecs[0]
-			return
-		}
-		if !IsContextLengthError(err) {
-			return // non-context error, give up
-		}
-		parentText = parentText[:len(parentText)/2]
-		if len(parentText) == 0 {
-			return
-		}
-	}
-}
-
-// ApplyChunks creates section/chunk nodes from a PreChunkResult. Caller
-// must hold the write lock. parentProps provides metadata to inherit for
-// section nodes. This is fast (no I/O, no embedding calls).
+// ApplyChunks creates section/chunk nodes from pre. Caller must hold
+// the engine write lock.
 func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps graph.Properties) int {
-	if pre == nil {
-		return 0
-	}
-
-	// Apply parent embedding from the chunk pipeline. When chunking is
-	// triggered, the content exceeded the embedding model's context
-	// window, so any embedding_full set by preEmbedContent is degraded
-	// (silently truncated by the model). The chunk pipeline's ParentVec
-	// is computed from the summary or first 2000 chars -- intentionally
-	// sized for the model and a better representation of the document's
-	// identity. Always prefer it over a degraded pre-embed result.
-	if pre.ParentVec != nil {
-		if old, hasEmbed := parentProps.GetVector("embedding_full"); hasEmbed {
-			e.indexes.propIdx.Remove(parentID, "embedding_full", graph.VectorProperty(old))
-			e.indexes.vecIdx.Remove(parentID)
-		}
-		prop := graph.VectorProperty(pre.ParentVec)
-		e.graph.SetNodeProperty(parentID, "embedding_full", prop)
-		e.indexes.propIdx.Add(parentID, "embedding_full", prop)
-		e.indexes.vecIdx.Add(parentID, pre.ParentVec)
-		if pre.Model != "" {
-			modelProp := graph.StringProperty(pre.Model)
-			e.graph.SetNodeProperty(parentID, "embedding_model", modelProp)
-			e.indexes.propIdx.Add(parentID, "embedding_model", modelProp)
-		}
-	}
-
-	if len(pre.Sections) > 0 {
-		return e.applySections(parentID, pre, parentProps)
-	}
-	return e.applyLegacyChunks(parentID, pre)
-}
-
-// applySections creates section_of nodes with inherited metadata.
-func (e *Engine) applySections(parentID string, pre *PreChunkResult, parentProps graph.Properties) int {
-	// Metadata keys to inherit from parent.
-	inheritKeys := []string{
-		"temporality", "confidence", "knowledge_type", "epistemic_status",
-		"content_keywords", "source_ref", "processing_status",
-	}
-
-	for i, sec := range pre.Sections {
-		props := graph.Properties{
-			"content_full": graph.StringProperty(sec.Text),
-		}
-
-		// Set section heading as content_short.
-		if sec.Heading != "" {
-			props["content_short"] = graph.StringProperty(sec.Heading)
-		} else if len(sec.Text) > 200 {
-			props["content_short"] = graph.StringProperty(sec.Text[:200])
-		}
-
-		// Inherit parent metadata.
-		for _, key := range inheritKeys {
-			if v, ok := parentProps[key]; ok {
-				props[key] = v
-			}
-		}
-
-		var vec []float32
-		if i < len(pre.Vectors) {
-			vec = pre.Vectors[i]
-		}
-
-		node := e.graph.AddNode(props)
-		if _, err := e.graph.AddEdge(node.ID, parentID, "section_of", 1.0, nil); err != nil {
-			slog.Error("failed to add section_of edge",
-				"component", "engine", "child", node.ID, "parent", parentID, "err", err)
-		}
-		e.IndexNode(node.ID, sec.Text, vec)
-
-		if vec != nil && pre.Model != "" {
-			e.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
-		}
-	}
-
-	return len(pre.Sections)
-}
-
-// applyLegacyChunks creates chunk_of nodes (backward-compatible dumb chunks).
-func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
-	for i, chunkText := range pre.Texts {
-		var vec []float32
-		if i < len(pre.Vectors) {
-			vec = pre.Vectors[i]
-		}
-
-		chunkNode := e.graph.AddNode(graph.Properties{
-			"content_full": graph.StringProperty(chunkText),
-		})
-		if _, err := e.graph.AddEdge(chunkNode.ID, parentID, "chunk_of", 1.0, nil); err != nil {
-			slog.Error("failed to add chunk_of edge",
-				"component", "engine", "child", chunkNode.ID, "parent", parentID, "err", err)
-		}
-		e.IndexNode(chunkNode.ID, chunkText, vec)
-
-		if vec != nil && pre.Model != "" {
-			e.SetProp(chunkNode.ID, "embedding_model", graph.StringProperty(pre.Model))
-		}
-	}
-
-	return len(pre.Texts)
+	return chunking.Apply(e, parentID, pre, parentProps)
 }
 
 // IndexNode populates all indexes for a node already added to the

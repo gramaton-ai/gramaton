@@ -102,6 +102,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Engine god-object split (P2-01)** -- `core/engine.go` reorganised
+  into named subsystems and sibling pipeline packages across two PRs.
+  PR1 extracted `providers`, `searcher`, and `indexSet` subsystems
+  (engine shrank 1207 -> 952 LOC); `indexSet.applyToNode` consolidates
+  cross-index updates so future indexes are picked up automatically
+  rather than via edits to every node-creation path. PR2 extracted
+  `chunking` and `dedup` to sibling packages (engine shrank 952 -> 564
+  LOC); `core.Engine.PreChunk`, `ApplyChunks`, `CheckDedup`, and
+  `IsContextLengthError` now delegate. `core.PreChunkResult` is a
+  type alias for `chunking.Result` so existing callers compile
+  unchanged. No public API signatures changed.
 - **Server service layer extraction** -- extracted 14 service methods from
   HTTP handlers into `service_records.go`, `service_search.go`,
   `service_ops.go`. Both HTTP handlers and MCP tools now delegate to the
