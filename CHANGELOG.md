@@ -140,6 +140,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`gramaton_search` tool description rewritten with trigger-led framing.**
+  The prior description was mechanical (`"Search Memory and Sessions.
+  Returns results ranked by composite score..."`) and said nothing about
+  when agents should call it. Observed failure mode (2026-04-20): agents
+  write architecture answers, design docs, and competitive claims from
+  general knowledge without first checking the store for project-specific
+  prior thinking -- losing decisions that were already made. New
+  description leads with "call BEFORE producing content that references
+  project state" and lists concrete triggers: architecture questions,
+  design/methodology writing, user references to prior sessions,
+  reasoning where project-specific prior art may exist. Same pattern as
+  the recent `session_prepare` rewrite. Shipped through the existing
+  `api.SearchDescription` constant (no refactor needed; constant was
+  already in place).
 - **Session tool descriptions migrated to `api.SessionXxxDescription`
   constants.** `api/sessions.go` now defines `SessionStartDescription`,
   `SessionGetDescription`, `SessionPrepareDescription`, and

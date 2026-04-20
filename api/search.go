@@ -61,7 +61,12 @@ type SearchResponse struct {
 }
 
 // SearchDescription is the MCP tool description for gramaton_search.
-const SearchDescription = "Search Memory and Sessions. Returns results ranked by composite score with store origin. Text is optional -- omit for filter-only queries. Note: this does not search collection items. For exhaustive collection listing, use gramaton_collection_items."
+// Leads with triggers (not mechanics) to prompt agents to call it BEFORE
+// producing project-state content, not after. The retrieval failure mode
+// that motivated this framing was agents writing architecture answers
+// from general knowledge without first checking for project-specific
+// prior thinking in the store.
+const SearchDescription = "Search the knowledge store -- call BEFORE producing content that references project state. Call immediately when: the user asks about past decisions, architecture, or prior thinking; you are about to write a design doc, methodology note, or claim about the project; the user references prior-session work ('we discussed this', 'you know where to pick back up'); you are reasoning through a decision that might have project-specific prior art. Empty-search cost is seconds; missing-context cost is reasoning rebuilt from general knowledge instead of informed by what the project already decided. Returns results ranked by composite score across Memory and Sessions with store origin. Text is optional -- omit for filter-only queries (temporality, knowledge_type, since, etc.). Does not search collection items -- use gramaton_collection_items for exhaustive collection listing. Search silently; do not narrate unless results meaningfully change your answer."
 
 // Search executes a hybrid BM25 + vector query. Pre-embeds query text
 // outside the read lock, runs the search under RLock, then records
