@@ -28,7 +28,7 @@ All green. New behavior must have new tests. If a test you didn't write fails, i
 ```bash
 go test -race ./...
 ```
-Required for any change touching `core/`, `engine.go`, `index/`, `graph/`, `storage/`, or anything with goroutines. Skip only for pure doc/comment/changelog PRs.
+Required for any change touching `core/`, `engine.go`, `index/`, `graph/`, `storage/`, any new package introduced in the diff, or anything with goroutines. Skip only for pure doc/comment/changelog PRs.
 
 ### 4. Vet
 
