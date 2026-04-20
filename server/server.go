@@ -59,19 +59,14 @@ type Server struct {
 	// migrated.
 	api *api.API
 
-	mu                  sync.Mutex
-	lastRequest         time.Time
-	lastBackup          time.Time
-	curationCancel      context.CancelFunc
-	accessCancel        context.CancelFunc
-	preparedSweepCancel context.CancelFunc
+	mu             sync.Mutex
+	lastRequest    time.Time
+	lastBackup     time.Time
+	curationCancel context.CancelFunc
+	accessCancel   context.CancelFunc
 
 	retrieval    *retrievalTracker
 	usageTracker *llm.UsageTracker
-
-	// Session prepare/commit state. In-memory; lost on restart (B2 resolution).
-	// Key: session ID, value: timestamp when prepare was called.
-	preparedSessions map[string]time.Time
 
 	// Curation envelope cache: every successful HTTP response embeds
 	// a CurationStatus. Computing it requires an engine RLock plus a
@@ -183,7 +178,6 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		lastRequest:  time.Now(),
 		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
-		preparedSessions: make(map[string]time.Time),
 		curationCacheTTL: 5 * time.Second,
 	}
 	// Construct the canonical API surface. As operations migrate into

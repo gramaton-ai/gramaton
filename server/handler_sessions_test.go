@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/search"
@@ -38,21 +39,20 @@ func addSearchableRecord(t *testing.T, eng *core.Engine, content string, keyword
 
 // createSessionWithSegments creates a session, prepares, and commits segments.
 // Returns the session ID.
-func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segments []commitSegment) string {
+func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segments []api.CommitSegment) string {
 	t.Helper()
-	result, svcErr := srv.serviceSessionCreate(clientID, "")
-	if svcErr != nil {
-		t.Fatalf("session create: %v", svcErr)
+	ctx := context.Background()
+	result, apiErr := srv.api.SessionStart(ctx, clientID, "")
+	if apiErr != nil {
+		t.Fatalf("session create: %v", apiErr)
 	}
 	sessionID := result["id"].(string)
 
-	_, svcErr = srv.serviceSessionPrepare(sessionID)
-	if svcErr != nil {
-		t.Fatalf("session prepare: %v", svcErr)
+	if _, apiErr := srv.api.SessionPrepare(ctx, sessionID); apiErr != nil {
+		t.Fatalf("session prepare: %v", apiErr)
 	}
-	_, svcErr = srv.serviceSessionCommit(sessionID, segments)
-	if svcErr != nil {
-		t.Fatalf("session commit: %v", svcErr)
+	if _, apiErr := srv.api.SessionCommit(ctx, sessionID, segments); apiErr != nil {
+		t.Fatalf("session commit: %v", apiErr)
 	}
 	return sessionID
 }
@@ -60,7 +60,7 @@ func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segme
 func TestSearchFindsBM25SessionSegments(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	createSessionWithSegments(t, srv, "bm25-search-test", []commitSegment{
+	createSessionWithSegments(t, srv, "bm25-search-test", []api.CommitSegment{
 		{Content: "PostgreSQL is our primary database choice", TopicName: "Architecture"},
 	})
 
@@ -136,7 +136,7 @@ func TestSearchStoreOriginMetadata(t *testing.T) {
 	addSearchableRecord(t, eng, "Go is a systems language", []string{"golang"})
 
 	// Add a Session segment.
-	createSessionWithSegments(t, srv, "store-origin-test", []commitSegment{
+	createSessionWithSegments(t, srv, "store-origin-test", []api.CommitSegment{
 		{Content: "Go is excellent for building services", TopicName: "Tech"},
 	})
 
@@ -171,7 +171,7 @@ func TestSearchStoreFilterMemoryOnly(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	addSearchableRecord(t, eng, "Redis caching strategy", []string{"redis"})
-	createSessionWithSegments(t, srv, "filter-memory-test", []commitSegment{
+	createSessionWithSegments(t, srv, "filter-memory-test", []api.CommitSegment{
 		{Content: "Redis is used for caching in production", TopicName: "Infra"},
 	})
 
@@ -196,7 +196,7 @@ func TestSearchStoreFilterSessionsOnly(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	addSearchableRecord(t, eng, "Kubernetes orchestration", []string{"k8s"})
-	createSessionWithSegments(t, srv, "filter-session-test", []commitSegment{
+	createSessionWithSegments(t, srv, "filter-session-test", []api.CommitSegment{
 		{Content: "Kubernetes deployment pipeline discussion", TopicName: "Infra"},
 	})
 
@@ -224,7 +224,7 @@ func TestSearchSessionOnlyData(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Only session data, no Memory records.
-	createSessionWithSegments(t, srv, "session-only-test", []commitSegment{
+	createSessionWithSegments(t, srv, "session-only-test", []api.CommitSegment{
 		{Content: "Terraform infrastructure as code patterns", TopicName: "Infra"},
 	})
 
@@ -269,7 +269,7 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 	// Memory record (has vector embedding potential + BM25).
 	addSearchableRecord(t, eng, "GraphQL API design patterns for microservices", []string{"graphql", "api"})
 	// Session segment (BM25 only).
-	createSessionWithSegments(t, srv, "ranking-test", []commitSegment{
+	createSessionWithSegments(t, srv, "ranking-test", []api.CommitSegment{
 		{Content: "GraphQL API design patterns for microservices", TopicName: "API"},
 	})
 

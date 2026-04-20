@@ -112,6 +112,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **T-02 cascade cleanup stage B (sessions).** Deleted
+  `server/service_sessions.go` (1255 lines) and
+  `server/service_sessions_test.go` (1659 lines): the server-level
+  session subsystem was fully dead after T-02 routed
+  `bindings_sessions.go` through `s.api.SessionXxx`. Tests ported to
+  `api/sessions_test.go` (47 tests, package `api`) using a new
+  `setupTestAPI` helper. Also removed the `preparedSessions` and
+  `preparedSweepCancel` fields from `server.Server` (now owned end-
+  to-end by `api.API`), and the three internal api helpers
+  (`sessionAddTopic`, `sessionAddSegment`, `sessionUpdateSegmentCapture`)
+  which had no callers after the helper-path tests were retired.
+  `server/handler_sessions_test.go` helper `createSessionWithSegments`
+  rewired to `srv.api.SessionStart/Prepare/Commit`. Test coverage for
+  the session subsystem is now preserved at the api layer, where the
+  logic actually lives. Full server + api suites pass with `-race`.
+  Dropped: seven tests that exercised internal AddTopic/AddSegment/
+  UpdateSegmentCapture helpers (not user-facing); ReadArchive tests
+  (the function was never wired to HTTP/MCP and was flagged as a
+  latent footgun in the T-02 security review).
 - **T-02 cascade cleanup stage A (isolated orphans).** Deleted the
   three T-02 service orphans that were safely isolated (no test
   references): `serviceExplore` (`server/service_search.go`) and
