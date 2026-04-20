@@ -26,6 +26,12 @@ A few things up front:
   **open an issue first to discuss the approach** before sending
   a PR. We'd rather sketch the design together than ask you to
   rework finished code.
+- **LLM contributors**: if you work with an agentic LLM coding
+  assistant, this repo ships conventions under
+  [.claude/skills/](.claude/skills/) that encode the recipes below
+  in invocable form. Claude Code auto-discovers them; other tools
+  reading agent-skill markdown can adapt. See
+  [CLAUDE.md](CLAUDE.md) for a short skill index.
 
 The rest of this document covers, in order:
 

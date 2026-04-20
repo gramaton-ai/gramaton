@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **LLM contributor skills** -- `.claude/skills/` ships seven agent
+  skills encoding project conventions for LLM coding assistants:
+  `new-operation`, `migrate-to-api`, `pre-merge-check`,
+  `gramaton-review`, `gramaton-security-review`, `store-health`,
+  `curation-sweep`. Claude Code auto-discovers them; other tools
+  reading agent-skill markdown can adapt. Skills cite CONTRIBUTING.md
+  as the source of truth rather than duplicating conventions. Added
+  `CLAUDE.md` at the repo root as a short skill index and governance
+  reference. `.gitignore` narrowed from a blanket `.claude/` rule to
+  a default-deny whitelist: only `.claude/skills/` is shared; user-
+  local settings and session state stay out of the repo.
 - **HNSW vector index** -- pure Go Hierarchical Navigable Small World
   implementation behind the existing VectorIndex interface. O(log N)
   approximate nearest neighbor search replaces O(N) brute-force at

@@ -119,11 +119,14 @@ For each new or changed api method:
 
 **Severity: varies.** Missing tests ≠ broken code, but no-tests merges cost future bugs.
 
-### 11. Design-doc sync
+### 11. Doc and skill drift
 
-For every exported symbol or MCP tool added/renamed/removed, grep `docs/architecture.md` and `docs/project-design/*.md` for mentions of the old shape. If found, they need updating.
+Two drift surfaces to check:
 
-**Severity: LOW**, but flag for the author.
+- **Design docs:** for every exported symbol or MCP tool added/renamed/removed, grep `docs/architecture.md` and `docs/project-design/*.md` for the old shape. Flag mentions for update.
+- **Skills:** if the diff modifies `CONTRIBUTING.md`, grep `.claude/skills/` for references to the changed sections (most skills cite CONTRIBUTING.md by section or line). A skill that references a renamed/renumbered/semantically-changed section needs updating.
+
+**Severity: LOW**, but flag for the author. Never edit a skill without explicit approval — see CLAUDE.md governance.
 
 ### 12. Changelog entry
 
