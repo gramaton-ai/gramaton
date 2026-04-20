@@ -112,6 +112,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Session tool descriptions migrated to `api.SessionXxxDescription`
+  constants.** `api/sessions.go` now defines `SessionStartDescription`,
+  `SessionGetDescription`, `SessionPrepareDescription`, and
+  `SessionCommitDescription` alongside the Request/Response types. Both
+  MCP transports (`server/bindings_sessions.go` and
+  `cli/mcp_proxy_sessions.go`) reference the constants instead of
+  duplicating literal strings. Aligns with the existing convention used
+  by capture + collections; structurally prevents the two MCP surfaces
+  from drifting on help text. Also deleted `server/mcp_sessions.go`
+  (dead code since the T-02 api/ migration -- `registerMCPTools` in
+  `server/mcp.go` routes via `registerSessionsMCPTools` in bindings, not
+  the older `registerMCPSessionTools`).
 - **Leaner `session_prepare` extraction prompt.** The prompt returned
   by `gramaton_session_prepare` dropped from 202 lines (~9360 bytes)
   to 51 lines (~2525 bytes). Detailed content (field-role framework,

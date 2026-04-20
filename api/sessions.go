@@ -19,6 +19,29 @@ import (
 //go:embed prompts/extraction.md
 var embeddedExtractionPrompt string
 
+// Session tool descriptions shared across MCP transports (server bindings
+// and CLI proxy). Single-source prevents the two MCP surfaces from
+// drifting on help text. Matches the api.XxxDescription convention
+// established for capture + collections.
+
+// SessionStartDescription is the MCP tool description for
+// gramaton_session_start.
+const SessionStartDescription = `Start or resume a knowledge capture session. On fresh start, creates a new session. On resume (--continue), creates a new session chained to the previous one. Returns the active session.`
+
+// SessionGetDescription is the MCP tool description for
+// gramaton_session_get.
+const SessionGetDescription = `Get the current session state including all topics and segments. Use to review what has been captured so far.`
+
+// SessionPrepareDescription is the MCP tool description for
+// gramaton_session_prepare. Leads with "eagerly throughout" language
+// to counter the prior-version regression where agents self-triggered
+// far less often than the old gramaton_observe tool did.
+const SessionPrepareDescription = `Extract knowledge from the ongoing conversation. Returns extraction instructions and session state. Call this EAGERLY throughout a conversation, not just at the end: immediately after a decision lands, a rule or principle is articulated, a task completes, or the user pivots topics. Also call before context compaction, and at least every ~10 substantive turns even without an explicit trigger. Bundling captures at session end is an anti-pattern -- knowledge from early in the conversation becomes harder to reconstruct as context accumulates. You must follow the returned instructions before calling gramaton_session_commit.`
+
+// SessionCommitDescription is the MCP tool description for
+// gramaton_session_commit.
+const SessionCommitDescription = `Submit extracted knowledge segments to the session. IMPORTANT: You must call gramaton_session_prepare first and follow its instructions. Do not call this tool directly -- the preparation step provides required context for high-quality extraction.`
+
 // loadExtractionPrompt loads the extraction prompt from the config directory,
 // falling back to the embedded default. Returns the prompt content and a short
 // hash for logging which version was used.

@@ -17,7 +17,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_start",
-		Description: "Start or resume a knowledge capture session. Creates a fresh session or returns the existing one for the same client_session_id (idempotent for --continue). No lookback to previous sessions.",
+		Description: api.SessionStartDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionStartArgs) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/sessions", args)
 	})
@@ -27,7 +27,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_get",
-		Description: "Get the current session state including all topics and segments.",
+		Description: api.SessionGetDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionGetArgs) (*mcp.CallToolResult, any, error) {
 		if args.SessionID == "" {
 			return proxyErr("session_id is required")
@@ -40,7 +40,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_prepare",
-		Description: "Extract knowledge from the ongoing conversation. Returns extraction instructions and session state. Call this EAGERLY throughout a conversation, not just at the end: immediately after a decision lands, a rule or principle is articulated, a task completes, or the user pivots topics. Also call before context compaction, and at least every ~10 substantive turns even without an explicit trigger. Bundling captures at session end is an anti-pattern -- knowledge from early in the conversation becomes harder to reconstruct as context accumulates. You must follow the returned instructions before calling gramaton_session_commit.",
+		Description: api.SessionPrepareDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionPrepareArgs) (*mcp.CallToolResult, any, error) {
 		if args.SessionID == "" {
 			return proxyErr("session_id is required")
@@ -54,7 +54,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_commit",
-		Description: "Submit extracted knowledge segments to the session. IMPORTANT: You must call gramaton_session_prepare first and follow its instructions. Do not call this tool directly -- the preparation step provides required context for high-quality extraction.",
+		Description: api.SessionCommitDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		if args.SessionID == "" {
 			return proxyErr("session_id is required")

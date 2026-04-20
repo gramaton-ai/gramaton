@@ -110,7 +110,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_start",
-		Description: "Start or resume a knowledge capture session. On fresh start, creates a new session. On resume (--continue), creates a new session chained to the previous one. Returns the active session.",
+		Description: api.SessionStartDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionStartArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_start")
 		defer done(nil)
@@ -126,7 +126,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_get",
-		Description: "Get the current session state including all topics and segments. Use to review what has been captured so far.",
+		Description: api.SessionGetDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionGetArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_get")
 		defer done(nil)
@@ -141,8 +141,8 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 		SessionID string `json:"session_id" jsonschema:"session ID to prepare extraction for"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name: "gramaton_session_prepare",
-		Description: `Extract knowledge from the ongoing conversation. Returns extraction instructions and session state. Call this EAGERLY throughout a conversation, not just at the end: immediately after a decision lands, a rule or principle is articulated, a task completes, or the user pivots topics. Also call before context compaction, and at least every ~10 substantive turns even without an explicit trigger. Bundling captures at session end is an anti-pattern -- knowledge from early in the conversation becomes harder to reconstruct as context accumulates. You must follow the returned instructions before calling gramaton_session_commit.`,
+		Name:        "gramaton_session_prepare",
+		Description: api.SessionPrepareDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionPrepareArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_prepare")
 		defer done(nil)
@@ -158,8 +158,8 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 		Segments  []api.CommitSegment  `json:"segments" jsonschema:"array of extracted knowledge segments"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name: "gramaton_session_commit",
-		Description: `Submit extracted knowledge segments to the session. IMPORTANT: You must call gramaton_session_prepare first and follow its instructions. Do not call this tool directly -- the preparation step provides required context for high-quality extraction.`,
+		Name:        "gramaton_session_commit",
+		Description: api.SessionCommitDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_commit")
 		defer done(nil)
