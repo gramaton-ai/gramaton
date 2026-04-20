@@ -112,6 +112,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **T-02 cascade cleanup stage C1 (search + test rewires).** Deleted
+  `server/service_search.go` (the last method `serviceSearch` was
+  unreachable via bindings since T-02 routed `bindings_search.go`
+  through `s.api.Search`). Rewired the one test reference in
+  `server/handler_sessions_test.go` to `srv.api.Search`. Also
+  rewired `bindings_collections_test.go` helpers (`makeCollection`,
+  dedup test seed) from `srv.serviceCollection{Create,Add}` to
+  `srv.api.Collection{Create,Add}`. Deleted the unused `searchRequest`
+  type in `server/handler_search.go`; kept `parseDateArg` (used by
+  remaining server-level services).
 - **T-02 cascade cleanup stage B (sessions).** Deleted
   `server/service_sessions.go` (1255 lines) and
   `server/service_sessions_test.go` (1659 lines): the server-level

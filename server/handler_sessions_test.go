@@ -9,7 +9,6 @@ import (
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
-	"github.com/gramaton-ai/gramaton/search"
 )
 
 // --- Phase 3: Search integration tests ---
@@ -274,16 +273,15 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	result, svcErr := srv.serviceSearch(ctx, &searchRequest{
+	resp, apiErr := srv.api.Search(ctx, api.SearchRequest{
 		Text: "GraphQL API design",
 		Top:  10,
 	})
-	if svcErr != nil {
-		t.Fatalf("search: %v", svcErr)
+	if apiErr != nil {
+		t.Fatalf("search: %v", apiErr)
 	}
-	results := result["results"].([]search.Result)
-	if len(results) < 2 {
-		t.Fatalf("expected >= 2 results, got %d", len(results))
+	if len(resp.Results) < 2 {
+		t.Fatalf("expected >= 2 results, got %d", len(resp.Results))
 	}
 	// Memory should rank first (RRF fusion of vector+BM25 vs BM25-only).
 	// Without vector embeddings in test, both are BM25-only, so ranking
@@ -291,7 +289,7 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 	// comes from vector embeddings in production.
 	foundMemory := false
 	foundSession := false
-	for _, r := range results {
+	for _, r := range resp.Results {
 		if r.Store == "memory" {
 			foundMemory = true
 		}

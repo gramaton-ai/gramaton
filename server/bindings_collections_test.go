@@ -13,9 +13,9 @@ import (
 // test below.
 func makeCollection(t *testing.T, srv *Server, name string) string {
 	t.Helper()
-	result, svcErr := srv.serviceCollectionCreate(context.Background(), &collectionCreateRequest{Name: name})
-	if svcErr != nil {
-		t.Fatalf("create collection %q: %v", name, svcErr)
+	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{Name: name})
+	if apiErr != nil {
+		t.Fatalf("create collection %q: %v", name, apiErr)
 	}
 	return result["id"].(string)
 }
@@ -127,10 +127,10 @@ func TestCollectionAddBatchDedupAgainstExisting(t *testing.T) {
 	collID := makeCollection(t, srv, "Backlog")
 
 	// Seed one existing item.
-	if _, svcErr := srv.serviceCollectionAdd(collID, &collectionAddRequest{
+	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
 		Fields: map[string]any{"title": "already here"},
-	}); svcErr != nil {
-		t.Fatalf("seed add: %v", svcErr)
+	}); apiErr != nil {
+		t.Fatalf("seed add: %v", apiErr)
 	}
 
 	req := api.CollectionAddBatchRequest{
