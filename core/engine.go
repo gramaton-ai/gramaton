@@ -34,16 +34,10 @@ type Engine struct {
 	cfg      config.Config
 	store    *storage.Store
 	graph    *graph.Graph
-	boltDB    *bolt.DB // shared bbolt database for property index + edge store
-	propIdx   index.PropertyIndex
-	vecIdx    index.VectorIndex
-	bm25Full  index.BM25Index                // content_full BM25 (D12: single layer)
-	secIdx    *index.BboltSecondaryIndex      // time, edge count, field existence (D16)
-	edgeStore *graph.BboltEdgeStore           // kept for BatchIndexWrites
-	collCache *index.BboltCollectionCache  // collection member cache (D24)
-	embedder embed.Provider
-	llmProv  llm.Provider
-	searcher *search.Tool
+	boltDB   *bolt.DB // shared bbolt database; closed in Close after indexes
+	indexes  *indexSet
+	prov     *providers
+	searcher *searcherSubsystem
 	headHash string
 
 	// accessDirty is set when access metadata (access_count,
@@ -62,20 +56,20 @@ type EngineOption func(*Engine)
 // WithEmbedder overrides the embedding provider. Use in tests to inject
 // a mock embedder without requiring a real Ollama/API endpoint.
 func WithEmbedder(p embed.Provider) EngineOption {
-	return func(e *Engine) { e.embedder = p }
+	return func(e *Engine) { e.prov.embedder = p }
 }
 
 // WithLLM overrides the LLM provider. Use in tests to inject a mock
 // LLM without requiring a real API key.
 func WithLLM(p llm.Provider) EngineOption {
-	return func(e *Engine) { e.llmProv = p }
+	return func(e *Engine) { e.prov.llm = p }
 }
 
 // WithVectorIndex overrides the vector index. Use in tests to inject
 // an in-memory FlatIndex instead of the disk-backed MmapFlatIndex.
 // When set, the engine skips creating/opening the mmap vector file.
 func WithVectorIndex(v index.VectorIndex) EngineOption {
-	return func(e *Engine) { e.vecIdx = v }
+	return func(e *Engine) { e.indexes.vecIdx = v }
 }
 
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
@@ -147,31 +141,12 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}()
 
-	propIdx, err := index.NewBboltPropertyIndex(boltDB, index.DefaultIndexedFields)
+	idx, err := newIndexSet(boltDB, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create bbolt property index: %w", err)
+		return nil, err
 	}
 
-	edgeStore, err := graph.NewBboltEdgeStore(boltDB, graph.DefaultEdgeCacheCapacity)
-	if err != nil {
-		return nil, fmt.Errorf("create bbolt edge store: %w", err)
-	}
-
-	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(edgeStore))
-	bm25Full, err := index.NewBboltBM25Index(boltDB, cfg.Search.BM25K1, cfg.Search.BM25B)
-	if err != nil {
-		return nil, fmt.Errorf("create bbolt BM25 index: %w", err)
-	}
-
-	secIdx, err := index.NewBboltSecondaryIndex(boltDB)
-	if err != nil {
-		return nil, fmt.Errorf("create secondary index: %w", err)
-	}
-
-	collCache, err := index.NewBboltCollectionCache(boltDB)
-	if err != nil {
-		return nil, fmt.Errorf("create collection cache: %w", err)
-	}
+	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
 
 	// Load HEAD commit if it exists.
 	var headHash string
@@ -185,41 +160,19 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		}
 	}
 
-	emb, err := embed.New(cfg.Embedding)
+	prov, err := newProviders(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	// LLM is optional -- a misconfigured provider becomes nil so the
-	// rest of the engine can run without curation. Log the error
-	// loudly so operators can tell "no LLM configured" apart from
-	// "LLM configured but typo'd / wrong key / wrong region". Before
-	// this, a misspelled provider name was indistinguishable from
-	// no provider at all. (Wave 5 P1-48.)
-	llmProv, err := llm.New(cfg.LLM)
-	if err != nil {
-		if cfg.LLM.Provider != "" {
-			slog.Error("llm provider configured but failed to initialise",
-				"component", "engine",
-				"provider", cfg.LLM.Provider,
-				"err", err)
-		}
-		llmProv = nil
-	}
-
 	e := &Engine{
-		cfg:       cfg,
-		store:     s,
-		graph:     g,
-		boltDB:    boltDB,
-		propIdx:   propIdx,
-		bm25Full:  bm25Full,
-		secIdx:    secIdx,
-		edgeStore: edgeStore,
-		collCache: collCache,
-		embedder:  emb,
-		llmProv:   llmProv,
-		headHash:  headHash,
+		cfg:      cfg,
+		store:    s,
+		graph:    g,
+		boltDB:   boltDB,
+		indexes:  idx,
+		prov:     prov,
+		headHash: headHash,
 	}
 
 	// Apply options before creating the vector index. This lets
@@ -233,37 +186,21 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// If no option provided a vector index, open the mmap'd flat
 	// vector index (D1 revised: flat as v1 default).
-	if e.vecIdx == nil {
-		vecDim := cfg.Embedding.Dimension
-		if vecDim <= 0 {
-			vecDim = 384 // MiniLM-L6 default (D3)
-		}
-		vecPath := filepath.Join(cfg.DataDir, "vec.flat")
-		mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)
-		if err != nil {
-			return nil, fmt.Errorf("open vector index: %w", err)
-		}
-		cleanups = append(cleanups, func() { mmapVec.Close() })
-		e.vecIdx = mmapVec
+	vecCleanup, err := idx.openDefaultVecIdx(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if vecCleanup != nil {
+		cleanups = append(cleanups, vecCleanup)
 	}
 
-	// Try to load persisted indexes from commit. Each index that loads
-	// successfully is skipped during rebuildIndexes.
-	bm25FullLoaded := bm25Full.Len() > 0
-	vecLoaded := e.vecIdx.Len() > 0
-	propLoaded := propIdx.Count() > 0
-
-	rebuildIndexes(boltDB, g, propIdx, e.vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
+	// Try to load persisted indexes from commit; each populated index
+	// is skipped during the rebuild walk.
+	idx.rebuildPrimaryIfMissing(g)
 
 	// Build searcher after all indexes are finalized.
-	var searchOpts []search.ToolOption
-	if e.secIdx != nil {
-		searchOpts = append(searchOpts, search.WithSecondaryIndex(e.secIdx))
-	}
-	if e.llmProv != nil && cfg.Search.RerankEnabled {
-		searchOpts = append(searchOpts, search.WithReranker(e.llmProv))
-	}
-	e.searcher = search.New(g, propIdx, e.vecIdx, bm25Full, emb, cfg, searchOpts...)
+	e.searcher = &searcherSubsystem{}
+	e.searcher.rebuild(g, idx.propIdx, idx.vecIdx, idx.bm25Full, idx.secIdx, e.prov.embedder, e.prov.llm, cfg)
 
 	success = true // disarm the deferred cleanup
 	return e, nil
@@ -318,22 +255,22 @@ func (e *Engine) SwapGraph(g *graph.Graph) { e.graph = g }
 // EdgeStore returns the engine's persistent edge store. Used by
 // SwapGraph callers (BranchCheckout/Merge) to construct a
 // replacement graph that shares the engine's BboltEdgeStore.
-func (e *Engine) EdgeStore() *graph.BboltEdgeStore { return e.edgeStore }
+func (e *Engine) EdgeStore() *graph.BboltEdgeStore { return e.indexes.edgeStore }
 
 // PropIdx returns the property index.
-func (e *Engine) PropIdx() index.PropertyIndex { return e.propIdx }
+func (e *Engine) PropIdx() index.PropertyIndex { return e.indexes.propIdx }
 
 // VecIdx returns the vector index.
-func (e *Engine) VecIdx() index.VectorIndex { return e.vecIdx }
+func (e *Engine) VecIdx() index.VectorIndex { return e.indexes.vecIdx }
 
 // Embedder returns the embedding provider (may be nil).
-func (e *Engine) Embedder() embed.Provider { return e.embedder }
+func (e *Engine) Embedder() embed.Provider { return e.prov.embedder }
 
 // LLM returns the LLM provider (may be nil if not configured).
-func (e *Engine) LLM() llm.Provider { return e.llmProv }
+func (e *Engine) LLM() llm.Provider { return e.prov.llm }
 
 // Searcher returns the search tool.
-func (e *Engine) Searcher() *search.Tool { return e.searcher }
+func (e *Engine) Searcher() *search.Tool { return e.searcher.tool }
 
 // Store returns the storage backend.
 func (e *Engine) Store() *storage.Store { return e.store }
@@ -362,7 +299,7 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // so startup can skip expensive rebuilds.
 func (e *Engine) Save(message string) (*graph.Commit, error) {
 	// Flush buffered vector writes to disk before committing.
-	if f, ok := e.vecIdx.(interface{ Flush() error }); ok {
+	if f, ok := e.indexes.vecIdx.(interface{ Flush() error }); ok {
 		if err := f.Flush(); err != nil {
 			return nil, fmt.Errorf("flush vector index: %w", err)
 		}
@@ -371,7 +308,7 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 	// BM25: BboltBM25Index persists to bbolt, not CAS. This block
 	// is kept for backward compat with BinaryMarshaler implementations.
 	var bm25FullRoot string
-	if m, ok := e.bm25Full.(encoding.BinaryMarshaler); ok {
+	if m, ok := e.indexes.bm25Full.(encoding.BinaryMarshaler); ok {
 		data, err := m.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("marshal BM25 index: %w", err)
@@ -386,7 +323,7 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 	// This block is kept for backward compat with implementations that
 	// support BinaryMarshaler (none currently active in v1).
 	var vecRoot string
-	if m, ok := e.vecIdx.(encoding.BinaryMarshaler); ok {
+	if m, ok := e.indexes.vecIdx.(encoding.BinaryMarshaler); ok {
 		vecData, err := m.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("marshal vector index: %w", err)
@@ -399,7 +336,7 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 
 	// Persist the property index (only for MemoryPropertyIndex).
 	var propRoot string
-	if memIdx, ok := e.propIdx.(*index.MemoryPropertyIndex); ok {
+	if memIdx, ok := e.indexes.propIdx.(*index.MemoryPropertyIndex); ok {
 		propData, err := memIdx.MarshalBinary()
 		if err != nil {
 			return nil, fmt.Errorf("marshal property index: %w", err)
@@ -496,72 +433,24 @@ func (e *Engine) FlushAccess() {
 	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
 }
 
-// RebuildAllIndexes clears and rebuilds all indexes from graph state.
-// All indexes are disk-backed (bbolt + mmap). Rebuild adds on top of
-// existing data (idempotent). Caller must hold the write lock.
+// RebuildAllIndexes rebuilds all indexes from graph state and refreshes
+// the searcher to point at them. Idempotent. Caller must hold the
+// write lock.
 func (e *Engine) RebuildAllIndexes() {
-	rebuildIndexes(e.boltDB, e.graph, e.propIdx, e.vecIdx, e.bm25Full, false, false, false)
-	// Rebuild secondary indexes (time, edge counts, field existence).
-	if e.secIdx != nil {
-		e.rebuildSecondaryIndexes()
-	}
-	var rebuildSearchOpts []search.ToolOption
-	if e.secIdx != nil {
-		rebuildSearchOpts = append(rebuildSearchOpts, search.WithSecondaryIndex(e.secIdx))
-	}
-	e.searcher = search.New(e.graph, e.propIdx, e.vecIdx, e.bm25Full, e.embedder, e.cfg, rebuildSearchOpts...)
-}
-
-// rebuildSecondaryIndexes populates secondary indexes from graph state.
-func (e *Engine) rebuildSecondaryIndexes() {
-	it := e.graph.NodeIterator()
-	defer it.Close()
-	for it.Next() {
-		n := it.Node()
-		// Time indexes.
-		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
-			e.secIdx.SetCreatedAt(n.ID, ca)
-		}
-		if la, ok := n.Properties.GetTimestamp("last_accessed"); ok {
-			e.secIdx.SetLastAccessed(n.ID, la)
-		}
-		// Field existence.
-		for k := range n.Properties {
-			e.secIdx.SetFieldExists(k, n.ID)
-		}
-	}
-	// Edge counts: iterate all nodes and count non-structural edges.
-	it2 := e.graph.NodeIterator()
-	defer it2.Close()
-	for it2.Next() {
-		id := it2.Node().ID
-		inEdges := e.graph.EdgesTo(id)
-		outEdges := e.graph.EdgesFrom(id)
-		inCount, outCount := 0, 0
-		for _, edge := range inEdges {
-			if !graph.IsStructuralEdge(edge.Type) {
-				inCount++
-			}
-		}
-		for _, edge := range outEdges {
-			if !graph.IsStructuralEdge(edge.Type) {
-				outCount++
-			}
-		}
-		e.secIdx.SetEdgeCounts(id, inCount, outCount)
-	}
+	e.indexes.rebuildAll(e.graph)
+	e.searcher.rebuild(e.graph, e.indexes.propIdx, e.indexes.vecIdx, e.indexes.bm25Full, e.indexes.secIdx, e.prov.embedder, e.prov.llm, e.cfg)
 }
 
 // BM25Full returns the BM25 index for content_full.
-func (e *Engine) BM25Full() index.BM25Index { return e.bm25Full }
+func (e *Engine) BM25Full() index.BM25Index { return e.indexes.bm25Full }
 
 // SecIdx returns the secondary index (time, edge counts, field existence).
 // May be nil in tests that don't create one.
-func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.secIdx }
+func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.indexes.secIdx }
 
 // CollCache returns the collection membership cache.
 // May be nil in tests that don't create one.
-func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
+func (e *Engine) CollCache() *index.BboltCollectionCache { return e.indexes.collCache }
 
 // BatchIndexWrites executes fn within a single bbolt write transaction
 // shared across all bbolt-backed indexes (PropIdx, BM25, SecIdx,
@@ -574,26 +463,7 @@ func (e *Engine) CollCache() *index.BboltCollectionCache { return e.collCache }
 // fn did not persist. Callers must check the error -- silently
 // ignoring it loses every write inside the closure.
 func (e *Engine) BatchIndexWrites(fn func()) error {
-	return e.boltDB.Update(func(tx *bolt.Tx) error {
-		if pi, ok := e.propIdx.(*index.BboltPropertyIndex); ok {
-			pi.SetBatch(tx)
-			defer pi.SetBatch(nil)
-		}
-		if bm, ok := e.bm25Full.(*index.BboltBM25Index); ok {
-			bm.SetBatch(tx)
-			defer bm.SetBatch(nil)
-		}
-		if e.secIdx != nil {
-			e.secIdx.SetBatch(tx)
-			defer e.secIdx.SetBatch(nil)
-		}
-		if e.edgeStore != nil {
-			e.edgeStore.SetBatch(tx)
-			defer e.edgeStore.SetBatch(nil)
-		}
-		fn()
-		return nil
-	})
+	return e.indexes.batch(fn)
 }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
@@ -601,10 +471,8 @@ func (e *Engine) BatchIndexWrites(fn func()) error {
 // Returns the first error encountered; all resources are closed regardless.
 func (e *Engine) Close() error {
 	var firstErr error
-	if c, ok := e.vecIdx.(interface{ Close() error }); ok {
-		if err := c.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	if err := e.indexes.close(); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if e.boltDB != nil {
 		if err := e.boltDB.Close(); err != nil && firstErr == nil {
@@ -621,7 +489,7 @@ func (e *Engine) Close() error {
 // positives on long documents with similar structure but different content.
 // Caller must hold at least a read lock.
 func (e *Engine) CheckDedup(nodeID string) (string, float64) {
-	if e.vecIdx.Len() < 2 {
+	if e.indexes.vecIdx.Len() < 2 {
 		return "", 0
 	}
 
@@ -644,7 +512,7 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	// Use vector index for candidate retrieval (uint8, approximate).
 	// Request extra candidates since one will be self (skipped) and
 	// others may fail verification.
-	results := e.vecIdx.Search(vec, 10, nil)
+	results := e.indexes.vecIdx.Search(vec, 10, nil)
 	for _, r := range results {
 		if r.NodeID == nodeID {
 			continue
@@ -737,8 +605,8 @@ func (e *Engine) embedContextWindow() int {
 	if e.cfg.Embedding.MaxTokens > 0 {
 		return e.cfg.Embedding.MaxTokens
 	}
-	if e.embedder != nil {
-		if cw := e.embedder.ContextWindow(); cw > 0 {
+	if e.prov.embedder != nil {
+		if cw := e.prov.embedder.ContextWindow(); cw > 0 {
 			return cw
 		}
 	}
@@ -802,7 +670,7 @@ func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) 
 func (e *Engine) preChunkSections(ctx context.Context, content, medium, summary string, sections []graph.Section) *PreChunkResult {
 	result := &PreChunkResult{Sections: sections}
 
-	if e.embedder == nil {
+	if e.prov.embedder == nil {
 		return result
 	}
 
@@ -811,10 +679,10 @@ func (e *Engine) preChunkSections(ctx context.Context, content, medium, summary 
 		texts[i] = s.Text
 	}
 
-	vecs, err := e.embedder.Embed(ctx, texts)
+	vecs, err := e.prov.embedder.Embed(ctx, texts)
 	if err == nil {
 		result.Vectors = vecs
-		result.Model = e.embedder.ModelID()
+		result.Model = e.prov.embedder.ModelID()
 		e.preChunkParent(ctx, result, content, medium, summary)
 		return result
 	}
@@ -850,7 +718,7 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary 
 
 		result := &PreChunkResult{Texts: chunks}
 
-		if e.embedder == nil {
+		if e.prov.embedder == nil {
 			return result
 		}
 
@@ -862,7 +730,7 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary 
 			}
 		}
 
-		_, err := e.embedder.Embed(ctx, []string{longest})
+		_, err := e.prov.embedder.Embed(ctx, []string{longest})
 		if err != nil && IsContextLengthError(err) {
 			// Chunks too large -- reduce by 25% and retry.
 			chunkSize = chunkSize * 3 / 4
@@ -874,10 +742,10 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary 
 		}
 
 		// Canary passed (or non-context error). Embed all chunks.
-		vecs, err := e.embedder.Embed(ctx, chunks)
+		vecs, err := e.prov.embedder.Embed(ctx, chunks)
 		if err == nil {
 			result.Vectors = vecs
-			result.Model = e.embedder.ModelID()
+			result.Model = e.prov.embedder.ModelID()
 		}
 
 		e.preChunkParent(ctx, result, content, medium, summary)
@@ -893,7 +761,7 @@ func (e *Engine) preChunkAdaptive(ctx context.Context, content, medium, summary 
 // Preference order: content_medium (purpose-built for the model's
 // context window), then content_short, then truncated content_full.
 func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, content, medium, summary string) {
-	if e.embedder == nil {
+	if e.prov.embedder == nil {
 		return
 	}
 	// Prefer content_medium: it's purpose-built to represent the
@@ -913,7 +781,7 @@ func (e *Engine) preChunkParent(ctx context.Context, result *PreChunkResult, con
 		return
 	}
 	for attempt := 0; attempt <= maxChunkRetries; attempt++ {
-		pvecs, err := e.embedder.Embed(ctx, []string{parentText})
+		pvecs, err := e.prov.embedder.Embed(ctx, []string{parentText})
 		if err == nil && len(pvecs) > 0 {
 			result.ParentVec = pvecs[0]
 			return
@@ -945,17 +813,17 @@ func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps g
 	// identity. Always prefer it over a degraded pre-embed result.
 	if pre.ParentVec != nil {
 		if old, hasEmbed := parentProps.GetVector("embedding_full"); hasEmbed {
-			e.propIdx.Remove(parentID, "embedding_full", graph.VectorProperty(old))
-			e.vecIdx.Remove(parentID)
+			e.indexes.propIdx.Remove(parentID, "embedding_full", graph.VectorProperty(old))
+			e.indexes.vecIdx.Remove(parentID)
 		}
 		prop := graph.VectorProperty(pre.ParentVec)
 		e.graph.SetNodeProperty(parentID, "embedding_full", prop)
-		e.propIdx.Add(parentID, "embedding_full", prop)
-		e.vecIdx.Add(parentID, pre.ParentVec)
+		e.indexes.propIdx.Add(parentID, "embedding_full", prop)
+		e.indexes.vecIdx.Add(parentID, pre.ParentVec)
 		if pre.Model != "" {
 			modelProp := graph.StringProperty(pre.Model)
 			e.graph.SetNodeProperty(parentID, "embedding_model", modelProp)
-			e.propIdx.Add(parentID, "embedding_model", modelProp)
+			e.indexes.propIdx.Add(parentID, "embedding_model", modelProp)
 		}
 	}
 
@@ -1037,66 +905,27 @@ func (e *Engine) applyLegacyChunks(parentID string, pre *PreChunkResult) int {
 	return len(pre.Texts)
 }
 
-// IndexNode populates all indexes for a node that has already been
-// added to the graph. Handles PropIdx (all properties), BM25 (if
-// content is non-empty), and VecIdx (if vec is non-nil). Call this
-// once after AddNode instead of manually updating each index.
-// Caller must hold the write lock.
+// IndexNode populates all indexes for a node already added to the
+// graph. When vec is non-nil it is also written back as the
+// embedding_full property -- the vector index is a derived structure
+// and the property is the source of truth. The cross-index update is
+// delegated to indexSet.applyToNode so a future index gets picked up
+// automatically. Caller must hold the write lock.
 func (e *Engine) IndexNode(nodeID, content string, vec []float32) {
+	if vec != nil {
+		e.graph.SetNodeProperty(nodeID, "embedding_full", graph.VectorProperty(vec))
+	}
 	n, ok := e.graph.GetNode(nodeID)
 	if !ok {
 		return
 	}
-	for k, v := range n.Properties {
-		e.propIdx.Add(nodeID, k, v)
-		// Update secondary field-existence index.
-		if e.secIdx != nil {
-			e.secIdx.SetFieldExists(k, nodeID)
-		}
-	}
-	// Add to BM25 index (D12: single layer, content_full only).
-	if content != "" {
-		e.bm25Full.Add(nodeID, content)
-	}
-	if vec != nil {
-		e.vecIdx.Add(nodeID, vec)
-		// Set embedding_full as a node property so it's persisted and
-		// visible to inspection/export. The vector index is a derived
-		// structure; the property is the source of truth.
-		prop := graph.VectorProperty(vec)
-		e.graph.SetNodeProperty(nodeID, "embedding_full", prop)
-		e.propIdx.Add(nodeID, "embedding_full", prop)
-	}
-	// Update secondary time indexes.
-	if e.secIdx != nil {
-		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
-			e.secIdx.SetCreatedAt(nodeID, ca)
-		}
-		if la, ok := n.Properties.GetTimestamp("last_accessed"); ok {
-			e.secIdx.SetLastAccessed(nodeID, la)
-		}
-	}
+	e.indexes.applyToNode(n, content, vec)
 }
 
 // SetProp sets a property on a node and updates the property index.
 // Caller must hold the write lock.
 func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
-	if n, ok := e.graph.GetNode(nodeID); ok {
-		if old, ok := n.Properties[key]; ok {
-			e.propIdx.Remove(nodeID, key, old)
-		}
-	}
-	e.graph.SetNodeProperty(nodeID, key, val)
-	e.propIdx.Add(nodeID, key, val)
-	// Maintain secondary indexes.
-	if e.secIdx != nil {
-		e.secIdx.SetFieldExists(key, nodeID)
-		if key == "last_accessed" {
-			if t := val.Timestamp(); !t.IsZero() {
-				e.secIdx.SetLastAccessed(nodeID, t)
-			}
-		}
-	}
+	e.indexes.setProp(e.graph, nodeID, key, val)
 }
 
 // SetContentProp updates a string property and refreshes the BM25
@@ -1104,11 +933,7 @@ func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
 // when changing content fields to keep BM25 in sync (D12: single
 // BM25 layer, content_full only). Caller must hold the write lock.
 func (e *Engine) SetContentProp(nodeID, key, content string) {
-	e.SetProp(nodeID, key, graph.StringProperty(content))
-	if key == "content_full" {
-		e.bm25Full.Remove(nodeID)
-		e.bm25Full.Add(nodeID, content)
-	}
+	e.indexes.setContentProp(e.graph, nodeID, key, content)
 }
 
 // NodeCount returns the number of nodes. Acquires a read lock.
@@ -1125,83 +950,3 @@ func (e *Engine) EdgeCount() int {
 	return e.graph.EdgeCount()
 }
 
-// rebuildIndexes populates indexes from graph state. Each *Loaded flag
-// indicates that the corresponding index was restored from a persisted
-// snapshot and should be skipped. When all are true, this is a no-op.
-func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
-	if bm25FullLoaded && vecLoaded && propLoaded {
-		return
-	}
-
-	// Batch all bbolt writes in a single transaction. Both propIdx and
-	// bm25Full may share the same bbolt DB; opening separate write
-	// transactions would deadlock. Open one transaction and share it.
-	type batchSetter interface {
-		SetBatch(tx *bolt.Tx)
-		ClearBatch()
-	}
-	var setters []batchSetter
-	if ps, ok := propIdx.(batchSetter); ok && !propLoaded {
-		setters = append(setters, ps)
-	}
-	if bs, ok := bm25Full.(batchSetter); ok && !bm25FullLoaded {
-		setters = append(setters, bs)
-	}
-	if len(setters) > 0 && db != nil {
-		db.Update(func(tx *bolt.Tx) error {
-			for _, s := range setters {
-				s.SetBatch(tx)
-			}
-			defer func() {
-				for _, s := range setters {
-					s.ClearBatch()
-				}
-			}()
-			rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-			return nil
-		})
-		return
-	}
-	rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-}
-
-
-func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
-	// If all indexes are already populated, skip the full graph scan.
-	if bm25FullLoaded && vecLoaded && propLoaded {
-		slog.Info("indexes already populated, skipping rebuild",
-			"component", "engine",
-			"bm25", bm25Full.Len(),
-			"vec", vecIdx.Len(),
-			"prop", propIdx.Count())
-		return
-	}
-	slog.Info("rebuilding indexes from graph",
-		"component", "engine",
-		"bm25_loaded", bm25FullLoaded,
-		"vec_loaded", vecLoaded,
-		"prop_loaded", propLoaded)
-	it := g.NodeIterator()
-	defer it.Close()
-	for it.Next() {
-		n := it.Node()
-		if !propLoaded {
-			for k, v := range n.Properties {
-				propIdx.Add(n.ID, k, v)
-			}
-		}
-		if !vecLoaded {
-			for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
-				if v, ok := n.Properties.GetVector(embKey); ok {
-					vecIdx.Add(n.ID, v)
-					break
-				}
-			}
-		}
-		if !bm25FullLoaded {
-			if text, ok := n.Properties.GetString("content_full"); ok {
-				bm25Full.Add(n.ID, text)
-			}
-		}
-	}
-}
