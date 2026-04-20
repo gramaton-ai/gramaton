@@ -93,38 +93,54 @@ Launch them in batches of 4 via the Agent tool. Track completions.
 
 ### 5. Sub-agent contract
 
-Each sub-agent's prompt is self-contained. Template:
+Each sub-agent's prompt is self-contained. The transcript is NOT
+embedded in the prompt (too large for many sessions); the prompt
+passes a filesystem path and the sub-agent reads it.
+
+Template:
 
 ```
 You are ingesting one benchmark chat session into the gramaton-bench
-store. Treat the transcript below as a conversation that just
-happened. Do these steps exactly:
+store via Gramaton's production session-extraction path. Treat the
+transcript at the provided path as "the conversation" that Gramaton's
+extraction instructions refer to.
 
-1. Call mcp__gramaton-bench__gramaton_session_prepare with:
-     session_id = "<lme-s-SESSIONID>"
-     conversation_summary = "LongMemEval-S haystack session,
-         dated <SESSION_DATE>"
+Do these steps exactly:
 
-2. Read the extraction instructions returned by session_prepare and
-   follow them precisely to extract segments.
+1. Read the transcript file at <TRANSCRIPT_PATH>. The first few lines
+   are metadata (session_id, source_session_id, session_date,
+   source_instance). The transcript itself follows the `---`
+   separator, formatted as [ROLE] blocks.
 
-3. Call mcp__gramaton-bench__gramaton_session_commit with:
-     session_id = "<lme-s-SESSIONID>"
-     segments = [<the segments you extracted>]
-     (default promote_to_memory: true — do not override)
+2. Call mcp__gramaton-bench__gramaton_session_start with:
+     client_session_id = "<CLIENT_SESSION_ID>"
+   Record the returned `id` field (a ULID). This is the SESSION_ULID
+   used for the next two calls. If `resumed: true` and topics is
+   non-empty, a prior run already committed — return "already done:
+   <CLIENT_SESSION_ID>" without calling commit again.
 
-4. Return a one-line summary: segments-committed count and
-   session_id. Nothing else.
+3. Call mcp__gramaton-bench__gramaton_session_prepare with:
+     session_id = SESSION_ULID
+
+4. Read the extraction instructions returned by session_prepare.
+   Apply them to the transcript (treat the transcript's user/assistant
+   turns as the conversation the instructions refer to). Produce a
+   list of segments.
+
+5. Call mcp__gramaton-bench__gramaton_session_commit with:
+     session_id = SESSION_ULID
+     segments   = <your extracted segments>
+   Default `promote_to_memory: true` — do NOT override.
+
+6. Return a single line: "committed <N> segments for
+   <CLIENT_SESSION_ID>". Nothing else.
 
 Rules:
 - Only use mcp__gramaton-bench__* tools. Never mcp__gramaton__*.
-- Do not invent content beyond what's in the transcript.
+- Do not invent content beyond what's in the transcript file.
+- session_prepare takes the ULID (step 2 result), not the
+  client_session_id. Using the wrong id returns "not_found".
 - Do not call session_commit without calling session_prepare first.
-
-Transcript:
----
-<TRANSCRIPT_BLOCK>
----
 ```
 
 Sub-agent type: `general-purpose`. Isolated context keeps each

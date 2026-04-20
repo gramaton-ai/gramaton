@@ -54,9 +54,13 @@ classification distribution and disable retrieval signals
 The primary autonomous-capture path.
 
 1. **Prepare**: Returns the canonical extraction instructions plus
-   current session state (for dedup). Call at natural breakpoints,
-   before context compaction, on long runs periodically, or when the
-   user asks you to capture.
+   current session state (for dedup). Call EAGERLY within the turn
+   when a decision lands, a rule or principle is articulated, a task
+   completes, or the user pivots topics. Call at least every ~10
+   substantive turns even without an explicit trigger. Also call
+   before context compaction or when the user asks. Bundling captures
+   at session end is an anti-pattern -- see
+   `gramaton_guide(topic="sessions")` for the full trigger list.
 2. **Commit**: Submit extracted segments. Each becomes a Session
    segment (BM25-indexed). When `promote_to_memory: true` (default
    when omitted) it ALSO becomes a Memory record (vector-embedded,

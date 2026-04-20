@@ -112,6 +112,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`benchmark-extract` skill sub-agent contract refined.** Updated
+  the sub-agent template in `.claude/skills/benchmark-extract/SKILL.md`
+  to reflect the actual flow used during the 2026-04-20 pilot: read
+  transcript from a staging file path (not inline in the prompt), call
+  `session_start` first to get the ULID, then `prepare` + `commit` with
+  the ULID (not the client_session_id). These details were learned
+  empirically and the skill now matches what works end-to-end.
+- **`gramaton_session_prepare` tool description rewritten for higher
+  autonomous-trigger rate.** The prior description led with compaction
+  and buried the actual triggers as "also call at natural breakpoints,"
+  producing a regression vs the old `gramaton_observe` self-trigger
+  cadence. New description leads with "EAGERLY throughout a conversation,
+  not just at the end," names the rule-articulation trigger explicitly,
+  adds a ~10-substantive-turns floor even without an explicit trigger,
+  and flags bundling-at-session-end as an anti-pattern. Synced across
+  the three description sites (`server/mcp_sessions.go`,
+  `server/bindings_sessions.go`, `cli/mcp_proxy_sessions.go`).
+  Corresponding "When to Call" guidance added to
+  `server/guide/sessions.md` and `server/guide/capture.md`, and the
+  shipped `integration/claude-code/CLAUDE.md` template was updated
+  with the same trigger list + scheduled cadence + anti-pattern
+  callout. Behavior change: LLM agents using the MCP surface should
+  call prepare/commit more frequently during real-dev conversations.
 - **Engine god-object split (P2-01)** -- `core/engine.go` reorganised
   into named subsystems and sibling pipeline packages across two PRs.
   PR1 extracted `providers`, `searcher`, and `indexSet` subsystems

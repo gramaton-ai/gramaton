@@ -69,6 +69,40 @@ Noise-but-worth-finding-by-keyword -> Session-only.
   knowledge. Edge: `segment_of` -> Topic. Promoted segments also
   have an `extracted_as` edge -> Memory record.
 
+## When to Call prepare/commit
+
+Call `prepare` + `commit` EAGERLY and FREQUENTLY during a conversation.
+This is the primary autonomous-capture path; bundling captures at
+session end is an anti-pattern because early-session context becomes
+harder to reconstruct as the conversation accumulates.
+
+**Act within the turn when any of these lands:**
+
+- A decision is reached (design choice, architectural call, which
+  library, which approach).
+- The user articulates a rule, principle, or preference.
+- A task in the TaskList flips to `completed`.
+- The user pivots to a new topic — capture the outgoing one first.
+- The user says "done", "ship it", "that works", or similar closure
+  signals on work that just landed.
+- The user explicitly asks to capture.
+- Before context compaction: any mention of compacting, running low,
+  or needing to compress.
+
+**Scheduled cadence:** even without an explicit trigger, call
+prepare/commit at least every ~10 substantive turns of a real-dev
+conversation. Reset the clock at each commit.
+
+**What counts as "substantive":** turns that produced decisions,
+preferences, design rationale, dead ends, research, architectural
+choices, cost estimates, or any non-trivial reasoning. Routine Q&A
+and small edits don't reset the clock.
+
+**Anti-pattern to avoid:** "I'll capture at the end of this big
+task." By the time the big task completes, you've blown past multiple
+natural breakpoints and the earliest reasoning is harder to recover.
+Capture at each landing, not at the end.
+
 ## Question Types Sessions Serve
 
 Sessions shine for questions Memory alone can't answer well:

@@ -147,15 +147,29 @@ without requiring the user to ask. The flow is two-phase:
    searchable as Session segments without polluting Memory's vector
    space.
 
-**When to call prepare/commit:**
-- At natural breakpoints: topic shifts, decisions landing, a task
-  completing, the user redirecting focus.
-- Before context compaction: if the user mentions compacting,
-  running low on context, or needing to compress, extract first
-  so nothing is lost.
-- When the user asks you to capture the conversation.
-- On long-running work, periodically (every ~10 turns is a
-  reasonable default).
+**When to call prepare/commit (EAGERLY, not at session end):**
+
+Act within the turn when any of these lands:
+- A decision is reached (design choice, architectural call, which
+  library, which approach).
+- The user articulates a rule, principle, or preference.
+- A TaskList item flips to completed.
+- The user pivots to a new topic -- capture the outgoing one first.
+- The user says "done", "ship it", "that works" on work that just
+  landed.
+- Before context compaction: any mention of compacting, running low,
+  or needing to compress.
+- The user asks to capture.
+
+**Scheduled cadence:** even without an explicit trigger, call
+prepare/commit at least every ~10 substantive turns (decisions,
+preferences, design rationale, dead ends, reasoning). Reset the
+clock at each commit.
+
+**Anti-pattern:** bundling captures at session end. By the time the
+big task completes, you've blown past multiple natural breakpoints
+and the earliest reasoning is harder to recover. Capture at each
+landing, not at the end.
 
 **Finding the session_id.** Run `gramaton session current` -- it
 returns `{"session_id": ..., "client_session_id": ...}` for the
