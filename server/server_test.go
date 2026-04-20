@@ -30,6 +30,11 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	cfg.DataDir = dir
 	cfg.Embedding.Provider = ""
 	cfg.LLM.Provider = ""
+	// Confine backups to a SIBLING directory of dataDir -- not a
+	// subdirectory! If backups live inside dataDir the in-progress
+	// archive file gets included in its own walk, producing the
+	// "archive/tar: write too long" race when the file grows.
+	cfg.Backup.Dir = t.TempDir() + "/backups"
 	config.Save(cfg, dir+"/config.yaml")
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{

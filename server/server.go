@@ -212,7 +212,13 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 
 	// Mount MCP Streamable HTTP handler directly (not through security
 	// middleware -- MCP has its own content types and headers).
-	mux.Handle("/mcp", s.MCPHandler())
+	// Loopback-only: MCP exposes destructive admin tools (gramaton_branch
+	// merge/discard, gramaton_backup, gramaton_curation trigger/batch)
+	// whose REST counterparts are loopback-gated. Without this guard the
+	// /mcp endpoint becomes a bypass for those gates when the server
+	// binds to a non-loopback address. The supported flow (CLI MCP proxy
+	// -> HTTP localhost) is unaffected.
+	mux.Handle("/mcp", loopbackOnly(s.MCPHandler()))
 
 	// Wrap REST routes with security headers. MCP handler is already
 	// mounted before the wrapper, so it won't be affected.

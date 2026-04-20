@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -119,6 +120,12 @@ func parseIntParam(r *http.Request, name string, defaultVal, maxVal int) int {
 	return v
 }
 
+// errEmptyBody is returned by parseJSON when the request body is
+// zero-length. Bindings whose body is optional can ignore this
+// specific error via errors.Is, while still surfacing real parse
+// failures (malformed JSON, oversized body) as 400.
+var errEmptyBody = errors.New("empty request body")
+
 // parseJSON reads and validates a JSON request body into target.
 func parseJSON(r *http.Request, target any, maxSize int64) error {
 	body := http.MaxBytesReader(nil, r.Body, maxSize)
@@ -130,7 +137,7 @@ func parseJSON(r *http.Request, target any, maxSize int64) error {
 	}
 
 	if len(data) == 0 {
-		return fmt.Errorf("empty request body")
+		return errEmptyBody
 	}
 
 	if !utf8.Valid(data) {

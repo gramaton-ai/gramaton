@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -115,6 +114,7 @@ func (a *API) BackupCreate(ctx context.Context) (BackupCreateResponse, *APIError
 		a.log.Warn("backup: read snapshot failed", "component", "backup", "err", snapErr)
 		return BackupCreateResponse{}, ErrInternal("failed to snapshot store state")
 	}
+	a.fireBackupSnapshotHook()
 
 	// Phase 2: compress off-lock.
 	archivePath, err := backup.CreateSnapshot(snap, cfg.DataDir, cfgPath, backupDir, a.storeName)
@@ -146,6 +146,12 @@ func (a *API) BackupCreate(ctx context.Context) (BackupCreateResponse, *APIError
 // the duration of extraction + index rebuild; this is a rare
 // destructive operation and splitting it further would add
 // complexity without real value.
+//
+// Path confinement: req.Path must live under the configured
+// backup directory. Without this gate any caller could restore
+// from an arbitrary tarball on the host filesystem -- a malicious
+// archive could exploit tar-extraction edge cases or simply
+// replace the live store with attacker-controlled state.
 func (a *API) BackupRestore(ctx context.Context, req RestoreRequest) (RestoreResponse, *APIError) {
 	start := time.Now()
 	if req.Path == "" {
@@ -161,7 +167,23 @@ func (a *API) BackupRestore(ctx context.Context, req RestoreRequest) (RestoreRes
 		return RestoreResponse{}, ErrInvalid("restore overwrites the current store. Set force: true to confirm.")
 	}
 
-	dataDir := a.engine.Config().DataDir
+	cfg := a.engine.Config()
+	backupDir := cfg.Backup.Dir
+	if backupDir == "" {
+		backupDir = backup.DefaultBackupDir()
+	}
+	cleanedBackupDir, err := filepath.Abs(filepath.Clean(backupDir))
+	if err != nil {
+		a.log.Warn("restore: resolve backup dir failed", "component", "backup", "err", err)
+		return RestoreResponse{}, ErrInternal("failed to resolve backup directory")
+	}
+	cleanedReq := filepath.Clean(req.Path)
+	prefix := cleanedBackupDir + string(filepath.Separator)
+	if !strings.HasPrefix(cleanedReq, prefix) {
+		return RestoreResponse{}, ErrInvalid("path must live under the configured backup directory")
+	}
+
+	dataDir := cfg.DataDir
 
 	a.engine.Lock()
 	defer a.engine.Unlock()
@@ -227,7 +249,8 @@ func (a *API) BackupExport(ctx context.Context, req ExportRequest, w io.Writer) 
 	}
 
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		return "", ErrInternal(fmt.Sprintf("write response: %v", err))
+		a.log.Warn("export: write response failed", "component", "backup", "format", format, "err", err)
+		return "", ErrInternal("failed to write export response")
 	}
 
 	switch format {

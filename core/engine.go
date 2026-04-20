@@ -299,15 +299,26 @@ func (e *Engine) Graph() *graph.Graph { return e.graph }
 //
 // This is the primitive for "load a new state off-lock, then apply
 // under lock" -- callers construct a fresh *graph.Graph via
-// graph.New() + Load(store, hash) outside the lock, then take the
-// write lock, call SwapGraph, write HEAD/refs, call
-// RebuildAllIndexes, release. BranchCheckout/Merge use this to keep
-// the expensive parse off-lock.
+// graph.NewWithCapacity(cap, graph.WithEdgeStore(engine.EdgeStore()))
+// + Load(store, hash) outside the lock, then take the write lock,
+// call SwapGraph, write HEAD/refs, call RebuildAllIndexes, release.
+// BranchCheckout/Merge use this to keep the expensive parse off-lock.
+//
+// IMPORTANT: the new graph must share the engine's BboltEdgeStore.
+// If you build it with the default graph.New() it gets a fresh
+// MemoryEdgeStore and any subsequent edge writes silently bypass
+// bbolt persistence. Use EdgeStore() to grab the engine's store
+// and inject via graph.WithEdgeStore.
 //
 // Incremental-commit state (lastNodeTreeRoot/lastEdgeTreeRoot) is
 // carried on the graph itself and was set by Load, so subsequent
 // saves on the swapped-in graph commit correctly.
 func (e *Engine) SwapGraph(g *graph.Graph) { e.graph = g }
+
+// EdgeStore returns the engine's persistent edge store. Used by
+// SwapGraph callers (BranchCheckout/Merge) to construct a
+// replacement graph that shares the engine's BboltEdgeStore.
+func (e *Engine) EdgeStore() *graph.BboltEdgeStore { return e.edgeStore }
 
 // PropIdx returns the property index.
 func (e *Engine) PropIdx() index.PropertyIndex { return e.propIdx }

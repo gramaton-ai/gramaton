@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/gramaton-ai/gramaton/api"
@@ -28,10 +29,17 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 			return
 		}
 		// Body is optional; the dry_run flag selects DryRun over Trigger.
+		// Real parse failures (malformed JSON, oversized body) surface
+		// as 400 -- silently defaulting to a real trigger when the
+		// caller asked for dry-run via a malformed body would be a foot
+		// gun.
 		var body struct {
 			DryRun bool `json:"dry_run"`
 		}
-		_ = parseJSON(r, &body, maxJSONBodySize)
+		if err := parseJSON(r, &body, maxJSONBodySize); err != nil && !errors.Is(err, errEmptyBody) {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
 		if body.DryRun {
 			result, apiErr := s.api.CurationDryRun(r.Context())
 			if apiErr != nil {
@@ -65,8 +73,13 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/reembed", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ReembedRequest
-		// Body is optional -- no required fields.
-		_ = parseJSON(r, &req, maxJSONBodySize)
+		// Body is optional -- no required fields. But if a body IS
+		// sent, it had better be valid JSON; silently defaulting on
+		// a malformed body would hide caller mistakes.
+		if err := parseJSON(r, &req, maxJSONBodySize); err != nil && !errors.Is(err, errEmptyBody) {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
 		result, apiErr := s.api.Reembed(r.Context(), req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)

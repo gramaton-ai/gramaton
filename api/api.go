@@ -49,6 +49,15 @@ type API struct {
 	// preparedSweepCancel cancels the prepared-sessions sweeper
 	// goroutine on shutdown. Set by startPreparedSweeper.
 	preparedSweepCancel context.CancelFunc
+
+	// testHookBackupSnapshotted, when set by tests via
+	// SetBackupSnapshotHook, is closed by BackupCreate immediately
+	// after phase-1 snapshot completes (before the off-lock
+	// compression starts). This lets tests deterministically
+	// distinguish "snapshot-time" from "compression-time" without
+	// time.Sleep races.
+	hooksMu                   sync.Mutex
+	testHookBackupSnapshotted chan struct{}
 }
 
 // Dependencies holds the collaborators an API needs at construction.
@@ -115,6 +124,31 @@ func (a *API) Logger() *slog.Logger { return a.log }
 // ConfigDir returns the configuration directory path (where hook-state
 // files and similar artifacts live).
 func (a *API) ConfigDir() string { return a.configDir }
+
+// SetBackupSnapshotHook installs a channel that BackupCreate closes
+// after phase-1 snapshot returns. Tests use this to race a
+// concurrent capture in between snapshot and compression with no
+// timing assumptions. Pass nil to clear.
+func (a *API) SetBackupSnapshotHook(ch chan struct{}) {
+	a.hooksMu.Lock()
+	defer a.hooksMu.Unlock()
+	a.testHookBackupSnapshotted = ch
+}
+
+func (a *API) fireBackupSnapshotHook() {
+	a.hooksMu.Lock()
+	ch := a.testHookBackupSnapshotted
+	a.hooksMu.Unlock()
+	if ch != nil {
+		close(ch)
+		a.hooksMu.Lock()
+		// Clear so a re-trigger doesn't double-close.
+		if a.testHookBackupSnapshotted == ch {
+			a.testHookBackupSnapshotted = nil
+		}
+		a.hooksMu.Unlock()
+	}
+}
 
 // StopPreparedSweeper cancels the sweeper goroutine started by
 // StartPreparedSweeper. Safe to call even if the sweeper never

@@ -141,9 +141,18 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 
 	tw := tar.NewWriter(gz)
 
-	// Walk the data directory and add files.
+	// Walk the data directory and add files. The walker tolerates
+	// transient races: temp files (.chunk-*, .gramaton-*) can vanish
+	// mid-walk when AtomicWriteFile completes, and chunk files can
+	// be rewritten concurrently. Skip a vanished entry rather than
+	// aborting the whole archive -- by definition the entry is no
+	// longer reachable from any commit anyway. ENOENT on excluded
+	// transients is not an error.
 	if err := filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 
@@ -163,27 +172,42 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 			return nil
 		}
 
+		// Directories: emit header from Walk's stat; no body.
+		if info.IsDir() {
+			header, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				return err
+			}
+			header.Name = filepath.Join("data", rel)
+			return tw.WriteHeader(header)
+		}
+
+		// Files: read the body into memory first, then write the
+		// header sized to the body and the body itself. This is the
+		// only way to keep header.Size and the byte stream aligned
+		// when concurrent writers can grow or shrink files between
+		// Walk's stat and our read. Chunks are typically a few KB
+		// to a few MB; buffering is acceptable.
+		body, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Vanished between Walk and ReadFile. Skip silently --
+				// any committed state still references chunks that
+				// exist; transient temp files are not our problem.
+				return nil
+			}
+			return err
+		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
 		header.Name = filepath.Join("data", rel)
-
+		header.Size = int64(len(body))
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		_, err = io.Copy(tw, file)
+		_, err = tw.Write(body)
 		return err
 	}); err != nil {
 		return "", fmt.Errorf("archive data: %w", err)

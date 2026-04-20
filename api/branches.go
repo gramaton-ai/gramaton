@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,11 +115,12 @@ func (a *API) BranchCreate(ctx context.Context, req BranchCreateRequest) (Branch
 // BranchCheckout loads the branch's committed graph state.
 // Three-phase lock discipline:
 //  1. RLock: read the target ref hash, release.
-//  2. No lock: parse the committed graph into a fresh *graph.Graph.
-//     This is the slow disk-IO step -- keeping it off-lock lets
-//     concurrent readers continue.
-//  3. Lock: SwapGraph, update HEAD, set active branch, rebuild
-//     indexes, release.
+//  2. No lock: parse the committed graph into a fresh *graph.Graph
+//     that SHARES the engine's BboltEdgeStore -- otherwise edges
+//     added on the new branch silently bypass bbolt persistence.
+//  3. Lock: write HEAD + active branch FIRST (so a partial failure
+//     leaves no in-memory/on-disk divergence), then SwapGraph,
+//     then rebuild indexes.
 func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutResponse, *APIError) {
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchCheckoutResponse{}, ErrInvalid(err.Error())
@@ -135,18 +135,24 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 		return BranchCheckoutResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
-	// Phase 2: parse graph off-lock into a fresh instance.
-	newGraph := graph.New()
+	// Phase 2: parse graph off-lock into a fresh instance backed by
+	// the engine's persistent edge store. Without WithEdgeStore the
+	// new graph would install a MemoryEdgeStore and AddEdge writes
+	// after checkout would silently bypass bbolt.
+	newGraph := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(a.engine.EdgeStore()))
 	if _, err := newGraph.Load(a.engine.Store(), hash); err != nil {
 		a.log.Warn("branch checkout: graph load failed", "component", "branch", "name", name, "err", err)
 		return BranchCheckoutResponse{}, ErrInternal("failed to load branch state")
 	}
 
-	// Phase 3: swap + apply under write lock.
+	// Phase 3: persist on-disk pointers FIRST, then swap in the new
+	// graph. If HEAD or active-branch writes fail, we abort without
+	// touching the in-memory engine state -- the user's view is the
+	// pre-checkout branch and a retry is idempotent. Once the disk
+	// pointers are in place, the swap is the cheap last step.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
-	a.engine.SwapGraph(newGraph)
 	headPath := filepath.Join(dataDir, "HEAD")
 	if err := core.AtomicWriteFile(headPath, []byte(hash), 0o600); err != nil {
 		a.log.Warn("branch checkout: write HEAD failed", "component", "branch", "name", name, "err", err)
@@ -156,6 +162,7 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 		a.log.Warn("branch checkout: set active failed", "component", "branch", "name", name, "err", err)
 		return BranchCheckoutResponse{}, ErrInternal("failed to set active branch")
 	}
+	a.engine.SwapGraph(newGraph)
 	a.engine.RebuildAllIndexes()
 
 	return BranchCheckoutResponse{
@@ -166,8 +173,16 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 }
 
 // BranchMerge fast-forwards main to absorb the named branch, then
-// deletes the branch ref. Three-phase for the same reason checkout
-// is: the graph parse stays off-lock.
+// deletes the branch ref. Same off-lock parse pattern as checkout;
+// the new graph shares the engine's BboltEdgeStore so post-merge
+// edge writes persist.
+//
+// Note: engine.Save() writes HEAD as part of its commit path, so
+// merge's "swap then save" sequence ends with HEAD pointing at the
+// new merge commit. main ref is updated after Save -- if that ref
+// write fails the new commit exists in the object store and HEAD
+// points at it (recoverable: re-running merge will pick up where
+// we left off, since the graph is still in main's state).
 func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse, *APIError) {
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchMergeResponse{}, ErrInvalid(err.Error())
@@ -185,15 +200,15 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 		return BranchMergeResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
-	// Phase 2: parse branch graph off-lock.
-	newGraph := graph.New()
+	// Phase 2: parse branch graph off-lock with shared edge store.
+	newGraph := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(a.engine.EdgeStore()))
 	if _, err := newGraph.Load(a.engine.Store(), branchHash); err != nil {
 		a.log.Warn("branch merge: graph load failed", "component", "branch", "name", name, "err", err)
 		return BranchMergeResponse{}, ErrInternal("failed to load branch state")
 	}
 
-	// Phase 3: swap, save merge commit, update main ref, delete
-	// branch ref, rebuild indexes.
+	// Phase 3: switch active branch first (cheap on-disk write),
+	// then swap the graph in, rebuild indexes, and commit the merge.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -227,8 +242,9 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 }
 
 // BranchDiscard deletes a branch ref without merging. If the
-// discarded branch was active, switches back to main. Short lock
-// hold -- a few ref writes.
+// discarded branch is the active one, switches HEAD + active back
+// to main BEFORE deleting -- otherwise we'd leave HEAD pointing at
+// a missing ref. Short lock hold -- only on-disk writes.
 func (a *API) BranchDiscard(ctx context.Context, name string) (BranchDiscardResponse, *APIError) {
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchDiscardResponse{}, ErrInvalid(err.Error())
@@ -242,25 +258,35 @@ func (a *API) BranchDiscard(ctx context.Context, name string) (BranchDiscardResp
 
 	dataDir := a.engine.Config().DataDir
 	if _, err := core.ReadRef(dataDir, name); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return BranchDiscardResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
-		}
 		return BranchDiscardResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
+	// If we're discarding the active branch, the on-disk HEAD must
+	// be moved to main BEFORE the ref is deleted -- a failure here
+	// is fatal because deleting the ref would orphan HEAD.
 	if core.ActiveBranch(dataDir) == name {
-		if mainHash, err := core.ReadRef(dataDir, "main"); err == nil {
-			headPath := filepath.Join(dataDir, "HEAD")
-			if err := core.AtomicWriteFile(headPath, []byte(mainHash), 0o600); err != nil {
-				a.log.Warn("branch discard: write HEAD failed", "component", "branch", "name", name, "err", err)
-			}
+		mainHash, err := core.ReadRef(dataDir, "main")
+		if err != nil {
+			a.log.Warn("branch discard: read main ref failed",
+				"component", "branch", "name", name, "err", err)
+			return BranchDiscardResponse{}, ErrInternal("failed to read main ref while switching off discarded branch")
+		}
+		headPath := filepath.Join(dataDir, "HEAD")
+		if err := core.AtomicWriteFile(headPath, []byte(mainHash), 0o600); err != nil {
+			a.log.Warn("branch discard: write HEAD failed",
+				"component", "branch", "name", name, "err", err)
+			return BranchDiscardResponse{}, ErrInternal("failed to update HEAD while switching off discarded branch")
 		}
 		if err := core.SetActiveBranch(dataDir, "main"); err != nil {
-			a.log.Warn("branch discard: set main active failed", "component", "branch", "name", name, "err", err)
+			a.log.Warn("branch discard: set main active failed",
+				"component", "branch", "name", name, "err", err)
+			return BranchDiscardResponse{}, ErrInternal("failed to set active branch while switching off discarded branch")
 		}
 	}
 	if err := core.DeleteRef(dataDir, name); err != nil {
-		a.log.Warn("branch discard: delete ref failed", "component", "branch", "name", name, "err", err)
+		// Non-fatal: HEAD/active are correct; ref cleanup just lingers.
+		a.log.Warn("branch discard: delete ref failed",
+			"component", "branch", "name", name, "err", err)
 	}
 
 	a.log.Info("branch discarded", "component", "branch", "name", name)
