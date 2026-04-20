@@ -28,8 +28,17 @@ coverage.html
 # IDE and editor files
 .idea/
 .vscode/
-.claude/
 .kiro/
+
+# Claude Code: commit shared conventions, ignore user/session state.
+# Default-deny everything under .claude/, then whitelist only what's
+# meant to be shared across contributors.
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+# If you later add repo-level Claude docs, whitelist specific files:
+# !.claude/CLAUDE.md
+# !.claude/settings.json
 *.swp
 *.swo
 *~
