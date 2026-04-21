@@ -42,6 +42,26 @@ var ansiRe = regexp.MustCompile(
 		`|\x1b[()][0-9A-B]`, // Character set selection
 )
 
+// footerRe matches the Credits/Time footer line that kiro-cli appends.
+// Anchored to line start (after ANSI strip + trim), and requires the
+// "Credits: <num>" or "Time: <num>" shape so model output that happens
+// to mention "Credits:" mid-sentence isn't clipped. The optional
+// leading " ▸ " bullet is accepted because kiro-cli emits it.
+// (P1-69.)
+var footerRe = regexp.MustCompile(`^(?:\s*[\x{25b8}\x{2022}]\s*)?(?:Credits|Time):\s`)
+
+// trustWarningPrefixes are the line shapes kiro-cli emits as a
+// trust/security banner BEFORE any model content. The filter only
+// strips a line if it starts with one of these prefixes; prior code
+// used strings.Contains, which would also match mid-response text.
+// (P1-69.)
+var trustWarningPrefixes = []string{
+	"All tools are now trusted",
+	"Agents can sometimes",
+	"Learn more at https://kiro.dev/docs",
+	"kiro.dev/docs", // legacy bare form; anchored to prefix to avoid mid-line false positives
+}
+
 // Client wraps the Kiro CLI for LLM completions.
 type Client struct {
 	binary string
@@ -112,6 +132,13 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 
 // extractResponse strips ANSI codes and kiro-cli formatting from
 // the raw output to get the model's response text.
+//
+// Chrome filtering is anchored to line-start shapes rather than
+// substring matching: the Credits/Time footer must start the line
+// (optionally after a bullet glyph) and match a regex with a digit-
+// grouped number; trust warnings must start the line. Mid-response
+// text that incidentally contains "Credits:" or "kiro.dev/docs"
+// survives. (P1-69.)
 func extractResponse(raw string) (string, error) {
 	// Strip ANSI escape sequences.
 	clean := ansiRe.ReplaceAllString(raw, "")
@@ -125,12 +152,12 @@ func extractResponse(raw string) (string, error) {
 		if line == "" {
 			continue
 		}
-		// Skip the Credits/Time footer.
-		if strings.Contains(line, "Credits:") || strings.Contains(line, "Time:") {
+		// Skip the Credits/Time footer (line-start shape).
+		if footerRe.MatchString(line) {
 			continue
 		}
-		// Skip trust warnings.
-		if strings.Contains(line, "tools are now trusted") || strings.Contains(line, "kiro.dev/docs") || strings.Contains(line, "Agents can sometimes") {
+		// Skip trust warnings (line-start prefixes).
+		if hasTrustWarningPrefix(line) {
 			continue
 		}
 		// Strip the "> " prefix kiro adds.
@@ -158,6 +185,15 @@ func extractResponse(raw string) (string, error) {
 	result = stripCodeFences(result)
 
 	return result, nil
+}
+
+func hasTrustWarningPrefix(line string) bool {
+	for _, p := range trustWarningPrefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripCodeFences removes ```json ... ``` wrappers from the response.

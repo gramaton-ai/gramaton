@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **kirocli output filtering anchored to line-start (P1-69)** -- the
+  Credits / Time footer and trust-warning lines were filtered via
+  `strings.Contains` on any substring match, which would silently
+  drop legitimate model responses containing those phrases mid-
+  sentence (e.g. "The bank statement shows Credits: 4"). Replaced
+  with regex + prefix matching that requires the chrome pattern at
+  line start. Three new tests in `llm/kirocli/kirocli_test.go`
+  assert mid-line occurrences of "Credits:", "Time:", and
+  "kiro.dev/docs" survive; the existing tests for footer/warning
+  stripping continue to pass.
 - **Bedrock Cohere embedder distinguishes query vs document (P1-40)**
   -- new optional `embed.QueryEmbedder` interface. Bedrock Cohere
   implements `EmbedQuery` with `input_type="search_query"`; the
