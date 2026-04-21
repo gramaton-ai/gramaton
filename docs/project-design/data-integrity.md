@@ -214,7 +214,7 @@ All write commands accept JSON on stdin. Security considerations:
 - **Strict field validation.** Known fields are validated by type and range. Unknown fields are ignored (not stored). No arbitrary key-value passthrough.
 - **Decode limits.** Maximum JSON size (default: 2MB), maximum nesting depth (default: 10), maximum string length per field. Prevents memory exhaustion from crafted inputs.
 - **No code execution.** JSON is data. Gramaton parses field values and stores them. No eval, no template rendering, no shell interpretation of stored content.
-- **Path validation.** `source_ref` is stored as an opaque string. The server never reads files based on user-supplied paths. `gramaton raw` returns the `source_ref` value — the agent reads the file using its own tools. `gramaton ingest --file` validates the path is within allowed directories before reading.
+- **Path validation.** `source_ref` is stored as an opaque string. The server never reads files based on user-supplied paths. The agent resolves `source_ref` itself using whatever read-file capability it has. `gramaton ingest --file` validates the path is within allowed directories before reading.
 - **Rate limiting.** Configurable maximum writes per second (default: 100). Prevents a runaway agent from flooding the store. Returns `"error": "rate_limited", "retryable": true` with a `Retry-After` header.
 
 ```yaml

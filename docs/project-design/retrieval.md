@@ -1,5 +1,13 @@
 # Retrieval
 
+> **Historical design rationale.** This document describes the retrieval
+> model as designed. The live API reference for search filters, sort
+> keys, and MCP tool shapes is [docs/integrator-guide.md](../integrator-guide.md)
+> ("Search and retrieval" section) and `gramaton_guide(topic="search")`.
+> When this document and the code diverge, code wins and this document
+> should be read as "why we did it this way" rather than "what the
+> server accepts today."
+
 ## Primary Query Pattern: Filter → Rank → Traverse
 
 The core of Gramaton's retrieval engine. A single operation that combines three capabilities no existing embeddable engine provides together:
@@ -98,7 +106,7 @@ Returns a subgraph fragment — multiple hops of connected knowledge:
 ### Tier 4: Raw Access (expensive)
 
 ```bash
-gramaton raw abc-123
+gramaton inspect abc-123  # then follow source_ref yourself
 ```
 
 Returns the original unprocessed source material from the source store filesystem.
@@ -124,7 +132,7 @@ Read commands use flags — their inputs are short strings and numbers, no escap
 gramaton search <query> [flags]       # Tier 1: discovery
 gramaton inspect <record-id>          # Tier 2: inspection
 gramaton explore <record-id> [flags]  # Tier 3: graph traversal
-gramaton raw <record-id>              # Tier 4: raw source
+gramaton inspect <record-id>          # Tier 2+: full record -- source_ref points at the original content
 gramaton pending                      # List unclassified records
 gramaton status                       # Server health, counts, embedding health, queue size
 ```

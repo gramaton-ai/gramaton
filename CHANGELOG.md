@@ -249,6 +249,54 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Phase 3 of the documentation consolidation: targeted updates to
+  the surviving `docs/project-design/` files.** Not rewrites -- each
+  doc stays as historical design rationale but is scrubbed of stale
+  claims and extended where post-T-02 material has a load-bearing
+  story worth preserving. Changes:
+    - **`design-decisions.md`**: added D31-D36 covering the three
+      storage paths / decision rule (D31), the two-tier session model
+      with `promote_to_memory` (D32), the `api/` canonical operations
+      surface from T-02 (D33), pure-Go BERT as default embedder
+      superseding D21's Ollama-as-default (D34), named stores via
+      `LoadWithFallback` (D35), and tiered LLM models with per-task
+      effort dials (D36). Each follows the existing Decision/Why
+      format.
+    - **`glossary.md`**: removed the nonexistent `gramaton raw` tier,
+      softened the Subagent entry to reflect that sessions replaced
+      most capture-time subagent usage, refreshed the
+      `EmbeddingProvider` entry (four shipped implementations, BERT
+      as default, BERT is in-process inference not HTTP). Added new
+      sections for Sessions & Collections (Session, Session segment,
+      Memory record, `promote_to_memory`, `extracted_as` edge,
+      Session archive, Collection, Collection schema,
+      `client_session_id`), Named stores (Named store, `LoadWithFallback`),
+      and api / transports (api canonical surface, Transport, MCP
+      cluster registrar).
+    - **`embedding.md`**: added a first-class "Pure-Go BERT (Default)"
+      section documenting the default provider and the amd64 matmul
+      perf caveat. Demoted the "Ollama (Default)" section to
+      "Ollama (Alternative)" while keeping the historical rationale.
+      Rewrote the first-run experience with actual `gramaton init`
+      output (BERT download) and a realistic failure-path fallback.
+      Updated the provider interface to include `ModelID()` and
+      `ContextWindow()` which the doc was missing.
+    - **`retrieval.md`**: added a historical-rationale preamble at
+      the top pointing live API-reference readers to
+      `docs/integrator-guide.md` and `gramaton_guide(topic="search")`.
+      Replaced all `gramaton raw` references with `gramaton inspect`
+      + a source_ref note (three occurrences).
+    - **`data-model.md`**: updated the `embedding_model` example from
+      `nomic-embed-text:v1.5` to `bge-small-en-v1.5` to match the
+      current default.
+    - **`data-integrity.md`**: removed the stale `gramaton raw`
+      reference in the path-validation bullet; replaced with the
+      correct "the agent resolves `source_ref` itself" shape.
+    - **`collections.md`, `foundations.md`, `case-studies.md`**:
+      scanned for stale references; no changes needed.
+    - **`project-design/README.md`**: already a leaner index over the
+      9 survivors (regenerated in the phase-1 sunset pass); no
+      additional change in phase 3.
 - **`docs/providers.md` updated for BERT-as-default and audited against
   current provider code.** Adds a new first-class "Pure-Go BERT" section
   documenting the default provider: no external runtime, model cached

@@ -143,7 +143,7 @@ Stored from the agent's context envelope at capture time. All optional — absen
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `embedding_model` | String | Identifier of the model that generated this node's embeddings (e.g., `nomic-embed-text:v1.5`). Set at embedding time. Used to detect model changes and flag stale embeddings. |
+| `embedding_model` | String | Identifier of the model that generated this node's embeddings (e.g., `bge-small-en-v1.5`, the current default). Set at embedding time. Used to detect model changes and flag stale embeddings. |
 
 ---
 

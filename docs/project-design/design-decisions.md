@@ -4,6 +4,58 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
+### D36: Tiered LLM Models with Per-Task Effort Dials
+
+**Decision:** LLM configuration splits into a single `llm.model` (default for general calls) and an optional `llm.models` block with three tiers — `low`, `medium`, `high`. The autonomous curation pipeline (`llm_curation:`) names an effort level per task (`classification_short_effort`, `classification_long_effort`, `summarization_effort`, `contradiction_effort`, `concept_effort`, `manifest_effort`), and each effort maps to one of the three tiers. Default assignments are Haiku-grade for short classification / summarization / manifest rollup, Sonnet-grade for long classification / contradiction detection / concept synthesis.
+
+**Why:** Curation tasks span a wide range of cognitive demand. Enum picking for classification of a one-sentence record doesn't need Sonnet; contradiction detection across near-duplicate semantically-similar records benefits from Sonnet. Routing them all through one model either overpays for easy work or underserves hard work. Three tiers (Haiku / Sonnet / Opus-grade) plus per-task effort dials let operators tune cost/quality per workload rather than per call site. Effort names rather than raw model names keep the config portable across providers (Anthropic, OpenAI, Bedrock) — each provider maps low/medium/high to its own family.
+
+---
+
+### D35: Named Stores via LoadWithFallback
+
+**Decision:** Gramaton supports multiple isolated stores per binary via the `gramaton --store <name>` flag. Each named store lives at `~/.gramaton/stores/<name>/` with its own `data/` and an optional per-store `config.yaml`. Per-store config uses `LoadWithFallback` (`config/config.go`): if the store config file exists, it is loaded standalone; if it does not, the global config is used. The unnamed default store remains at `~/.gramaton/data/`.
+
+**Why:** Different workloads need different isolation. A benchmark run that ingests 20k LongMemEval sessions would wreck retrieval quality in a personal knowledge store. A per-project store keeps domain-specific knowledge from bleeding into general memory. Named stores give a clean "which context am I in right now" boundary without forcing users to juggle multiple binaries or data directories outside `~/.gramaton/`. Defers D27's "one store per user default" — the default is still one store, but the escape hatch is now first-class rather than a `--data-dir` workaround.
+
+Known sharp edge: per-store config load is full-replace, not deep-merge. A partial per-store `config.yaml` that only overrides one section causes the other sections to be zero-valued rather than inherited from the global — silently disables features or causes startup to refuse. Tracked for improvement; workaround is to copy the full global config into the store directory and edit only what needs to change.
+
+---
+
+### D34: Pure-Go BERT as Default Embedder
+
+**Decision:** The default embedding provider is a pure-Go BERT encoder built into the Gramaton binary (`embed/bert/`), running `bge-small-en-v1.5` (BAAI, 384-dim). Model weights download from HuggingFace on first use and cache at `~/.gramaton/models/<model>/`. Ollama, OpenAI-compatible, and AWS Bedrock remain available as alternatives. Supersedes D21's Ollama-as-default stance.
+
+**Why:** Single-binary install, no external runtime, offline-first after first-run model download. The Quick Start becomes `go install && gramaton init` — one tool, one command, no separate daemon to manage. A ~130MB model download is acceptable for a knowledge store that otherwise owns its state end-to-end. Ollama remains the right escape hatch for users who want larger or multilingual encoders than the shipped BERT.
+
+Open follow-up (dev collection item): the amd64 build currently falls back to a pure-Go matmul (`embed/bert/matmul_generic.go`); arm64 has a hand-written NEON kernel (`matmul_arm64.s`). An AVX2 kernel for amd64 is the direct path to closing the perf gap on Intel/AMD hardware. User accepted this regression to proceed with the default-flip rather than gate it on assembly work.
+
+---
+
+### D33: api/ as the Canonical Operations Surface (T-02)
+
+**Decision:** Every operation Gramaton exposes — capture, search, session prepare/commit, collection lifecycle, versioning — is defined once in the `api/` package as a `XxxRequest` / `XxxResponse` / `XxxDescription` / `func (a *API) Xxx(...)` tuple. Every transport (HTTP, MCP stdio + Streamable HTTP, CLI MCP proxy) consumes those types and that method through a hand-written binding table. No per-transport request struct, no codegen, no reflection. Locking discipline (`engine.Lock()` / `Unlock()`) lives inside api methods; transport handlers never hold locks.
+
+**Why:** Before T-02, the same operation had up to three distinct shapes — an HTTP request struct in `server/`, an MCP tool args struct, a CLI flag set — which drifted. Bugs like "the MCP tool accepts this field but HTTP doesn't" were recurrent and expensive. Collapsing to one definition eliminates that whole bug class. Hand-written bindings (rather than codegen) keep the transport layer honest: when you add a transport, you read the api type, map the wire format, and call the method. The work is mechanical and local. The `jsonschema` tags on request fields double as MCP tool descriptions (the MCP SDK reads them via reflection when the struct is passed as a tool args type), which means a single tag update propagates to both HTTP and MCP simultaneously.
+
+---
+
+### D32: Two-Tier Session Model with promote_to_memory
+
+**Decision:** A session is a two-phase structure. Phase 1 is `gramaton_session_prepare`, which returns extraction instructions and the session state so far. Phase 2 is `gramaton_session_commit`, which submits extracted segments. Each segment creates a Session segment node (BM25-indexed, part of the conversational thread) and, when `promote_to_memory: true` (the default), a linked Memory record (vector-embedded, full lifecycle, auto-supersession). Segments with `promote_to_memory: false` stay Session-only — searchable within session-scoped queries, not competing in Memory's vector space. An `extracted_as` edge links each Session segment to its Memory record.
+
+**Why:** Two distinct retrieval patterns need distinct storage. Conversational recall ("what did we discuss in the April 12 session?") wants thread-preserved, session-scoped results; semantic knowledge retrieval ("what did we decide about auth?") wants ranked cross-session results with epistemic metadata. Keeping them separate lets each retrieval path give good answers without the other's noise. The `promote_to_memory` flag gives agents a way to capture exploration, dead ends, and open questions honestly — findable by session lookup without polluting Memory's vector space with speculation. This supersedes the older "observe" pipeline (`gramaton_observe`) which ran a quality-gate model over raw conversation chunks — extraction quality is dramatically better when an LLM with context synthesizes segments than when a server-side quality gate classifies pre-extracted facts.
+
+---
+
+### D31: Three Storage Paths with the Decision Rule
+
+**Decision:** Gramaton offers three first-class storage paths with distinct retrieval guarantees. Memory: best-match fuzzy retrieval by composite score (vector similarity + BM25 + freshness + activation + confidence). Sessions: automatic two-phase extraction from conversations with optional promotion to Memory. Collections: named containers with optional schema enforcement; `_items` returns every matching item exhaustively. The decision rule: "Will missing one item be a failure? Yes → Collection. No → Memory (direct or via session extraction)."
+
+**Why:** One retrieval guarantee does not fit all knowledge shapes. A task list where a missing item is a bug has completely different retrieval needs from an architecture decision where low-relevance results can be ignored. Ranking a backlog by composite score is a bug; enumerating every architecture decision for every question is waste. Exposing the three guarantees as three paths with distinct tools makes the integration decision ("which path?") legible rather than forcing a generic store to approximate all three. The decision rule is the single most important integration choice an agent-builder makes; every other retrieval design question flows downstream of it.
+
+---
+
 ### D30: Two Time Signals — Exponential Access Decay + Power Law Knowledge Freshness
 
 **Decision:** Retrieval scoring uses two independent time signals with different curves. Access recency (exponential, keyed off `last_accessed`) handles "how recently was this useful." Knowledge freshness (power law, keyed off `valid_from` or `created_at`) handles "how old is the underlying knowledge." For records with explicit `valid_from` / `valid_until` dates, hard validity filtering is preferred over soft scoring. Default search behavior prefers currently-valid records. `--include-historical` overrides for history/evolution queries.

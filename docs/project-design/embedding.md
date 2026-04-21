@@ -6,46 +6,60 @@ An embedding is a list of numbers (a vector) that represents the "meaning" of a 
 
 A query for "how to handle transient failures" will find a record about "retry strategies with exponential backoff" because their embeddings are close in vector space — even though they share almost no words.
 
-Embedding generation is distinct from LLM inference. Embedding models are small, fast, and run locally via Ollama or remotely via API. Gramaton does not bundle or run an embedding model itself — it delegates to an external provider via a clean interface.
+Embedding generation is distinct from LLM inference. Embedding models are small and fast. Gramaton ships a pure-Go BERT encoder as its default provider (no external runtime needed) and can also delegate to external providers (Ollama, OpenAI-compatible, AWS Bedrock) via a clean interface.
 
 ## Embedding Provider Interface
 
 ```go
-type EmbeddingProvider interface {
+type Provider interface {
     Embed(ctx context.Context, texts []string) ([][]float32, error)
+    ModelID() string
+    ContextWindow() int
 }
 ```
 
-Three implementations, all pure Go (no CGo, no native dependencies):
+Four shipped implementations:
 
-### Ollama (Default)
+### Pure-Go BERT (Default)
 
-Ollama runs embedding models locally with optimized native inference. Gramaton makes HTTP calls to Ollama's local API. The user controls which model to use.
+`embed/bert/` contains a pure-Go BERT encoder that runs inside the Gramaton process — no external runtime, no native dependencies. Default model is `bge-small-en-v1.5` (BAAI, 384-dim, ~33M params). Weights download from HuggingFace on first use and cache at `~/.gramaton/models/<model>/`.
+
+```yaml
+embedding:
+  provider: bert                       # default -- omit the embedding: block to get this
+  model: bge-small-en-v1.5
+  dimension: 384
+```
+
+**Why BERT as default (supersedes D21's Ollama-as-default):**
+- Single-binary install. No external process to manage. Quick Start is `go install && gramaton init`.
+- Offline-first after the first-run model download. No network required for capture or search once cached.
+- Graceful degradation: no embedding provider is still a fallback, but the BERT default means every install gets semantic search out of the box.
+- Cross-platform consistency: Apple Silicon has a hand-written NEON matmul kernel (`matmul_arm64.s`); amd64 currently uses a pure-Go matmul fallback (AVX2 kernel planned, tracked in-repo).
+
+**Alternative models:** set `model` to a different HuggingFace repo path (e.g. `BAAI/bge-base-en-v1.5` for a 768-dim version, or any BERT-encoder repo containing `config.json`, `tokenizer.json`, and `model.safetensors`). Update `dimension` to match.
+
+### Ollama (Alternative)
+
+Ollama runs embedding models in a separate local process with optimized native inference. Gramaton makes HTTP calls to its local API. Use this if you want a model BERT doesn't ship (larger encoders, multilingual, etc.) or if Ollama is already part of your workflow.
 
 ```yaml
 embedding:
   provider: ollama
-  endpoint: http://localhost:11434    # default
-  model: nomic-embed-text            # user's choice
+  endpoint: http://localhost:11434     # default
+  model: mxbai-embed-large             # your choice
+  dimension: 1024
 ```
 
-**Why Ollama as default:**
-- Best performance of any local option (~5-15ms) — Ollama runs optimized native code, we just call the API
-- Best search quality — user can pick any model Ollama supports, including the best available
-- Zero native dependencies in Gramaton's Go binary — pure Go HTTP client
-- Zero build complexity — no CGo, no cross-compilation issues, no bundled model files
-- Zero maintenance burden on us — Ollama maintains inference, we maintain an HTTP client
-- The ecosystem is moving toward Ollama — increasingly common among AI-forward developers
-
-**User setup:** Install Ollama, pull an embedding model. Guided by `gramaton init`.
+**Setup:** Install Ollama, pull an embedding model (`ollama pull mxbai-embed-large`). `gramaton init` with `provider: ollama` configured will detect the binary, start Ollama if not running, and pull the configured model. At runtime Gramaton does not supervise Ollama — if it crashes, embed calls error and records land without vectors (still BM25-searchable).
 
 **Recommended models via Ollama:**
 
 | Model | MTEB Retrieval Score | Notes |
 |-------|---------------------|-------|
-| nomic-embed-text | ~55-57 | Best balance of quality and size. Recommended default. |
+| mxbai-embed-large | ~57-59 | Larger, strong quality |
+| nomic-embed-text | ~55-57 | Balanced size / quality |
 | snowflake-arctic-embed-s | ~53-55 | Smaller, slightly lower quality |
-| mxbai-embed-large | ~57-59 | Larger, best quality |
 | all-minilm | ~41-43 | Smallest, noticeably weaker |
 
 ### OpenAI-Compatible API
@@ -141,40 +155,53 @@ Re-embedding runs against the configured provider (Ollama, API, Bedrock). At ~5-
 
 ## First-Run Experience
 
-```
-$ gramaton init
-
-Checking for embedding providers...
-
-  [✓] Ollama detected at localhost:11434
-      Models with embedding support: nomic-embed-text
-
-  → Use Ollama with nomic-embed-text? (Y/n)
-  
-  ✓ Configuration saved. Gramaton is ready — just use it.
-```
-
-Or if Ollama isn't detected:
+The default path — no user choice, no external installs:
 
 ```
 $ gramaton init
 
+Initialized Gramaton at /home/user/.gramaton
+  Config: /home/user/.gramaton/config.yaml
+  Data:   /home/user/.gramaton/data
+
 Checking for embedding providers...
 
-  [✗] No local providers detected.
+  Setting up built-in BERT embedder (bge-small-en-v1.5)...
+  Downloading model.safetensors (130MB)... 100%
+  Downloading tokenizer.json... 100%
+  Model bge-small-en-v1.5 ready
 
-Options:
-  [1] Install Ollama (recommended — free, local, private)
-      macOS: brew install ollama
-      Linux: curl -fsSL https://ollama.com/install.sh | sh
-      Windows: download from ollama.com
-      Then: ollama pull nomic-embed-text
-      
-  [2] Use an API key (OpenAI-compatible endpoint)
-  [3] Use AWS Bedrock
-  [4] Skip for now (no semantic search — keyword and graph search still work)
+  Embedding configured: bert with bge-small-en-v1.5
 
-Choice:
+Gramaton is ready. Start capturing knowledge.
+```
+
+If the BERT download fails (no internet on first run, or HuggingFace is unreachable), `gramaton init` falls back to detecting Ollama. The fallback message names the BERT download as the likely failure and points at Ollama, OpenAI, or Bedrock as alternatives:
+
+```
+$ gramaton init
+...
+  Setting up built-in BERT embedder (bge-small-en-v1.5)...
+  BERT setup failed: dial tcp: lookup huggingface.co: no such host
+  Falling back to Ollama...
+  Ollama not found
+
+  Embedding setup failed.
+
+  Gramaton's default embedding provider is a pure-Go BERT embedder
+  that downloads the model (~130MB) from HuggingFace on first run.
+  Setup probably failed because of a network issue.
+
+  Options:
+    1. Check your internet connection and re-run: gramaton init
+    2. Use Ollama as an alternative local embedding provider:
+         Download from https://ollama.com/download/mac
+         Or: brew install ollama
+       Then re-run: gramaton init
+    3. Configure OpenAI or AWS Bedrock manually. See docs/providers.md.
+
+  Gramaton also works without embeddings (keyword and graph search
+  still work), but semantic similarity search requires them.
 ```
 
 ## Chunking Strategy
