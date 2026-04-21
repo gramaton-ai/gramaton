@@ -71,6 +71,20 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusOK, result)
 	})
 
+	mux.HandleFunc("POST /v1/curation/drain", func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"drain is restricted to loopback connections", false)
+			return
+		}
+		result, apiErr := s.api.CurationDrainContradictions(r.Context())
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
 	mux.HandleFunc("POST /v1/reembed", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ReembedRequest
 		// Body is optional -- no required fields. But if a body IS
