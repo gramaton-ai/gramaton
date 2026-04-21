@@ -33,7 +33,7 @@ type InspectResponse struct {
 }
 
 // InspectDescription is the MCP tool description for gramaton_inspect.
-const InspectDescription = "Get full content, metadata, and related records for a specific record. Set include_content=false for lightweight mode (omits content_full)."
+const InspectDescription = "Get full content, metadata, and related records for a specific record by ULID. PREFER OVER SEARCH when the user's prompt names a specific ID (any ULID -- 26 chars starting with 0 or 1, e.g. 01KPED88HKK...) or when you already know the target record's ID from earlier context. Inspect is one call that returns the record plus its one-hop related edges with summaries; search on the same topic returns ranked candidates and takes two calls (search then inspect) to get the same depth. Set include_content=false for lightweight mode (omits content_full)."
 
 // Inspect returns a record with its properties, metadata summary, and
 // related edges. Records access and spreads activation (D14). When
