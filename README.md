@@ -35,7 +35,7 @@ Gramaton's differences:
 
 What Gramaton isn't:
 
-- **Searchable surface is distilled, not verbatim.** Search retrieves committed Session segments and Memory records — extracted knowledge, not a full chat log. Raw transcripts can be archived alongside a session (compressed, path-addressable on disk) when the conversation itself matters, and the session state points at the archive so an agent can decompress and read it if something seems missing. The archive itself isn't indexed for search today.
+- **Searchable surface is distilled, not verbatim.** Search retrieves committed Session segments and Memory records — extracted knowledge, not a full chat log. Raw transcripts can be archived alongside a session (compressed, path-addressable on disk); the session state points at the archive so an agent can decompress and read it if something seems missing. Archiving is opt-in at the Gramaton layer — the shipped Claude Code and Kiro hooks under [`hooks/`](hooks/) wire it up automatically at compaction boundaries, and the `gramaton session archive` CLI covers manual or custom workflows. The archive itself isn't indexed for search today.
 - **Not a multi-user service.** v0.1 is single-user and local. Auth and tenancy are future work.
 - **Not a managed RAG solution.** It's infrastructure you run, not a hosted API.
 
@@ -81,7 +81,11 @@ Gramaton isn't one bucket of retrieved-by-similarity notes. It offers three dist
 
 ### Memory — fuzzy, semantic, ranked
 
-For knowledge that benefits from best-match retrieval. Decisions, design rationale, research findings, user preferences, domain context. Captured explicitly via `gramaton_capture`, retrieved via `gramaton_search`. Results are ranked by composite score combining vector similarity, BM25 keywords, freshness (decayed by temporality), access-based activation, and confidence. A low-relevance miss is acceptable; the goal is surfacing the best few results, not all of them.
+For knowledge that benefits from best-match retrieval. Decisions, design rationale, research findings, user preferences, domain context.
+
+Memory records land from several paths: explicit `gramaton_capture` calls, the `gramaton_intake` write endpoint (with optional LLM-side classification), session commits that promote segments to Memory (the default — see Sessions below), and bulk ingest via the `gramaton ingest` CLI. All paths produce records with the same shape and the same retrieval semantics.
+
+Retrieval is via `gramaton_search`: results are ranked by composite score combining vector similarity, BM25 keywords, freshness (decayed by temporality), access-based activation, and confidence. A low-relevance miss is acceptable; the goal is surfacing the best few results, not all of them.
 
 ### Sessions — automatic extraction from conversations
 
