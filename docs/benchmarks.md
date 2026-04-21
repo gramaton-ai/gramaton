@@ -70,6 +70,19 @@ lsof -iTCP:7338 -P
   is separate -- remove it with `claude mcp remove gramaton-bench
   -s user` if you want to drop the tool surface too.
 
+## Disable contradiction detection for benchmark stores
+
+Benchmark corpora are test fixtures — records we measure retrieval against, not knowledge we need to reason about. The autonomous contradiction-detection task in `llm_curation` adds no value on a benchmark store and can burn real money on ambient LLM calls.
+
+Set `llm_curation.max_contradiction_checks: 0` in the per-store `config.yaml` when creating a benchmark store:
+
+```yaml
+llm_curation:
+  max_contradiction_checks: 0    # disabled for benchmark store
+```
+
+Apply the same rule to any future benchmark store you create, unless the benchmark specifically exercises contradiction-detection behavior. Other autonomous curation tasks (classification, summarization, concept synthesis, manifest) are fine to leave on — they cost less and produce useful signal for benchmark extraction flows.
+
 ## Why a separate store
 
 Session segments committed with `promote_to_memory: true` (the

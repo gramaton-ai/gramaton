@@ -247,6 +247,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `serviceCollectionSchemaRead`, `startPreparedSweeper`, unused
   constants in `server/validation.go`) will need their own pass.
 
+### Added
+
+- **`gramaton_curation(action="drain_contradictions")` MCP action.**
+  Artificially marks every in-window contradiction-candidate pair as
+  `no_contradiction` without calling the LLM. Each edge carries
+  `artificial: true` so a future recheck-pass can distinguish
+  artificially-drained marks from genuine LLM verdicts. Tradeoff:
+  real contradictions in the drained set will not be flagged. Use on
+  stores where the pre-fix pool accumulated and the operator doesn't
+  want to pay the ambient Sonnet cost of organic drain. Implemented
+  as `curation.DrainContradictionsNoLLM(engine, cfg, logger)` in a
+  new `curation/drain.go`, exposed via `api.CurationDrainContradictions`
+  and the new MCP action. Three tests in `curation/drain_test.go`
+  cover the happy path, skip-when-edged, and out-of-window cases.
+  See design-decisions.md D38 for the underlying bug the drain
+  compensates for.
+- **`docs/benchmarks.md` gained a "Disable contradiction detection
+  for benchmark stores" section.** Recommends setting
+  `llm_curation.max_contradiction_checks: 0` in every benchmark
+  store's `config.yaml` since contradiction output is not meaningful
+  on test fixtures and the ambient Sonnet cost compounds across
+  benchmark stores. Applied to the existing `longmemeval-bench`
+  store's config (local edit, not in this commit).
+
 ### Fixed
 
 - **Contradiction-detection candidate pool now drains on negative

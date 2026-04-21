@@ -95,11 +95,11 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 // backward-compatible.
 func (s *Server) registerMaintenanceMCPTools(mcpServer *mcp.Server) {
 	type curationArgs struct {
-		Action string `json:"action,omitempty" jsonschema:"status|trigger|dry_run|batch (default: status)"`
+		Action string `json:"action,omitempty" jsonschema:"status|trigger|dry_run|batch|drain_contradictions (default: status)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name: "gramaton_curation",
-		Description: "View or drive the curation runner. action=status returns the current state and manifest. action=trigger runs a cycle now. action=dry_run previews what an autonomous cycle would do without applying changes. action=batch classifies every pending record (LLM required).",
+		Name:        "gramaton_curation",
+		Description: "View or drive the curation runner. action=status returns the current state and manifest. action=trigger runs a cycle now. action=dry_run previews what an autonomous cycle would do without applying changes. action=batch classifies every pending record (LLM required). action=drain_contradictions artificially marks every in-window contradiction-candidate pair as no_contradiction without calling the LLM; see design-decisions.md D38.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args curationArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_curation")
 		defer done(nil)
@@ -122,6 +122,12 @@ func (s *Server) registerMaintenanceMCPTools(mcpServer *mcp.Server) {
 				return mcpAPIErr(apiErr)
 			}
 			return mcpJSONResult(result)
+		case "drain_contradictions":
+			result, apiErr := s.api.CurationDrainContradictions(ctx)
+			if apiErr != nil {
+				return mcpAPIErr(apiErr)
+			}
+			return mcpJSONResult(result)
 		case "", "status":
 			result, apiErr := s.api.CurationStatus(ctx)
 			if apiErr != nil {
@@ -129,7 +135,7 @@ func (s *Server) registerMaintenanceMCPTools(mcpServer *mcp.Server) {
 			}
 			return mcpJSONResult(result)
 		default:
-			return mcpAPIErr(api.ErrInvalid("action must be one of: status, trigger, dry_run, batch"))
+			return mcpAPIErr(api.ErrInvalid("action must be one of: status, trigger, dry_run, batch, drain_contradictions"))
 		}
 	})
 

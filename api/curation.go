@@ -50,6 +50,13 @@ type CurationBatchResponse struct {
 	Result *curation.BatchResult `json:"result"`
 }
 
+// CurationDrainResponse reports the outcome of an artificial drain of
+// the contradiction-detection candidate pool. See
+// CurationDrainContradictions for the safety tradeoffs.
+type CurationDrainResponse struct {
+	Result *curation.DrainResult `json:"result"`
+}
+
 // Description constants are shared by HTTP, MCP, and CLI proxy
 // transports so the surface text never drifts between them.
 const (
@@ -57,6 +64,7 @@ const (
 	CurationTriggerDescription = "Run a curation cycle now. Returns triggered=false (with the prior status) when a cycle is already in progress."
 	CurationDryRunDescription  = "Preview what an autonomous curation cycle would do without applying changes. The deterministic phase still runs (it is always safe)."
 	CurationBatchDescription   = "Classify every pending record in one call (LLM required). Use when piggyback curation has fallen behind."
+	CurationDrainDescription   = "Artificially drain the contradiction-detection candidate pool by writing no_contradiction edges (marked artificial=true) on every in-window pair without an existing edge. No LLM calls. Use when the pool accumulated under pre-fix binaries and the operator does not want to pay the ambient Sonnet cost of organic drain. Tradeoff: real contradictions in the drained set will not be flagged. See design-decisions.md D38."
 )
 
 // CurationStatus returns the runner's status and current manifest.
@@ -108,6 +116,26 @@ func (a *API) CurationDryRun(ctx context.Context) (CurationDryRunResponse, *APIE
 		Errors:         result.Errors,
 		Status:         a.runner.Status(),
 	}, nil
+}
+
+// CurationDrainContradictions artificially marks every in-window
+// contradiction-candidate pair as "no_contradiction" without calling
+// the LLM. The operator is saying "I don't want to pay for the
+// autonomous pass to organically drain this pool; I accept that real
+// contradictions in the drained set won't be flagged." Edges carry
+// an artificial: true property so future re-check logic can
+// distinguish them from LLM-verified marks.
+func (a *API) CurationDrainContradictions(ctx context.Context) (CurationDrainResponse, *APIError) {
+	if a.engine == nil {
+		return CurationDrainResponse{}, ErrInternal("engine not configured")
+	}
+	cfg := a.engine.Config()
+	result, err := curation.DrainContradictionsNoLLM(ctx, a.engine, cfg, a.log)
+	if err != nil {
+		a.log.Error("contradiction drain failed", "component", "curation", "err", err)
+		return CurationDrainResponse{Result: result}, ErrInternal("drain failed")
+	}
+	return CurationDrainResponse{Result: result}, nil
 }
 
 // CurationBatch classifies every pending record in one pass. Requires
