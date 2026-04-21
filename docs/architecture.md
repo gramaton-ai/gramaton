@@ -1,188 +1,296 @@
 # Architecture
 
-This document describes Gramaton's internal architecture for developers working on the codebase.
+This document describes Gramaton's internal architecture for developers working on the codebase. If you're looking for how to *use* Gramaton as an integrator, see the [Integrator Guide](integrator-guide.md) instead; if you're looking for how to change the code, read this together with [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## System Overview
+## System overview
 
-Gramaton is a single Go binary that runs as an on-demand daemon. The CLI auto-starts the server on first use. The server manages the graph, indexes, and embeddings. All state lives on the local filesystem.
+Gramaton is a single Go binary that runs as an on-demand daemon. The CLI auto-starts the server on first use. The server manages the graph, indexes, embeddings, and background curation. All state lives on the local filesystem.
 
 ```
-                  ┌──────────────┐
-                  │  CLI / MCP   │   protocol layer
-                  └──────┬───────┘
-                         │ HTTP
-                  ┌──────┴───────┐
-                  │    Server    │   request handling, locking, curation
-                  └──────┬───────┘
-                         │
-                  ┌──────┴───────┐
-                  │    Engine    │   graph operations, embedding, search
-                  └──────┬───────┘
-                    ┌────┼────┐
-               ┌────┴┐ ┌┴───┐ ┌┴────┐
-               │Graph│ │Idx │ │Store│  data layer
-               └─────┘ └────┘ └─────┘
+   Agent
+     │
+     │  MCP  /  HTTP  /  CLI
+     ▼
+┌────────────────────────────┐
+│  Server transports         │   bindings_*.go, mcp.go, handler_intake.go,
+│  + curation runner         │   curation/runner.go
+└─────────────┬──────────────┘
+              │
+┌─────────────┴──────────────┐
+│   api (canonical ops)      │   one file per operation; locking discipline
+└─────────────┬──────────────┘
+              │
+┌─────────────┴──────────────┐
+│   core.Engine              │   composition root; owns RWMutex
+└─────────────┬──────────────┘
+              │
+  ┌───────────┼───────────────────┐
+  ▼           ▼                   ▼
+┌───────┐   ┌─────────────────┐   ┌──────────┐
+│ graph │   │ indexes         │   │ storage  │
+│       │   │ BM25 / Property │   │ prolly   │
+│       │   │ HNSW / Flat     │   │ tree     │
+│       │   │ Collections /   │   │          │
+│       │   │ Secondary       │   │          │
+└───────┘   └─────────────────┘   └──────────┘
+
+                 embed.Provider      llm.Provider
+                 (Ollama / BERT /    (Anthropic /
+                  OpenAI / Bedrock)   OpenAI / Bedrock)
 ```
 
-## Package Map
+Requests flow downward; dependencies flow inward. Nothing in `core/`, `graph/`, `index/`, or `storage/` imports `api/` or `server/`.
 
-### Protocol Layer
+## The four layers
+
+### 1. Transports (`server/`, `cli/`)
+
+The outermost layer. Three transports, one surface underneath.
+
+- **HTTP**: `server/bindings_*.go` register Cobra-style routes via `http.ServeMux`. Each route deserializes a request body, calls an `api.API` method, and serializes the response. No business logic — just wire format translation and an `api.APIError` → HTTP status mapping.
+- **MCP (Streamable HTTP + stdio)**: `server/mcp.go` wires the MCP SDK's server to a `/mcp` route on the same HTTP listener (loopback-only — non-loopback callers get rejected before reaching the handler), and `cli/mcp_cmd.go` exposes an equivalent stdio entry point. `server.registerMCPTools` calls nine cluster registrars (`bindings_records.go`, `bindings_search.go`, `bindings_sessions.go`, `bindings_collections.go`, `bindings_admin.go`, `bindings_history.go`, `bindings_maintenance.go`, `mcp_intake.go`, `mcp_guide.go`), each of which registers MCP tools that call `api.API` methods directly — not through HTTP.
+- **CLI**: `cli/*.go` holds one Cobra command per operation. A CLI command opens a local HTTP client against the server and calls the HTTP route (`cli/httpclient.go`). For MCP-native clients that run Gramaton as a stdio subprocess, `cli/mcp_cmd.go` + `cli/mcp_proxy_*.go` register the same MCP tool set, proxying each call to the HTTP server via the same local client.
+
+The important invariant: all three transports consume the same request/response types declared once in `api/`. There is no per-transport struct. A tool description written as `api.CaptureDescription` appears verbatim in MCP (direct registration, CLI proxy) and in any docs generated from the package.
+
+### 2. The canonical operations surface (`api/`)
+
+`api/` is the single source of truth for what an operation *is*. One file per operation (`api/capture.go`, `api/search.go`, `api/sessions.go`, `api/collections.go`, `api/branches.go`, ...). Each follows the same shape:
+
+```go
+type XxxRequest  struct { /* json + jsonschema tags */ }
+type XxxResponse struct { /* json tags */ }
+const XxxDescription = "..."   // MCP tool description
+func (a *API) Xxx(ctx context.Context, req XxxRequest) (XxxResponse, *APIError)
+```
+
+Locking discipline lives here. Methods call `a.engine.Lock()` / `Unlock()` (or `RLock()` / `RUnlock()`) and do nothing slow inside the lock:
+
+- Validate inputs.
+- Pre-embed content **outside** the lock (`a.preEmbedContent(...)` in `api/capture.go` is the canonical example — embeddings take tens of milliseconds, so the lock stays short).
+- Acquire lock, mutate or read, release.
+- Serialize results.
+
+`api.API` itself is constructed via `api.New(Dependencies{...})`. Dependencies are `Engine`, `Runner`, `UsageTracker`, `Log`, `ConfigDir`, `StoreName`. The API also owns transient state that outlives a single request — most notably the prepared-sessions map (`preparedSessions`, sweeper goroutine).
+
+See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step procedure when adding a new operation to this layer.
+
+### 3. The composition root (`core.Engine`)
+
+`core/engine.go` owns the wiring. An `Engine` holds:
+
+- The loaded graph (`graph.Graph`).
+- The index set (`indexSet`: BM25, vector HNSW/Flat, property, secondary, collections).
+- A `searcherSubsystem` that wraps `search.Tool` — pure computation on top of the graph and indexes.
+- Provider references (`embed.Provider`, `llm.Provider`).
+- The storage layer (`storage.Store`).
+- A single `sync.RWMutex` that gates all mutation.
+- A dirty flag for access metadata (access counts are flushed periodically rather than on every read).
+
+`LoadEngine` / `LoadEngineWithOptions` are the public constructors. Options support dependency injection for tests (`WithEmbedder`, `WithLLM`, `WithVectorIndex`).
+
+The Engine never knows about the transports or the api/ layer. It exposes primitives (`Graph()`, `VecIdx()`, `PropIdx()`, `CheckDedup()`, `IndexNode()`, `Save()`, `Lock()`/`Unlock()`) that `api/` methods compose into operations.
+
+### 4. Data layer (`graph/`, `index/`, `storage/`)
+
+- **`graph/`**: in-memory property graph. Nodes with typed key-value properties, edges with type + weight + optional properties. Pure data structure — no I/O. `graph.Properties` is a `map[string]Property`; property types are a sum (`String`, `Float64`, `Int64`, `Bool`, `Timestamp`, `Vector`, `StringList`, `Bytes`).
+- **`index/`**: BM25 (`bbolt_bm25.go`), vector indexes (`hnsw.go`, `flat_mmap.go`, switched dynamically by candidate-set size), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). All persisted via bbolt buckets or a mmap'd flat file for vectors.
+- **`storage/`**: prolly tree — a probabilistic B-tree with content-addressed chunks. Mutations create new root hashes; old roots stay reachable as commit history. `storage/cas.go` is the content-addressed store; `storage/prolly.go` is the tree itself; `storage/gc.go` garbage-collects unreferenced chunks.
+
+The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted alongside each commit and loaded from disk at startup, skipping re-tokenization.
+
+## Package map
+
+### Protocol / outer layer
 
 | Package | Purpose |
 |---------|---------|
-| `cli/` | Cobra commands. Each file is one command. Talks to server via HTTP. |
-| `cli/mcp_proxy.go` | MCP tool registration. Each tool proxies to an HTTP endpoint. |
-| `server/` | HTTP handlers, MCP handler, service methods, curation runner. |
+| `server/` | HTTP server, MCP registrar, binding tables per operation cluster, curation runner lifecycle, intake handler |
+| `cli/` | Cobra commands (one file per command), HTTP client for hitting the server, MCP stdio entry point, MCP proxy cluster files |
 
-### Engine Layer
-
-| Package | Purpose |
-|---------|---------|
-| `core/` | `Engine` -- the central coordinator. Holds the graph, indexes, and embedder. Manages locking. |
-| `search/` | `Tool` -- search, scoring, dedup, graph traversal. Pure computation, no I/O. |
-| `curation/` | Deterministic and autonomous curation. Runs on a timer inside the server. |
-| `embed/` | `Provider` interface + factory. Implementations in `embed/ollama/`, `embed/openai/`, `embed/bedrock/`. |
-| `llm/` | `Provider` interface + factory. Implementations in `llm/anthropic/`, `llm/openai/`, `llm/bedrock/`. |
-
-### Data Layer
+### Operations
 
 | Package | Purpose |
 |---------|---------|
-| `graph/` | Property graph: nodes, edges, properties. Pure in-memory data structure. |
-| `index/` | `PropertyIndex` (exact + range lookups), `FlatIndex` / `HNSWIndex` (vector search with dynamic switching), `BM25Index` (keyword search, persisted). |
-| `storage/` | Prolly tree -- content-addressed, append-only persistence. Serialization, chunking, commit history. |
-| `store/` | Named store management. Resolves store paths, validates names. |
+| `api/` | Canonical request/response types, descriptions, and methods. Locking discipline. The surface every transport consumes. |
+
+### Engine + computation
+
+| Package | Purpose |
+|---------|---------|
+| `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
+| `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
+| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). |
+| `dedup/` | Near-duplicate detection via vector similarity + Jaccard guard. |
+| `chunking/` | Long-content splitting before embedding. |
+
+### Providers
+
+| Package | Purpose |
+|---------|---------|
+| `embed/` | `Provider` interface + factory. Implementations: `embed/bert/` (pure-Go default), `embed/ollama/`, `embed/openai/`, `embed/bedrock/`. |
+| `llm/` | `Provider` interface + factory. Implementations: `llm/anthropic/`, `llm/openai/`, `llm/bedrock/`. Usage tracking and rate limiting live at this layer (`metered.go`, `ratelimit.go`, `pricing.go`, `usage.go`). |
+
+### Data
+
+| Package | Purpose |
+|---------|---------|
+| `graph/` | In-memory property graph: nodes, edges, properties. Pure data structure. |
+| `index/` | Persisted indexes: BM25, vector (HNSW / Flat / mmap), property, secondary, collections. |
+| `storage/` | Prolly tree on a content-addressed store. Commit history, garbage collection. |
 
 ### Support
 
 | Package | Purpose |
 |---------|---------|
-| `config/` | Config types, defaults, YAML loading. |
+| `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
 | `backup/` | Tar archive backup/restore, export/import. |
-| `internal/awscfg/` | Shared AWS credential loading for Bedrock providers. |
-| `testutil/` | Test helpers, builders, fake providers. |
+| `hooks/` | Shipped agent integration hooks (`hooks/claude-code/`, `hooks/kiro/`): session start, pre-compact archive, post-compact, stop. |
+| `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
+| `internal/version/` | Build-time version injection. |
 
-## Dependency Direction
+## Dependency direction
 
 Dependencies flow inward. Outer layers depend on inner layers, never the reverse.
 
 ```
-cli/ server/          → core/ search/ curation/
-core/ search/         → graph/ index/ embed/ llm/
-graph/ index/         → (standard library only)
-storage/              → graph/ (for serialization)
-embed/*/ llm/*/       → config/ (for provider config)
+server/ cli/        → api/ core/ search/ curation/
+api/                → core/ curation/ llm/ graph/
+core/ search/       → graph/ index/ storage/ embed/ llm/ config/
+curation/           → core/ graph/ llm/ config/
+graph/ index/       → standard library (bbolt for persistence)
+storage/            → graph/ (for serialization)
+embed/*/  llm/*/    → config/ internal/awscfg/
 ```
 
-The `core.Engine` is the composition root. It wires together the graph, indexes, embedder, and LLM provider. The server wraps the engine and adds HTTP/MCP handling, locking discipline, and curation scheduling.
+No package in `core/` or below imports `api/` or `server/`. No `embed/xxx` or `llm/xxx` provider imports another provider — each is self-contained behind its interface.
 
-## Data Flow
+## Lifecycle
+
+**Startup** (`LoadEngine` → `server.New` → `server.Start`):
+
+1. Load `config.yaml` with optional named-store fallback (`config.LoadWithFallback`).
+2. Open the prolly tree at `data_dir/store/`.
+3. Rebuild the in-memory graph from the current commit's chunks.
+4. Open the bbolt database and reattach BM25, property, secondary, and collections indexes. Load the BM25 index from disk if a `bm25_root` is present in the commit; otherwise rebuild from content.
+5. Open the mmap'd vector index (or the FlatIndex in memory).
+6. Instantiate the embedding and LLM providers from config; nil providers are legal (embedding/LLM are both optional).
+7. Construct `core.Engine` → `api.API` → `server.Server`.
+8. Start the curation `Runner` goroutine and the prepared-sessions sweeper.
+9. Bind the HTTP listener; mount the MCP Streamable HTTP handler at `/mcp` (loopback-only).
+
+**Request**: transport handler → `api` method → engine primitives → response → serialized back out. Lock is held only inside the api method, only for the mutation window.
+
+**Idle**: the server tracks last-request time. After the configured `idle_timeout` (default 4 hours) with no activity, it shuts down gracefully. CLI auto-starts a new server on the next call.
+
+**Shutdown**: `server.Stop` cancels the curation runner, stops the prepared-sessions sweeper, flushes access metadata, closes indexes, closes bbolt, closes the prolly store.
+
+## Data flow examples
 
 ### Capture
 
 ```
-Client → POST /v1/records → parseJSON → serviceCapture
-  1. Pre-embed content (outside lock, if embedder configured)
-  2. Lock
-  3. Create node with properties
-  4. Add to vector index, property index, BM25 index
-  5. Check for duplicates (cosine + Jaccard guard)
-  6. If duplicate: create supersedes edge, set valid_until on old record
-  7. If content is long: chunk into child nodes with part_of edges
-  8. Commit to storage
-  9. Unlock
+Client → POST /v1/records → api.Capture
+  1. Validate request (content length, enums, meta shape)
+  2. Pre-embed content_short outside the lock (via a.engine.Embedder())
+  3. engine.Lock()
+  4. Create node with properties (content_full, processing_status, context_*, meta.*, timestamps)
+  5. IndexNode for BM25 + any meta text
+  6. Attach pre-computed embedding via applyPreEmbedded; pick best vector for the search index
+  7. CheckDedup: if cosine ≥ threshold and action = reject → rollback node, return ErrConflict
+                 if action = supersede → mark older record historical, create supersedes edge
+  8. Save incremental prolly update
+  9. engine.Unlock()
+  10. Serialize CaptureResponse (id, warnings, superseded[])
 ```
 
 ### Search
 
 ```
-Client → POST /v1/search → parseJSON → serviceSearch
-  1. Pre-embed query text (outside lock)
-  2. RLock
-  3. Filter candidates by metadata (property index)
-  4. Score candidates:
-     a. Vector similarity (flat index, cosine)
-     b. BM25 keyword score
-     c. RRF fusion of vector + BM25 ranks
-     d. Freshness (time decay by temporality)
-     e. ACT-R activation (access count + recency)
-     f. Confidence (from record metadata)
-     g. Composite = weighted sum of similarity, freshness, activation, confidence
-  5. Sort by composite score, take top N
-  6. Record access (activation bump)
-  7. RUnlock
-  8. Return results with metadata summaries
+Client → POST /v1/search → api.Search
+  1. Pre-embed query text outside the lock (if embedding configured)
+  2. engine.RLock()
+  3. Filter candidates by metadata (property index, resolution, lifecycle, epistemic status, temporality, ...)
+  4. Hybrid rank: vector similarity + BM25 keyword, fused via RRF
+  5. Composite score per candidate: similarity, knowledge freshness (temporality-keyed exponent), access recency, confidence. Importance acts as a floor.
+  6. Sort, take top N, optionally expand via single-hop traversal
+  7. Record access (bump access_count / last_accessed / activation_boost on neighbors; flushed later by access-dirty timer)
+  8. engine.RUnlock()
+  9. Assemble result rows with metadata summaries and store origin (memory / sessions)
 ```
 
-### Curation Cycle
+### Session commit
 
-Runs every 5 minutes (configurable).
+```
+Client → POST /v1/sessions/{id}/commit → api.SessionCommit
+  1. Verify session has a prior prepare (tracked in a.preparedSessions)
+  2. For each segment:
+     a. Pre-embed summary_short outside the lock
+     b. engine.Lock()
+     c. Create a Session segment node (BM25-indexed)
+     d. If promote_to_memory (default true): create a linked Memory record with the same content,
+        check dedup, run auto-supersession against prior Memory records
+     e. Link the Session segment to the Memory record via extracted_as edge
+     f. engine.Unlock()
+  3. Single final Save for the batch
+  4. Return per-segment IDs and any supersession records
+```
 
-**Deterministic (always):**
-- Expire stale ephemeral/temporal records (set valid_until)
-- Link orphan nodes to similar neighbors
-- Detect and flag duplicates
-- Rebuild store manifest (type counts, keyword distribution)
+## Concurrency model
 
-**Autonomous (when LLM configured):**
-- Classify pending records (temporality, confidence, knowledge_type, etc.)
-- Generate missing summaries
-- Detect contradictions between similar records
-- Synthesize concept nodes from recurring keywords
+The engine uses one `sync.RWMutex`. Rules:
 
-## Concurrency Model
+- **`api/` methods** acquire and release the lock internally. They are the only layer that calls `engine.Lock()` / `Unlock()`.
+- **Transport handlers** never hold the lock directly — they call api methods.
+- **Network I/O** (embedding calls, LLM calls) happens outside the lock. The canonical pattern: RLock to read what you need, Unlock, call provider, Lock to write results.
+- **Curation** runs in its own goroutine driven by a timer. Curation phases call the same api methods or engine primitives the transports do, so they participate in the same lock.
+- **Access metadata** (access_count, last_accessed, activation_boost) is written under the lock but not flushed to disk on every read. A background flusher saves the accumulated batch periodically (see `accessDirty` in `core/engine.go`). This trades exact durability of "last accessed at" for O(1) reads on hot queries.
 
-The engine uses a single `sync.RWMutex`. The locking discipline is:
+## Storage model
 
-- **Service methods** acquire and release locks internally.
-- **HTTP handlers and MCP tools** do not hold locks -- they call service methods.
-- **Embedding calls** happen outside the lock (pre-embed pattern).
-
-The pre-embed pattern avoids holding the lock during network I/O:
-1. RLock to read content
-2. Unlock
-3. Embed content (network call, may be slow)
-4. Lock to write results
-
-Curation holds its own mutex for status tracking, independent of the engine lock.
-
-## Storage Model
-
-Gramaton uses a prolly tree (probabilistic B-tree) for persistence. Key properties:
+Gramaton uses a prolly tree (probabilistic B-tree) for persistence:
 
 - **Content-addressed.** Every chunk is identified by its hash. Identical subtrees share storage.
-- **Append-only.** Mutations create new root nodes. Old roots are retained as commit history.
-- **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean merges).
+- **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history. `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
+- **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean branch merges).
 
-The storage layer is below the graph layer. The graph is fully materialized in memory on startup and flushed to the prolly tree on commit. This keeps search fast (no disk I/O during queries) at the cost of memory proportional to store size.
+The graph is materialized in memory on startup and flushed incrementally on `Save`. Dirty tracking (per graph object) keeps saves O(K) where K is the number of modified nodes/edges. The BM25 index is persisted as a content-addressed chunk referenced by each commit (`bm25_root`), so startup skips re-tokenization at cost of a small per-commit storage overhead.
 
-Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed. The prolly tree is updated incrementally via `Update()` (O(K * depth)) rather than rebuilt from scratch. Access metadata (access_count, last_accessed) is flushed by a background goroutine every 30 seconds rather than on every read. The BM25 index is persisted alongside each commit and loaded from disk on startup, skipping re-tokenization.
+Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep.
 
-## Adding a New Provider
+## Adding a new operation
 
-### Embedding Provider
+See CONTRIBUTING.md's operation recipe. The short version:
+
+1. Add a file at `api/<op>.go` with `XxxRequest`, `XxxResponse`, `XxxDescription`, `func (a *API) Xxx(...)`. Use jsonschema tags on request fields.
+2. Register the HTTP route in the right `server/bindings_<cluster>.go`.
+3. Register the MCP tool in the same bindings file (direct) and in the matching `cli/mcp_proxy_<cluster>.go` (proxy). Both use `api.XxxDescription`.
+4. Add a CLI command under `cli/<op>.go` if end-users should call it directly.
+5. Add tests in `api/<op>_test.go` (and binding tests if the HTTP/MCP surface has non-trivial transport concerns).
+
+The `.claude/skills/new-operation/` skill encodes this as an invocable procedure for LLM assistants.
+
+## Adding a new provider
+
+### Embedding
 
 1. Create `embed/<name>/<name>.go` implementing `embed.Provider`:
    ```go
    type Provider interface {
        Embed(ctx context.Context, texts []string) ([][]float32, error)
        ModelID() string
+       ContextWindow() int
    }
    ```
 2. Add the case to `embed.New()` in `embed/embed.go`.
-3. Add tests in `embed/<name>/<name>_test.go`.
+3. Add tests in `embed/<name>/<name>_test.go` following the shape of `embed/bert/bert_test.go` or `embed/ollama/ollama_test.go`.
 
-### LLM Provider
+### LLM
 
-1. Create `llm/<name>/<name>.go` implementing `llm.Provider`:
-   ```go
-   type Provider interface {
-       Complete(ctx context.Context, prompt string) (string, error)
-       ModelID() string
-   }
-   ```
+1. Create `llm/<name>/<name>.go` implementing `llm.Provider` (see `llm/llm.go` for the current interface; it includes completion plus usage reporting).
 2. Add the case to `llm.New()` in `llm/llm.go`.
-3. Add tests in `llm/<name>/<name>_test.go`.
+3. Add pricing data to `llm/pricing.go` if cost tracking is needed.
+4. Add tests mirroring existing provider tests.
 
-Both interfaces are intentionally minimal. The provider handles auth, retries, and serialization internally. The engine and server never import provider packages directly -- they use the interface.
+Both interfaces are intentionally minimal. The provider handles auth, retries, and serialization internally. `core.Engine` and `api.API` never import provider packages directly — they go through the interface.

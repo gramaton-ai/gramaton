@@ -249,6 +249,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`docs/architecture.md` rewritten for the post-T-02 layered
+  architecture.** Previous version predated T-02 and described a
+  three-layer stack (CLI/MCP -> Server -> Engine) in which service
+  methods lived inside the server package and held engine locks
+  directly. Rewrite documents the four-layer stack that actually
+  ships: transports (server/bindings_*.go, cli/mcp_proxy_*.go) ->
+  api (canonical request/response types + locking discipline) ->
+  core.Engine (composition root) -> data layer. Replaces claims
+  about deleted symbols (serviceSearch, cli/mcp_proxy.go as a single
+  file, store/ and testutil/ as top-level packages) with accurate
+  descriptions: one file per operation in api/, nine MCP cluster
+  registrars in server/mcp.go, the loopback-only /mcp mount,
+  Engine holding graph + indexSet + providers + searcher +
+  storage.Store behind a sync.RWMutex, provider factories in
+  embed/embed.go and llm/llm.go. Adds concrete package map
+  covering hooks/ (shipped Claude Code + Kiro integration
+  scripts), llm/ telemetry surface (metered, pricing, ratelimit,
+  usage), curation/ two-phase pipeline (deterministic + autonomous),
+  storage/ file-level layout (cas, prolly, gc), and
+  internal/{awscfg,version}. Keeps capture/search/session-commit
+  data-flow examples updated to reflect api methods rather than
+  server service methods. Explicit pointers into CONTRIBUTING.md's
+  "Adding a new operation" recipe and the `.claude/skills/new-
+  operation/` skill for the step-by-step. Every structural claim
+  verified against current code (server/mcp.go, api/*.go,
+  core/engine.go, graph/property.go, config/config.go, hooks/).
 - **Pure-Go BERT is the official default embedding provider.** The
   `config.Defaults()` return value (`embedding.provider: "bert"`,
   `model: "bge-small-en-v1.5"`) already pointed at BERT, and
