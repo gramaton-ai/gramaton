@@ -249,6 +249,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`docs/providers.md` updated for BERT-as-default and audited against
+  current provider code.** Adds a new first-class "Pure-Go BERT" section
+  documenting the default provider: no external runtime, model cached
+  at `~/.gramaton/models/<name>/`, custom HuggingFace repos supported,
+  and the known amd64 performance caveat from
+  `embed/bert/matmul_amd64.go` pending the AVX2 kernel. Ollama
+  section rewritten as an "alternative local" path rather than a
+  default; notes that `gramaton init` starts Ollama when
+  `provider: ollama` is configured, but the runtime server does not
+  supervise Ollama (a crashed Ollama causes embed calls to error and
+  records land without vectors, still BM25-searchable). Bedrock LLM
+  section notes the Converse API is model-agnostic (Claude / Titan /
+  Llama / Mistral) per `llm/bedrock/bedrock.go:16`. "Mix and match"
+  examples refreshed — default combo is now BERT embedding + optional
+  Anthropic LLM; added pure-local (BERT + no LLM) and explicit
+  disable-embedding examples. Dimension field called out per example
+  since it must match the chosen model. Credential handling section
+  made explicit: never inline keys, use `api_key_env` pointing at an
+  env var name, and Gramaton fails startup if the env var is missing
+  rather than running unauthenticated.
 - **`docs/configuration.md` audited against current `config/config.go`
   and restructured.** Fixes drifted defaults: `server.idle_timeout`
   30m -> 4h, `embedding.provider` ""->bert, `embedding.model`
