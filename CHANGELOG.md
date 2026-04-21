@@ -112,6 +112,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **docs/project-design sunset pass.** Removed nine design docs
+  under `docs/project-design/` that described superseded pipelines
+  or were duplicates of top-level `docs/` content:
+  `server-design.md` (pre-T-02 "v0.2" daemon spec, superseded by
+  the `api/` unified surface); `observe-pipeline.md` (the
+  `gramaton_observe` flow, soft-deprecated and replaced by the
+  session prepare/commit two-tier model); `capture-and-processing.md`
+  and `curation.md` (early subagent-classification-at-capture model
+  with `/gramaton-process` and `/gramaton-curate` skills that were
+  never built -- current reality is server-side autonomous curation
+  plus agent piggyback fallback); `validation.md` (theoretical
+  test methodology superseded by the LongMemEval benchmark work in
+  `gramaton-inspection/benchmark-methodology.md`);
+  `open-questions.md` (all items marked RESOLVED);
+  `agent-integration.md` (taught the observe/subagent integration
+  pattern, now outdated -- live integration guidance lives in the
+  agent's `CLAUDE.md` and the top-level `docs/integrator-guide.md`);
+  `tenets.md` and `architecture.md` (duplicates of the top-level
+  `docs/tenets.md` and `docs/architecture.md`). `project-design/README.md`
+  rewritten as a leaner index over the remaining 9 docs (data-model,
+  retrieval, embedding, collections, foundations, case-studies,
+  data-integrity, design-decisions, glossary). Git history preserves
+  the removed files for recall. Phase-2 rewrites of the top-level
+  `docs/architecture.md`, `integrator-guide.md`, and root `README.md`
+  (which still reference the removed `gramaton_observe` tool) are
+  tracked in `gramaton-inspection/documentation-plan.md`.
 - **T-02 cascade cleanup stage C3 (collections).** Deleted
   `server/service_collections.go` (928 lines) and
   `server/service_collections_test.go` (967 lines), plus the
