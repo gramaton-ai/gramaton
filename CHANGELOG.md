@@ -249,6 +249,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Pure-Go BERT is the official default embedding provider.** The
+  `config.Defaults()` return value (`embedding.provider: "bert"`,
+  `model: "bge-small-en-v1.5"`) already pointed at BERT, and
+  `embed/setup.go` already tried BERT first with Ollama as fallback.
+  This change aligns the user-facing story with that reality: the
+  README Quick Start no longer instructs users to install Ollama
+  (Gramaton downloads the BERT model itself on first run, ~130MB,
+  no external runtime); the Features bullet lists BERT as default
+  and Ollama as an alternative local option; the Configuration
+  sample drops the explicit Ollama block and notes that an
+  `embedding:` section is only needed to override the BERT default.
+  `cli/init.go`'s `printNoOllama` fallback message was rewritten as
+  `printEmbeddingSetupFailed`: when setup fails it now names the
+  BERT-download path as the most likely cause (network), and lists
+  Ollama, OpenAI, and Bedrock as alternatives rather than
+  recommending Ollama. Known limitation: `embed/bert/matmul_amd64.go`
+  still falls back to pure Go -- the AVX2 kernel TODO from
+  `matmul_amd64.go:3` is real and tracked in the Gramaton development
+  collection. Apple Silicon has the arm64 NEON kernel and is
+  unaffected.
 - **`README.md` rewritten for the post-T-02 surface.** Added a "Why
   Gramaton" section motivating the project against built-in agent
   memory and generic vector stores (without naming them) and listing

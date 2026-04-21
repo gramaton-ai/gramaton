@@ -45,12 +45,12 @@ What Gramaton isn't:
 # Install
 go install github.com/gramaton-ai/gramaton@latest
 
-# Install Ollama for local embeddings (https://ollama.com)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Initialize (pulls embedding model, starts server)
+# Initialize — downloads the default embedding model (~130MB, one-time),
+# creates the config, and starts the server.
 gramaton init
 ```
+
+No external runtime to install. Gramaton ships a pure-Go BERT embedder as the default, so a fresh install is just the Go binary plus a model download on first run. Ollama, OpenAI-compatible, and AWS Bedrock remain available if you prefer a different embedding provider.
 
 Then add Gramaton to your MCP client (Claude Code, Kiro, etc.):
 
@@ -152,7 +152,7 @@ For the full layered package map, lock discipline, and data flow, see [Architect
 - **Automatic curation** — lifecycle management, orphan linking, dedup, concept candidate detection, optional LLM classification and contradiction detection
 - **Auto-supersession** — captures that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge
 - **Named stores** — run multiple isolated knowledge bases from the same binary (personal store, benchmark store, per-project store)
-- **Multiple providers** — Ollama (local, default), pure-Go BERT (local, no external runtime), OpenAI-compatible, and AWS Bedrock for embeddings; Anthropic, OpenAI-compatible, and AWS Bedrock for LLM
+- **Multiple providers** — pure-Go BERT (local, default, no external runtime), Ollama (local, alternative), OpenAI-compatible, and AWS Bedrock for embeddings; Anthropic, OpenAI-compatible, and AWS Bedrock for LLM
 
 ## MCP Tools
 
@@ -244,21 +244,21 @@ Run `gramaton <command> --help` for flags.
 <details>
 <summary><strong>Configuration</strong></summary>
 
-Config lives at `~/.gramaton/config.yaml`. All fields have sensible defaults — an empty or missing config file is valid.
+Config lives at `~/.gramaton/config.yaml`. All fields have sensible defaults — an empty or missing config file is valid. Embedding defaults to pure-Go BERT (`bge-small-en-v1.5`); you only need an `embedding:` block if you want a different provider or model.
 
 ```yaml
-# Minimal config -- local embeddings
-embedding:
-  provider: ollama
-  model: mxbai-embed-large
-
-# Optional -- enables autonomous curation
+# Optional -- enables autonomous curation.
 llm:
   provider: anthropic
   api_key_env: ANTHROPIC_API_KEY
+
+# Optional -- override the default embedding provider.
+# embedding:
+#   provider: ollama
+#   model: mxbai-embed-large
 ```
 
-Embedding providers: Ollama (local, default), pure-Go BERT (local), OpenAI-compatible, AWS Bedrock.
+Embedding providers: pure-Go BERT (local, default), Ollama (local), OpenAI-compatible, AWS Bedrock.
 LLM providers (for autonomous curation): Anthropic, OpenAI-compatible, AWS Bedrock.
 
 Per-store config can override the global config by placing a `config.yaml` inside the store directory.

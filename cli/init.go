@@ -77,7 +77,7 @@ func setupEmbedding(cfg *config.Config, cfgPath string) bool {
 	}
 
 	if !result.Configured {
-		printNoOllama()
+		printEmbeddingSetupFailed()
 		return false
 	}
 
@@ -86,24 +86,29 @@ func setupEmbedding(cfg *config.Config, cfgPath string) bool {
 	return true
 }
 
-func printNoOllama() {
-	fmt.Println("  Ollama not found.")
+func printEmbeddingSetupFailed() {
+	fmt.Println("  Embedding setup failed.")
 	fmt.Println()
-	fmt.Println("  Ollama provides local, private embedding (recommended).")
-	fmt.Println("  Install it:")
+	fmt.Println("  Gramaton's default embedding provider is a pure-Go BERT embedder")
+	fmt.Println("  that downloads the model (~130MB) from HuggingFace on first run.")
+	fmt.Println("  Setup probably failed because of a network issue.")
+	fmt.Println()
+	fmt.Println("  Options:")
+	fmt.Println("    1. Check your internet connection and re-run: gramaton init")
+	fmt.Println("    2. Use Ollama as an alternative local embedding provider:")
 	switch runtime.GOOS {
 	case "darwin":
-		fmt.Println("    Download from https://ollama.com/download/mac")
-		fmt.Println("    Or if you have Homebrew: brew install ollama")
+		fmt.Println("         Download from https://ollama.com/download/mac")
+		fmt.Println("         Or: brew install ollama")
 	case "linux":
-		fmt.Println("    curl -fsSL https://ollama.com/install.sh | sh")
+		fmt.Println("         curl -fsSL https://ollama.com/install.sh | sh")
 	default:
-		fmt.Println("    Download from https://ollama.com")
+		fmt.Println("         Download from https://ollama.com")
 	}
+	fmt.Println("       Then re-run: gramaton init")
+	fmt.Println("    3. Configure OpenAI or AWS Bedrock manually. See docs/providers.md.")
 	fmt.Println()
-	fmt.Println("  Then re-run: gramaton init")
-	fmt.Println()
-	fmt.Println("  Gramaton works without embeddings (keyword and graph search")
+	fmt.Println("  Gramaton also works without embeddings (keyword and graph search")
 	fmt.Println("  still work), but semantic similarity search requires them.")
 }
 
