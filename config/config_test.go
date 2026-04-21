@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -509,3 +510,112 @@ func TestModelForTask_EndToEnd(t *testing.T) {
 		t.Errorf("summarization model after effort+tier override = %q, want premium-summarizer", got)
 	}
 }
+
+func TestValidateDefaultsAccepted(t *testing.T) {
+	cfg := Defaults()
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("Defaults() should validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name  string
+		mutate func(*Config)
+		want  string
+	}{
+		{
+			name:  "unknown llm provider",
+			mutate: func(c *Config) { c.LLM.Provider = "gemini" },
+			want:  "llm.provider",
+		},
+		{
+			name:  "unknown embedding provider",
+			mutate: func(c *Config) { c.Embedding.Provider = "cohere-local" },
+			want:  "embedding.provider",
+		},
+		{
+			name:  "negative port",
+			mutate: func(c *Config) { c.Server.Port = -1 },
+			want:  "server.port",
+		},
+		{
+			name:  "port too high",
+			mutate: func(c *Config) { c.Server.Port = 70000 },
+			want:  "server.port",
+		},
+		{
+			name:  "immutable decay non-zero",
+			mutate: func(c *Config) { c.Decay.Rates.Immutable = 0.01 },
+			want:  "decay.rates.immutable",
+		},
+		{
+			name:  "negative decay rate",
+			mutate: func(c *Config) { c.Decay.Rates.Ephemeral = -0.1 },
+			want:  "decay.rates.ephemeral",
+		},
+		{
+			name:  "negative scoring weight",
+			mutate: func(c *Config) { c.Scoring.WeightFreshness = -0.1 },
+			want:  "scoring.weight_freshness",
+		},
+		{
+			name:  "negative bm25 weight",
+			mutate: func(c *Config) { c.Search.BM25WeightShort = -0.5 },
+			want:  "search.bm25_weight_short",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			tc.mutate(&cfg)
+			err := Validate(&cfg)
+			if err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not mention %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateAllowsEmptyProviders(t *testing.T) {
+	// Empty providers mean "disabled." Should validate.
+	cfg := Defaults()
+	cfg.LLM.Provider = ""
+	cfg.Embedding.Provider = ""
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("empty providers should validate, got %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// Typo: weight_similarty (missing 'i') should fail strict decoding.
+	os.WriteFile(path, []byte("scoring:\n  weight_similarty: 0.5\n"), 0o600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected strict YAML to reject unknown key, got nil")
+	}
+	if !strings.Contains(err.Error(), "weight_similarty") {
+		t.Fatalf("error should name the offending key; got %q", err.Error())
+	}
+}
+
+func TestLoadRejectsInvariantViolation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("llm:\n  provider: gemini\n"), 0o600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Validate to reject unknown provider, got nil")
+	}
+	if !strings.Contains(err.Error(), "llm.provider") {
+		t.Fatalf("error should name the offending key; got %q", err.Error())
+	}
+}
+

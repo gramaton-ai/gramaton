@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -244,7 +246,7 @@ type CurationConfig struct {
 // the top-level Model field is only used by a few non-curation code
 // paths (see below).
 type LLMConfig struct {
-	// Provider: "anthropic", "openai", "bedrock", "claudecli", "kirocli".
+	// Provider: "anthropic", "openai", "bedrock", "claude-cli", "kiro-cli".
 	Provider string `yaml:"provider"`
 
 	// Model is the default used by code paths that call the provider's
@@ -1142,6 +1144,9 @@ func LoadWithFallback(storeCfgPath, globalCfgPath string) (Config, error) {
 	if err := normalize(&cfg); err != nil {
 		return cfg, err
 	}
+	if err := Validate(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -1155,12 +1160,90 @@ func Load(path string) (Config, error) {
 	if err := normalize(&cfg); err != nil {
 		return cfg, err
 	}
+	if err := Validate(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// Validate reports the first invariant violation in cfg, or nil if the
+// config is self-consistent. Called automatically by Load and
+// LoadWithFallback after normalize. Safe to call independently on a
+// hand-constructed Config (e.g. from tests).
+//
+// Checked invariants:
+//   - LLM.Provider is one of the supported providers (or empty = disabled)
+//   - Embedding.Provider is one of the supported providers (or empty)
+//   - Server.Port in [0, 65535]
+//   - Decay.Rates.Immutable == 0 (immutable records never decay)
+//   - Decay rates and scoring/BM25 weights are all non-negative
+//
+// Sum-to-1 is NOT enforced for scoring weights because search/score.go
+// re-normalizes the meta weights at runtime; nor for BM25 weights
+// because they are RRF weights with a documented non-unit default
+// (1/2/3).
+func Validate(cfg *Config) error {
+	switch cfg.LLM.Provider {
+	case "", "anthropic", "openai", "bedrock", "claude-cli", "kiro-cli":
+		// ok
+	default:
+		return fmt.Errorf("config: invalid llm.provider %q; expected one of anthropic, openai, bedrock, claude-cli, kiro-cli (or empty to disable)", cfg.LLM.Provider)
+	}
+
+	switch cfg.Embedding.Provider {
+	case "", "bert", "ollama", "openai", "bedrock":
+		// ok
+	default:
+		return fmt.Errorf("config: invalid embedding.provider %q; expected one of bert, ollama, openai, bedrock (or empty to disable)", cfg.Embedding.Provider)
+	}
+
+	if cfg.Server.Port < 0 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("config: server.port %d out of range; expected 0-65535 (0 = auto-select)", cfg.Server.Port)
+	}
+
+	if cfg.Decay.Rates.Immutable != 0 {
+		return fmt.Errorf("config: decay.rates.immutable must be 0 (immutable records never decay); got %v", cfg.Decay.Rates.Immutable)
+	}
+	for _, r := range []struct {
+		name string
+		v    float64
+	}{
+		{"decay.rates.ephemeral", cfg.Decay.Rates.Ephemeral},
+		{"decay.rates.temporal", cfg.Decay.Rates.Temporal},
+		{"decay.rates.durable", cfg.Decay.Rates.Durable},
+	} {
+		if r.v < 0 {
+			return fmt.Errorf("config: %s must be non-negative; got %v", r.name, r.v)
+		}
+	}
+
+	for _, w := range []struct {
+		name string
+		v    float64
+	}{
+		{"scoring.weight_similarity", cfg.Scoring.WeightSimilarity},
+		{"scoring.weight_freshness", cfg.Scoring.WeightFreshness},
+		{"scoring.weight_activation", cfg.Scoring.WeightActivation},
+		{"scoring.weight_confidence", cfg.Scoring.WeightConfidence},
+		{"search.bm25_weight_full", cfg.Search.BM25WeightFull},
+		{"search.bm25_weight_medium", cfg.Search.BM25WeightMedium},
+		{"search.bm25_weight_short", cfg.Search.BM25WeightShort},
+	} {
+		if w.v < 0 {
+			return fmt.Errorf("config: %s must be non-negative; got %v", w.name, w.v)
+		}
+	}
+
+	return nil
 }
 
 // overlay unmarshals the YAML at path onto cfg in place. Missing file is
 // not an error (the layer is simply absent). Fields absent from the YAML
 // retain whatever value cfg already held.
+//
+// The decoder runs with KnownFields(true): unknown keys fail loud with
+// the offending name and line so typos surface at startup instead of
+// silently reverting to defaults.
 func overlay(cfg *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1169,7 +1252,13 @@ func overlay(cfg *Config, path string) error {
 		}
 		return fmt.Errorf("config: read %s: %w", path, err)
 	}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		if err == io.EOF {
+			// Empty file is a valid no-op overlay.
+			return nil
+		}
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	return nil

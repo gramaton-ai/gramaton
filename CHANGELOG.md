@@ -7,6 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **P1-38: config `Validate()` + strict YAML decoding** -- config/config.go
+  gains an exported `Validate(*Config) error` that runs after `normalize`
+  in `Load` and `LoadWithFallback`. Enforces: LLM provider whitelist
+  (`anthropic`, `openai`, `bedrock`, `claude-cli`, `kiro-cli`, or empty),
+  embedding provider whitelist (`bert`, `ollama`, `openai`, `bedrock`,
+  or empty), `Server.Port` in [0, 65535], `Decay.Rates.Immutable == 0`,
+  and non-negativity on decay rates + scoring + BM25 weights. Sum-to-1
+  is NOT enforced because search/score.go re-normalizes meta weights
+  at runtime and BM25 RRF weights have a documented non-unit default
+  (1/2/3). The `overlay` helper now decodes via `yaml.NewDecoder` with
+  `KnownFields(true)`: typos (e.g. `scoring:\n  weight_similarty: 0.5`)
+  fail loud at startup with the offending key + line instead of silently
+  reverting to defaults. Empty files remain a valid no-op overlay.
+  Also corrected a doc comment that listed LLM providers as `claudecli`
+  / `kirocli` when the actual switch accepts only the hyphenated
+  `claude-cli` / `kiro-cli`. Validate() was added without splitting
+  config.go into multiple files; the 2026-04-17 in-file sectioning
+  (user-facing vs internal-tuning) remains sufficient for navigation.
+
 ### Changed
 
 - **Named-store config now deep-merges (cluster A #1)** --
