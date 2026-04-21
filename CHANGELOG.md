@@ -249,6 +249,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`docs/configuration.md` audited against current `config/config.go`
+  and restructured.** Fixes drifted defaults: `server.idle_timeout`
+  30m -> 4h, `embedding.provider` ""->bert, `embedding.model`
+  mxbai-embed-large -> bge-small-en-v1.5, `curation.interval`
+  5m -> 1m, `limits.max_summary_short` 500 -> 1000, `backup.enabled`
+  false -> true. Drops the reference to `limits.max_summary_abstract`
+  (field no longer exists). Adds sections for fields introduced
+  since the doc was last touched: tiered `llm.models` (low / medium
+  / high), six `llm_curation.*_effort` dials, cost-reduction
+  toggles (`prompt_caching_enabled`, `manifest_cache_enabled`,
+  `contradiction_check_reverse_edges`, `classify_short_prompt_compressed`),
+  `llm_curation.max_calls_per_session`, the batch and coherence
+  knobs (`contradiction_batch_size`, `synthesis_batch_size`,
+  `synthesis_max_input_tokens`, `concept_coherence_min`,
+  `long_classification_threshold`), `curation.observation_batch_size`
+  and `observation_min_content_length`, and `search.session_dedup_enabled`.
+  Adds a new top-level "Named stores" section documenting the
+  `~/.gramaton/stores/<name>/config.yaml` layout and calling out the
+  full-replace-not-merge silent-fail trap (dev collection item
+  01KPMQ0N2KY2XY6KAMPW3WXF52): partial per-store configs can silently
+  zero out sections and cause startup refusal. Marks the `observe:`
+  section as soft-deprecated in favor of the Sessions flow. Restructures
+  the file around the user-facing vs internal-tuning distinction that
+  config/config.go itself uses. Surfaces one code/config-comment
+  inconsistency during the audit: `dedup.action` values `flag` and
+  `supersede` behave identically in `api/capture.go:142-174` (both
+  mark the older record historical and add a supersedes edge; only
+  `reject` differs), contrary to the config comment that describes
+  `flag` as 'mark but don't delete'. Documented in the doc and tracked
+  as dev collection item 01KPPXGF8FETMYWQDQC5H7VKYN.
 - **`docs/integrator-guide.md` rewritten around the three storage
   paths.** Previous version was organized around "two retrieval
   modes" (Knowledge Graph vs Collections) and gave `gramaton_observe`
