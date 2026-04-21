@@ -35,7 +35,7 @@ Gramaton's differences:
 
 What Gramaton isn't:
 
-- **Not a chat-replayable memory.** It's selective by design — knowledge worth keeping, not every word spoken.
+- **Searchable surface is distilled, not verbatim.** Search retrieves committed Session segments and Memory records — extracted knowledge, not a full chat log. Raw transcripts can be archived alongside a session (compressed, path-addressable on disk) when the conversation itself matters, and the session state points at the archive so an agent can decompress and read it if something seems missing. The archive itself isn't indexed for search today.
 - **Not a multi-user service.** v0.1 is single-user and local. Auth and tenancy are future work.
 - **Not a managed RAG solution.** It's infrastructure you run, not a hosted API.
 
