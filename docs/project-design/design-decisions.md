@@ -96,11 +96,11 @@ The warn-only mode remains possible as a future feature if someone articulates a
 
 ### D35: Named Stores via LoadWithFallback
 
-**Decision:** Gramaton supports multiple isolated stores per binary via the `gramaton --store <name>` flag. Each named store lives at `~/.gramaton/stores/<name>/` with its own `data/` and an optional per-store `config.yaml`. Per-store config uses `LoadWithFallback` (`config/config.go`): if the store config file exists, it is loaded standalone; if it does not, the global config is used. The unnamed default store remains at `~/.gramaton/data/`.
+**Decision:** Gramaton supports multiple isolated stores per binary via the `gramaton --store <name>` flag. Each named store lives at `~/.gramaton/stores/<name>/` with its own `data/` and an optional per-store `config.yaml`. Per-store config uses `LoadWithFallback` (`config/config.go`) with deep-merge semantics: defaults → overlay global (if present) → overlay per-store (if present) → normalize. Keys absent from a layer inherit from the layer beneath; explicit empty values replace. The unnamed default store remains at `~/.gramaton/data/`.
 
 **Why:** Different workloads need different isolation. A benchmark run that ingests 20k LongMemEval sessions would wreck retrieval quality in a personal knowledge store. A per-project store keeps domain-specific knowledge from bleeding into general memory. Named stores give a clean "which context am I in right now" boundary without forcing users to juggle multiple binaries or data directories outside `~/.gramaton/`. Defers D27's "one store per user default" — the default is still one store, but the escape hatch is now first-class rather than a `--data-dir` workaround.
 
-Known sharp edge: per-store config load is full-replace, not deep-merge. A partial per-store `config.yaml` that only overrides one section causes the other sections to be zero-valued rather than inherited from the global — silently disables features or causes startup to refuse. Tracked for improvement; workaround is to copy the full global config into the store directory and edit only what needs to change.
+Merge semantics (vs the earlier full-replace-fallback behaviour, fixed 2026-04-21): the original `LoadWithFallback` loaded the store file standalone when present and fell back to defaults for unspecified keys, which silently erased global settings (notably `llm:`, causing the server to refuse to start). Deep-merge matches the documented intent and the user mental model of an "override file." The launcher also now tails the child's `gramaton.stderr` when the readiness poll times out, so startup failures surface instead of dying as a bare timeout.
 
 ---
 

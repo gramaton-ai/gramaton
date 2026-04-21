@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
@@ -143,6 +144,9 @@ func startBackground() error {
 
 	// Wait for the server to be ready.
 	if err := waitForServer(dir, 10*time.Second); err != nil {
+		if tail := tailServerStderr(stderrPath, 2048); tail != "" {
+			return fmt.Errorf("server failed to start: %w\n--- last stderr from child (%s) ---\n%s", err, stderrPath, tail)
+		}
 		return fmt.Errorf("server failed to start: %w", err)
 	}
 
@@ -174,6 +178,41 @@ func stopServer() error {
 
 	fmt.Fprintln(os.Stderr, "shutdown requested")
 	return nil
+}
+
+// tailServerStderr returns up to maxBytes of trailing content from the
+// child server's stderr file, trimmed to start at a line boundary.
+// Returns "" if the file is missing, empty, or unreadable -- the caller
+// falls back to the bare timeout error in that case.
+func tailServerStderr(path string, maxBytes int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return ""
+	}
+	offset := int64(0)
+	if info.Size() > maxBytes {
+		offset = info.Size() - maxBytes
+	}
+	if _, err := f.Seek(offset, 0); err != nil {
+		return ""
+	}
+	buf := make([]byte, info.Size()-offset)
+	n, err := f.Read(buf)
+	if err != nil || n == 0 {
+		return ""
+	}
+	out := string(buf[:n])
+	if offset > 0 {
+		if nl := strings.IndexByte(out, '\n'); nl >= 0 && nl < len(out)-1 {
+			out = out[nl+1:]
+		}
+	}
+	return out
 }
 
 // waitForServer polls the status endpoint until the server is ready.

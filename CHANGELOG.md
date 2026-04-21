@@ -9,6 +9,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Named-store config now deep-merges (cluster A #1)** --
+  `config.LoadWithFallback` was an "if-exists-use-store, else-use-global"
+  fallback, which silently zero-valued any section absent from a
+  partial per-store `config.yaml`. A minimal override (e.g. only
+  `server.port`) would drop the global's `llm:` block, making
+  `server.New` refuse to start; the background launcher then
+  returned a bare `"timeout after 10s"` with no underlying error
+  because `waitForServer` never surfaced the child's stderr.
+  Rewrote the loader to layer defaults -> global overlay -> store
+  overlay -> normalize once. Keys absent from a layer inherit from
+  the layer beneath; explicit empty YAML (`key: []`, `key: {}`)
+  replaces. `Load` shares the same overlay/normalize helpers.
+  `cli/serve.go::startBackground` now tails `~/.gramaton/gramaton.stderr`
+  on readiness timeout and folds the last ~2KB into the error.
+  New regression tests: `TestLoadWithFallbackMergeInheritsFromGlobal`
+  (store inherits global's `llm:` + `logging:` when only overriding
+  `server.port`) and `TestLoadWithFallbackSamePathNoDoubleLoad`.
+  Docs for `docs/configuration.md`, `docs/benchmarks.md`,
+  `docs/project-design/glossary.md`, and D35 in design-decisions.md
+  all updated; the "copy the full global as a workaround" guidance
+  is gone.
 - **P2-06 Stages 2+3: WriteSession pattern for batched index writes** --
   closes the stashed `*bolt.Tx` race hazard across five bbolt-backed
   types (`BboltPropertyIndex`, `BboltBM25Index`, `BboltSecondaryIndex`,

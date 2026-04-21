@@ -309,7 +309,7 @@ curation:
 	}
 }
 
-func TestLoadWithFallbackUsesStoreConfig(t *testing.T) {
+func TestLoadWithFallbackStoreOverridesGlobal(t *testing.T) {
 	storeDir := t.TempDir()
 	globalDir := t.TempDir()
 
@@ -323,9 +323,8 @@ func TestLoadWithFallbackUsesStoreConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithFallback: %v", err)
 	}
-	// Should use store config when it exists.
 	if cfg.Scoring.WeightSimilarity != 0.77 {
-		t.Fatalf("expected 0.77 (store), got %f", cfg.Scoring.WeightSimilarity)
+		t.Fatalf("expected 0.77 (store overrides global), got %f", cfg.Scoring.WeightSimilarity)
 	}
 }
 
@@ -342,7 +341,6 @@ func TestLoadWithFallbackFallsToGlobal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithFallback: %v", err)
 	}
-	// Should fall back to global.
 	if cfg.Scoring.WeightSimilarity != 0.33 {
 		t.Fatalf("expected 0.33 (global), got %f", cfg.Scoring.WeightSimilarity)
 	}
@@ -356,10 +354,70 @@ func TestLoadWithFallbackBothMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithFallback: %v", err)
 	}
-	// Should return defaults.
 	defaults := Defaults()
 	if cfg.Scoring.WeightSimilarity != defaults.Scoring.WeightSimilarity {
 		t.Fatal("both missing should return defaults")
+	}
+}
+
+// TestLoadWithFallbackMergeInheritsFromGlobal proves the deep-merge
+// semantics: a partial store config inherits fields from the global
+// config rather than silently zero-valuing them via Defaults(). This
+// is the regression that the 2026-04-20 named-store setup hit --
+// minimal store override left LLM empty and the server's New()
+// constructor failed at startup.
+func TestLoadWithFallbackMergeInheritsFromGlobal(t *testing.T) {
+	storeDir := t.TempDir()
+	globalDir := t.TempDir()
+	storePath := filepath.Join(storeDir, "config.yaml")
+	globalPath := filepath.Join(globalDir, "config.yaml")
+
+	// Global sets LLM provider + model + logging. Store only overrides port.
+	global := "" +
+		"server:\n  port: 42982\n" +
+		"llm:\n  provider: anthropic\n  model: claude-haiku-4-5\n" +
+		"logging:\n  level: debug\n"
+	store := "" +
+		"server:\n  port: 7338\n"
+	os.WriteFile(globalPath, []byte(global), 0o600)
+	os.WriteFile(storePath, []byte(store), 0o600)
+
+	cfg, err := LoadWithFallback(storePath, globalPath)
+	if err != nil {
+		t.Fatalf("LoadWithFallback: %v", err)
+	}
+
+	// Store's override applies.
+	if cfg.Server.Port != 7338 {
+		t.Fatalf("expected store port 7338, got %d", cfg.Server.Port)
+	}
+	// Fields only in global must be inherited by the merged config.
+	if cfg.LLM.Provider != "anthropic" {
+		t.Fatalf("expected inherited LLM provider=anthropic, got %q", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Model != "claude-haiku-4-5" {
+		t.Fatalf("expected inherited LLM model, got %q", cfg.LLM.Model)
+	}
+	if cfg.Logging.Level != "debug" {
+		t.Fatalf("expected inherited logging level=debug, got %q", cfg.Logging.Level)
+	}
+}
+
+// TestLoadWithFallbackSamePathNoDoubleLoad confirms that when the
+// caller passes the same path for both layers (normal unnamed-store
+// case) the function doesn't attempt to unmarshal the file twice and
+// still returns the normalized config.
+func TestLoadWithFallbackSamePathNoDoubleLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("scoring:\n  weight_similarity: 0.5\n"), 0o600)
+
+	cfg, err := LoadWithFallback(path, path)
+	if err != nil {
+		t.Fatalf("LoadWithFallback: %v", err)
+	}
+	if cfg.Scoring.WeightSimilarity != 0.5 {
+		t.Fatalf("expected 0.5, got %f", cfg.Scoring.WeightSimilarity)
 	}
 }
 

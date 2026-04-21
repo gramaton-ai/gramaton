@@ -1121,32 +1121,63 @@ func DefaultConfigPath() string {
 	return filepath.Join(DefaultDir(), "config.yaml")
 }
 
-// LoadWithFallback loads config from storeCfgPath. If it doesn't exist,
-// falls back to globalCfgPath. If neither exists, returns defaults.
+// LoadWithFallback loads config with deep-merge semantics: start from
+// Defaults(), overlay the global config (if present), then overlay the
+// per-store config (if present). Keys absent from a layer's YAML inherit
+// from the layer beneath. Explicit empty values (e.g. `key: []`,
+// `key: {}`) replace. Normalization/bounds run once on the merged result.
+//
+// Either path may be missing; if both are missing the function returns
+// normalized defaults.
 func LoadWithFallback(storeCfgPath, globalCfgPath string) (Config, error) {
-	if _, err := os.Stat(storeCfgPath); err == nil {
-		return Load(storeCfgPath)
+	cfg := Defaults()
+	if err := overlay(&cfg, globalCfgPath); err != nil {
+		return cfg, err
 	}
-	return Load(globalCfgPath)
+	if storeCfgPath != globalCfgPath {
+		if err := overlay(&cfg, storeCfgPath); err != nil {
+			return cfg, err
+		}
+	}
+	if err := normalize(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
 // Load reads a config from the given path. If the file does not exist,
 // returns defaults. Fields not specified in the file retain their defaults.
 func Load(path string) (Config, error) {
 	cfg := Defaults()
+	if err := overlay(&cfg, path); err != nil {
+		return cfg, err
+	}
+	if err := normalize(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
 
+// overlay unmarshals the YAML at path onto cfg in place. Missing file is
+// not an error (the layer is simply absent). Fields absent from the YAML
+// retain whatever value cfg already held.
+func overlay(cfg *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return nil
 		}
-		return cfg, fmt.Errorf("config: read %s: %w", path, err)
+		return fmt.Errorf("config: read %s: %w", path, err)
 	}
-
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("config: parse %s: %w", path, err)
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	return nil
+}
 
+// normalize coerces legacy aliases and clamps out-of-range values on a
+// loaded config. Runs once per load after all overlays have been applied.
+func normalize(cfg *Config) error {
 	// Dedup action coercion. See DedupConfig docs + design-decisions.md D37.
 	// "flag" is a legacy alias that never had behavior distinct from
 	// "supersede"; silently coerce for one release cycle. Empty (omitted
@@ -1159,10 +1190,9 @@ func Load(path string) (Config, error) {
 	case "supersede", "reject":
 		// ok
 	default:
-		return cfg, fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
+		return fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
 	}
 
-	// Enforce bounds on configurable limits.
 	if cfg.LLMCuration.MaxCallsPerRun > 10000 {
 		cfg.LLMCuration.MaxCallsPerRun = 10000
 	}
@@ -1188,8 +1218,7 @@ func Load(path string) (Config, error) {
 	if cfg.Curation.MaxDedupPerRun > 200 {
 		cfg.Curation.MaxDedupPerRun = 200
 	}
-
-	return cfg, nil
+	return nil
 }
 
 // Save writes the config to the given path, creating parent directories

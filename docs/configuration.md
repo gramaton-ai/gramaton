@@ -24,15 +24,13 @@ Gramaton supports multiple isolated stores per binary — a personal store, a be
       data/            # per-store state
 ```
 
-A per-store `config.yaml` is loaded via `LoadWithFallback` (see `config/config.go`). Per-store fields override the global; omitted fields inherit from global.
+A per-store `config.yaml` is loaded via `LoadWithFallback` (see `config/config.go`) with **deep-merge** semantics: defaults are applied first, the global config is overlaid, then the per-store config is overlaid on top. Keys absent from a layer inherit from the layer beneath, so a minimal per-store override (e.g. only `server.port`) keeps the global's `llm:`, `embedding:`, and `logging:` sections intact. Explicit empty values (e.g. `foo: []`, `foo: {}`) replace — use them to intentionally disable an inherited list or map.
 
 **Running against a named store:**
 ```bash
 gramaton --store <name> serve
 gramaton --store <name> search "..."
 ```
-
-**Silent-fail trap to know about:** per-store config is loaded with **full-replace fallback**, not a deep merge. If a per-store `config.yaml` exists but is a partial override (e.g., only overrides `server.port`), the other top-level sections (`embedding:`, `llm:`, etc.) are **not** filled in from the global — they're whatever the YAML in the per-store file provides, which for missing sections is zero-valued. Consequence: an incomplete per-store config can silently disable features or cause the server to refuse to start (LLM is required for autonomous curation, so a missing `llm:` section in a per-store file disables that tier). Workaround today: copy the full global `config.yaml` into the store directory and edit only the fields that need to change. Tracked for improvement in the Gramaton development collection.
 
 ## Server
 

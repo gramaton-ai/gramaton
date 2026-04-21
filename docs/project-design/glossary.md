@@ -131,7 +131,7 @@ Never mix both in the same surface. Pick one per context.
 | Term | Definition |
 |------|-----------|
 | **Named store** | An isolated Gramaton store with its own data directory and optional per-store config, selected via `gramaton --store <name>`. Lives at `~/.gramaton/stores/<name>/`. The default (unnamed) store lives at `~/.gramaton/data/`. |
-| **`LoadWithFallback`** | Config loader that tries a per-store `config.yaml` first and falls back to the global config if the per-store file is missing. Full-replace, not deep-merge — a partial per-store config silently zero-values unspecified sections. |
+| **`LoadWithFallback`** | Config loader for named stores. Deep-merges: defaults → global overlay → per-store overlay → normalize. Keys absent from a layer inherit from the layer beneath; explicit empty values (`key: []`, `key: {}`) replace. |
 
 ## api / transports
 

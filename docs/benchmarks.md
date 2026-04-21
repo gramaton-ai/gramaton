@@ -19,18 +19,15 @@ graph. This document covers the one-time setup.
 # 1. Create the named store (data dir only; no config yet).
 gramaton store create longmemeval-bench
 
-# 2. Copy global config as the benchmark's override, then edit the
-#    two fields that differ. LoadWithFallback does not deep-merge --
-#    a partial override file leaves other sections at defaults and
-#    the server refuses to start (LLM is required).
-cp ~/.gramaton/config.yaml ~/.gramaton/stores/longmemeval-bench/config.yaml
-
-# Edit ~/.gramaton/stores/longmemeval-bench/config.yaml:
-#   data_dir: /Users/b/.gramaton/stores/longmemeval-bench/data
-#   server:
-#     port: 7338
-#     auto_start: false
-#     idle_timeout: 8h
+# 2. Write a minimal override with just the fields that differ from
+#    the global config. LoadWithFallback deep-merges (defaults ->
+#    global -> per-store), so unset keys inherit from the global.
+cat > ~/.gramaton/stores/longmemeval-bench/config.yaml <<'EOF'
+data_dir: /Users/b/.gramaton/stores/longmemeval-bench/data
+server:
+  port: 7338
+  auto_start: false
+EOF
 
 # 3. Register a second MCP server for Claude Code (stdio, proxies to
 #    the benchmark gramaton instance via --store).
