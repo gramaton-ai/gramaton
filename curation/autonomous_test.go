@@ -129,7 +129,7 @@ func TestClassifyPendingHappyPath(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -176,7 +176,7 @@ func TestClassifyPendingLLMError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 0 {
 		t.Fatalf("expected 0 classified, got %d", result.Classified)
@@ -200,7 +200,7 @@ func TestClassifyPendingParseError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 0 {
 		t.Fatalf("expected 0 classified, got %d", result.Classified)
@@ -226,7 +226,7 @@ func TestClassifyPendingMaxCallsLimit(t *testing.T) {
 
 	result := &AutonomousResult{}
 	// Limit to 3 calls.
-	classifyPending(context.Background(), eng, llm, cfg, result, 3, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 3, 0, nil, false)
 
 	if result.LLMCalls != 3 {
 		t.Fatalf("expected 3 LLM calls (max), got %d", result.LLMCalls)
@@ -251,7 +251,7 @@ func TestClassifyPendingBatchSize(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	// Should only process batch_size=2 even though 5 exist.
 	if result.Classified != 2 {
@@ -275,7 +275,7 @@ func TestClassifyPendingContextCancelled(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(ctx, eng, llm, cfg, result, 20, nil, false)
+	classifyPending(ctx, eng, llm, cfg, result, 20, 0, nil, false)
 
 	// Should stop immediately.
 	if result.LLMCalls != 0 {
@@ -305,7 +305,7 @@ func TestClassifyPendingSkipsEmptyContent(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (empty content), got %d", result.LLMCalls)
@@ -331,7 +331,7 @@ func TestClassifyPendingModelTiering(t *testing.T) {
 	llm := &mockLLM{responses: []string{classifyResp, classifyResp}}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 2 {
 		t.Fatalf("expected 2 classified, got %d", result.Classified)
@@ -374,7 +374,7 @@ func TestClassifyPendingNoTieringWhenModelsUnset(t *testing.T) {
 	llm := &mockLLM{responses: []string{classifyResp}}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -421,7 +421,7 @@ func TestClassifyPendingSetsSystemPrompt(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -442,7 +442,7 @@ func TestClassifyPendingFallsBackWithoutSystemPrompt(t *testing.T) {
 	llm := &mockLLM{responses: []string{classifyResp}}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified, got %d", result.Classified)
@@ -465,7 +465,7 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary, got %d", result.SummariesGenerated)
@@ -491,7 +491,7 @@ func TestGenerateSummariesLLMError(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.SummariesGenerated != 0 {
 		t.Fatalf("expected 0 summaries, got %d", result.SummariesGenerated)
@@ -512,7 +512,7 @@ func TestGenerateSummariesEmptyResponse(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.SummariesGenerated != 0 {
 		t.Fatalf("expected 0 (empty summary), got %d", result.SummariesGenerated)
@@ -538,7 +538,7 @@ func TestGenerateSummariesTruncation(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary, got %d", result.SummariesGenerated)
@@ -585,7 +585,7 @@ func TestGenerateSummariesSkipsChunks(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	// Chunk should be skipped, parent already has summary.
 	if result.LLMCalls != 0 {
@@ -614,7 +614,7 @@ func TestGenerateSummariesSkipsDeleted(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (deleted skipped), got %d", result.LLMCalls)
@@ -643,7 +643,7 @@ func TestGenerateSummariesSkipsExistingSummary(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (already has summary), got %d", result.LLMCalls)
@@ -665,7 +665,7 @@ func TestGenerateSummariesMaxCalls(t *testing.T) {
 
 	result := &AutonomousResult{}
 	// Limit to 2 calls.
-	generateSummaries(context.Background(), eng, llm, cfg, result, 2, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 2, 0, nil, false)
 
 	if result.LLMCalls != 2 {
 		t.Fatalf("expected 2 LLM calls (max), got %d", result.LLMCalls)
@@ -723,7 +723,7 @@ func TestClassifyPendingDryRun(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 20, nil, true)
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, true)
 
 	if result.Classified != 1 {
 		t.Fatalf("expected 1 classified in dry-run, got %d", result.Classified)
@@ -758,7 +758,7 @@ func TestGenerateSummariesDryRun(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, true)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, true)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary in dry-run, got %d", result.SummariesGenerated)
@@ -867,7 +867,7 @@ func TestDetectContradictions(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.ContradictionsDetected != 1 {
 		t.Fatalf("expected 1 contradiction detected, got %d", result.ContradictionsDetected)
@@ -907,7 +907,7 @@ func TestDetectContradictionsDryRun(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, true)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, true)
 
 	if result.ContradictionsDetected != 1 {
 		t.Fatalf("expected 1 contradiction in dry-run, got %d", result.ContradictionsDetected)
@@ -945,7 +945,7 @@ func TestDetectContradictionsNoMatch(t *testing.T) {
 	llm := &mockLLM{responses: []string{}}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	// No LLM calls should be made since records are too dissimilar.
 	if result.LLMCalls != 0 {
@@ -982,7 +982,7 @@ func TestDetectContradictionsWritesNoContradictionEdge(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.LLMCalls != 1 {
 		t.Fatalf("expected exactly 1 LLM call, got %d", result.LLMCalls)
@@ -1050,7 +1050,7 @@ func TestDetectContradictionsSkipsPairsWithNoContradictionEdge(t *testing.T) {
 	llm := &mockLLM{responses: []string{}} // must not be called
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.LLMCalls != 0 {
 		t.Fatalf("expected 0 LLM calls (pair has no_contradiction edge), got %d", result.LLMCalls)
@@ -1161,7 +1161,7 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.ContradictionsDetected != 1 {
 		t.Fatalf("expected 1 supersession, got %d", result.ContradictionsDetected)
@@ -1216,7 +1216,7 @@ func TestDetectContradictionsLLMError(t *testing.T) {
 	llm := &mockLLM{errors: []error{fmt.Errorf("LLM unavailable")}}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.Errors != 1 {
 		t.Fatalf("expected 1 error, got %d", result.Errors)
@@ -1332,7 +1332,7 @@ func TestClassifyPendingRoutesShortAndLongTiers(t *testing.T) {
 	llm := &mockLLM{responses: []string{resp, resp}}
 
 	result := &AutonomousResult{}
-	classifyPending(context.Background(), eng, llm, cfg, result, 10, nil, false)
+	classifyPending(context.Background(), eng, llm, cfg, result, 10, 0, nil, false)
 
 	if result.Classified != 2 {
 		t.Fatalf("expected 2 classified, got %d", result.Classified)
@@ -1539,7 +1539,7 @@ func TestDetectContradictionsBatched(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	// Exactly one LLM call for all pairs in the batch.
 	if result.LLMCalls != 1 {
@@ -1572,7 +1572,7 @@ func TestDetectContradictionsBatchedFallbackToSingleWhenSize1(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.ContradictionsDetected != 1 {
 		t.Fatalf("single-pair mode should yield 1 finding, got %d", result.ContradictionsDetected)
@@ -1797,7 +1797,7 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	generateSummaries(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.SummariesGenerated != 1 {
 		t.Fatalf("expected 1 summary generated for truncated section, got %d", result.SummariesGenerated)
@@ -1893,7 +1893,7 @@ func TestCreateConceptNodes(t *testing.T) {
 	}
 
 	result := &AutonomousResult{}
-	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, nil, false)
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
 	if result.ConceptsCreated != 1 {
 		t.Fatalf("expected 1 concept enriched, got %d", result.ConceptsCreated)

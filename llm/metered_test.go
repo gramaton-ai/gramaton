@@ -34,7 +34,7 @@ func (s *stubProvider) ProviderName() string { return "stub" }
 // cap and on every subsequent call until the cap was manually
 // inspected.
 func TestMeteredRefusesWhenCapped(t *testing.T) {
-	tracker := NewUsageTracker(t.TempDir(), 0, 1) // 1 call/session cap.
+	tracker := NewUsageTracker(t.TempDir(), 0, 1, 0) // 1 call/session cap.
 	stub := &stubProvider{response: "ok"}
 	m := NewMetered(stub, tracker, nil)
 
@@ -79,7 +79,7 @@ func TestMeteredRefusesWhenCapped(t *testing.T) {
 // "metered" string. This is what lets per-provider accounting work when
 // multiple backends are in play.
 func TestMeteredPropagatesProviderName(t *testing.T) {
-	tracker := NewUsageTracker(t.TempDir(), 0, 0)
+	tracker := NewUsageTracker(t.TempDir(), 0, 0, 0)
 	stub := &stubProvider{response: "ok"}
 	m := NewMetered(stub, tracker, nil)
 

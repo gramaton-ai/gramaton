@@ -97,6 +97,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	if maxCalls <= 0 {
 		maxCalls = 20
 	}
+	maxCostUSD := cfg.LLMCuration.MaxCostUSDPerRun // 0 = no cost cap
 
 	// Cycle-scoped usage recorder. All LLM calls in this cycle
 	// accumulate tokens + cost here; the "autonomous curation complete"
@@ -105,17 +106,17 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	cycleUsage := &telemetry.UsageRecorder{}
 	ctx = telemetry.WithUsageRecorder(ctx, cycleUsage)
 
-	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
 	runtime.Gosched() // yield so other goroutines can acquire the lock
-	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
 	runtime.Gosched()
-	enrichConceptSyntheses(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	enrichConceptSyntheses(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
 	runtime.Gosched()
-	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, logger, dryRun)
+	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
 
 	// Generate manifest qualitative summary if we have a manifest from
 	// the last deterministic run and haven't used too many LLM calls.
-	if !dryRun && result.LLMCalls < maxCalls {
+	if !dryRun && !cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
 		generateManifestSummary(ctx, e, llmProv, cfg, result, manifestCache, logger)
 	}
 
@@ -173,6 +174,44 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	return result
 }
 
+// cycleBudgetExceeded returns true when the cycle has hit either its
+// count cap (result.LLMCalls >= maxCalls) or its cost cap (accumulated
+// per-task token cost >= maxCostUSD). maxCostUSD <= 0 disables the
+// cost check; maxCalls is always enforced. Cost is estimated from the
+// cycle-scoped recorder in ctx using the pricing table and per-task
+// model lookup -- unknown models contribute 0, so the count cap is the
+// real backstop in that regime. Post-call check: the cycle may exceed
+// the cost cap by one in-flight call before the next iteration breaks.
+func cycleBudgetExceeded(ctx context.Context, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64) bool {
+	if result.LLMCalls >= maxCalls {
+		return true
+	}
+	if maxCostUSD > 0 {
+		if cost := cycleCostSoFar(ctx, cfg); cost >= maxCostUSD {
+			return true
+		}
+	}
+	return false
+}
+
+// cycleCostSoFar reads the per-task token counts from the cycle
+// recorder attached to ctx and sums llm.EstimateCost across them.
+// Returns 0 when no recorder is attached (shouldn't happen in the
+// normal autonomous path) or when all models are missing from the
+// pricing table.
+func cycleCostSoFar(ctx context.Context, cfg config.Config) float64 {
+	recorder := telemetry.RecorderFromContext(ctx)
+	if recorder == nil {
+		return 0
+	}
+	total := 0.0
+	for task, u := range recorder.ByTask() {
+		model := modelForTaskLabel(cfg, task)
+		total += llm.EstimateCost(model, u)
+	}
+	return total
+}
+
 // modelForTaskLabel maps the string task label emitted by curation
 // code back to a concrete model name via config. Labels that don't
 // correspond to a curation task (or the contradiction_batch synonym)
@@ -197,7 +236,7 @@ func modelForTaskLabel(cfg config.Config, task string) string {
 }
 
 // classifyPending classifies records with processing_status="captured".
-func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 
 	// Each tier (short / long) sets its own system prompt per pass.
@@ -261,7 +300,13 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	default:
 	}
 
-	// Cap batch to remaining LLM budget.
+	// Gate on count and cost caps before doing any work. The batch
+	// trim below still uses the count cap -- the cost cap only gates
+	// "should we run this phase at all", since mid-phase cost tracking
+	// would have to pre-estimate token counts.
+	if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
+		return
+	}
 	remaining := maxCalls - result.LLMCalls
 	if remaining <= 0 {
 		return
@@ -437,7 +482,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 }
 
 // generateSummaries adds summary_short to records that lack one.
-func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 
 	// Cache the invariant instructions on providers that support it so
@@ -513,7 +558,13 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 	e.RUnlock()
 
-	// Cap batch to remaining LLM budget.
+	// Gate on count and cost caps before doing any work. The batch
+	// trim below still uses the count cap -- the cost cap only gates
+	// "should we run this phase at all", since mid-phase cost tracking
+	// would have to pre-estimate token counts.
+	if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
+		return
+	}
 	remaining := maxCalls - result.LLMCalls
 	if remaining <= 0 {
 		return
@@ -771,9 +822,9 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 // and upgrades their template content with LLM-generated synthesis.
 // Prioritizes by access_count (most-accessed first). Batches multiple
 // concepts per LLM call for efficiency. Uses leftover LLM budget only.
-func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
-	if result.LLMCalls >= maxCalls {
+	if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
 		return
 	}
 
@@ -955,7 +1006,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 	// Execute batched LLM calls.
 	for _, batch := range batches {
-		if result.LLMCalls >= maxCalls {
+		if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
 			break
 		}
 
@@ -1148,7 +1199,7 @@ func conceptShortSummary(synthesis string, maxLen int) string {
 
 // detectContradictions finds records with moderate similarity and uses the
 // LLM to determine if they contradict or supersede each other.
-func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, logger *slog.Logger, dryRun bool) {
+func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 	maxChecks := cfg.LLMCuration.MaxContradictionChecks
 	if maxChecks <= 0 {
@@ -1308,7 +1359,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		}
 
 		for _, c := range candidates {
-			if result.LLMCalls >= maxCalls {
+			if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
 				break
 			}
 			select {
@@ -1359,7 +1410,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		}
 
 		for start := 0; start < len(candidates); start += batchSize {
-			if result.LLMCalls >= maxCalls {
+			if cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
 				break
 			}
 			select {

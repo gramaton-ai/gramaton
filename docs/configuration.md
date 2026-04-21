@@ -76,6 +76,11 @@ llm:
   region: ""                      # AWS region (Bedrock)
   aws_profile: ""                 # AWS named profile (Bedrock)
 
+  # Safety caps. 0 = disabled.
+  max_calls_per_day: 0            # hard cap on LLM calls per calendar day
+  max_calls_per_session: 0        # hard cap per server lifetime
+  max_cost_usd_per_day: 0         # USD cap per calendar day (see below)
+
   # Tiered models — used by llm_curation effort dials below.
   models:
     low:    claude-haiku-4-5
@@ -84,6 +89,17 @@ llm:
 ```
 
 The tiered `models` block lets `llm_curation` route different curation tasks at different cost/quality points (see `llm_curation` below). If you omit the `models` block, all tasks use `model`.
+
+### Cost and call caps
+
+Two independent safety nets, both checked before every LLM call:
+
+- **`max_calls_per_day`** / **`max_calls_per_session`** — simple count caps. Fire on exact hit. Use for "never exceed N calls" guarantees.
+- **`max_cost_usd_per_day`** — USD cap computed from reported token counts × pricing table (`llm/pricing.go`). Fires when accumulated cost exceeds the threshold.
+
+**Both live in config deliberately.** The USD cap is the primary signal for cost control, but it only works for models in the pricing table. Keep `max_calls_per_day` set as a backstop: if a new or custom model has no pricing entry, `EstimateCost` returns 0 and the USD cap will never trip. CLI providers (claude-cli, kiro-cli) don't report tokens yet, so they always read 0 — the count cap is the only safety net for those.
+
+When any cap trips, curation pauses and subsequent LLM calls return `llm.ErrCapped` until the daily boundary rolls over (automatic) or an operator manually unpauses.
 
 ## Logging
 
@@ -141,8 +157,8 @@ Controls the autonomous (LLM-requiring) phase of curation. Only runs if `llm:` i
 ```yaml
 llm_curation:
   batch_size: 10                        # records per LLM classification batch
-  max_calls_per_run: 20                 # max LLM calls per curation cycle
-  max_calls_per_session: 0              # 0 = unlimited; optional cap per server lifetime
+  max_calls_per_run: 20                 # max LLM calls per curation cycle (count cap)
+  max_cost_usd_per_run: 0               # USD cap per curation cycle (0 = disabled)
 
   # Contradiction detection.
   max_contradiction_checks: 5
@@ -176,6 +192,8 @@ llm_curation:
 ```
 
 The effort dials are the primary cost/quality knob. Short classification, summarization, and manifest rollup are Haiku-grade (clear-signal work, enum picks, distilled summaries). Contradiction detection, concept synthesis, and long-content classification benefit from Sonnet-grade reasoning. Opus is rarely needed — reserved for particularly nuanced tasks if you want to set one.
+
+`max_cost_usd_per_run` (per cycle) and `llm.max_cost_usd_per_day` (across the day) are independent — the per-cycle cap bounds a single cycle's damage, the per-day cap bounds the aggregate across many cycles. Both complement `max_calls_per_run` / `max_calls_per_day` rather than replacing them; see "Cost and call caps" under the LLM section above for why keeping the count caps set is important.
 
 ## Observe
 

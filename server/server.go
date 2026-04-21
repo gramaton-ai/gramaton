@@ -170,7 +170,12 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		logger = slog.Default()
 	}
 	engineCfg := engine.Config()
-	usageTracker := llm.NewUsageTracker(cfg.ConfigDir, engineCfg.LLM.MaxCallsPerDay, engineCfg.LLM.MaxCallsPerSession)
+	usageTracker := llm.NewUsageTracker(
+		cfg.ConfigDir,
+		engineCfg.LLM.MaxCallsPerDay,
+		engineCfg.LLM.MaxCallsPerSession,
+		engineCfg.LLM.MaxCostUSDPerDay,
+	)
 	s := &Server{
 		engine:       engine,
 		cfg:          cfg,

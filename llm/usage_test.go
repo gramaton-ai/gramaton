@@ -7,7 +7,7 @@ import (
 )
 
 func TestUsageTrackerRecord(t *testing.T) {
-	tracker := NewUsageTracker("", 0, 0)
+	tracker := NewUsageTracker("", 0, 0, 0)
 
 	tracker.Record(CallMetrics{
 		Provider:    "anthropic",
@@ -69,7 +69,7 @@ func TestUsageTrackerRecord(t *testing.T) {
 }
 
 func TestUsageTrackerDailyCap(t *testing.T) {
-	tracker := NewUsageTracker("", 3, 0) // 3 calls/day cap
+	tracker := NewUsageTracker("", 3, 0, 0) // 3 calls/day cap
 
 	for i := 0; i < 3; i++ {
 		paused, _ := tracker.IsPaused()
@@ -95,8 +95,45 @@ func TestUsageTrackerDailyCap(t *testing.T) {
 	}
 }
 
+// TestUsageTrackerDailyCostCap verifies the USD cost cap pauses when
+// accumulated today.CostUSD exceeds the threshold. Count caps still
+// serve as backstop for unknown-model cases where cost reads as 0.
+func TestUsageTrackerDailyCostCap(t *testing.T) {
+	// $1/day cap, no count caps.
+	tracker := NewUsageTracker("", 0, 0, 1.0)
+
+	// First call: $0.60 -- under cap.
+	tracker.Record(CallMetrics{Task: "classify", Success: true, CostUSD: 0.60})
+	if paused, _ := tracker.IsPaused(); paused {
+		t.Fatal("should not pause at $0.60 with $1 cap")
+	}
+
+	// Second call: cumulative $1.20 -- over cap.
+	tracker.Record(CallMetrics{Task: "classify", Success: true, CostUSD: 0.60})
+	paused, reason := tracker.IsPaused()
+	if !paused {
+		t.Fatal("should pause when today.CostUSD exceeds cap")
+	}
+	if reason == "" {
+		t.Fatal("pause reason should describe the cost cap")
+	}
+}
+
+// TestUsageTrackerCostCapZeroDisabled verifies maxCostUSDPerDay=0
+// leaves the cost cap disabled regardless of spend.
+func TestUsageTrackerCostCapZeroDisabled(t *testing.T) {
+	tracker := NewUsageTracker("", 0, 0, 0) // all caps off
+
+	for i := 0; i < 5; i++ {
+		tracker.Record(CallMetrics{Task: "classify", Success: true, CostUSD: 100.0})
+	}
+	if paused, _ := tracker.IsPaused(); paused {
+		t.Fatal("no caps set should never pause")
+	}
+}
+
 func TestUsageTrackerSessionCap(t *testing.T) {
-	tracker := NewUsageTracker("", 0, 2) // 2 calls/session cap
+	tracker := NewUsageTracker("", 0, 2, 0) // 2 calls/session cap
 
 	tracker.Record(CallMetrics{Task: "classify", Success: true})
 	paused, _ := tracker.IsPaused()
@@ -118,7 +155,7 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create tracker, record some usage, persist.
-	t1 := NewUsageTracker(dir, 0, 0)
+	t1 := NewUsageTracker(dir, 0, 0, 0)
 	t1.Record(CallMetrics{
 		Model:   "sonnet",
 		Task:    "classify",
@@ -142,7 +179,7 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	}
 
 	// Create new tracker from same dir -- should load persisted data.
-	t2 := NewUsageTracker(dir, 0, 0)
+	t2 := NewUsageTracker(dir, 0, 0, 0)
 	s := t2.Summary()
 
 	// Session should be fresh (0 calls).
@@ -163,7 +200,7 @@ func TestUsageTrackerPersistence(t *testing.T) {
 }
 
 func TestUsageTrackerDailyCapPct(t *testing.T) {
-	tracker := NewUsageTracker("", 100, 0)
+	tracker := NewUsageTracker("", 100, 0, 0)
 
 	if tracker.DailyCapPct() != 0 {
 		t.Fatal("should be 0% with no calls")
@@ -178,7 +215,7 @@ func TestUsageTrackerDailyCapPct(t *testing.T) {
 }
 
 func TestUsageTrackerNoCap(t *testing.T) {
-	tracker := NewUsageTracker("", 0, 0) // no caps
+	tracker := NewUsageTracker("", 0, 0, 0) // no caps
 
 	for i := 0; i < 1000; i++ {
 		tracker.Record(CallMetrics{Task: "classify", Success: true})

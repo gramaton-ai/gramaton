@@ -297,12 +297,23 @@ type LLMConfig struct {
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 
 	// MaxCallsPerDay caps total LLM calls per calendar day. 0 = no cap.
-	// Safety net against runaway cost.
+	// Safety net against runaway cost. Count-based; acts as backstop
+	// when MaxCostUSDPerDay can't compute a cost (unknown model in the
+	// pricing table) and cost therefore reads as 0.
 	MaxCallsPerDay int `yaml:"max_calls_per_day,omitempty"`
 
 	// MaxCallsPerSession caps LLM calls per server session (between
 	// starts). 0 = no cap.
 	MaxCallsPerSession int `yaml:"max_calls_per_session,omitempty"`
+
+	// MaxCostUSDPerDay caps total estimated LLM cost per calendar day
+	// in USD. 0 = no cap. Cost is estimated via llm.EstimateCost using
+	// the pricing table; providers or models missing from the table
+	// contribute 0 to this total (MaxCallsPerDay is the backstop for
+	// those). Complements MaxCallsPerDay rather than replacing it: a
+	// count cap is cheap insurance for any model the pricing table
+	// hasn't learned yet.
+	MaxCostUSDPerDay float64 `yaml:"max_cost_usd_per_day,omitempty"`
 
 	// RateLimitInterval is the minimum gap between successive LLM
 	// calls. 0 = no rate limit.
@@ -335,7 +346,19 @@ type LLMCurationConfig struct {
 
 	// MaxCallsPerRun is the hard cap on total LLM calls in one
 	// curation cycle. Protects against a runaway cycle burning budget.
+	// Acts as a backstop when MaxCostUSDPerRun can't compute a cost
+	// (unknown model in the pricing table) -- keep it set even when
+	// cost cap is enabled.
 	MaxCallsPerRun int `yaml:"max_calls_per_run"`
+
+	// MaxCostUSDPerRun caps estimated LLM cost per curation cycle in
+	// USD. 0 = no cost cap; MaxCallsPerRun still applies. Cost is
+	// estimated via llm.EstimateCost from per-task token counts and
+	// the pricing table; unknown models contribute 0. A cost cap
+	// trips when at least one call has landed for a cycle -- the
+	// check is post-call, so the cycle may exceed the cap by one
+	// call's worth of cost before breaking.
+	MaxCostUSDPerRun float64 `yaml:"max_cost_usd_per_run,omitempty"`
 
 	// MaxContradictionChecks is the maximum number of candidate pairs
 	// examined for contradictions per cycle. With

@@ -58,6 +58,7 @@ type UsageTracker struct {
 	// Cap enforcement.
 	maxCallsPerDay     int
 	maxCallsPerSession int
+	maxCostUSDPerDay   float64
 	paused             bool
 	pauseReason        string
 
@@ -66,7 +67,8 @@ type UsageTracker struct {
 }
 
 // NewUsageTracker creates a tracker, loading lifetime stats from disk.
-func NewUsageTracker(dataDir string, maxPerDay, maxPerSession int) *UsageTracker {
+// maxCostUSDPerDay = 0 disables the cost cap (count caps still apply).
+func NewUsageTracker(dataDir string, maxPerDay, maxPerSession int, maxCostUSDPerDay float64) *UsageTracker {
 	t := &UsageTracker{
 		session: UsageStats{
 			StartedAt: time.Now().UTC(),
@@ -85,6 +87,7 @@ func NewUsageTracker(dataDir string, maxPerDay, maxPerSession int) *UsageTracker
 		},
 		maxCallsPerDay:     maxPerDay,
 		maxCallsPerSession: maxPerSession,
+		maxCostUSDPerDay:   maxCostUSDPerDay,
 		dataDir:            dataDir,
 	}
 	t.loadFromDisk()
@@ -116,7 +119,9 @@ func (t *UsageTracker) Record(m CallMetrics) {
 	t.addToStats(&t.today, m)
 	t.addToStats(&t.lifetime, m)
 
-	// Check caps.
+	// Check caps. Count caps fire on exact-hit; the cost cap is
+	// inherently approximate (depends on pricing data and post-call
+	// reporting) so it fires on any exceedance.
 	if t.maxCallsPerSession > 0 && t.session.Calls >= t.maxCallsPerSession {
 		t.paused = true
 		t.pauseReason = fmt.Sprintf("session LLM call cap reached (%d/%d)", t.session.Calls, t.maxCallsPerSession)
@@ -124,6 +129,10 @@ func (t *UsageTracker) Record(m CallMetrics) {
 	if t.maxCallsPerDay > 0 && t.today.Calls >= t.maxCallsPerDay {
 		t.paused = true
 		t.pauseReason = fmt.Sprintf("daily LLM call cap reached (%d/%d)", t.today.Calls, t.maxCallsPerDay)
+	}
+	if t.maxCostUSDPerDay > 0 && t.today.CostUSD >= t.maxCostUSDPerDay {
+		t.paused = true
+		t.pauseReason = fmt.Sprintf("daily LLM cost cap reached ($%.4f/$%.4f)", t.today.CostUSD, t.maxCostUSDPerDay)
 	}
 }
 

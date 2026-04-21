@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **USD-denominated LLM cost caps (T-07 step 2)** -- two new config
+  fields: `llm_curation.max_cost_usd_per_run` bounds a single curation
+  cycle, `llm.max_cost_usd_per_day` bounds the daily aggregate. Both
+  default to 0 (disabled) and complement the existing count caps
+  rather than replacing them. Cost is estimated via
+  `llm.EstimateCost` using per-task token counts from the cycle
+  recorder plus the per-model pricing table. Motivated by the
+  contradiction-drain bleed (~950 Sonnet calls at ~$0.018/call stayed
+  comfortably within count budget; a USD cap catches that class of
+  incident directly). Unknown models contribute 0 to the cost total,
+  so keeping count caps set is still recommended -- documented in
+  `docs/configuration.md` under "Cost and call caps" and design
+  decision D39.
+
 ### Changed
 
 - **Per-provider LLM telemetry (T-07 steps 1+3)** -- token usage is now

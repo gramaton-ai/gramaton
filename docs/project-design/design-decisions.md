@@ -4,6 +4,26 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
+### D39: Cost Caps Supplement Count Caps, Not Replace Them
+
+**Decision:** Gramaton gains two USD-denominated safety caps on LLM spend: `llm_curation.max_cost_usd_per_run` (per curation cycle) and `llm.max_cost_usd_per_day` (across the day). Both default to 0 (disabled). They coexist with the existing `max_calls_per_run` / `max_calls_per_day` / `max_calls_per_session` count caps rather than replacing them. When a cost cap is enabled and tripped, curation breaks out of the current cycle; the daily cap pauses `llm.Metered` so all subsequent LLM calls return `ErrCapped` until the daily boundary rolls over. Cost is estimated via `llm.EstimateCost` using the per-task token counts reported by providers plus the per-model pricing table in `llm/pricing.go`.
+
+**Why:** Count caps were the only safety net when D38 landed, and they had a visible failure mode: the contradiction-detection pool-drain bug burned 950 Sonnet calls (~$17) at a steady ~60 calls/hour while staying comfortably within the default 20 calls/cycle count cap — because cycles reset. What matters for a cost incident isn't "how many calls" but "how many dollars." A USD cap addresses that directly.
+
+Three options were considered:
+
+(a) **Replace count caps with cost caps.** Simpler config surface; one knob per scope. Rejected because it requires every model to have a pricing entry — the pricing table covers anthropic (claude 3/4 tiers) and openai (gpt-4o, gpt-4o-mini), but CLI-shim providers (`claudecli`, `kirocli`) currently report 0 tokens, and any user-added custom model or future Bedrock Titan/Llama entry would silently evade the cap. Cost-only means the safety net has holes proportional to how many models are missing from the table.
+
+(b) **Cost cap on a new `LimitsConfig` field; count cap stays on `LLMConfig`.** The instinct was that dollars feel "limits-like" and belong with `max_json_size`. Rejected because symmetry matters more than category: `max_calls_per_day` already lives on `LLMConfig` for good reason (it's an LLM-specific cap, not a request-body cap), and splitting count cap from cost cap by section forces operators to look in two places to reason about spend.
+
+(c) **Cost cap as a supplement: new fields next to the existing count caps, same scope units.** Picked. `LLMCurationConfig.MaxCostUSDPerRun` sits next to `MaxCallsPerRun`; `LLMConfig.MaxCostUSDPerDay` sits next to `MaxCallsPerDay`. Both operate post-call — they read accumulated cost after each completion and break on the next iteration. Unknown-model cost reads as 0, so in that regime the count cap is the real backstop.
+
+The two caps answer different questions: "have we used too many calls" (cheap, always-correct) vs "have we spent too much" (accurate when pricing data is available). Keeping both means operators can tune the cost cap as the primary knob and leave the count cap as the "just in case" fallback. Docs explicitly tell operators to keep count caps set when adding a cost cap — the combination is much safer than either alone.
+
+The per-run cost cap is a post-call check: the cycle may exceed the cap by one in-flight call's worth of cost before the next iteration breaks, since the recorder only updates after the provider response parses. Acceptable for the intended use (bound damage, not guarantee dollar-precision).
+
+---
+
 ### D38: Persist Contradiction-Check Negative Results as `no_contradiction` Edges
 
 **Decision:** The autonomous contradiction-detection pass (`curation/autonomous.go` `detectContradictions`) now writes a `no_contradiction` edge with a `checked_at` timestamp property on every pair the LLM evaluated and reported as neither contradicting nor superseding. The read-phase `hasEdge` guard (which was already treating any inter-pair edge as "already handled") now also skips these marks, which drains the candidate pool across cycles on any store where the LLM finds no contradictions. Positive findings continue to produce `contradicts` or `supersedes` edges as before. No config knob for a recheck-interval TTL in this change — the `checked_at` property is recorded so a future TTL can be added without migration, but day-one behavior is "once checked, permanently marked."
