@@ -13,6 +13,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/llm/httpretry"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
@@ -180,15 +181,18 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 	}
 
 	url := c.baseURL + "/v1/messages"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("anthropic: create request: %w", err)
+	buildReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", apiVersion)
+		return req, nil
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.apiKey)
-	httpReq.Header.Set("anthropic-version", apiVersion)
 
-	resp, err := c.client.Do(httpReq)
+	resp, err := httpretry.DoWithRetry(ctx, c.client, httpretry.DefaultRetryConfig(), buildReq)
 	if err != nil {
 		return "", fmt.Errorf("anthropic: request failed: %w", err)
 	}

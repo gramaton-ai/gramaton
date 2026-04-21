@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **HTTP LLM provider retry on 429 / 5xx (P1-23)** -- new
+  `llm/httpretry` package implements exponential backoff + decorrelated
+  jitter with Retry-After parsing (seconds or HTTP-date). Wired into
+  `llm/anthropic` and `llm/openai` via `DoWithRetry`, which handles
+  the buildReq/client.Do loop and closes intermediate response bodies
+  before retrying. Default policy: 4 attempts, 500ms -> 1s -> 2s -> 4s
+  with jitter, 30s cap. Bedrock uses the AWS SDK's retryer bumped
+  from MaxAttempts=3 to 5 with a 30s max backoff in
+  `internal/awscfg/awscfg.go`. A single 429 wave from a provider no
+  longer fails arbitrary classification records in a curation batch.
+  Context cancellation breaks the retry loop promptly. Non-retryable
+  status codes (4xx other than 429) return to the caller after a
+  single attempt.
+- **`Engine.TryRLock` + writeJSON/writeJSONLocked collapse (P1-45)**
+  -- `writeJSONLocked` is gone. `writeJSON` is now safe to call from
+  any handler regardless of engine lock state: `curationStatus` uses
+  an opportunistic `engine.TryRLock` to refresh the cache when
+  possible, falling back to the stale (possibly zero) cached value
+  rather than deadlocking when a caller holds the write lock. Closes
+  the RWMutex-not-reentrant footgun and finishes T-06 step 4.
 - **`Engine.WithWriteBatch` helper (T-06)** -- consolidates the
   write-phase recipe (Lock -> bbolt index batch -> Save -> Unlock)
   into a single call so curation and bulk-insert paths stop drifting

@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
@@ -40,6 +41,21 @@ func Load(ctx context.Context, region, profile, accessKeyIDEnv, secretKeyEnv str
 	// default client has no timeout, which can hang indefinitely.
 	opts = append(opts, awsconfig.WithHTTPClient(&http.Client{
 		Timeout: 120 * time.Second,
+	}))
+
+	// Override the default retryer (MaxAttempts=3) with a more
+	// aggressive policy: 5 attempts with exponential backoff +
+	// jitter and a longer max backoff. Bedrock Converse 429s are
+	// routine under curation load; the default 3 attempts can
+	// lose classification work on a contentious hour. The SDK
+	// honors Retry-After and handles ThrottlingException /
+	// RequestLimitExceeded automatically within this budget.
+	// (P1-23.)
+	opts = append(opts, awsconfig.WithRetryer(func() aws.Retryer {
+		return retry.NewStandard(func(o *retry.StandardOptions) {
+			o.MaxAttempts = 5
+			o.MaxBackoff = 30 * time.Second
+		})
 	}))
 
 	return awsconfig.LoadDefaultConfig(ctx, opts...)

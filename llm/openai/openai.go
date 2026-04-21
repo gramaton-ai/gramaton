@@ -12,6 +12,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/llm/httpretry"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
@@ -109,16 +110,19 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 
 	url := c.baseURL + "/v1/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("openai llm: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	buildReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("openai llm: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		return req, nil
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := httpretry.DoWithRetry(ctx, c.client, httpretry.DefaultRetryConfig(), buildReq)
 	if err != nil {
 		return "", fmt.Errorf("openai llm: request failed: %w", err)
 	}
