@@ -29,19 +29,32 @@ var (
 // An LRU cache holds recently accessed edges to avoid repeated
 // bbolt reads for hot paths (graph traversal neighborhoods).
 type BboltEdgeStore struct {
-	db    *bolt.DB
-	cache *edgeLRU
-	batch *bolt.Tx // non-nil during BatchIndexWrites
+	db      *bolt.DB
+	cache   *edgeLRU
+	batch   *bolt.Tx    // non-nil during BatchIndexWrites
+	batchSt *edgeBatch  // non-nil during BatchIndexWrites
+}
 
-	// In-batch adjacency cache (P1-27). addToEdgeIDList decoded,
-	// linear-scanned, sorted, and re-encoded the full edge ID list
-	// for each single-item write -- O(K log K) per edge with K
-	// being the node's current degree. Bulk-loading a node with K
-	// edges was O(K^2 log K). These maps buffer decoded adjacency
-	// lists per bucket; SetBatch(nil) flushes each dirty key once.
-	batchAdjOut map[string][]string
-	batchAdjIn  map[string][]string
-	batchAdjTyp map[string][]string
+// edgeBatch bundles the in-batch adjacency cache (P1-27).
+// addToEdgeIDList decoded, linear-scanned, sorted, and re-encoded the
+// full edge ID list for each single-item write -- O(K log K) per edge
+// with K being the node's current degree. Bulk-loading a node with K
+// edges was O(K^2 log K). These maps buffer decoded adjacency lists
+// per bucket; flushBatch flushes each dirty key once. (T-06 stage 1:
+// hoisted out of BboltEdgeStore so the batch state can be threaded as
+// a parameter rather than stashed on the store struct in later stages.)
+type edgeBatch struct {
+	adjOut map[string][]string
+	adjIn  map[string][]string
+	adjTyp map[string][]string
+}
+
+func newEdgeBatch() *edgeBatch {
+	return &edgeBatch{
+		adjOut: make(map[string][]string),
+		adjIn:  make(map[string][]string),
+		adjTyp: make(map[string][]string),
+	}
 }
 
 // DefaultEdgeCacheCapacity is the default max edges in the LRU cache.
@@ -81,13 +94,11 @@ func (s *BboltEdgeStore) SetBatch(tx *bolt.Tx) {
 		return
 	}
 	s.batch = tx
-	s.batchAdjOut = make(map[string][]string)
-	s.batchAdjIn = make(map[string][]string)
-	s.batchAdjTyp = make(map[string][]string)
+	s.batchSt = newEdgeBatch()
 }
 
 func (s *BboltEdgeStore) flushBatch() {
-	if s.batch != nil {
+	if s.batch != nil && s.batchSt != nil {
 		flushAdj := func(bucket []byte, cache map[string][]string) {
 			b := s.batch.Bucket(bucket)
 			for key, ids := range cache {
@@ -99,26 +110,27 @@ func (s *BboltEdgeStore) flushBatch() {
 				}
 			}
 		}
-		flushAdj(adjOutBucket, s.batchAdjOut)
-		flushAdj(adjInBucket, s.batchAdjIn)
-		flushAdj(adjTypBucket, s.batchAdjTyp)
+		flushAdj(adjOutBucket, s.batchSt.adjOut)
+		flushAdj(adjInBucket, s.batchSt.adjIn)
+		flushAdj(adjTypBucket, s.batchSt.adjTyp)
 	}
 	s.batch = nil
-	s.batchAdjOut = nil
-	s.batchAdjIn = nil
-	s.batchAdjTyp = nil
+	s.batchSt = nil
 }
 
 // pickBatchCache returns the batch map for a given adjacency bucket,
 // or nil if not batching.
 func (s *BboltEdgeStore) pickBatchCache(bucket []byte) map[string][]string {
+	if s.batchSt == nil {
+		return nil
+	}
 	switch string(bucket) {
 	case string(adjOutBucket):
-		return s.batchAdjOut
+		return s.batchSt.adjOut
 	case string(adjInBucket):
-		return s.batchAdjIn
+		return s.batchSt.adjIn
 	case string(adjTypBucket):
-		return s.batchAdjTyp
+		return s.batchSt.adjTyp
 	}
 	return nil
 }
