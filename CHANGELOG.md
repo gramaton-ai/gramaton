@@ -249,6 +249,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`README.md` rewritten for the post-T-02 surface.** Added a "Why
+  Gramaton" section motivating the project against built-in agent
+  memory and generic vector stores (without naming them) and listing
+  the concrete questions the system is designed to answer. Added a
+  new "Three Ways to Store Knowledge" section covering the Memory /
+  Sessions / Collections split with the decision rule ("will missing
+  one item be a failure?"). Rewrote the MCP tool table as five
+  grouped clusters (Records, Search & discovery, Sessions,
+  Collections, History & admin) matching the 38 tools actually
+  registered by `server/mcp.go`. Dropped the stale `gramaton_observe`
+  entry (the tool is no longer registered). Corrected the embedding
+  provider list to include pure-Go BERT (`embed/bert/`). Corrected
+  the feature bullet on concept emergence to reflect that candidate
+  *promotion* is LLM-gated while candidate *detection* and existing-
+  concept enrichment are always-on. Fixed the architecture diagram
+  to show the `api/` canonical operations layer between transports
+  and the engine. Added the named-store feature bullet. Added a
+  CLI-reference entry for `gramaton mcp` (stdio proxy) and a
+  Documentation-table entry for `CONTRIBUTING.md` and
+  `docs/benchmarks.md`. Every feature claim verified against current
+  code before landing. Phase 2 of the documentation consolidation
+  tracked in `gramaton-inspection/documentation-plan.md`.
 - **`gramaton_search` tool description rewritten with trigger-led framing.**
   The prior description was mechanical (`"Search Memory and Sessions.
   Returns results ranked by composite score..."`) and said nothing about

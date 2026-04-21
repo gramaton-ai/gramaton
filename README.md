@@ -8,7 +8,36 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
-**Gramaton is a knowledge store for AI agents.** It stores facts, decisions, and context in a versioned property graph with semantic search, epistemic metadata, and automatic curation. Agents capture knowledge during their sessions and retrieve it later -- across conversations, across tools, across time.
+**Gramaton is a local, versioned knowledge store for AI agents.** It stores facts, decisions, context, and tasks in a property graph with semantic search, epistemic metadata, and automatic curation. Agents capture knowledge during their sessions and retrieve it later — across conversations, across tools, across time.
+
+## Why Gramaton
+
+AI tools ship with built-in memory, and the ecosystem has plenty of general-purpose vector stores. Gramaton exists because both shapes of tool struggle with the same set of questions:
+
+- *"What did we decide about X — and has that been superseded?"*
+- *"What's still open on project Y?"* (where missing one item is a failure)
+- *"How has our thinking on this evolved since March?"*
+- *"What was the context around this decision — who, what prompted it, what else relates?"*
+- *"What do I know about this domain that might now be stale?"*
+- *"Give me everything connected to this idea, two hops out."*
+
+Built-in agent memory tends to be opaque, per-vendor, and hard to audit or export. Generic vector stores treat a superseded decision from two years ago the same as yesterday's, and have no way to keep a task backlog distinct from a pile of design notes. Autocapture systems often collect so aggressively that the signal drowns in noise.
+
+Gramaton's differences:
+
+- **Epistemic metadata on every record.** Confidence, temporality (ephemeral / temporal / durable / immutable), epistemic status (well_established → refuted), knowledge type. A superseded decision is marked historical; it doesn't compete with its replacement in search results. A low-confidence speculation is surfaced with that caveat attached.
+- **Three retrieval shapes, not one.** Ranked fuzzy retrieval for knowledge, automatic extraction from conversation, and exhaustive-every-item collections for tasks. The right guarantee for the right question. See [Three Ways to Store Knowledge](#three-ways-to-store-knowledge) below.
+- **Versioned by design.** Every mutation is a commit. Branch, diff, log, revert. You can ask *what changed*, not just *what is*.
+- **A graph, not a list.** Records are nodes connected by typed, weighted edges. Hybrid search (vector + BM25) ranks candidates, then traversal fans out to related knowledge. Recurring keywords graduate to concept nodes that act as hubs.
+- **Local and portable.** A single Go binary. State lives in a directory on your filesystem. Exportable, inspectable, moveable. No managed service, no vendor lock-in, no cloud dependency.
+- **Cross-tool.** The MCP interface means the same store serves Claude Code, Kiro, custom agents, or anything else that speaks MCP. Your knowledge survives tool changes.
+- **Automatic curation.** The store actively maintains itself — stale records expire, orphans get linked, duplicates get consolidated, concept candidates get detected. With an LLM provider configured, classification and contradiction-detection run too.
+
+What Gramaton isn't:
+
+- **Not a chat-replayable memory.** It's selective by design — knowledge worth keeping, not every word spoken.
+- **Not a multi-user service.** v0.1 is single-user and local. Auth and tenancy are future work.
+- **Not a managed RAG solution.** It's infrastructure you run, not a hosted API.
 
 ## Quick Start
 
@@ -36,99 +65,182 @@ Then add Gramaton to your MCP client (Claude Code, Kiro, etc.):
 }
 ```
 
-Your agent now has tools like `gramaton_capture`, `gramaton_search`, `gramaton_inspect`, and `gramaton_explore`. A CLI is also available for inspection and debugging.
+Your agent now has access to the full Gramaton MCP toolset — capture and search for semantic knowledge, session extraction for automatic capture, collections for structured items, and versioning tools for history. See [MCP Tools](#mcp-tools) below.
+
+A CLI mirrors the MCP surface for inspection, scripting, and debugging.
 
 ## Who This Is For
 
 Gramaton is for anyone who works with AI tools and wants them to remember things properly.
 
-A researcher tracking findings across hundreds of papers. A project manager whose AI assistant should know what was decided last quarter and why. A developer whose coding agent keeps forgetting architecture decisions. A writer building a novel with an AI collaborator that needs to keep characters and plot points straight. Anyone who has ever wished their AI tools had a better memory.
+A researcher tracking findings across hundreds of papers. A project manager whose AI assistant should know what was decided last quarter and why. A developer whose coding agent keeps forgetting architecture decisions. A writer building a novel with an AI collaborator that needs to keep characters and plot points straight. Anyone who has ever wished their AI tools had a better memory they could actually control.
 
-Gramaton gives AI agents a structured, searchable, versioned place to store and retrieve knowledge -- so context survives across sessions, across tools, and across time.
+## Three Ways to Store Knowledge
 
-**What it is:** A knowledge graph with versioning, metadata-aware search, and background curation. A single binary with no infrastructure to manage.
+Gramaton isn't one bucket of retrieved-by-similarity notes. It offers three distinct storage paths with different retrieval guarantees. Matching the path to the question is the most important integration decision.
+
+### Memory — fuzzy, semantic, ranked
+
+For knowledge that benefits from best-match retrieval. Decisions, design rationale, research findings, user preferences, domain context. Captured explicitly via `gramaton_capture`, retrieved via `gramaton_search`. Results are ranked by composite score combining vector similarity, BM25 keywords, freshness (decayed by temporality), access-based activation, and confidence. A low-relevance miss is acceptable; the goal is surfacing the best few results, not all of them.
+
+### Sessions — automatic extraction from conversations
+
+For knowledge that emerges during conversation without the agent being asked. Two-phase: `gramaton_session_prepare` returns extraction instructions; `gramaton_session_commit` submits the extracted segments. Each segment becomes a Session record (BM25-indexed, preserves the conversational thread) and, by default, a linked Memory record (vector-embedded for semantic search). Exploration, open questions, and dead ends can stay Session-only with `promote_to_memory: false` — searchable without polluting Memory's vector space.
+
+### Collections — structured, exhaustive
+
+For things where missing one item is a failure: tasks, TODOs, action items, checklists, sprint backlogs, reading lists. Collections are named containers with optional schemas that enforce field types. `gramaton_collection_items` returns every item — no ranking, no top-N cutoff, no relevance tradeoff. Items are also graph nodes and can be linked to knowledge records.
+
+### Decision rule
+
+> *Will missing one item be a failure?*
+> **Yes** → Collection. **No** → Memory (direct capture, or via session extraction).
+
+The [Integrator Guide](docs/integrator-guide.md) has the full treatment.
 
 ## How It Works
 
-Records are nodes in a property graph. Each carries metadata: confidence, temporality (ephemeral, temporal, durable, immutable), epistemic status, knowledge type, and provenance. Relationships are typed, weighted edges. Every mutation is a versioned commit with full history.
+Records are nodes in a property graph. Each carries typed properties and metadata: confidence, temporality, epistemic status, knowledge type, provenance, timestamps. Relationships are typed, weighted edges. Every mutation is a versioned commit with full history.
 
-Search combines vector similarity and BM25 keywords (RRF fusion), then scores results using four signals: similarity, freshness, ACT-R activation (usage-based), and confidence. Metadata filters narrow results before ranking -- a superseded decision doesn't compete with its replacement.
+Search combines vector similarity and BM25 keywords fused via Reciprocal Rank Fusion, then scores results with a composite model (similarity, freshness, activation, confidence). Metadata filters narrow candidates *before* ranking — a superseded decision doesn't get to compete with its replacement. Graph traversal from top results surfaces related knowledge the query text didn't directly mention.
 
-Background curation runs automatically: expiring stale records, linking orphans, detecting duplicates, and (with an LLM provider configured) classifying unprocessed records, generating summaries, and finding contradictions.
+Background curation runs on a timer inside the server:
+
+- **Always on:** lifecycle transitions (expire stale ephemeral/temporal records), orphan linking, duplicate consolidation, concept candidate detection, enrichment of existing concept nodes.
+- **With an LLM provider configured:** classify pending records, generate missing summaries, detect semantic contradictions between similar records, synthesize a qualitative store manifest.
 
 ```
-Agent ──► CLI / MCP / HTTP ──► Server ──► Graph Engine
-                                            ├── Vector Index
-                                            ├── BM25 Index
-                                            ├── Property Index
-                                            └── Prolly Tree (storage)
+   Agent
+     │
+     │  MCP  /  HTTP  /  CLI
+     ▼
+┌────────────────────────┐
+│  Server transports     │   bindings + MCP handlers + curation runner
+└───────────┬────────────┘
+            │
+┌───────────┴────────────┐
+│   api (canonical ops)  │   one definition per operation; locking discipline
+└───────────┬────────────┘
+            │
+┌───────────┴────────────┐
+│ Engine (composition)   │   graph + indexes + embedder + LLM
+└───────────┬────────────┘
+            │
+  ┌─────────┼─────────┐
+  ▼         ▼         ▼
+┌─────┐  ┌──────────┐  ┌────────┐
+│Graph│  │ Indexes  │  │Storage │
+│     │  │ BM25     │  │ prolly │
+│     │  │ HNSW/Flat│  │ tree   │
+│     │  │ Property │  │        │
+└─────┘  └──────────┘  └────────┘
 ```
+
+For the full layered package map, lock discipline, and data flow, see [Architecture](docs/architecture.md).
 
 ## Features
 
-- **Epistemic metadata** -- confidence, temporality, knowledge type, epistemic status on every record
-- **Hybrid search** -- vector similarity + BM25 keyword search, fused with RRF
-- **Versioned graph** -- branch, diff, merge, revert. Full commit history.
-- **Concept emergence** -- recurring keywords graduate to concept nodes that connect related knowledge
-- **Automatic curation** -- lifecycle management, orphan linking, dedup, optional LLM classification
-- **Multiple providers** -- Ollama (local), OpenAI-compatible, AWS Bedrock for embeddings and LLM
+- **Epistemic metadata** — confidence, temporality, knowledge type, epistemic status, importance on every record
+- **Hybrid search** — vector similarity (HNSW at scale, flat at small candidate sets) + BM25 keyword search, fused with RRF
+- **Versioned graph** — branch, diff, merge, revert. Full commit history. Auditable.
+- **Three storage paths** — Memory (fuzzy), Sessions (auto-extract), Collections (exhaustive)
+- **Concept detection and promotion** — recurring keywords are detected as concept candidates; with an LLM provider configured, candidates are promoted to concept nodes that link related knowledge across topics
+- **Automatic curation** — lifecycle management, orphan linking, dedup, concept candidate detection, optional LLM classification and contradiction detection
+- **Auto-supersession** — captures that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge
+- **Named stores** — run multiple isolated knowledge bases from the same binary (personal store, benchmark store, per-project store)
+- **Multiple providers** — Ollama (local, default), pure-Go BERT (local, no external runtime), OpenAI-compatible, and AWS Bedrock for embeddings; Anthropic, OpenAI-compatible, and AWS Bedrock for LLM
 
 ## MCP Tools
 
-Gramaton's primary interface is MCP. Agents interact through structured tools.
+Gramaton's primary interface is MCP. The 38 tools register into clusters matched to the three storage paths plus versioning and admin. For live descriptions and schemas, call `gramaton_guide(topic=...)` from any MCP-aware agent.
+
+### Records (Memory)
+
+| Tool | What it does |
+|------|-------------|
+| `gramaton_capture` | Store a knowledge record with epistemic metadata |
+| `gramaton_inspect` | Full content, metadata, and one-hop related edges for a record |
+| `gramaton_update` | Modify properties on an existing record |
+| `gramaton_classify` | Assign or update classification metadata on a pending record |
+| `gramaton_resolve` | Mark a record as resolved (completed / superseded / abandoned / obsolete) |
+| `gramaton_link` / `gramaton_unlink` | Manage typed, weighted edges between records |
+| `gramaton_history` | Per-record change history |
+
+### Search & discovery
 
 | Tool | What it does |
 |------|-------------|
 | `gramaton_search` | Hybrid vector + keyword search with metadata filtering |
-| `gramaton_capture` | Store a knowledge record |
-| `gramaton_inspect` | Full content, metadata, related edges |
-| `gramaton_explore` | Graph traversal from a node |
-| `gramaton_observe` | Extract knowledge from conversation context |
-| `gramaton_update` | Modify record properties |
-| `gramaton_classify` | Classify a pending record with metadata |
-| `gramaton_resolve` | Mark as resolved (completed, superseded, abandoned) |
-| `gramaton_link` / `gramaton_unlink` | Manage edges between records |
+| `gramaton_explore` | Graph traversal from a node with edge-type and weight filters |
 | `gramaton_pending` | List records awaiting classification |
-| `gramaton_duplicates` | Find near-duplicate records |
-| `gramaton_stats` | Aggregate statistics |
-| `gramaton_curation` | View curation status, trigger, or dry-run |
-| `gramaton_branch` | Branch management (create, checkout, merge) |
-| `gramaton_diff` / `gramaton_log` | Version history and diffs |
-| `gramaton_reembed` | Re-embed records after model change |
-| `gramaton_backup` | Create a backup archive |
+| `gramaton_duplicates` | Find near-duplicate records by vector similarity |
+| `gramaton_stats` | Aggregate statistics over the store |
+| `gramaton_status` | Server health, curation state, embedding coverage |
+
+### Sessions (automatic extraction)
+
+| Tool | What it does |
+|------|-------------|
+| `gramaton_session_start` | Begin a conversation session bound to a client |
+| `gramaton_session_get` | Fetch current session state (segments committed so far) |
+| `gramaton_session_prepare` | Get extraction instructions; must be called before commit |
+| `gramaton_session_commit` | Submit extracted knowledge segments — creates Session records and (by default) linked Memory records |
+
+### Collections (structured, exhaustive)
+
+Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`, `items`, `add`, `add_batch`, `update`, `move`, `remove`, `rename`, `delete`, `schema`, `migrate`. Collections support optional schemas with typed, required fields; items are graph nodes and can be linked to knowledge records. See the [Integrator Guide](docs/integrator-guide.md) for the full tool reference.
+
+### History & admin
+
+| Tool | What it does |
+|------|-------------|
+| `gramaton_log` | Commit log or per-record change log |
+| `gramaton_diff` | Structural diff between two commits or branches |
+| `gramaton_branch` | Create / list / checkout / merge / discard branches |
+| `gramaton_backup` | Create a backup archive of the store |
+| `gramaton_curation` | View curation status, trigger a sweep, or dry-run |
+| `gramaton_reembed` | Re-embed records after an embedding model change |
+| `gramaton_guide` | Live topic-addressable reference (capture, search, sessions, collections, metadata, curation) |
 
 Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
 
 <details>
 <summary><strong>CLI Reference</strong></summary>
 
-A CLI mirrors every MCP tool for inspection, debugging, and scripting.
+A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curated subset:
 
 | Command | Description |
 |---------|-------------|
+| `gramaton init` | First-run setup — detect Ollama, pull embedding model, start server |
+| `gramaton serve` | Run the server in the foreground (otherwise auto-started on first use) |
+| `gramaton status` | Server and store health |
+| `gramaton store <subcmd>` | Manage named stores (create, list, delete) |
 | `gramaton search <query> [flags]` | Search with metadata filtering |
 | `gramaton inspect <id>` | Full record details |
 | `gramaton explore <id> [--depth N]` | Graph traversal |
 | `gramaton capture` | Store a record (JSON on stdin) |
 | `gramaton classify <id>` | Classify a pending record |
-| `gramaton update <id>` | Modify properties or create edges |
 | `gramaton resolve <id>` | Mark as resolved |
+| `gramaton update <id>` | Modify properties or edges |
 | `gramaton delete <id> --reason "..."` | Soft delete |
+| `gramaton session <subcmd>` | Session management |
 | `gramaton ingest <files>` | Bulk-load text files |
 | `gramaton log [--last N]` | Commit history |
-| `gramaton diff [ref1..ref2]` | Structural diff between commits |
-| `gramaton branch create/list/checkout/merge/discard` | Branch management |
+| `gramaton diff [ref1..ref2]` | Structural diff |
+| `gramaton branch <subcmd>` | Branch management |
 | `gramaton revert <commit>` | Rollback to a prior commit |
-| `gramaton backup` / `gramaton restore` | Backup and restore |
 | `gramaton export` / `gramaton import` | Export and import records |
 | `gramaton reembed [--batch N]` | Re-embed after model change |
+| `gramaton mcp` | Run as an MCP stdio proxy to the HTTP server |
+
+Run `gramaton <command> --help` for flags.
 
 </details>
 
 <details>
 <summary><strong>Configuration</strong></summary>
 
-Config lives at `~/.gramaton/config.yaml`. All fields have sensible defaults.
+Config lives at `~/.gramaton/config.yaml`. All fields have sensible defaults — an empty or missing config file is valid.
 
 ```yaml
 # Minimal config -- local embeddings
@@ -142,7 +254,10 @@ llm:
   api_key_env: ANTHROPIC_API_KEY
 ```
 
-Embedding and LLM providers: Ollama (local), OpenAI-compatible, AWS Bedrock, Anthropic (LLM only).
+Embedding providers: Ollama (local, default), pure-Go BERT (local), OpenAI-compatible, AWS Bedrock.
+LLM providers (for autonomous curation): Anthropic, OpenAI-compatible, AWS Bedrock.
+
+Per-store config can override the global config by placing a `config.yaml` inside the store directory.
 
 See [docs/configuration.md](docs/configuration.md) for all fields and [docs/providers.md](docs/providers.md) for provider setup.
 
@@ -152,12 +267,14 @@ See [docs/configuration.md](docs/configuration.md) for all fields and [docs/prov
 
 | | |
 |---|---|
-| [Integrator Guide](docs/integrator-guide.md) | How to build agents and tools on Gramaton |
-| [Configuration](docs/configuration.md) | All config fields, defaults, and examples |
+| [Integrator Guide](docs/integrator-guide.md) | How to build agents and tools on Gramaton — the three storage paths, retrieval patterns, tool reference |
+| [Architecture](docs/architecture.md) | Package layers, data flow, concurrency model, lock discipline |
+| [Configuration](docs/configuration.md) | All config fields, defaults, examples, named-store model |
 | [Providers](docs/providers.md) | Embedding and LLM provider setup |
-| [Architecture](docs/architecture.md) | Package structure, data flow, concurrency model |
+| [Benchmarks](docs/benchmarks.md) | Benchmark store setup (LongMemEval and similar) |
 | [Tenets](docs/tenets.md) | Design principles |
-| [Design Documents](docs/project-design/) | Research foundations, data model, scoring, curation, threat model |
+| [Project Design](docs/project-design/) | Data model, retrieval, collections, threat model, research foundations, design decisions |
+| [Contributing](CONTRIBUTING.md) | Conventions for contributors — the operation recipe, lock discipline, tests, CHANGELOG etiquette |
 
 ## License
 
