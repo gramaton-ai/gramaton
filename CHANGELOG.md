@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Bedrock Cohere embedder distinguishes query vs document (P1-40)**
+  -- new optional `embed.QueryEmbedder` interface. Bedrock Cohere
+  implements `EmbedQuery` with `input_type="search_query"`; the
+  existing `Embed` continues to use `search_document` for indexed
+  content. Cohere's retrieval benchmarks show measurable cosine-
+  similarity degradation when queries use the document input type,
+  so search-time query embedding now routes through
+  `embed.EmbedForQuery` (in `api/search.go`) and the `queryEmbedder`
+  type-assertion in `search.Tool.Execute`. Providers that don't
+  distinguish (OpenAI, Ollama, Titan, BERT) fall back to `Embed`
+  unchanged.
 - **LLM.Model vs LLM.Models.* time-bomb reduced (P1-76)** -- curation
   path stops reaching into `cfg.LLM.Models.Medium` directly;
   `modelForTaskLabel` now goes through `cfg.ModelAtEffort` so the

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/search"
 )
@@ -190,13 +191,16 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		*pair.dest = &t
 	}
 
-	// Pre-embed outside any engine lock.
+	// Pre-embed outside any engine lock. Uses embed.EmbedForQuery so
+	// providers that distinguish query-time embeddings (e.g. Cohere
+	// on Bedrock, which needs input_type="search_query") pick the
+	// right path; others fall back to Embed. (P1-40.)
 	a.log.Debug("search: embedding query", "component", "search", "text_len", len(q.Text))
 	embedStart := time.Now()
 	var queryVec []float32
 	var warnings []string
 	if q.Text != "" && a.engine.Embedder() != nil {
-		vecs, err := a.engine.Embedder().Embed(ctx, []string{q.Text})
+		vec, err := embed.EmbedForQuery(ctx, a.engine.Embedder(), q.Text)
 		switch {
 		case err != nil:
 			// Degrade gracefully to BM25-only instead of failing the
@@ -205,8 +209,8 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 			a.log.Warn("search: query embed failed, falling back to BM25",
 				"component", "search", "err", err)
 			warnings = append(warnings, "query embedding failed; results ranked by BM25 only")
-		case len(vecs) > 0:
-			queryVec = vecs[0]
+		default:
+			queryVec = vec
 		}
 	}
 	a.log.Debug("search: embed done, acquiring read lock", "component", "search", "embed_ms", time.Since(embedStart).Milliseconds())

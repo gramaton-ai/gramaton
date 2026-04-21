@@ -30,6 +30,15 @@ type embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+// queryEmbedder is the optional interface Search checks for when
+// embedding a user query. Providers that distinguish query-time
+// embeddings (Cohere on Bedrock) implement this; others fall through
+// to Embed. Mirrors embed.QueryEmbedder but kept local so search
+// doesn't import embed. (P1-40.)
+type queryEmbedder interface {
+	EmbedQuery(ctx context.Context, text string) ([]float32, error)
+}
+
 // reranker is the LLM interface used for search result reranking.
 type reranker interface {
 	Complete(ctx context.Context, prompt string) (string, error)
@@ -256,12 +265,20 @@ type Result struct {
 func (t *Tool) Execute(ctx context.Context, q Query) ([]Result, error) {
 	var queryVec []float32
 	if q.Text != "" && t.embedder != nil {
-		vecs, err := t.embedder.Embed(ctx, []string{q.Text})
-		if err != nil {
-			return nil, fmt.Errorf("search: embed query: %w", err)
-		}
-		if len(vecs) > 0 {
-			queryVec = vecs[0]
+		if qe, ok := t.embedder.(queryEmbedder); ok {
+			vec, err := qe.EmbedQuery(ctx, q.Text)
+			if err != nil {
+				return nil, fmt.Errorf("search: embed query: %w", err)
+			}
+			queryVec = vec
+		} else {
+			vecs, err := t.embedder.Embed(ctx, []string{q.Text})
+			if err != nil {
+				return nil, fmt.Errorf("search: embed query: %w", err)
+			}
+			if len(vecs) > 0 {
+				queryVec = vecs[0]
+			}
 		}
 	}
 	return t.ExecuteWithVector(ctx, q, queryVec)

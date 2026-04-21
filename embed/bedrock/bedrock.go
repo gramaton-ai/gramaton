@@ -51,7 +51,9 @@ func New(cfg config.EmbeddingConfig) (*Client, error) {
 
 // Embed generates embeddings for the given texts. Titan models are
 // called one at a time (no native batching). Cohere models support
-// batch input.
+// batch input. Cohere calls mark input_type="search_document" so
+// indexed content embeds correctly; use EmbedQuery for retrieval-
+// time queries.
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
@@ -61,9 +63,39 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 	case familyTitan:
 		return c.embedTitan(ctx, texts)
 	case familyCohere:
-		return c.embedCohere(ctx, texts)
+		return c.embedCohere(ctx, texts, "search_document")
 	default:
 		return nil, fmt.Errorf("bedrock embed: unsupported model family")
+	}
+}
+
+// EmbedQuery generates a single embedding for a retrieval query.
+// For Cohere, this sets input_type="search_query" -- Cohere produces
+// different vectors for query vs document inputs, and using the
+// document path for a query degrades cosine similarity measurably.
+// For Titan (no query/document distinction in the API), delegates to
+// Embed. Implements embed.QueryEmbedder. (P1-40.)
+func (c *Client) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	switch c.family {
+	case familyCohere:
+		vecs, err := c.embedCohere(ctx, []string{text}, "search_query")
+		if err != nil {
+			return nil, err
+		}
+		if len(vecs) == 0 {
+			return nil, nil
+		}
+		return vecs[0], nil
+	default:
+		// Titan and any other family: no distinction at the API level.
+		vecs, err := c.Embed(ctx, []string{text})
+		if err != nil {
+			return nil, err
+		}
+		if len(vecs) == 0 {
+			return nil, nil
+		}
+		return vecs[0], nil
 	}
 }
 
@@ -128,7 +160,7 @@ type cohereResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func (c *Client) embedCohere(ctx context.Context, texts []string) ([][]float32, error) {
+func (c *Client) embedCohere(ctx context.Context, texts []string, inputType string) ([][]float32, error) {
 	// Cohere Bedrock supports up to 96 texts per call.
 	const maxBatch = 96
 	var all [][]float32
@@ -142,7 +174,7 @@ func (c *Client) embedCohere(ctx context.Context, texts []string) ([][]float32, 
 
 		body, err := json.Marshal(cohereRequest{
 			Texts:     batch,
-			InputType: "search_document",
+			InputType: inputType,
 			Truncate:  "END",
 		})
 		if err != nil {
