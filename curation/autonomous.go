@@ -249,7 +249,8 @@ func cycleCostSoFar(ctx context.Context, cfg config.Config) float64 {
 // modelForTaskLabel maps the string task label emitted by curation
 // code back to a concrete model name via config. Labels that don't
 // correspond to a curation task (or the contradiction_batch synonym)
-// fall back to the medium tier.
+// fall back to the medium tier via ModelAtEffort so the direct
+// tier-map access stays confined to config.go (P1-76).
 func modelForTaskLabel(cfg config.Config, task string) string {
 	switch task {
 	case "classify":
@@ -266,7 +267,7 @@ func modelForTaskLabel(cfg config.Config, task string) string {
 	case "manifest":
 		return cfg.ModelForTask(config.TaskManifest)
 	}
-	return cfg.LLM.Models.Medium
+	return cfg.ModelAtEffort(config.EffortMedium)
 }
 
 // classifyPending classifies records with processing_status="captured".

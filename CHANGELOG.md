@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **LLM.Model vs LLM.Models.* time-bomb reduced (P1-76)** -- curation
+  path stops reaching into `cfg.LLM.Models.Medium` directly;
+  `modelForTaskLabel` now goes through `cfg.ModelAtEffort` so the
+  tier-map access is confined to `config.go`. Server startup logs a
+  Warn when any effort tier (`llm.models.low/medium/high`) is empty,
+  naming the tiers and the fallback model; curation silently falling
+  back to the provider default was the original surprise the ticket
+  called out. `ModelForTask` remains the single entry point for
+  mapping a curation task to a concrete model.
+
 ### Added
 
 - **HTTP LLM provider retry on 429 / 5xx (P1-23)** -- new

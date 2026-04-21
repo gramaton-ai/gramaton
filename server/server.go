@@ -170,6 +170,28 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		logger = slog.Default()
 	}
 	engineCfg := engine.Config()
+
+	// Warn on partial LLM.Models configuration at startup so operators
+	// discover effort-tier gaps before curation silently falls back to
+	// the provider default. (P1-76.)
+	var emptyTiers []string
+	if engineCfg.LLM.Models.Low == "" {
+		emptyTiers = append(emptyTiers, "low")
+	}
+	if engineCfg.LLM.Models.Medium == "" {
+		emptyTiers = append(emptyTiers, "medium")
+	}
+	if engineCfg.LLM.Models.High == "" {
+		emptyTiers = append(emptyTiers, "high")
+	}
+	if len(emptyTiers) > 0 {
+		logger.Warn("llm.models tier(s) empty; curation tasks mapped to those tiers will use the provider default",
+			"component", "server",
+			"empty_tiers", emptyTiers,
+			"default_model", engineCfg.LLM.Model)
+	}
+
+
 	usageTracker := llm.NewUsageTracker(
 		cfg.ConfigDir,
 		engineCfg.LLM.MaxCallsPerDay,
