@@ -29,13 +29,13 @@ import (
 // (keys are serialized Property values which sort correctly for
 // same-type comparisons).
 //
-// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
-// without internal locking; this type relies on the engine's
-// RWMutex serialising every caller. Direct callers outside the
-// engine MUST own that lock. (Wave 7 P1-34.)
+// Concurrency: Mutating methods take an explicit *bolt.Tx so the
+// transaction is threaded via the call graph rather than stashed
+// on the struct. Non-Tx methods open their own db.Update; in-batch
+// callers use the *Tx variants. Read methods open their own
+// db.View inline. Removes the P2-06 stashed-pointer race class.
 type BboltPropertyIndex struct {
-	db    *bolt.DB
-	batch *bolt.Tx // non-nil during Batch() call
+	db *bolt.DB
 
 	// indexedFields controls selective property indexing (D6).
 	// If non-nil, only these fields (plus meta.* prefixed keys) are
@@ -83,47 +83,6 @@ func NewBboltPropertyIndex(db *bolt.DB, indexedFields []string) (*BboltPropertyI
 	return &BboltPropertyIndex{db: db, indexedFields: fm}, nil
 }
 
-// Batch executes fn within a single bbolt write transaction. All Add
-// and Remove calls within fn share one transaction, amortizing fsync.
-// Critical for bulk operations (import, rebuild).
-func (idx *BboltPropertyIndex) Batch(fn func()) error {
-	if idx.batch != nil {
-		// Already in a batch (e.g., external transaction via SetBatch).
-		fn()
-		return nil
-	}
-	return idx.db.Update(func(tx *bolt.Tx) error {
-		idx.batch = tx
-		defer func() { idx.batch = nil }()
-		fn()
-		return nil
-	})
-}
-
-// SetBatch sets an external bbolt transaction for batching. This allows
-// the engine to open one transaction shared across multiple indexes
-// (property + BM25) on the same bbolt DB.
-func (idx *BboltPropertyIndex) SetBatch(tx *bolt.Tx) { idx.batch = tx }
-
-// ClearBatch clears the external batch transaction.
-func (idx *BboltPropertyIndex) ClearBatch() { idx.batch = nil }
-
-// update runs fn in the current batch transaction or a new one.
-func (idx *BboltPropertyIndex) update(fn func(tx *bolt.Tx) error) error {
-	if idx.batch != nil {
-		return fn(idx.batch)
-	}
-	return idx.db.Update(fn)
-}
-
-// view runs fn in the current batch transaction (read) or a new one.
-func (idx *BboltPropertyIndex) view(fn func(tx *bolt.Tx) error) error {
-	if idx.batch != nil {
-		return fn(idx.batch)
-	}
-	return idx.db.View(fn)
-}
-
 // isIndexed returns true if the key should be indexed.
 func (idx *BboltPropertyIndex) isIndexed(key string) bool {
 	if idx.indexedFields == nil {
@@ -140,99 +99,132 @@ func exactBucket(key string) []byte { return []byte("exact:" + key) }
 func kwBucket(key string) []byte    { return []byte("kw:" + key) }
 func strBucket(key string) []byte   { return []byte("str:" + key) }
 
+// Add indexes a property value via its own db.Update. Use AddTx
+// inside a shared transaction.
 func (idx *BboltPropertyIndex) Add(nodeID, key string, val graph.Property) {
 	if !idx.isIndexed(key) {
 		return
 	}
-	if err := idx.update(func(tx *bolt.Tx) error {
-		// Track which keys this node has indexed.
-		nk, err := tx.CreateBucketIfNotExists([]byte("nodekeys"))
-		if err != nil {
-			return err
-		}
-		addToIDSet(nk, []byte(nodeID), key)
-
-		// Exact match index.
-		eb, err := tx.CreateBucketIfNotExists(exactBucket(key))
-		if err != nil {
-			return err
-		}
-		serialized := serializeValue(val)
-		addToIDSet(eb, []byte(serialized), nodeID)
-
-		// Substring index (string type only).
-		if val.Type == graph.TypeString {
-			sb, err := tx.CreateBucketIfNotExists(strBucket(key))
-			if err != nil {
-				return err
-			}
-			sb.Put([]byte(nodeID), []byte(val.String()))
-		}
-
-		// Keyword index (string list type only).
-		if val.Type == graph.TypeStringList {
-			kb, err := tx.CreateBucketIfNotExists(kwBucket(key))
-			if err != nil {
-				return err
-			}
-			for _, kw := range val.StringList() {
-				addToIDSet(kb, []byte(kw), nodeID)
-			}
-		}
-
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
+		idx.AddTx(tx, nodeID, key, val)
 		return nil
 	}); err != nil {
 		slog.Error("bbolt property index: add", "node", nodeID, "key", key, "err", err)
 	}
 }
 
+// AddTx indexes a property value using the caller's tx. Safe to
+// call inside a db.Update closure.
+func (idx *BboltPropertyIndex) AddTx(tx *bolt.Tx, nodeID, key string, val graph.Property) {
+	if !idx.isIndexed(key) {
+		return
+	}
+	// Track which keys this node has indexed.
+	nk, err := tx.CreateBucketIfNotExists([]byte("nodekeys"))
+	if err != nil {
+		slog.Error("bbolt property index: create nodekeys bucket", "err", err)
+		return
+	}
+	addToIDSet(nk, []byte(nodeID), key)
+
+	// Exact match index.
+	eb, err := tx.CreateBucketIfNotExists(exactBucket(key))
+	if err != nil {
+		slog.Error("bbolt property index: create exact bucket", "key", key, "err", err)
+		return
+	}
+	serialized := serializeValue(val)
+	addToIDSet(eb, []byte(serialized), nodeID)
+
+	// Substring index (string type only).
+	if val.Type == graph.TypeString {
+		sb, err := tx.CreateBucketIfNotExists(strBucket(key))
+		if err != nil {
+			slog.Error("bbolt property index: create str bucket", "key", key, "err", err)
+			return
+		}
+		sb.Put([]byte(nodeID), []byte(val.String()))
+	}
+
+	// Keyword index (string list type only).
+	if val.Type == graph.TypeStringList {
+		kb, err := tx.CreateBucketIfNotExists(kwBucket(key))
+		if err != nil {
+			slog.Error("bbolt property index: create kw bucket", "key", key, "err", err)
+			return
+		}
+		for _, kw := range val.StringList() {
+			addToIDSet(kb, []byte(kw), nodeID)
+		}
+	}
+}
+
+// Remove drops a single property value via its own tx.
 func (idx *BboltPropertyIndex) Remove(nodeID, key string, val graph.Property) {
 	if !idx.isIndexed(key) {
 		return
 	}
-	if err := idx.update(func(tx *bolt.Tx) error {
-		// Exact match.
-		if eb := tx.Bucket(exactBucket(key)); eb != nil {
-			serialized := serializeValue(val)
-			removeFromIDSet(eb, []byte(serialized), nodeID)
-		}
-
-		// Substring index.
-		if val.Type == graph.TypeString {
-			if sb := tx.Bucket(strBucket(key)); sb != nil {
-				sb.Delete([]byte(nodeID))
-			}
-		}
-
-		// Keyword index.
-		if val.Type == graph.TypeStringList {
-			if kb := tx.Bucket(kwBucket(key)); kb != nil {
-				for _, kw := range val.StringList() {
-					removeFromIDSet(kb, []byte(kw), nodeID)
-				}
-			}
-		}
-
-		// Update nodekeys.
-		if nk := tx.Bucket([]byte("nodekeys")); nk != nil {
-			removeFromIDSet(nk, []byte(nodeID), key)
-		}
-
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
+		idx.RemoveTx(tx, nodeID, key, val)
 		return nil
 	}); err != nil {
 		slog.Error("bbolt property index: remove", "node", nodeID, "key", key, "err", err)
 	}
 }
 
+// RemoveTx drops a single property value using the caller's tx.
+func (idx *BboltPropertyIndex) RemoveTx(tx *bolt.Tx, nodeID, key string, val graph.Property) {
+	if !idx.isIndexed(key) {
+		return
+	}
+	// Exact match.
+	if eb := tx.Bucket(exactBucket(key)); eb != nil {
+		serialized := serializeValue(val)
+		removeFromIDSet(eb, []byte(serialized), nodeID)
+	}
+
+	// Substring index.
+	if val.Type == graph.TypeString {
+		if sb := tx.Bucket(strBucket(key)); sb != nil {
+			sb.Delete([]byte(nodeID))
+		}
+	}
+
+	// Keyword index.
+	if val.Type == graph.TypeStringList {
+		if kb := tx.Bucket(kwBucket(key)); kb != nil {
+			for _, kw := range val.StringList() {
+				removeFromIDSet(kb, []byte(kw), nodeID)
+			}
+		}
+	}
+
+	// Update nodekeys.
+	if nk := tx.Bucket([]byte("nodekeys")); nk != nil {
+		removeFromIDSet(nk, []byte(nodeID), key)
+	}
+}
+
+// RemoveNode drops all of a node's indexed properties via its own tx.
 func (idx *BboltPropertyIndex) RemoveNode(nodeID string, props graph.Properties) {
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
+		idx.RemoveNodeTx(tx, nodeID, props)
+		return nil
+	}); err != nil {
+		slog.Error("bbolt property index: remove node", "node", nodeID, "err", err)
+	}
+}
+
+// RemoveNodeTx drops all of a node's indexed properties using the caller's tx.
+func (idx *BboltPropertyIndex) RemoveNodeTx(tx *bolt.Tx, nodeID string, props graph.Properties) {
 	for key, val := range props {
-		idx.Remove(nodeID, key, val)
+		idx.RemoveTx(tx, nodeID, key, val)
 	}
 }
 
 func (idx *BboltPropertyIndex) Lookup(key string, val graph.Property) []string {
 	var result []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -246,7 +238,7 @@ func (idx *BboltPropertyIndex) Lookup(key string, val graph.Property) []string {
 
 func (idx *BboltPropertyIndex) Range(key string, min, max graph.Property) []string {
 	var result []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -276,7 +268,7 @@ func (idx *BboltPropertyIndex) Range(key string, min, max graph.Property) []stri
 
 func (idx *BboltPropertyIndex) Contains(key, substring string) []string {
 	var result []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		sb := tx.Bucket(strBucket(key))
 		if sb == nil {
 			return nil
@@ -295,7 +287,7 @@ func (idx *BboltPropertyIndex) Contains(key, substring string) []string {
 func (idx *BboltPropertyIndex) ContainsFold(key, substring string) []string {
 	var result []string
 	lowerSub := strings.ToLower(substring)
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		sb := tx.Bucket(strBucket(key))
 		if sb == nil {
 			return nil
@@ -313,7 +305,7 @@ func (idx *BboltPropertyIndex) ContainsFold(key, substring string) []string {
 
 func (idx *BboltPropertyIndex) LookupKeyword(key, keyword string) []string {
 	var result []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		kb := tx.Bucket(kwBucket(key))
 		if kb == nil {
 			return nil
@@ -326,7 +318,7 @@ func (idx *BboltPropertyIndex) LookupKeyword(key, keyword string) []string {
 
 func (idx *BboltPropertyIndex) NodesWithKey(key string) map[string]struct{} {
 	result := make(map[string]struct{})
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		eb := tx.Bucket(exactBucket(key))
 		if eb == nil {
 			return nil
@@ -347,7 +339,7 @@ func (idx *BboltPropertyIndex) NodesWithKey(key string) map[string]struct{} {
 
 func (idx *BboltPropertyIndex) KeywordCounts(key string) map[string]int {
 	counts := make(map[string]int)
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		kb := tx.Bucket(kwBucket(key))
 		if kb == nil {
 			return nil
@@ -369,7 +361,7 @@ func (idx *BboltPropertyIndex) KeywordCounts(key string) map[string]int {
 
 func (idx *BboltPropertyIndex) Count() int {
 	total := 0
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		tx.ForEach(func(name []byte, b *bolt.Bucket) error {
 			if bytes.HasPrefix(name, []byte("exact:")) {
 				c := b.Cursor()

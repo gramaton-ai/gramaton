@@ -174,32 +174,86 @@ func (s *indexSet) setContentProp(g *graph.Graph, nodeID, key, content string) {
 	}
 }
 
-// batch wraps fn in a single bbolt write transaction shared across
-// the four bbolt-backed components (propIdx, bm25Full, secIdx,
-// edgeStore). Use for bulk node creation paths (session extraction,
-// import) where per-node fsync overhead would dominate runtime.
+// applyToNodeSession is applyToNode via a WriteSession (uses the
+// session's tx + BM25 batch cache).
+func (s *indexSet) applyToNodeSession(ws *WriteSession, n *graph.Node, content string, vec []float32) {
+	for k, v := range n.Properties {
+		s.propIdx.AddTx(ws.tx, n.ID, k, v)
+		if s.secIdx != nil {
+			s.secIdx.SetFieldExistsTx(ws.tx, k, n.ID)
+		}
+	}
+	if content != "" {
+		s.bm25Full.AddTx(ws.tx, ws.bm25, n.ID, content)
+	}
+	if vec != nil {
+		s.vecIdx.Add(n.ID, vec)
+	}
+	if s.secIdx != nil {
+		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
+			s.secIdx.SetCreatedAtTx(ws.tx, n.ID, ca)
+		}
+		if la, ok := n.Properties.GetTimestamp("last_accessed"); ok {
+			s.secIdx.SetLastAccessedTx(ws.tx, n.ID, la)
+		}
+	}
+}
+
+// setPropSession is setProp via a WriteSession.
+func (s *indexSet) setPropSession(ws *WriteSession, nodeID, key string, val graph.Property) {
+	g := ws.engine.graph
+	if n, ok := g.GetNode(nodeID); ok {
+		if old, ok := n.Properties[key]; ok {
+			s.propIdx.RemoveTx(ws.tx, nodeID, key, old)
+		}
+	}
+	g.SetNodeProperty(nodeID, key, val)
+	s.propIdx.AddTx(ws.tx, nodeID, key, val)
+	if s.secIdx != nil {
+		s.secIdx.SetFieldExistsTx(ws.tx, key, nodeID)
+		if key == "last_accessed" {
+			if t := val.Timestamp(); !t.IsZero() {
+				s.secIdx.SetLastAccessedTx(ws.tx, nodeID, t)
+			}
+		}
+	}
+}
+
+// setContentPropSession is setContentProp via a WriteSession.
+func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content string) {
+	s.setPropSession(ws, nodeID, key, graph.StringProperty(content))
+	if key == "content_full" {
+		s.bm25Full.RemoveTx(ws.tx, ws.bm25, nodeID)
+		s.bm25Full.AddTx(ws.tx, ws.bm25, nodeID, content)
+	}
+}
+
+// batch opens a single bbolt write transaction, constructs a
+// WriteSession carrying the tx plus the BM25 + Edge in-batch caches,
+// runs fn, and flushes the caches before commit. Use for bulk node
+// creation paths (session extraction, import, curation) where per-
+// node fsync overhead would dominate runtime.
 //
 // A non-nil return means the transaction was rolled back -- index
-// writes inside fn did not persist. Callers must check.
-func (s *indexSet) batch(fn func()) error {
+// writes inside fn did not persist. Callers must check. (P2-06.)
+func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 	return s.boltDB.Update(func(tx *bolt.Tx) error {
-		if pi, ok := s.propIdx.(*index.BboltPropertyIndex); ok {
-			pi.SetBatch(tx)
-			defer pi.SetBatch(nil)
+		ws := &WriteSession{
+			tx:      tx,
+			bm25:    index.NewBM25Batch(),
+			edges:   graph.NewEdgeBatch(),
+			engine:  e,
+			indexes: s,
+		}
+		if err := fn(ws); err != nil {
+			return err
 		}
 		if bm, ok := s.bm25Full.(*index.BboltBM25Index); ok {
-			bm.SetBatch(tx)
-			defer bm.SetBatch(nil)
-		}
-		if s.secIdx != nil {
-			s.secIdx.SetBatch(tx)
-			defer s.secIdx.SetBatch(nil)
+			bm.FlushBatchTx(tx, ws.bm25)
 		}
 		if s.edgeStore != nil {
-			s.edgeStore.SetBatch(tx)
-			defer s.edgeStore.SetBatch(nil)
+			s.edgeStore.FlushBatchTx(tx, ws.edges)
 		}
-		fn()
 		return nil
 	})
 }
@@ -280,40 +334,11 @@ func (s *indexSet) close() error {
 // in a single write transaction. propIdx and bm25Full share the same
 // bbolt DB; opening separate write transactions for each would
 // deadlock. When all three flags are true the rebuild is a no-op.
+//
+// Uses the Tx-suffixed Add variants directly, threading tx through the
+// bbolt-backed impls; in-memory impls accept and ignore the tx. This
+// replaces the old SetBatch type-assertion dance.
 func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
-	if bm25FullLoaded && vecLoaded && propLoaded {
-		return
-	}
-	type batchSetter interface {
-		SetBatch(tx *bolt.Tx)
-		ClearBatch()
-	}
-	var setters []batchSetter
-	if ps, ok := propIdx.(batchSetter); ok && !propLoaded {
-		setters = append(setters, ps)
-	}
-	if bs, ok := bm25Full.(batchSetter); ok && !bm25FullLoaded {
-		setters = append(setters, bs)
-	}
-	if len(setters) > 0 && db != nil {
-		db.Update(func(tx *bolt.Tx) error {
-			for _, s := range setters {
-				s.SetBatch(tx)
-			}
-			defer func() {
-				for _, s := range setters {
-					s.ClearBatch()
-				}
-			}()
-			rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-			return nil
-		})
-		return
-	}
-	rebuildIndexesInner(g, propIdx, vecIdx, bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
-}
-
-func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
 	if bm25FullLoaded && vecLoaded && propLoaded {
 		slog.Info("indexes already populated, skipping rebuild",
 			"component", "engine",
@@ -327,27 +352,46 @@ func rebuildIndexesInner(g graph.NodeReader, propIdx index.PropertyIndex, vecIdx
 		"bm25_loaded", bm25FullLoaded,
 		"vec_loaded", vecLoaded,
 		"prop_loaded", propLoaded)
-	it := g.NodeIterator()
-	defer it.Close()
-	for it.Next() {
-		n := it.Node()
-		if !propLoaded {
-			for k, v := range n.Properties {
-				propIdx.Add(n.ID, k, v)
+
+	doRebuild := func(tx *bolt.Tx, bm25Batch *index.BM25Batch) {
+		it := g.NodeIterator()
+		defer it.Close()
+		for it.Next() {
+			n := it.Node()
+			if !propLoaded {
+				for k, v := range n.Properties {
+					propIdx.AddTx(tx, n.ID, k, v)
+				}
 			}
-		}
-		if !vecLoaded {
-			for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
-				if v, ok := n.Properties.GetVector(embKey); ok {
-					vecIdx.Add(n.ID, v)
-					break
+			if !vecLoaded {
+				for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
+					if v, ok := n.Properties.GetVector(embKey); ok {
+						vecIdx.Add(n.ID, v)
+						break
+					}
+				}
+			}
+			if !bm25FullLoaded {
+				if text, ok := n.Properties.GetString("content_full"); ok {
+					bm25Full.AddTx(tx, bm25Batch, n.ID, text)
 				}
 			}
 		}
-		if !bm25FullLoaded {
-			if text, ok := n.Properties.GetString("content_full"); ok {
-				bm25Full.Add(n.ID, text)
-			}
-		}
 	}
+
+	// Only open a bbolt tx when at least one bbolt-backed index needs
+	// rebuilding; in-memory-only test setups skip the outer Update.
+	needsTx := (!propLoaded) || (!bm25FullLoaded)
+	if needsTx && db != nil {
+		db.Update(func(tx *bolt.Tx) error {
+			bm25Batch := index.NewBM25Batch()
+			doRebuild(tx, bm25Batch)
+			if bm, ok := bm25Full.(*index.BboltBM25Index); ok {
+				bm.FlushBatchTx(tx, bm25Batch)
+			}
+			return nil
+		})
+		return
+	}
+	doRebuild(nil, nil)
 }

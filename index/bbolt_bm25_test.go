@@ -204,14 +204,21 @@ func TestBboltBM25IncrementalTotalLen(t *testing.T) {
 	}
 }
 
+// TestBboltBM25Batch exercises the AddTx + FlushBatchTx path that
+// replaced the old SetBatch/idx.Batch pattern in P2-06.
 func TestBboltBM25Batch(t *testing.T) {
 	idx := newTestBboltBM25(t)
 
-	idx.Batch(func() {
+	batch := NewBM25Batch()
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
 		for i := 0; i < 100; i++ {
-			idx.Add("n"+string(rune('A'+i%26)), "batch test content number")
+			idx.AddTx(tx, batch, "n"+string(rune('A'+i%26)), "batch test content number")
 		}
-	})
+		idx.FlushBatchTx(tx, batch)
+		return nil
+	}); err != nil {
+		t.Fatalf("batch update: %v", err)
+	}
 
 	if idx.Len() == 0 {
 		t.Fatal("expected non-zero length after batch")

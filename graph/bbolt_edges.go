@@ -28,29 +28,36 @@ var (
 //
 // An LRU cache holds recently accessed edges to avoid repeated
 // bbolt reads for hot paths (graph traversal neighborhoods).
+//
+// Concurrency: Put/Delete take no *bolt.Tx (open their own Update);
+// PutTx/DeleteTx accept the caller's tx + an optional *EdgeBatch
+// adjacency cache. Removes the P2-06 stashed-pointer race class.
 type BboltEdgeStore struct {
-	db      *bolt.DB
-	cache   *edgeLRU
-	batch   *bolt.Tx    // non-nil during BatchIndexWrites
-	batchSt *edgeBatch  // non-nil during BatchIndexWrites
+	db    *bolt.DB
+	cache *edgeLRU
 }
 
-// edgeBatch bundles the in-batch adjacency cache (P1-27).
+// EdgeBatch bundles the in-batch adjacency cache (P1-27).
 // addToEdgeIDList decoded, linear-scanned, sorted, and re-encoded the
-// full edge ID list for each single-item write -- O(K log K) per edge
-// with K being the node's current degree. Bulk-loading a node with K
-// edges was O(K^2 log K). These maps buffer decoded adjacency lists
-// per bucket; flushBatch flushes each dirty key once. (T-06 stage 1:
-// hoisted out of BboltEdgeStore so the batch state can be threaded as
-// a parameter rather than stashed on the store struct in later stages.)
-type edgeBatch struct {
+// full edge ID list for each single-item write -- O(K log K) per
+// edge with K being the node's current degree. Bulk-loading a node
+// with K edges was O(K^2 log K). These maps buffer decoded adjacency
+// lists per bucket; FlushBatchTx flushes each dirty key once.
+//
+// Pass via PutTx/DeleteTx and flush via FlushBatchTx when done. A
+// nil *EdgeBatch disables caching and falls back to per-call encode/
+// decode.
+type EdgeBatch struct {
 	adjOut map[string][]string
 	adjIn  map[string][]string
 	adjTyp map[string][]string
 }
 
-func newEdgeBatch() *edgeBatch {
-	return &edgeBatch{
+// NewEdgeBatch creates an empty adjacency cache for use with a
+// single shared bbolt transaction. The caller flushes via
+// FlushBatchTx.
+func NewEdgeBatch() *EdgeBatch {
+	return &EdgeBatch{
 		adjOut: make(map[string][]string),
 		adjIn:  make(map[string][]string),
 		adjTyp: make(map[string][]string),
@@ -82,83 +89,75 @@ func NewBboltEdgeStore(db *bolt.DB, cacheCapacity int) (*BboltEdgeStore, error) 
 	}, nil
 }
 
-// SetBatch installs (tx != nil) or clears (tx == nil) the batch tx.
-// Installing initializes the in-batch adjacency cache so repeated
-// writes against the same (bucket, key) pair only decode/encode once.
-// Clearing flushes every dirty key back to bbolt via the previously
-// installed transaction. Engine pattern is SetBatch(tx) + defer
-// SetBatch(nil), matching this lifecycle. (P1-27.)
-func (s *BboltEdgeStore) SetBatch(tx *bolt.Tx) {
-	if tx == nil {
-		s.flushBatch()
+// FlushBatchTx writes the *EdgeBatch's cached adjacency lists back
+// to bbolt via tx. Safe with nil batch (no-op).
+func (s *BboltEdgeStore) FlushBatchTx(tx *bolt.Tx, batch *EdgeBatch) {
+	if batch == nil {
 		return
 	}
-	s.batch = tx
-	s.batchSt = newEdgeBatch()
-}
-
-func (s *BboltEdgeStore) flushBatch() {
-	if s.batch != nil && s.batchSt != nil {
-		flushAdj := func(bucket []byte, cache map[string][]string) {
-			b := s.batch.Bucket(bucket)
-			for key, ids := range cache {
-				k := []byte(key)
-				if len(ids) == 0 {
-					b.Delete(k)
-				} else {
-					b.Put(k, encodeEdgeIDList(ids))
-				}
+	flushAdj := func(bucket []byte, cache map[string][]string) {
+		b := tx.Bucket(bucket)
+		for key, ids := range cache {
+			k := []byte(key)
+			if len(ids) == 0 {
+				b.Delete(k)
+			} else {
+				b.Put(k, encodeEdgeIDList(ids))
 			}
 		}
-		flushAdj(adjOutBucket, s.batchSt.adjOut)
-		flushAdj(adjInBucket, s.batchSt.adjIn)
-		flushAdj(adjTypBucket, s.batchSt.adjTyp)
 	}
-	s.batch = nil
-	s.batchSt = nil
+	flushAdj(adjOutBucket, batch.adjOut)
+	flushAdj(adjInBucket, batch.adjIn)
+	flushAdj(adjTypBucket, batch.adjTyp)
 }
 
 // pickBatchCache returns the batch map for a given adjacency bucket,
-// or nil if not batching.
-func (s *BboltEdgeStore) pickBatchCache(bucket []byte) map[string][]string {
-	if s.batchSt == nil {
+// or nil if batch is nil.
+func pickBatchCache(batch *EdgeBatch, bucket []byte) map[string][]string {
+	if batch == nil {
 		return nil
 	}
 	switch string(bucket) {
 	case string(adjOutBucket):
-		return s.batchSt.adjOut
+		return batch.adjOut
 	case string(adjInBucket):
-		return s.batchSt.adjIn
+		return batch.adjIn
 	case string(adjTypBucket):
-		return s.batchSt.adjTyp
+		return batch.adjTyp
 	}
 	return nil
 }
 
+// Put stores an edge via its own bbolt Update.
 func (s *BboltEdgeStore) Put(e *Edge) {
 	s.cache.Put(e)
-	writeFn := func(tx *bolt.Tx) error {
-		data, err := MarshalEdge(e)
-		if err != nil {
-			return fmt.Errorf("marshal edge %s: %w", e.ID, err)
-		}
-		if err := tx.Bucket(edgesBucket).Put([]byte(e.ID), data); err != nil {
-			return err
-		}
-		s.addToAdj(tx.Bucket(adjOutBucket), adjOutBucket, e.SourceID, e.ID)
-		s.addToAdj(tx.Bucket(adjInBucket), adjInBucket, e.TargetID, e.ID)
-		s.addToAdj(tx.Bucket(adjTypBucket), adjTypBucket, e.Type, e.ID)
-		return nil
-	}
-	if s.batch != nil {
-		if err := writeFn(s.batch); err != nil {
-			slog.Error("bbolt edge store: put (batch)", "edge", e.ID, "err", err)
-		}
-		return
-	}
-	if err := s.db.Update(writeFn); err != nil {
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		return s.putInTx(tx, nil, e)
+	}); err != nil {
 		slog.Error("bbolt edge store: put", "edge", e.ID, "err", err)
 	}
+}
+
+// PutTx stores an edge via the caller's tx + optional *EdgeBatch.
+func (s *BboltEdgeStore) PutTx(tx *bolt.Tx, batch *EdgeBatch, e *Edge) {
+	s.cache.Put(e)
+	if err := s.putInTx(tx, batch, e); err != nil {
+		slog.Error("bbolt edge store: put (tx)", "edge", e.ID, "err", err)
+	}
+}
+
+func (s *BboltEdgeStore) putInTx(tx *bolt.Tx, batch *EdgeBatch, e *Edge) error {
+	data, err := MarshalEdge(e)
+	if err != nil {
+		return fmt.Errorf("marshal edge %s: %w", e.ID, err)
+	}
+	if err := tx.Bucket(edgesBucket).Put([]byte(e.ID), data); err != nil {
+		return err
+	}
+	s.addToAdj(tx.Bucket(adjOutBucket), batch, adjOutBucket, e.SourceID, e.ID)
+	s.addToAdj(tx.Bucket(adjInBucket), batch, adjInBucket, e.TargetID, e.ID)
+	s.addToAdj(tx.Bucket(adjTypBucket), batch, adjTypBucket, e.Type, e.ID)
+	return nil
 }
 
 func (s *BboltEdgeStore) Get(id string) (*Edge, bool) {
@@ -189,6 +188,7 @@ func (s *BboltEdgeStore) Get(id string) (*Edge, bool) {
 	return nil, false
 }
 
+// Delete removes an edge via its own tx.
 func (s *BboltEdgeStore) Delete(id string) {
 	// Get the edge first to update adjacency indexes.
 	e, ok := s.Get(id)
@@ -197,14 +197,28 @@ func (s *BboltEdgeStore) Delete(id string) {
 	}
 	s.cache.Remove(id)
 	if err := s.db.Update(func(tx *bolt.Tx) error {
-		tx.Bucket(edgesBucket).Delete([]byte(id))
-		s.removeFromAdj(tx.Bucket(adjOutBucket), adjOutBucket, e.SourceID, id)
-		s.removeFromAdj(tx.Bucket(adjInBucket), adjInBucket, e.TargetID, id)
-		s.removeFromAdj(tx.Bucket(adjTypBucket), adjTypBucket, e.Type, id)
+		s.deleteInTx(tx, nil, e)
 		return nil
 	}); err != nil {
 		slog.Error("bbolt edge store: delete", "edge", id, "err", err)
 	}
+}
+
+// DeleteTx removes an edge via the caller's tx + optional *EdgeBatch.
+func (s *BboltEdgeStore) DeleteTx(tx *bolt.Tx, batch *EdgeBatch, id string) {
+	e, ok := s.Get(id)
+	if !ok {
+		return
+	}
+	s.cache.Remove(id)
+	s.deleteInTx(tx, batch, e)
+}
+
+func (s *BboltEdgeStore) deleteInTx(tx *bolt.Tx, batch *EdgeBatch, e *Edge) {
+	tx.Bucket(edgesBucket).Delete([]byte(e.ID))
+	s.removeFromAdj(tx.Bucket(adjOutBucket), batch, adjOutBucket, e.SourceID, e.ID)
+	s.removeFromAdj(tx.Bucket(adjInBucket), batch, adjInBucket, e.TargetID, e.ID)
+	s.removeFromAdj(tx.Bucket(adjTypBucket), batch, adjTypBucket, e.Type, e.ID)
 }
 
 func (s *BboltEdgeStore) From(nodeID string) []*Edge {
@@ -363,11 +377,11 @@ func decodeEdgeIDList(data []byte) []string {
 }
 
 // addToAdj inserts an edge id into the adjacency list for (bucket, key).
-// Routes through the batch cache when batching so a node's K edge
-// inserts pay O(K) total instead of O(K^2 log K) per-write encode
+// Routes through the batch cache when batch is non-nil so a node's K
+// edge inserts pay O(K) total instead of O(K^2 log K) per-write encode
 // cycles.
-func (s *BboltEdgeStore) addToAdj(b *bolt.Bucket, bucket []byte, key, id string) {
-	cache := s.pickBatchCache(bucket)
+func (s *BboltEdgeStore) addToAdj(b *bolt.Bucket, batch *EdgeBatch, bucket []byte, key, id string) {
+	cache := pickBatchCache(batch, bucket)
 	if cache != nil {
 		existing, ok := cache[key]
 		if !ok {
@@ -392,8 +406,8 @@ func (s *BboltEdgeStore) addToAdj(b *bolt.Bucket, bucket []byte, key, id string)
 	b.Put([]byte(key), encodeEdgeIDList(existing))
 }
 
-func (s *BboltEdgeStore) removeFromAdj(b *bolt.Bucket, bucket []byte, key, id string) {
-	cache := s.pickBatchCache(bucket)
+func (s *BboltEdgeStore) removeFromAdj(b *bolt.Bucket, batch *EdgeBatch, bucket []byte, key, id string) {
+	cache := pickBatchCache(batch, bucket)
 	if cache != nil {
 		existing, ok := cache[key]
 		if !ok {

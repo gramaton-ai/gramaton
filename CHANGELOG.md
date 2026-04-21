@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **P2-06 Stages 2+3: WriteSession pattern for batched index writes** --
+  closes the stashed `*bolt.Tx` race hazard across five bbolt-backed
+  types (`BboltPropertyIndex`, `BboltBM25Index`, `BboltSecondaryIndex`,
+  `BboltCollectionCache`, `BboltEdgeStore`) by threading the
+  transaction explicitly. `SetBatch`/`ClearBatch` are gone from all
+  five. Mutating methods grew `*Tx`-suffixed variants
+  (`AddTx`/`RemoveTx`/`PutTx`/etc.) that accept `*bolt.Tx` plus an
+  optional companion cache (`*BM25Batch`, `*EdgeBatch`). Non-Tx
+  methods remain as convenience wrappers that open their own
+  `db.Update`. New `core.WriteSession` type owns one shared tx +
+  caches for a batched write phase; `Engine.WithWriteBatch`'s fn
+  signature is now `func(*WriteSession) (mutated bool, err error)`.
+  `graph.Graph.AddEdgeTx` threads tx through the graph boundary.
+  `indexSet.batch()` rewrites to construct a `WriteSession` and
+  flush the BM25/Edge caches before commit. Rebuild path
+  (`rebuildIndexes`) uses `AddTx`/`AddPreTokenizedTx` directly
+  instead of the old SetBatch type-assertion dance. Callers
+  migrated: `curation/observe.go`, `curation/deterministic.go`,
+  `backup/import.go` (both ImportJSON and ImportObsidian),
+  `api/collections.go` batch path. 80+ non-batched call sites to
+  `Engine.SetProp`/`Graph.AddEdge`/etc. unchanged -- only code
+  inside `WithWriteBatch` closures changes (~10 call sites total).
+  Closes all three hazard classes (torn pointer read, stale-pointer
+  cross-goroutine use, companion-map race). See D40 for architectural
+  rationale and `docs/project-design/p2-06-writesession-plan.md`
+  for the stage-by-stage plan.
 - **kirocli output filtering anchored to line-start (P1-69)** -- the
   Credits / Time footer and trust-warning lines were filtered via
   `strings.Contains` on any substring match, which would silently

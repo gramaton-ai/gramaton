@@ -146,14 +146,15 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 		return result, nil
 	}
 
-	// Import under write lock.
-	e.Lock()
-	defer e.Unlock()
-
-	// Pass 1: create nodes, build old-to-new ID map.
-	// Batch property index writes to amortize fsync for disk-backed indexes.
+	// Import under a single write batch. WithWriteBatch handles
+	// lock + shared bbolt tx + save, amortizing fsync across both
+	// passes: node creation + property indexing first, then edge
+	// creation referencing the fresh IDs. For a bulk import of N
+	// nodes with ~K edges each, edge-creation cost drops from
+	// O(N*K) fsyncs to O(1). (P1-09, P2-06.)
 	idMap := make(map[string]string, len(records))
-	e.PropIdx().Batch(func() {
+	batchErr := e.WithWriteBatch("import", func(ws *core.WriteSession) (bool, error) {
+		// Pass 1: create nodes, build old-to-new ID map.
 		for _, rec := range records {
 			props := buildSafeProps(rec.Properties)
 			props["processing_status"] = graph.StringProperty("captured")
@@ -165,9 +166,9 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 				props["imported_from_id"] = graph.StringProperty(rec.ID)
 			}
 
-			n := e.Graph().AddNode(props)
+			n := ws.AddNode(props)
 			for k, v := range n.Properties {
-				e.PropIdx().Add(n.ID, k, v)
+				ws.PropIdx().AddTx(ws.Tx(), n.ID, k, v)
 			}
 
 			if rec.ID != "" {
@@ -175,14 +176,8 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 			}
 			result.Imported++
 		}
-	})
 
-	// Pass 2: create edges between imported records only. Wrapped in
-	// BatchIndexWrites so every AddEdge shares one bbolt tx + fsync
-	// instead of forcing one tx per edge. For a bulk import of N
-	// nodes with ~K edges each, this changes the edge-creation cost
-	// from O(N*K) fsyncs to O(1). (P1-09.)
-	if batchErr := e.BatchIndexWrites(func() {
+		// Pass 2: create edges between imported records only.
 		for _, rec := range records {
 			newSourceID, ok := idMap[rec.ID]
 			if !ok {
@@ -196,20 +191,17 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 				if !ok {
 					continue // target not in import batch
 				}
-				if _, err := e.Graph().AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil); err != nil {
+				if _, err := ws.AddEdge(newSourceID, newTargetID, edge.Type, edge.Weight, nil); err != nil {
 					slog.Error("failed to add edge during import",
 						"component", "import", "from", newSourceID, "to", newTargetID, "type", edge.Type, "err", err)
 				}
 			}
 		}
-	}); batchErr != nil {
-		return result, fmt.Errorf("batch edge writes: %w", batchErr)
-	}
 
-	if result.Imported > 0 {
-		if _, err := e.Save("import"); err != nil {
-			return result, fmt.Errorf("save after import: %w", err)
-		}
+		return result.Imported > 0, nil
+	})
+	if batchErr != nil {
+		return result, fmt.Errorf("import batch: %w", batchErr)
 	}
 
 	return result, nil
@@ -417,38 +409,35 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 		return result, nil
 	}
 
-	// Import under write lock.
-	e.Lock()
-	defer e.Unlock()
-
-	// Pass 1: create nodes, build name-to-ID map for wikilinks.
+	// Import under a single write batch (see ImportJSON for
+	// rationale; same structure).
 	nameToID := make(map[string]string, len(files))
-	for _, f := range files {
-		props := graph.Properties{
-			"content_full":      graph.StringProperty(f.content),
-			"content_short":     graph.StringProperty(truncate(f.name, 200)),
-			"source_ref":        graph.StringProperty(f.path),
-			"processing_status": graph.StringProperty("captured"),
-			"created_at":        graph.TimestampProperty(time.Now().UTC()),
-			"access_count":      graph.Int64Property(0),
-		}
-		if len(f.tags) > 0 {
-			props["content_keywords"] = graph.StringListProperty(f.tags)
-		}
-
-		n := e.Graph().AddNode(props)
-		for k, v := range n.Properties {
-			e.PropIdx().Add(n.ID, k, v)
-		}
-
-		nameToID[strings.ToLower(f.name)] = n.ID
-		result.Imported++
-	}
-
-	// Pass 2: create edges from wikilinks. Same batching rationale as
-	// ImportJSON Pass 2 (P1-09).
 	edgesCreated := 0
-	if batchErr := e.BatchIndexWrites(func() {
+	batchErr := e.WithWriteBatch("import obsidian", func(ws *core.WriteSession) (bool, error) {
+		// Pass 1: create nodes, build name-to-ID map for wikilinks.
+		for _, f := range files {
+			props := graph.Properties{
+				"content_full":      graph.StringProperty(f.content),
+				"content_short":     graph.StringProperty(truncate(f.name, 200)),
+				"source_ref":        graph.StringProperty(f.path),
+				"processing_status": graph.StringProperty("captured"),
+				"created_at":        graph.TimestampProperty(time.Now().UTC()),
+				"access_count":      graph.Int64Property(0),
+			}
+			if len(f.tags) > 0 {
+				props["content_keywords"] = graph.StringListProperty(f.tags)
+			}
+
+			n := ws.AddNode(props)
+			for k, v := range n.Properties {
+				ws.PropIdx().AddTx(ws.Tx(), n.ID, k, v)
+			}
+
+			nameToID[strings.ToLower(f.name)] = n.ID
+			result.Imported++
+		}
+
+		// Pass 2: create edges from wikilinks. (P1-09.)
 		for _, f := range files {
 			sourceID, ok := nameToID[strings.ToLower(f.name)]
 			if !ok {
@@ -462,21 +451,18 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 				if sourceID == targetID {
 					continue
 				}
-				if _, err := e.Graph().AddEdge(sourceID, targetID, "related_to", 0.5, nil); err != nil {
+				if _, err := ws.AddEdge(sourceID, targetID, "related_to", 0.5, nil); err != nil {
 					slog.Error("failed to add wikilink edge during obsidian import",
 						"component", "import", "from", sourceID, "to", targetID, "err", err)
 				}
 				edgesCreated++
 			}
 		}
-	}); batchErr != nil {
-		return result, fmt.Errorf("batch wikilink edges: %w", batchErr)
-	}
 
-	if result.Imported > 0 {
-		if _, err := e.Save("import obsidian"); err != nil {
-			return result, fmt.Errorf("save after obsidian import: %w", err)
-		}
+		return result.Imported > 0, nil
+	})
+	if batchErr != nil {
+		return result, fmt.Errorf("import obsidian batch: %w", batchErr)
 	}
 
 	if edgesCreated > 0 {

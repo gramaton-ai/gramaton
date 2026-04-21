@@ -596,13 +596,13 @@ func TestWithWriteBatchSaves(t *testing.T) {
 	defer eng.Close()
 
 	var newID string
-	err := eng.WithWriteBatch("test: mutated", func() (bool, error) {
-		n := eng.Graph().AddNode(graph.Properties{
+	err := eng.WithWriteBatch("test: mutated", func(ws *WriteSession) (bool, error) {
+		n := ws.AddNode(graph.Properties{
 			"content_full": graph.StringProperty("hello"),
 			"created_at":   graph.TimestampProperty(time.Now().UTC()),
 		})
 		newID = n.ID
-		eng.IndexNode(n.ID, "hello", nil)
+		ws.IndexNode(n.ID, "hello", nil)
 		return true, nil
 	})
 	if err != nil {
@@ -628,7 +628,7 @@ func TestWithWriteBatchSkipsSaveOnNoMutations(t *testing.T) {
 
 	prevHead := eng.headHash
 	ran := false
-	err := eng.WithWriteBatch("test: noop", func() (bool, error) {
+	err := eng.WithWriteBatch("test: noop", func(_ *WriteSession) (bool, error) {
 		ran = true
 		return false, nil
 	})
@@ -650,7 +650,7 @@ func TestWithWriteBatchPropagatesFnError(t *testing.T) {
 	defer eng.Close()
 
 	sentinel := errors.New("boom")
-	err := eng.WithWriteBatch("test: err", func() (bool, error) {
+	err := eng.WithWriteBatch("test: err", func(_ *WriteSession) (bool, error) {
 		return true, sentinel
 	})
 	if err == nil {

@@ -18,12 +18,11 @@ import (
 //
 // All indexes are derived data, rebuildable from the graph.
 //
-// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
-// without internal locking; this type relies on the engine's
-// RWMutex serialising every caller. (Wave 7 P1-34.)
+// Concurrency: Mutating methods take an explicit *bolt.Tx; Non-Tx
+// methods open their own db.Update. Removes the P2-06 stashed-
+// pointer race class.
 type BboltSecondaryIndex struct {
-	db    *bolt.DB
-	batch *bolt.Tx
+	db *bolt.DB
 }
 
 var (
@@ -56,26 +55,6 @@ func NewBboltSecondaryIndex(db *bolt.DB) (*BboltSecondaryIndex, error) {
 	return &BboltSecondaryIndex{db: db}, nil
 }
 
-// SetBatch sets an external bbolt transaction for batching.
-func (idx *BboltSecondaryIndex) SetBatch(tx *bolt.Tx) { idx.batch = tx }
-
-// ClearBatch clears the external batch transaction.
-func (idx *BboltSecondaryIndex) ClearBatch() { idx.batch = nil }
-
-func (idx *BboltSecondaryIndex) update(fn func(tx *bolt.Tx) error) error {
-	if idx.batch != nil {
-		return fn(idx.batch)
-	}
-	return idx.db.Update(fn)
-}
-
-func (idx *BboltSecondaryIndex) view(fn func(tx *bolt.Tx) error) error {
-	if idx.batch != nil {
-		return fn(idx.batch)
-	}
-	return idx.db.View(fn)
-}
-
 // --- Time indexes ---
 
 // timeKey encodes a timestamp + nodeID as a sortable key.
@@ -96,38 +75,44 @@ func parseTimeKey(key []byte) (time.Time, string) {
 	return time.Unix(0, nanos), string(key[8:])
 }
 
-// SetCreatedAt records or updates a node's created_at timestamp.
+// SetCreatedAt records or updates a node's created_at timestamp via its own tx.
 func (idx *BboltSecondaryIndex) SetCreatedAt(nodeID string, t time.Time) {
-	idx.update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(timeCreatedBucket)
-		rev := tx.Bucket(timeCreatedRevBucket)
-		idx.removeTimeEntry(b, rev, nodeID)
-		key := timeKey(t, nodeID)
-		if err := b.Put(key, []byte(nodeID)); err != nil {
-			return err
-		}
-		if rev != nil {
-			return rev.Put([]byte(nodeID), key)
-		}
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.SetCreatedAtTx(tx, nodeID, t)
 		return nil
 	})
 }
 
-// SetLastAccessed records or updates a node's last_accessed timestamp.
+// SetCreatedAtTx records or updates a node's created_at timestamp via the caller's tx.
+func (idx *BboltSecondaryIndex) SetCreatedAtTx(tx *bolt.Tx, nodeID string, t time.Time) {
+	b := tx.Bucket(timeCreatedBucket)
+	rev := tx.Bucket(timeCreatedRevBucket)
+	idx.removeTimeEntry(b, rev, nodeID)
+	key := timeKey(t, nodeID)
+	b.Put(key, []byte(nodeID))
+	if rev != nil {
+		rev.Put([]byte(nodeID), key)
+	}
+}
+
+// SetLastAccessed records or updates a node's last_accessed timestamp via its own tx.
 func (idx *BboltSecondaryIndex) SetLastAccessed(nodeID string, t time.Time) {
-	idx.update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(timeAccessedBucket)
-		rev := tx.Bucket(timeAccessedRevBucket)
-		idx.removeTimeEntry(b, rev, nodeID)
-		key := timeKey(t, nodeID)
-		if err := b.Put(key, []byte(nodeID)); err != nil {
-			return err
-		}
-		if rev != nil {
-			return rev.Put([]byte(nodeID), key)
-		}
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.SetLastAccessedTx(tx, nodeID, t)
 		return nil
 	})
+}
+
+// SetLastAccessedTx records or updates a node's last_accessed timestamp via the caller's tx.
+func (idx *BboltSecondaryIndex) SetLastAccessedTx(tx *bolt.Tx, nodeID string, t time.Time) {
+	b := tx.Bucket(timeAccessedBucket)
+	rev := tx.Bucket(timeAccessedRevBucket)
+	idx.removeTimeEntry(b, rev, nodeID)
+	key := timeKey(t, nodeID)
+	b.Put(key, []byte(nodeID))
+	if rev != nil {
+		rev.Put([]byte(nodeID), key)
+	}
 }
 
 // removeTimeEntry removes a nodeID's entry from a time bucket. Uses the
@@ -161,7 +146,7 @@ func (idx *BboltSecondaryIndex) removeTimeEntry(b, rev *bolt.Bucket, nodeID stri
 // RecentByCreatedAt returns the N most recently created node IDs.
 func (idx *BboltSecondaryIndex) RecentByCreatedAt(n int) []string {
 	var ids []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(timeCreatedBucket)
 		c := b.Cursor()
 		// Reverse iteration (newest first).
@@ -179,7 +164,7 @@ func (idx *BboltSecondaryIndex) RecentByCreatedAt(n int) []string {
 // RecentByLastAccessed returns the N most recently accessed node IDs.
 func (idx *BboltSecondaryIndex) RecentByLastAccessed(n int) []string {
 	var ids []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(timeAccessedBucket)
 		c := b.Cursor()
 		for k, _ := c.Last(); k != nil && len(ids) < n; k, _ = c.Prev() {
@@ -195,20 +180,26 @@ func (idx *BboltSecondaryIndex) RecentByLastAccessed(n int) []string {
 
 // --- Edge count cache ---
 
-// SetEdgeCounts stores the in/out edge counts for a node.
+// SetEdgeCounts stores the in/out edge counts for a node via its own tx.
 func (idx *BboltSecondaryIndex) SetEdgeCounts(nodeID string, inCount, outCount int) {
-	idx.update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(edgeCountBucket)
-		var buf [8]byte
-		binary.LittleEndian.PutUint32(buf[:4], uint32(inCount))
-		binary.LittleEndian.PutUint32(buf[4:], uint32(outCount))
-		return b.Put([]byte(nodeID), buf[:])
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.SetEdgeCountsTx(tx, nodeID, inCount, outCount)
+		return nil
 	})
+}
+
+// SetEdgeCountsTx stores the in/out edge counts via the caller's tx.
+func (idx *BboltSecondaryIndex) SetEdgeCountsTx(tx *bolt.Tx, nodeID string, inCount, outCount int) {
+	b := tx.Bucket(edgeCountBucket)
+	var buf [8]byte
+	binary.LittleEndian.PutUint32(buf[:4], uint32(inCount))
+	binary.LittleEndian.PutUint32(buf[4:], uint32(outCount))
+	b.Put([]byte(nodeID), buf[:])
 }
 
 // GetEdgeCounts returns the cached in/out edge counts for a node.
 func (idx *BboltSecondaryIndex) GetEdgeCounts(nodeID string) (in, out int, ok bool) {
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(edgeCountBucket)
 		v := b.Get([]byte(nodeID))
 		if len(v) >= 8 {
@@ -224,7 +215,7 @@ func (idx *BboltSecondaryIndex) GetEdgeCounts(nodeID string) (in, out int, ok bo
 // Orphans returns node IDs with zero in+out edge count.
 func (idx *BboltSecondaryIndex) Orphans() []string {
 	var ids []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(edgeCountBucket)
 		c := b.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -241,46 +232,63 @@ func (idx *BboltSecondaryIndex) Orphans() []string {
 	return ids
 }
 
-// RemoveNode removes a node from all secondary indexes.
+// RemoveNode removes a node from all secondary indexes via its own tx.
 func (idx *BboltSecondaryIndex) RemoveNode(nodeID string) {
-	idx.update(func(tx *bolt.Tx) error {
-		idx.removeTimeEntry(tx.Bucket(timeCreatedBucket), tx.Bucket(timeCreatedRevBucket), nodeID)
-		idx.removeTimeEntry(tx.Bucket(timeAccessedBucket), tx.Bucket(timeAccessedRevBucket), nodeID)
-		tx.Bucket(edgeCountBucket).Delete([]byte(nodeID))
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.RemoveNodeTx(tx, nodeID)
 		return nil
 	})
 }
 
+// RemoveNodeTx removes a node from all secondary indexes via the caller's tx.
+func (idx *BboltSecondaryIndex) RemoveNodeTx(tx *bolt.Tx, nodeID string) {
+	idx.removeTimeEntry(tx.Bucket(timeCreatedBucket), tx.Bucket(timeCreatedRevBucket), nodeID)
+	idx.removeTimeEntry(tx.Bucket(timeAccessedBucket), tx.Bucket(timeAccessedRevBucket), nodeID)
+	tx.Bucket(edgeCountBucket).Delete([]byte(nodeID))
+}
+
 // --- Field existence ---
 
-// SetFieldExists marks that a node has a given field.
+// SetFieldExists marks that a node has a given field via its own tx.
 func (idx *BboltSecondaryIndex) SetFieldExists(field, nodeID string) {
-	idx.update(func(tx *bolt.Tx) error {
-		name := []byte(existsPrefix + field)
-		b, err := tx.CreateBucketIfNotExists(name)
-		if err != nil {
-			return err
-		}
-		return b.Put([]byte(nodeID), []byte{1})
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.SetFieldExistsTx(tx, field, nodeID)
+		return nil
 	})
 }
 
-// ClearFieldExists removes a node from a field existence index.
+// SetFieldExistsTx marks field existence via the caller's tx.
+func (idx *BboltSecondaryIndex) SetFieldExistsTx(tx *bolt.Tx, field, nodeID string) {
+	name := []byte(existsPrefix + field)
+	b, err := tx.CreateBucketIfNotExists(name)
+	if err != nil {
+		return
+	}
+	b.Put([]byte(nodeID), []byte{1})
+}
+
+// ClearFieldExists removes a node from a field existence index via its own tx.
 func (idx *BboltSecondaryIndex) ClearFieldExists(field, nodeID string) {
-	idx.update(func(tx *bolt.Tx) error {
-		name := []byte(existsPrefix + field)
-		b := tx.Bucket(name)
-		if b == nil {
-			return nil
-		}
-		return b.Delete([]byte(nodeID))
+	idx.db.Update(func(tx *bolt.Tx) error {
+		idx.ClearFieldExistsTx(tx, field, nodeID)
+		return nil
 	})
+}
+
+// ClearFieldExistsTx clears field existence via the caller's tx.
+func (idx *BboltSecondaryIndex) ClearFieldExistsTx(tx *bolt.Tx, field, nodeID string) {
+	name := []byte(existsPrefix + field)
+	b := tx.Bucket(name)
+	if b == nil {
+		return
+	}
+	b.Delete([]byte(nodeID))
 }
 
 // NodesWithField returns all node IDs that have the given field set.
 func (idx *BboltSecondaryIndex) NodesWithField(field string) []string {
 	var ids []string
-	idx.view(func(tx *bolt.Tx) error {
+	idx.db.View(func(tx *bolt.Tx) error {
 		name := []byte(existsPrefix + field)
 		b := tx.Bucket(name)
 		if b == nil {

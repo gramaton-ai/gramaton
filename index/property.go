@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
+	bolt "go.etcd.io/bbolt"
 )
 
 // PropertyIndex supports exact match, range, and substring queries over
@@ -14,12 +15,21 @@ import (
 // Implementations: MemoryPropertyIndex (in-memory maps),
 // and BboltPropertyIndex (bbolt-backed).
 type PropertyIndex interface {
-	// Add indexes a property value for a node.
+	// Add indexes a property value for a node via its own tx (or
+	// in-memory write). Use AddTx inside a shared transaction to
+	// amortize fsync.
 	Add(nodeID, key string, val graph.Property)
-	// Remove removes a specific property value for a node from the index.
+	// AddTx indexes a property value via the caller's tx. In-memory
+	// implementations ignore the tx argument.
+	AddTx(tx *bolt.Tx, nodeID, key string, val graph.Property)
+	// Remove removes a specific property value via its own tx.
 	Remove(nodeID, key string, val graph.Property)
-	// RemoveNode removes all indexed properties for a node.
+	// RemoveTx removes a property value via the caller's tx.
+	RemoveTx(tx *bolt.Tx, nodeID, key string, val graph.Property)
+	// RemoveNode removes all indexed properties for a node via its own tx.
 	RemoveNode(nodeID string, props graph.Properties)
+	// RemoveNodeTx removes all indexed properties via the caller's tx.
+	RemoveNodeTx(tx *bolt.Tx, nodeID string, props graph.Properties)
 	// Lookup returns all node IDs with an exact property match.
 	Lookup(key string, val graph.Property) []string
 	// Range returns all node IDs where the property value is between min and max (inclusive).
@@ -36,10 +46,6 @@ type PropertyIndex interface {
 	KeywordCounts(key string) map[string]int
 	// Count returns the total number of indexed entries across all keys.
 	Count() int
-	// Batch executes fn with all writes batched in a single transaction.
-	// For disk-backed implementations this amortizes fsync. For in-memory
-	// implementations this is a no-op wrapper.
-	Batch(fn func()) error
 }
 
 // MemoryPropertyIndex is an in-memory implementation of PropertyIndex
@@ -365,10 +371,19 @@ func (idx *MemoryPropertyIndex) KeywordCounts(key string) map[string]int {
 	return counts
 }
 
-// Batch is a no-op for the in-memory implementation.
-func (idx *MemoryPropertyIndex) Batch(fn func()) error {
-	fn()
-	return nil
+// AddTx mirrors Add; the in-memory impl ignores tx.
+func (idx *MemoryPropertyIndex) AddTx(_ *bolt.Tx, nodeID, key string, val graph.Property) {
+	idx.Add(nodeID, key, val)
+}
+
+// RemoveTx mirrors Remove; the in-memory impl ignores tx.
+func (idx *MemoryPropertyIndex) RemoveTx(_ *bolt.Tx, nodeID, key string, val graph.Property) {
+	idx.Remove(nodeID, key, val)
+}
+
+// RemoveNodeTx mirrors RemoveNode; the in-memory impl ignores tx.
+func (idx *MemoryPropertyIndex) RemoveNodeTx(_ *bolt.Tx, nodeID string, props graph.Properties) {
+	idx.RemoveNode(nodeID, props)
 }
 
 // Count returns the total number of indexed entries across all keys.

@@ -1,6 +1,10 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+
+	bolt "go.etcd.io/bbolt"
+)
 
 // Edge is a directed relationship between two nodes. Edges are first-class
 // objects with their own ID, type, weight, and optional properties.
@@ -13,10 +17,21 @@ type Edge struct {
 	Properties Properties
 }
 
-// AddEdge creates a new edge between two existing nodes. Both source and
-// target nodes must exist. Weight should be in [0.0, 1.0]. Properties
-// are cloned on creation.
+// AddEdge creates a new edge between two existing nodes via the
+// edge store's own transaction. Both source and target nodes must
+// exist. Weight should be in [0.0, 1.0]. Properties are cloned on
+// creation.
 func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, props Properties) (*Edge, error) {
+	return g.AddEdgeTx(nil, nil, sourceID, targetID, edgeType, weight, props)
+}
+
+// AddEdgeTx is AddEdge via the caller's bbolt transaction + optional
+// *EdgeBatch cache. When tx and batch are both nil, falls back to
+// the edge store opening its own Update (non-batched path). When
+// non-nil, writes go through the bbolt-backed store's PutTx so the
+// shared tx is used and the adjacency cache amortizes re-encode cost.
+// In-memory edge stores ignore tx/batch. (P2-06, D40.)
+func (g *Graph) AddEdgeTx(tx *bolt.Tx, batch *EdgeBatch, sourceID, targetID, edgeType string, weight float64, props Properties) (*Edge, error) {
 	if _, ok := g.GetNode(sourceID); !ok {
 		return nil, fmt.Errorf("graph: source node %s: %w", sourceID, ErrNotFound)
 	}
@@ -36,7 +51,11 @@ func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, pro
 		e.Properties = make(Properties)
 	}
 
-	g.edgeStore.Put(e)
+	if tx != nil {
+		g.edgeStore.PutTx(tx, batch, e)
+	} else {
+		g.edgeStore.Put(e)
+	}
 	g.markEdgeDirty(e.ID)
 
 	return e, nil

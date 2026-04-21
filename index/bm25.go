@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // BM25Index provides term-frequency / inverse-document-frequency based
@@ -13,18 +15,22 @@ import (
 // Implementations: MemoryBM25Index (in-memory), and
 // BboltBM25Index (bbolt-backed).
 type BM25Index interface {
-	// Add indexes a document's content. Tokenizes the text and stores term frequencies.
+	// Add indexes a document's content via its own tx.
 	Add(nodeID, text string)
-	// Remove deletes a document from the index.
+	// AddTx indexes a document via the caller's tx + optional batch cache.
+	AddTx(tx *bolt.Tx, batch *BM25Batch, nodeID, text string)
+	// Remove deletes a document from the index via its own tx.
 	Remove(nodeID string)
+	// RemoveTx deletes a document via the caller's tx + optional batch cache.
+	RemoveTx(tx *bolt.Tx, batch *BM25Batch, nodeID string)
 	// Search scores documents against query tokens using BM25. Returns top-k results.
 	Search(queryTokens []string, k int, candidates map[string]struct{}) []SearchResult
 	// Len returns the number of indexed documents.
 	Len() int
 	// AddPreTokenized indexes a document from pre-computed term frequencies.
 	AddPreTokenized(nodeID string, termFreqs map[string]int, docLength int)
-	// Batch executes fn with all writes batched in a single transaction.
-	Batch(fn func()) error
+	// AddPreTokenizedTx is AddPreTokenized via the caller's tx + optional batch cache.
+	AddPreTokenizedTx(tx *bolt.Tx, batch *BM25Batch, nodeID string, termFreqs map[string]int, docLength int)
 }
 
 // MemoryBM25Index is an in-memory BM25 implementation using Go maps.
@@ -220,10 +226,19 @@ func (idx *MemoryBM25Index) Len() int {
 	return idx.numDocs
 }
 
-// Batch is a no-op for the in-memory implementation.
-func (idx *MemoryBM25Index) Batch(fn func()) error {
-	fn()
-	return nil
+// AddTx mirrors Add; the in-memory impl ignores tx/batch.
+func (idx *MemoryBM25Index) AddTx(_ *bolt.Tx, _ *BM25Batch, nodeID, text string) {
+	idx.Add(nodeID, text)
+}
+
+// RemoveTx mirrors Remove; the in-memory impl ignores tx/batch.
+func (idx *MemoryBM25Index) RemoveTx(_ *bolt.Tx, _ *BM25Batch, nodeID string) {
+	idx.Remove(nodeID)
+}
+
+// AddPreTokenizedTx mirrors AddPreTokenized; tx/batch ignored.
+func (idx *MemoryBM25Index) AddPreTokenizedTx(_ *bolt.Tx, _ *BM25Batch, nodeID string, termFreqs map[string]int, docLength int) {
+	idx.AddPreTokenized(nodeID, termFreqs, docLength)
 }
 
 // AddPreTokenized indexes a document from pre-computed term frequencies,

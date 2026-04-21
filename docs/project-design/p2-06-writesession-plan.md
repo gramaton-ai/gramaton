@@ -1,6 +1,6 @@
 # P2-06 Execution Plan: `WriteSession` Pattern
 
-Status: **Stage 1 landed** (commit `2994c30`). Stages 2 + 3 pending.
+Status: **All stages landed**. Stage 1 commit `2994c30`; Stages 2 + 3 in a single follow-up commit.
 
 See [D40](design-decisions.md#d40-writesession-pattern-for-batched-index-writes-p2-06) for the architectural choice rationale.
 

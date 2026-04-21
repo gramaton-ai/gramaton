@@ -373,25 +373,25 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// actually changed" gate and wraps errors with the phase label.
 	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts)
 	if mutations > 0 {
-		err := e.WithWriteBatch("curation: deterministic", func() (bool, error) {
+		err := e.WithWriteBatch("curation: deterministic", func(ws *core.WriteSession) (bool, error) {
 
 			// Lifecycle transitions: set valid_until on stale records.
 			for _, id := range staleIDs {
-				if _, ok := e.Graph().GetNode(id); ok {
-					e.SetProp(id, "valid_until", graph.TimestampProperty(now))
+				if _, ok := ws.Graph().GetNode(id); ok {
+					ws.SetProp(id, "valid_until", graph.TimestampProperty(now))
 					result.LifecycleTransitions++
 				}
 			}
 
 			// Orphan linking.
 			for _, ol := range orphanLinks {
-				if _, ok := e.Graph().GetNode(ol.orphanID); !ok {
+				if _, ok := ws.Graph().GetNode(ol.orphanID); !ok {
 					continue
 				}
-				if _, ok := e.Graph().GetNode(ol.targetID); !ok {
+				if _, ok := ws.Graph().GetNode(ol.targetID); !ok {
 					continue
 				}
-				_, err := e.Graph().AddEdge(ol.orphanID, ol.targetID, "related_to", ol.similarity, nil)
+				_, err := ws.AddEdge(ol.orphanID, ol.targetID, "related_to", ol.similarity, nil)
 				if err == nil {
 					result.OrphansLinked++
 				}
@@ -400,8 +400,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// Duplicate consolidation with Jaccard verification to prevent
 			// false positives on structurally similar long documents.
 			for _, pair := range pairs {
-				na, okA := e.Graph().GetNode(pair.IDA)
-				nb, okB := e.Graph().GetNode(pair.IDB)
+				na, okA := ws.Graph().GetNode(pair.IDA)
+				nb, okB := ws.Graph().GetNode(pair.IDB)
 				if !okA || !okB {
 					continue
 				}
@@ -421,7 +421,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// title, etc.). Silently consolidating them on embedding alone
 				// would merge distinct tracked work. Operators still see these
 				// pairs via gramaton_duplicates for manual triage.
-				if isCollectionMember(e.Graph(), na.ID) || isCollectionMember(e.Graph(), nb.ID) {
+				if isCollectionMember(ws.Graph(), na.ID) || isCollectionMember(ws.Graph(), nb.ID) {
 					continue
 				}
 
@@ -442,9 +442,9 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// because pair.IDA = lex-smaller per FindDuplicates.)
 				caA, _ := na.Properties.GetTimestamp("created_at")
 				caB, _ := nb.Properties.GetTimestamp("created_at")
-				olderID, newerID := pickOlder(e.Graph(), pair.IDA, pair.IDB, caA, caB)
+				olderID, newerID := pickOlder(ws.Graph(), pair.IDA, pair.IDB, caA, caB)
 
-				older, ok := e.Graph().GetNode(olderID)
+				older, ok := ws.Graph().GetNode(olderID)
 				if !ok {
 					continue
 				}
@@ -452,10 +452,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				if _, has := older.Properties.GetTimestamp("valid_until"); has {
 					continue
 				}
-				e.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
-				e.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
-				e.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
-				if _, err := e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
+				ws.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
+				ws.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
+				ws.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
+				if _, err := ws.AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
 					logger.Error("failed to add supersedes edge",
 						"component", "curation", "newer", newerID, "older", olderID, "err", err)
 				}
@@ -464,13 +464,13 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 
 			// Quality repairs: fix deterministic issues, flag others.
 			for _, qi := range qualityIssues {
-				if _, ok := e.Graph().GetNode(qi.nodeID); !ok {
+				if _, ok := ws.Graph().GetNode(qi.nodeID); !ok {
 					continue
 				}
 				switch qi.fix {
 				case "concept_summary", "extract_short":
 					// Deterministic fix: update content_short.
-					e.SetContentProp(qi.nodeID, "content_short", qi.short)
+					ws.SetContentProp(qi.nodeID, "content_short", qi.short)
 					result.QualityRepairs++
 				case "flag_embed":
 					// Can't fix deterministically (needs embedder).
@@ -493,7 +493,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				allWellEstablished := true
 
 				for _, memberID := range c.NodeIDs {
-					mn, ok := e.Graph().GetNode(memberID)
+					mn, ok := ws.Graph().GetNode(memberID)
 					if !ok {
 						continue
 					}
@@ -579,16 +579,16 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					"access_count":      graph.Int64Property(0),
 				}
 
-				cn := e.Graph().AddNode(props)
-				for k, v := range cn.Properties {
-					e.PropIdx().Add(cn.ID, k, v)
-				}
-				e.IndexNode(cn.ID, templateFull, nil)
+				cn := ws.AddNode(props)
+				// IndexNode covers property + BM25 + vector. The manual
+				// propIdx.Add loop was a pre-IndexNode holdover; dropping
+				// it here avoids double-adding each property.
+				ws.IndexNode(cn.ID, templateFull, nil)
 
 				// Create instance_of edges from member records.
 				for _, memberID := range c.NodeIDs {
-					if _, ok := e.Graph().GetNode(memberID); ok {
-						if _, err := e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
+					if _, ok := ws.Graph().GetNode(memberID); ok {
+						if _, err := ws.AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
 							logger.Error("failed to add instance_of edge",
 								"component", "curation", "member", memberID, "concept", cn.ID, "err", err)
 						}

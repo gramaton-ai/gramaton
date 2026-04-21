@@ -15,12 +15,14 @@ import (
 //
 //	collmembers -> collectionID -> encoded list of item node IDs
 //
-// Concurrency: NOT thread-safe. The batch *bolt.Tx slot mutates
-// without internal locking; this type relies on the engine's
-// RWMutex serialising every caller. (Wave 7 P1-34.)
+// Concurrency: Mutating methods take an explicit *bolt.Tx so the
+// transaction is threaded via the call graph. The P1-78 deadlock
+// gotcha (AddMember opening its own bbolt tx inside BatchIndexWrites)
+// is now a compile-time concern: callers that hold a tx MUST use
+// AddMemberTx, not AddMember. Removes the P2-06 stashed-pointer
+// race class.
 type BboltCollectionCache struct {
-	db    *bolt.DB
-	batch *bolt.Tx
+	db *bolt.DB
 }
 
 var collMembersBucket = []byte("collmembers")
@@ -37,58 +39,53 @@ func NewBboltCollectionCache(db *bolt.DB) (*BboltCollectionCache, error) {
 	return &BboltCollectionCache{db: db}, nil
 }
 
-// SetBatch / ClearBatch for shared transaction batching.
-func (c *BboltCollectionCache) SetBatch(tx *bolt.Tx) { c.batch = tx }
-func (c *BboltCollectionCache) ClearBatch()           { c.batch = nil }
-
-func (c *BboltCollectionCache) update(fn func(tx *bolt.Tx) error) error {
-	if c.batch != nil {
-		return fn(c.batch)
-	}
-	return c.db.Update(fn)
-}
-
-func (c *BboltCollectionCache) view(fn func(tx *bolt.Tx) error) error {
-	if c.batch != nil {
-		return fn(c.batch)
-	}
-	return c.db.View(fn)
-}
-
-// AddMember adds an item ID to a collection's cached member list.
+// AddMember adds an item ID to a collection's cached member list via its own tx.
 func (c *BboltCollectionCache) AddMember(collectionID, itemID string) {
-	if err := c.update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(collMembersBucket)
-		ids := decodeIDList(b.Get([]byte(collectionID)))
-		for _, id := range ids {
-			if id == itemID {
-				return nil
-			}
-		}
-		ids = append(ids, itemID)
-		return b.Put([]byte(collectionID), encodeIDList(ids))
+	if err := c.db.Update(func(tx *bolt.Tx) error {
+		c.AddMemberTx(tx, collectionID, itemID)
+		return nil
 	}); err != nil {
 		slog.Error("collection cache: add member failed", "collection", collectionID, "item", itemID, "err", err)
 	}
 }
 
-// RemoveMember removes an item ID from a collection's cached member list.
-func (c *BboltCollectionCache) RemoveMember(collectionID, itemID string) {
-	if err := c.update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(collMembersBucket)
-		ids := decodeIDList(b.Get([]byte(collectionID)))
-		for i, id := range ids {
-			if id == itemID {
-				ids = append(ids[:i], ids[i+1:]...)
-				if len(ids) == 0 {
-					return b.Delete([]byte(collectionID))
-				}
-				return b.Put([]byte(collectionID), encodeIDList(ids))
-			}
+// AddMemberTx adds an item ID via the caller's tx.
+func (c *BboltCollectionCache) AddMemberTx(tx *bolt.Tx, collectionID, itemID string) {
+	b := tx.Bucket(collMembersBucket)
+	ids := decodeIDList(b.Get([]byte(collectionID)))
+	for _, id := range ids {
+		if id == itemID {
+			return
 		}
+	}
+	ids = append(ids, itemID)
+	b.Put([]byte(collectionID), encodeIDList(ids))
+}
+
+// RemoveMember removes an item ID from a collection's cached member list via its own tx.
+func (c *BboltCollectionCache) RemoveMember(collectionID, itemID string) {
+	if err := c.db.Update(func(tx *bolt.Tx) error {
+		c.RemoveMemberTx(tx, collectionID, itemID)
 		return nil
 	}); err != nil {
 		slog.Error("collection cache: remove member failed", "collection", collectionID, "item", itemID, "err", err)
+	}
+}
+
+// RemoveMemberTx removes an item ID via the caller's tx.
+func (c *BboltCollectionCache) RemoveMemberTx(tx *bolt.Tx, collectionID, itemID string) {
+	b := tx.Bucket(collMembersBucket)
+	ids := decodeIDList(b.Get([]byte(collectionID)))
+	for i, id := range ids {
+		if id == itemID {
+			ids = append(ids[:i], ids[i+1:]...)
+			if len(ids) == 0 {
+				b.Delete([]byte(collectionID))
+			} else {
+				b.Put([]byte(collectionID), encodeIDList(ids))
+			}
+			return
+		}
 	}
 }
 
@@ -96,7 +93,7 @@ func (c *BboltCollectionCache) RemoveMember(collectionID, itemID string) {
 // Returns nil if the collection has no cached members.
 func (c *BboltCollectionCache) Members(collectionID string) []string {
 	var ids []string
-	c.view(func(tx *bolt.Tx) error {
+	c.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(collMembersBucket)
 		ids = decodeIDList(b.Get([]byte(collectionID)))
 		return nil
@@ -107,7 +104,7 @@ func (c *BboltCollectionCache) Members(collectionID string) []string {
 // MemberCount returns the cached member count for a collection.
 func (c *BboltCollectionCache) MemberCount(collectionID string) int {
 	count := 0
-	c.view(func(tx *bolt.Tx) error {
+	c.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(collMembersBucket)
 		data := b.Get([]byte(collectionID))
 		if len(data) >= 4 {
@@ -118,13 +115,19 @@ func (c *BboltCollectionCache) MemberCount(collectionID string) int {
 	return count
 }
 
-// DeleteCollection removes the cache entry for a collection.
+// DeleteCollection removes the cache entry for a collection via its own tx.
 func (c *BboltCollectionCache) DeleteCollection(collectionID string) {
-	if err := c.update(func(tx *bolt.Tx) error {
-		return tx.Bucket(collMembersBucket).Delete([]byte(collectionID))
+	if err := c.db.Update(func(tx *bolt.Tx) error {
+		c.DeleteCollectionTx(tx, collectionID)
+		return nil
 	}); err != nil {
 		slog.Error("collection cache: delete collection failed", "collection", collectionID, "err", err)
 	}
+}
+
+// DeleteCollectionTx removes the cache entry via the caller's tx.
+func (c *BboltCollectionCache) DeleteCollectionTx(tx *bolt.Tx, collectionID string) {
+	tx.Bucket(collMembersBucket).Delete([]byte(collectionID))
 }
 
 // --- Encoding: uint32(count) + for each: uint16(len) + []byte(id) ---

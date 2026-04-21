@@ -213,9 +213,9 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	writeStart := time.Now()
 	created := 0
 
-	err := e.WithWriteBatch("curation: observation extraction", func() (bool, error) {
+	err := e.WithWriteBatch("curation: observation extraction", func(ws *core.WriteSession) (bool, error) {
 		for _, o := range allObs {
-			parent, ok := e.Graph().GetNode(o.parentID)
+			parent, ok := ws.Graph().GetNode(o.parentID)
 			if !ok {
 				continue // parent deleted between read and write
 			}
@@ -246,16 +246,16 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			}
 			props["content_short"] = graph.StringProperty(short)
 
-			n := e.Graph().AddNode(props)
+			n := ws.AddNode(props)
 
 			// Create observation_of edge (child -> parent).
-			if _, err := e.Graph().AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil); err != nil {
+			if _, err := ws.AddEdge(n.ID, o.parentID, "observation_of", 1.0, nil); err != nil {
 				logger.Error("failed to add observation_of edge",
 					"component", "curation", "child", n.ID, "parent", o.parentID, "err", err)
 			}
 
 			// Index the node (properties + BM25 + vector).
-			e.IndexNode(n.ID, o.text, o.vec)
+			ws.IndexNode(n.ID, o.text, o.vec)
 
 			created++
 		}

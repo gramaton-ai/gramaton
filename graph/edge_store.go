@@ -1,17 +1,24 @@
 package graph
 
+import bolt "go.etcd.io/bbolt"
+
 // EdgeStore abstracts edge storage and adjacency index operations.
 // The Graph delegates edge CRUD and traversal queries to this interface.
 //
 // Implementations: MemoryEdgeStore (in-memory maps, current default),
 // and BboltEdgeStore (bbolt-backed).
 type EdgeStore interface {
-	// Put stores an edge and updates adjacency indexes.
+	// Put stores an edge and updates adjacency indexes via its own tx.
 	Put(e *Edge)
+	// PutTx stores an edge via the caller's tx + optional *EdgeBatch.
+	// In-memory impls ignore tx and batch.
+	PutTx(tx *bolt.Tx, batch *EdgeBatch, e *Edge)
 	// Get retrieves an edge by ID.
 	Get(id string) (*Edge, bool)
-	// Delete removes an edge and updates adjacency indexes.
+	// Delete removes an edge and updates adjacency indexes via its own tx.
 	Delete(id string)
+	// DeleteTx removes an edge via the caller's tx + optional *EdgeBatch.
+	DeleteTx(tx *bolt.Tx, batch *EdgeBatch, id string)
 	// From returns all outbound edges from a node.
 	From(nodeID string) []*Edge
 	// To returns all inbound edges to a node.
@@ -67,6 +74,12 @@ func (s *MemoryEdgeStore) Delete(id string) {
 	removeFromIndex(s.typeEdges, e.Type, id)
 	delete(s.edges, id)
 }
+
+// PutTx mirrors Put; the in-memory impl ignores tx and batch.
+func (s *MemoryEdgeStore) PutTx(_ *bolt.Tx, _ *EdgeBatch, e *Edge) { s.Put(e) }
+
+// DeleteTx mirrors Delete; the in-memory impl ignores tx and batch.
+func (s *MemoryEdgeStore) DeleteTx(_ *bolt.Tx, _ *EdgeBatch, id string) { s.Delete(id) }
 
 func (s *MemoryEdgeStore) From(nodeID string) []*Edge {
 	ids, ok := s.outEdges[nodeID]

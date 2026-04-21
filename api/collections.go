@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -123,6 +124,33 @@ func (a *API) setFieldProps(nodeID string, fields map[string]any) {
 				}
 			}
 			a.engine.SetProp(nodeID, propKey, graph.StringListProperty(ss))
+		}
+	}
+}
+
+// setFieldPropsIn is setFieldProps routed through a WriteSession so
+// property writes share the batch's bbolt tx instead of opening one
+// per call. Used inside WithWriteBatch closures. (P2-06.)
+func (a *API) setFieldPropsIn(ws *core.WriteSession, nodeID string, fields map[string]any) {
+	for k, v := range fields {
+		propKey := "field." + k
+		switch val := v.(type) {
+		case string:
+			ws.SetProp(nodeID, propKey, graph.StringProperty(val))
+		case float64:
+			ws.SetProp(nodeID, propKey, graph.Float64Property(val))
+		case bool:
+			ws.SetProp(nodeID, propKey, graph.BoolProperty(val))
+		case nil:
+			ws.SetProp(nodeID, propKey, graph.StringProperty(""))
+		case []any:
+			ss := make([]string, 0, len(val))
+			for _, elem := range val {
+				if s, ok := elem.(string); ok {
+					ss = append(ss, s)
+				}
+			}
+			ws.SetProp(nodeID, propKey, graph.StringListProperty(ss))
 		}
 	}
 }
@@ -939,7 +967,7 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	// closure and apply them after it returns.
 	cachePending := make([]string, 0, len(survivors))
 
-	batchErr := a.engine.BatchIndexWrites(func() {
+	batchErr := a.engine.BatchIndexWrites(func(ws *core.WriteSession) {
 		for _, s := range survivors {
 			// Per-item schema validation. Runs under lock so the
 			// schema we validate against matches the schema we commit
@@ -975,8 +1003,8 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 				"created_at":   graph.TimestampProperty(time.Now().UTC()),
 				"access_count": graph.Int64Property(0),
 			}
-			n := a.engine.Graph().AddNode(props)
-			a.setFieldProps(n.ID, s.item.Fields)
+			n := ws.AddNode(props)
+			a.setFieldPropsIn(ws, n.ID, s.item.Fields)
 
 			// Index + BM25 from string field values.
 			var bm25Parts []string
@@ -985,12 +1013,12 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 					bm25Parts = append(bm25Parts, str)
 				}
 			}
-			a.engine.IndexNode(n.ID, strings.Join(bm25Parts, " "), s.vec)
+			ws.IndexNode(n.ID, strings.Join(bm25Parts, " "), s.vec)
 			if s.vec != nil && modelID != "" {
-				a.engine.SetProp(n.ID, "embedding_model", graph.StringProperty(modelID))
+				ws.SetProp(n.ID, "embedding_model", graph.StringProperty(modelID))
 			}
 
-			if _, err := a.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
+			if _, err := ws.AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
 				a.log.Warn("collection batch member_of edge failed",
 					"component", "collection", "collection_id", collectionID,
 					"item_id", n.ID, "err", err)

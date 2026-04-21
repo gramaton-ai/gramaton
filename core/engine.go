@@ -475,9 +475,13 @@ func (e *Engine) CollCache() *index.BboltCollectionCache { return e.indexes.coll
 // Prefer WithWriteBatch for write-phase callers that also need Lock +
 // Save. BatchIndexWrites remains the right call for code paths that
 // are already under the write lock and want to batch a sub-section
-// of their work.
-func (e *Engine) BatchIndexWrites(fn func()) error {
-	return e.indexes.batch(fn)
+// of their work. (P2-06: fn now receives a *WriteSession, matching
+// the WithWriteBatch closure shape.)
+func (e *Engine) BatchIndexWrites(fn func(*WriteSession)) error {
+	return e.indexes.batch(e, func(ws *WriteSession) error {
+		fn(ws)
+		return nil
+	})
 }
 
 // WithWriteBatch runs fn under the engine write lock with bbolt index
@@ -498,16 +502,20 @@ func (e *Engine) BatchIndexWrites(fn func()) error {
 // commit label.
 //
 // Logs batch_ms and save_ms at Info so lock-hold duration is
-// observable per phase. (T-06.)
-func (e *Engine) WithWriteBatch(message string, fn func() (mutated bool, err error)) error {
+// observable per phase. fn receives a *WriteSession with the
+// session's tx and companion caches; call ws.SetProp, ws.AddEdge,
+// ws.IndexNode etc. inside to thread tx through the bbolt-backed
+// indexes. (T-06, P2-06.)
+func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated bool, err error)) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	lockStart := time.Now()
 	var mutated bool
 	var fnErr error
-	batchErr := e.indexes.batch(func() {
-		mutated, fnErr = fn()
+	batchErr := e.indexes.batch(e, func(ws *WriteSession) error {
+		mutated, fnErr = fn(ws)
+		return fnErr
 	})
 	batchDur := time.Since(lockStart)
 
