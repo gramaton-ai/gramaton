@@ -4,6 +4,32 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
+### D40: `WriteSession` Pattern for Batched Index Writes (P2-06)
+
+**Decision:** The stashed `batch *bolt.Tx` field on BboltPropertyIndex / BboltBM25Index / BboltSecondaryIndex / BboltCollectionCache / BboltEdgeStore is replaced by an explicit `core.WriteSession` type that owns the shared bbolt transaction and the BM25/Edge companion caches. Mutating methods on the five types grow `*Tx`-suffixed variants that take the tx directly. `Engine.WithWriteBatch`'s fn signature changes from `func() (bool, error)` to `func(*WriteSession) (bool, error)` so callers inside a batch operate through the session. `Graph.AddEdge` gains an `AddEdgeTx(tx, batch, ...)` companion used internally by `WriteSession.AddEdge`. The 139 existing `Graph.AddEdge` call sites outside batches are unchanged. Engine-level methods (`SetProp`, `IndexNode`, etc.) retain their current signatures — callers outside a batch continue to use them as before; callers inside a batch use `WriteSession` methods instead.
+
+The refactor lands in three stages: (1) hoist companion caches into value types (landed in commit `2994c30`), (2) add Tx-suffixed variants to the five types + Graph and remove the stashed `batch` field + `SetBatch`/`ClearBatch`, (3) introduce `WriteSession`, flip `WithWriteBatch`'s fn signature, and migrate curation/observe and curation/deterministic.
+
+**Why:** The `SetBatch(tx)` + stashed-pointer pattern was flagged as a race hazard (P2-06) under hypothetical finer-grained locking, with three distinct failure modes: (A) torn pointer read of `idx.batch`, (B) stale-pointer use by a goroutine outside the batch-owning goroutine, (C) companion-map race for BM25 posting cache and EdgeStore adjacency cache. The current engine write lock makes all three impossible today, but the pattern has already caused one concrete incident (P1-78 `CollCache.AddMember` deadlock inside `BatchIndexWrites`), the implicit invariant ("caller must hold the engine write lock for the full batch lifetime") lives in doc comments and rots, and every new index joining the batch pattern extends the tax.
+
+Four options were weighed:
+
+(a) **Document the invariant, defer the fix to a future fine-grained-locking pass.** Zero LOC. Rejected because documented invariants are the first thing to rot, and the P1-78 incident showed the class is already producing real bugs rather than just hypothetical ones.
+
+(b) **`atomic.Pointer[bolt.Tx]` on the stashed field.** ~20 LOC, fixes failure mode A only. Rejected because it *looks* safer than it is — future readers see `atomic.Pointer` and assume the whole batch state is race-free, but the companion maps remain unprotected. Half-fixes are worse than documented fragile state because they invite misplaced confidence.
+
+(c) **`sync.Mutex` gating the SetBatch lifetime.** ~60 LOC. Serializes two concurrent `SetBatch` calls but doesn't prevent a third-party goroutine from calling `Add` while a batch is installed and seeing someone else's tx. Still fails mode B.
+
+(d) **Explicit threading via `WriteSession`.** ~400-500 LOC. Picked. Only option that closes all three failure modes. The type signature is self-documenting: `func(ws *WriteSession) (bool, error)` makes the batched path obvious at every call site. No implicit invariant to uphold. The 139-call-site blast radius feared for "full tx threading" doesn't materialize because non-batched callers use the existing `AddEdge`/`SetProp`/etc. unchanged — only code inside `WithWriteBatch` closures changes, which is ~6 call sites across `curation/observe.go` and `curation/deterministic.go`.
+
+One architectural concession accepted: `Graph.AddEdgeTx` takes a `*bbolt.Tx` parameter, which leaks bbolt into the graph package. The graph package could in principle serve a non-bbolt edge store (MemoryEdgeStore exists for tests), so the parameter is nominally storage-specific. This is honest leakage — Gramaton ships one production backend (bbolt), the MemoryEdgeStore impl ignores the tx, and the alternative (neutral opaque handle via a new `txbatch` package) adds a package boundary for a use case that has one real implementation. Documented as a known concession rather than pretending the graph layer is storage-agnostic.
+
+The three-stage landing keeps each commit reviewable and reversible. Stage 1 was a pure refactor (no API change, internal restructure of companion caches); Stages 2 and 3 are coupled (interface signature changes require caller updates to compile) and land together in a single commit to avoid broken intermediate state.
+
+Detailed stage-by-stage execution plan: [p2-06-writesession-plan.md](p2-06-writesession-plan.md).
+
+---
+
 ### D39: Cost Caps Supplement Count Caps, Not Replace Them
 
 **Decision:** Gramaton gains two USD-denominated safety caps on LLM spend: `llm_curation.max_cost_usd_per_run` (per curation cycle) and `llm.max_cost_usd_per_day` (across the day). Both default to 0 (disabled). They coexist with the existing `max_calls_per_run` / `max_calls_per_day` / `max_calls_per_session` count caps rather than replacing them. When a cost cap is enabled and tripped, curation breaks out of the current cycle; the daily cap pauses `llm.Metered` so all subsequent LLM calls return `ErrCapped` until the daily boundary rolls over. Cost is estimated via `llm.EstimateCost` using the per-task token counts reported by providers plus the per-model pricing table in `llm/pricing.go`.

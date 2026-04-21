@@ -33,3 +33,9 @@ Start with foundations for context, then read the design docs in order. The rema
 | [Data Integrity](data-integrity.md) | Threat model, agent misuse, failure modes, defenses |
 | [Design Decisions](design-decisions.md) | Decision log with rationale |
 | [Glossary](glossary.md) | Terminology reference |
+
+### Pending refactors
+
+| Document | What It Covers |
+|----------|---------------|
+| [P2-06 WriteSession plan](p2-06-writesession-plan.md) | Stage-by-stage plan to replace the stashed `*bolt.Tx` pattern with an explicit `WriteSession` type |
