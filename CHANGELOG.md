@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Engine.WithWriteBatch` helper (T-06)** -- consolidates the
+  write-phase recipe (Lock -> bbolt index batch -> Save -> Unlock)
+  into a single call so curation and bulk-insert paths stop drifting
+  on error handling, logging, and the "skip save when nothing
+  changed" gate. `fn` returns `(mutated bool, err error)`: a false
+  `mutated` skips Save (no-op commits waste fsync + HEAD writes),
+  an error skips Save and is wrapped with the phase label. Logs
+  `batch_ms` / `save_ms` at Info so lock-hold duration is observable
+  per phase. Migrated `curation/deterministic.go` (previously
+  unbatched -- every SetProp / AddEdge / IndexNode did its own
+  bbolt fsync under the monolithic write lock; a busy cycle with
+  hundreds of mutations now lands in a single bbolt transaction)
+  and `curation/observe.go` observation extraction. Closes portions
+  of P1-30, P1-31, P1-45; step 4 (curation envelope cache) was
+  already done when writeJSON grew the 5s cache.
 - **USD-denominated LLM cost caps (T-07 step 2)** -- two new config
   fields: `llm_curation.max_cost_usd_per_run` bounds a single curation
   cycle, `llm.max_cost_usd_per_day` bounds the daily aggregate. Both

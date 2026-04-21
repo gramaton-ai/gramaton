@@ -205,19 +205,15 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	}
 
 	// --- Write phase ---
-	// Batch BM25 and property index writes to amortize fsync. Without
-	// batching, each IndexNode does a separate bbolt write transaction
-	// (~5-10ms fsync each), making 500+ observations take minutes.
-	e.Lock()
-	defer e.Unlock()
-
+	// WithWriteBatch takes the engine write lock, batches all bbolt
+	// index writes into a single transaction (without batching each
+	// IndexNode would fsync separately, making 500-observation runs
+	// take minutes), and Saves under the message label when fn
+	// reports mutations.
 	writeStart := time.Now()
 	created := 0
 
-	// Batch all bbolt-backed index writes (PropIdx + BM25) in a single
-	// transaction. Without batching, each IndexNode call does separate
-	// bbolt write transactions with fsync, making bulk writes extremely slow.
-	if err := e.BatchIndexWrites(func() {
+	err := e.WithWriteBatch("curation: observation extraction", func() (bool, error) {
 		for _, o := range allObs {
 			parent, ok := e.Graph().GetNode(o.parentID)
 			if !ok {
@@ -263,8 +259,10 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 
 			created++
 		}
-	}); err != nil {
-		logger.Error("observation index batch failed",
+		return created > 0, nil
+	})
+	if err != nil {
+		logger.Error("observation write batch failed",
 			"component", "curation",
 			"err", err,
 			"attempted", len(allObs))
@@ -272,7 +270,6 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	}
 
 	if created > 0 {
-		e.SaveOrLog("curation: observation extraction")
 		logger.Info("observations extracted",
 			"component", "curation",
 			"observations", created,

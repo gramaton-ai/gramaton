@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -583,5 +585,84 @@ func TestSetContentPropUpdatesBM25Layers(t *testing.T) {
 
 	if len(eng.BM25Full().Search([]string{"databases"}, 10, nil)) != 1 {
 		t.Fatal("BM25Full should find 'databases'")
+	}
+}
+
+// TestWithWriteBatchSaves verifies the helper takes the lock, runs fn
+// under a single bbolt transaction, and persists state when mutated
+// is true. Caller must observe the record after release.
+func TestWithWriteBatchSaves(t *testing.T) {
+	eng := setupTestEngine(t)
+	defer eng.Close()
+
+	var newID string
+	err := eng.WithWriteBatch("test: mutated", func() (bool, error) {
+		n := eng.Graph().AddNode(graph.Properties{
+			"content_full": graph.StringProperty("hello"),
+			"created_at":   graph.TimestampProperty(time.Now().UTC()),
+		})
+		newID = n.ID
+		eng.IndexNode(n.ID, "hello", nil)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch: %v", err)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(newID); !ok {
+		t.Fatal("node should exist after WithWriteBatch")
+	}
+	if eng.headHash == "" {
+		t.Fatal("headHash should be set after Save")
+	}
+}
+
+// TestWithWriteBatchSkipsSaveOnNoMutations verifies the "mutated=false"
+// branch does not call Save. Checked by observing that headHash
+// stays empty (no commit landed) while fn still ran under the lock.
+func TestWithWriteBatchSkipsSaveOnNoMutations(t *testing.T) {
+	eng := setupTestEngine(t)
+	defer eng.Close()
+
+	prevHead := eng.headHash
+	ran := false
+	err := eng.WithWriteBatch("test: noop", func() (bool, error) {
+		ran = true
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch: %v", err)
+	}
+	if !ran {
+		t.Fatal("fn should have run")
+	}
+	if eng.headHash != prevHead {
+		t.Fatalf("headHash should not change on no-op, got %q (was %q)", eng.headHash, prevHead)
+	}
+}
+
+// TestWithWriteBatchPropagatesFnError confirms fn errors are wrapped
+// with the message label and Save is skipped.
+func TestWithWriteBatchPropagatesFnError(t *testing.T) {
+	eng := setupTestEngine(t)
+	defer eng.Close()
+
+	sentinel := errors.New("boom")
+	err := eng.WithWriteBatch("test: err", func() (bool, error) {
+		return true, sentinel
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel in chain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "test: err") {
+		t.Fatalf("expected label in error, got %v", err)
+	}
+	if eng.headHash != "" {
+		t.Fatal("headHash should stay empty on fn error")
 	}
 }

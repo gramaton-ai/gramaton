@@ -243,8 +243,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 
 	// Orphan similarity search: for each orphan, find similar records.
 	type orphanLink struct {
-		orphanID  string
-		targetID  string
+		orphanID   string
+		targetID   string
 		similarity float64
 	}
 	var orphanLinks []orphanLink
@@ -365,238 +365,246 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	e.RUnlock()
 
 	// --- Write phase ---
+	// Uses WithWriteBatch so all bbolt index writes inside land in a
+	// single transaction (previously unbatched: every SetProp / AddEdge
+	// / IndexNode did its own fsync, so a busy cycle with hundreds of
+	// mutations serialised hundreds of disk syncs under the write
+	// lock). The helper also handles the "only Save if something
+	// actually changed" gate and wraps errors with the phase label.
 	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts)
 	if mutations > 0 {
-		e.Lock()
+		err := e.WithWriteBatch("curation: deterministic", func() (bool, error) {
 
-		// Lifecycle transitions: set valid_until on stale records.
-		for _, id := range staleIDs {
-			if _, ok := e.Graph().GetNode(id); ok {
-				e.SetProp(id, "valid_until", graph.TimestampProperty(now))
-				result.LifecycleTransitions++
-			}
-		}
-
-		// Orphan linking.
-		for _, ol := range orphanLinks {
-			if _, ok := e.Graph().GetNode(ol.orphanID); !ok {
-				continue
-			}
-			if _, ok := e.Graph().GetNode(ol.targetID); !ok {
-				continue
-			}
-			_, err := e.Graph().AddEdge(ol.orphanID, ol.targetID, "related_to", ol.similarity, nil)
-			if err == nil {
-				result.OrphansLinked++
-			}
-		}
-
-		// Duplicate consolidation with Jaccard verification to prevent
-		// false positives on structurally similar long documents.
-		for _, pair := range pairs {
-			na, okA := e.Graph().GetNode(pair.IDA)
-			nb, okB := e.Graph().GetNode(pair.IDB)
-			if !okA || !okB {
-				continue
+			// Lifecycle transitions: set valid_until on stale records.
+			for _, id := range staleIDs {
+				if _, ok := e.Graph().GetNode(id); ok {
+					e.SetProp(id, "valid_until", graph.TimestampProperty(now))
+					result.LifecycleTransitions++
+				}
 			}
 
-			// Observations are derived from their parents, so observation-
-			// vs-parent similarity is not a duplicate signal. FindDuplicates
-			// already filters observation_of pairs, but we defense-in-depth
-			// here in case an observation ever lands without its edge.
-			if nt, ok := na.Properties.GetString("node_type"); ok && nt == "observation" {
-				continue
-			}
-			if nt, ok := nb.Properties.GetString("node_type"); ok && nt == "observation" {
-				continue
-			}
-
-			// Collection members have structured per-item fields (status,
-			// title, etc.). Silently consolidating them on embedding alone
-			// would merge distinct tracked work. Operators still see these
-			// pairs via gramaton_duplicates for manual triage.
-			if isCollectionMember(e.Graph(), na.ID) || isCollectionMember(e.Graph(), nb.ID) {
-				continue
+			// Orphan linking.
+			for _, ol := range orphanLinks {
+				if _, ok := e.Graph().GetNode(ol.orphanID); !ok {
+					continue
+				}
+				if _, ok := e.Graph().GetNode(ol.targetID); !ok {
+					continue
+				}
+				_, err := e.Graph().AddEdge(ol.orphanID, ol.targetID, "related_to", ol.similarity, nil)
+				if err == nil {
+					result.OrphansLinked++
+				}
 			}
 
-			// Jaccard guard: verify content similarity, not just embedding.
-			if !verifyDedupJaccard(na, nb) {
-				continue
-			}
+			// Duplicate consolidation with Jaccard verification to prevent
+			// false positives on structurally similar long documents.
+			for _, pair := range pairs {
+				na, okA := e.Graph().GetNode(pair.IDA)
+				nb, okB := e.Graph().GetNode(pair.IDB)
+				if !okA || !okB {
+					continue
+				}
 
-			// Determine which is older. Tie-break on identical
-			// created_at (common in bulk imports) by inbound edge
-			// count -- keep the more-referenced record as the
-			// "newer" survivor since rewriting more inbound edges
-			// is more destructive. Final fallback is lex order on
-			// ID, which matches FindDuplicates' canonical pair
-			// ordering and stays deterministic.
-			// (Wave 3 P1-36: previously the lex-smaller ID was
-			// silently chosen as "older" on identical timestamps,
-			// because pair.IDA = lex-smaller per FindDuplicates.)
-			caA, _ := na.Properties.GetTimestamp("created_at")
-			caB, _ := nb.Properties.GetTimestamp("created_at")
-			olderID, newerID := pickOlder(e.Graph(), pair.IDA, pair.IDB, caA, caB)
+				// Observations are derived from their parents, so observation-
+				// vs-parent similarity is not a duplicate signal. FindDuplicates
+				// already filters observation_of pairs, but we defense-in-depth
+				// here in case an observation ever lands without its edge.
+				if nt, ok := na.Properties.GetString("node_type"); ok && nt == "observation" {
+					continue
+				}
+				if nt, ok := nb.Properties.GetString("node_type"); ok && nt == "observation" {
+					continue
+				}
 
-			older, ok := e.Graph().GetNode(olderID)
-			if !ok {
-				continue
-			}
-			// Skip if already historical.
-			if _, has := older.Properties.GetTimestamp("valid_until"); has {
-				continue
-			}
-			e.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
-			e.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
-			e.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
-			if _, err := e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
-				logger.Error("failed to add supersedes edge",
-					"component", "curation", "newer", newerID, "older", olderID, "err", err)
-			}
-			result.DuplicatesSuperseded++
-		}
+				// Collection members have structured per-item fields (status,
+				// title, etc.). Silently consolidating them on embedding alone
+				// would merge distinct tracked work. Operators still see these
+				// pairs via gramaton_duplicates for manual triage.
+				if isCollectionMember(e.Graph(), na.ID) || isCollectionMember(e.Graph(), nb.ID) {
+					continue
+				}
 
-		// Quality repairs: fix deterministic issues, flag others.
-		for _, qi := range qualityIssues {
-			if _, ok := e.Graph().GetNode(qi.nodeID); !ok {
-				continue
-			}
-			switch qi.fix {
-			case "concept_summary", "extract_short":
-				// Deterministic fix: update content_short.
-				e.SetContentProp(qi.nodeID, "content_short", qi.short)
-				result.QualityRepairs++
-			case "flag_embed":
-				// Can't fix deterministically (needs embedder).
-				// Stale count in manifest already captures this;
-				// reembed pipeline will handle it.
-				result.QualityFlags++
-			}
-		}
+				// Jaccard guard: verify content similarity, not just embedding.
+				if !verifyDedupJaccard(na, nb) {
+					continue
+				}
 
-		// Deterministic concept creation: create concept nodes with
-		// template content and computed metadata. LLM synthesis is
-		// deferred to the autonomous enrichment phase.
-		for _, c := range newConcepts {
-			// Compute metadata from member records.
-			var confSum float64
-			var confCount int
-			var coKeywords []string
-			coKWCounts := make(map[string]int)
-			hasSpeculative := false
-			allWellEstablished := true
+				// Determine which is older. Tie-break on identical
+				// created_at (common in bulk imports) by inbound edge
+				// count -- keep the more-referenced record as the
+				// "newer" survivor since rewriting more inbound edges
+				// is more destructive. Final fallback is lex order on
+				// ID, which matches FindDuplicates' canonical pair
+				// ordering and stays deterministic.
+				// (Wave 3 P1-36: previously the lex-smaller ID was
+				// silently chosen as "older" on identical timestamps,
+				// because pair.IDA = lex-smaller per FindDuplicates.)
+				caA, _ := na.Properties.GetTimestamp("created_at")
+				caB, _ := nb.Properties.GetTimestamp("created_at")
+				olderID, newerID := pickOlder(e.Graph(), pair.IDA, pair.IDB, caA, caB)
 
-			for _, memberID := range c.NodeIDs {
-				mn, ok := e.Graph().GetNode(memberID)
+				older, ok := e.Graph().GetNode(olderID)
 				if !ok {
 					continue
 				}
-				if conf, ok := mn.Properties.GetFloat64("confidence"); ok && conf > 0 {
-					confSum += conf
-					confCount++
+				// Skip if already historical.
+				if _, has := older.Properties.GetTimestamp("valid_until"); has {
+					continue
 				}
-				if es, ok := mn.Properties.GetString("epistemic_status"); ok {
-					if es == "speculative" {
-						hasSpeculative = true
-					}
-					if es != "well_established" {
-						allWellEstablished = false
-					}
+				e.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
+				e.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
+				e.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
+				if _, err := e.Graph().AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
+					logger.Error("failed to add supersedes edge",
+						"component", "curation", "newer", newerID, "older", olderID, "err", err)
 				}
-				if kws, ok := mn.Properties.GetStringList("content_keywords"); ok {
-					for _, mk := range kws {
-						if mk != c.Keyword {
-							coKWCounts[mk]++
+				result.DuplicatesSuperseded++
+			}
+
+			// Quality repairs: fix deterministic issues, flag others.
+			for _, qi := range qualityIssues {
+				if _, ok := e.Graph().GetNode(qi.nodeID); !ok {
+					continue
+				}
+				switch qi.fix {
+				case "concept_summary", "extract_short":
+					// Deterministic fix: update content_short.
+					e.SetContentProp(qi.nodeID, "content_short", qi.short)
+					result.QualityRepairs++
+				case "flag_embed":
+					// Can't fix deterministically (needs embedder).
+					// Stale count in manifest already captures this;
+					// reembed pipeline will handle it.
+					result.QualityFlags++
+				}
+			}
+
+			// Deterministic concept creation: create concept nodes with
+			// template content and computed metadata. LLM synthesis is
+			// deferred to the autonomous enrichment phase.
+			for _, c := range newConcepts {
+				// Compute metadata from member records.
+				var confSum float64
+				var confCount int
+				var coKeywords []string
+				coKWCounts := make(map[string]int)
+				hasSpeculative := false
+				allWellEstablished := true
+
+				for _, memberID := range c.NodeIDs {
+					mn, ok := e.Graph().GetNode(memberID)
+					if !ok {
+						continue
+					}
+					if conf, ok := mn.Properties.GetFloat64("confidence"); ok && conf > 0 {
+						confSum += conf
+						confCount++
+					}
+					if es, ok := mn.Properties.GetString("epistemic_status"); ok {
+						if es == "speculative" {
+							hasSpeculative = true
+						}
+						if es != "well_established" {
+							allWellEstablished = false
+						}
+					}
+					if kws, ok := mn.Properties.GetStringList("content_keywords"); ok {
+						for _, mk := range kws {
+							if mk != c.Keyword {
+								coKWCounts[mk]++
+							}
 						}
 					}
 				}
-			}
 
-			// Derived confidence: average of member confidence.
-			derivedConf := 0.7 // default
-			if confCount > 0 {
-				derivedConf = confSum / float64(confCount)
-			}
+				// Derived confidence: average of member confidence.
+				derivedConf := 0.7 // default
+				if confCount > 0 {
+					derivedConf = confSum / float64(confCount)
+				}
 
-			// Derived epistemic status.
-			derivedES := "probable"
-			if allWellEstablished {
-				derivedES = "well_established"
-			} else if hasSpeculative {
-				derivedES = "probable" // mixed -> probable
-			}
+				// Derived epistemic status.
+				derivedES := "probable"
+				if allWellEstablished {
+					derivedES = "well_established"
+				} else if hasSpeculative {
+					derivedES = "probable" // mixed -> probable
+				}
 
-			// Top co-occurring keywords (up to 5).
-			type kwE struct {
-				kw    string
-				count int
-			}
-			var coKWList []kwE
-			for kw, cnt := range coKWCounts {
-				coKWList = append(coKWList, kwE{kw, cnt})
-			}
-			sort.Slice(coKWList, func(i, j int) bool { return coKWList[i].count > coKWList[j].count })
-			topCoKW := 5
-			if len(coKWList) < topCoKW {
-				topCoKW = len(coKWList)
-			}
-			for i := 0; i < topCoKW; i++ {
-				coKeywords = append(coKeywords, coKWList[i].kw)
-			}
+				// Top co-occurring keywords (up to 5).
+				type kwE struct {
+					kw    string
+					count int
+				}
+				var coKWList []kwE
+				for kw, cnt := range coKWCounts {
+					coKWList = append(coKWList, kwE{kw, cnt})
+				}
+				sort.Slice(coKWList, func(i, j int) bool { return coKWList[i].count > coKWList[j].count })
+				topCoKW := 5
+				if len(coKWList) < topCoKW {
+					topCoKW = len(coKWList)
+				}
+				for i := 0; i < topCoKW; i++ {
+					coKeywords = append(coKeywords, coKWList[i].kw)
+				}
 
-			// Template content.
-			templateFull := fmt.Sprintf("Concept: %s. Connects %d records.", c.Keyword, c.Count)
-			if len(coKeywords) > 0 {
-				templateFull += fmt.Sprintf(" Related terms: %s.", strings.Join(coKeywords, ", "))
-			}
-			templateShort := fmt.Sprintf("%s (%d records)", c.Keyword, c.Count)
-			if len(templateShort) > 200 {
-				templateShort = templateShort[:200]
-			}
+				// Template content.
+				templateFull := fmt.Sprintf("Concept: %s. Connects %d records.", c.Keyword, c.Count)
+				if len(coKeywords) > 0 {
+					templateFull += fmt.Sprintf(" Related terms: %s.", strings.Join(coKeywords, ", "))
+				}
+				templateShort := fmt.Sprintf("%s (%d records)", c.Keyword, c.Count)
+				if len(templateShort) > 200 {
+					templateShort = templateShort[:200]
+				}
 
-			allKeywords := append([]string{c.Keyword}, coKeywords...)
+				allKeywords := append([]string{c.Keyword}, coKeywords...)
 
-			props := graph.Properties{
-				"content_full":      graph.StringProperty(templateFull),
-				"content_short":     graph.StringProperty(templateShort),
-				"content_keywords":  graph.StringListProperty(allKeywords),
-				"processing_status": graph.StringProperty("processed"),
-				"synthesis_status":  graph.StringProperty("pending"),
-				"node_type":         graph.StringProperty("concept"),
-				"concept_keyword":   graph.StringProperty(c.Keyword),
-				"temporality":       graph.StringProperty("durable"),
-				"knowledge_type":    graph.StringProperty("conceptual"),
-				"epistemic_status":  graph.StringProperty(derivedES),
-				"confidence":        graph.Float64Property(derivedConf),
-				"evidence_count":    graph.Int64Property(int64(c.Count)),
-				"created_at":        graph.TimestampProperty(now),
-				"access_count":      graph.Int64Property(0),
-			}
+				props := graph.Properties{
+					"content_full":      graph.StringProperty(templateFull),
+					"content_short":     graph.StringProperty(templateShort),
+					"content_keywords":  graph.StringListProperty(allKeywords),
+					"processing_status": graph.StringProperty("processed"),
+					"synthesis_status":  graph.StringProperty("pending"),
+					"node_type":         graph.StringProperty("concept"),
+					"concept_keyword":   graph.StringProperty(c.Keyword),
+					"temporality":       graph.StringProperty("durable"),
+					"knowledge_type":    graph.StringProperty("conceptual"),
+					"epistemic_status":  graph.StringProperty(derivedES),
+					"confidence":        graph.Float64Property(derivedConf),
+					"evidence_count":    graph.Int64Property(int64(c.Count)),
+					"created_at":        graph.TimestampProperty(now),
+					"access_count":      graph.Int64Property(0),
+				}
 
-			cn := e.Graph().AddNode(props)
-			for k, v := range cn.Properties {
-				e.PropIdx().Add(cn.ID, k, v)
-			}
-			e.IndexNode(cn.ID, templateFull, nil)
+				cn := e.Graph().AddNode(props)
+				for k, v := range cn.Properties {
+					e.PropIdx().Add(cn.ID, k, v)
+				}
+				e.IndexNode(cn.ID, templateFull, nil)
 
-			// Create instance_of edges from member records.
-			for _, memberID := range c.NodeIDs {
-				if _, ok := e.Graph().GetNode(memberID); ok {
-					if _, err := e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
-						logger.Error("failed to add instance_of edge",
-							"component", "curation", "member", memberID, "concept", cn.ID, "err", err)
+				// Create instance_of edges from member records.
+				for _, memberID := range c.NodeIDs {
+					if _, ok := e.Graph().GetNode(memberID); ok {
+						if _, err := e.Graph().AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
+							logger.Error("failed to add instance_of edge",
+								"component", "curation", "member", memberID, "concept", cn.ID, "err", err)
+						}
 					}
 				}
+
+				result.ConceptsCreated++
 			}
 
-			result.ConceptsCreated++
+			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated
+			return changed > 0, nil
+		})
+		if err != nil {
+			logger.Error("deterministic write batch failed",
+				"component", "curation", "err", err)
 		}
-
-		if result.LifecycleTransitions+result.OrphansLinked+result.DuplicatesSuperseded+result.QualityRepairs+result.ConceptsCreated > 0 {
-			e.SaveOrLog("curation: deterministic")
-		}
-
-		e.Unlock()
 	}
 
 	// --- Concept enrichment phase ---

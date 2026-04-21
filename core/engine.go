@@ -464,8 +464,71 @@ func (e *Engine) CollCache() *index.BboltCollectionCache { return e.indexes.coll
 // return means the entire batch was rolled back; index writes inside
 // fn did not persist. Callers must check the error -- silently
 // ignoring it loses every write inside the closure.
+//
+// Prefer WithWriteBatch for write-phase callers that also need Lock +
+// Save. BatchIndexWrites remains the right call for code paths that
+// are already under the write lock and want to batch a sub-section
+// of their work.
 func (e *Engine) BatchIndexWrites(fn func()) error {
 	return e.indexes.batch(fn)
+}
+
+// WithWriteBatch runs fn under the engine write lock with bbolt index
+// writes batched into a single transaction, then Saves under the label
+// `message` when fn reports mutations.
+//
+// Standardises the three-step write-phase recipe (Lock -> batched
+// writes -> Save) so callers don't drift on error handling, logging,
+// or the "skip save when nothing changed" gate. Caller MUST NOT hold
+// the engine lock. Caller is responsible for short-circuiting *before*
+// calling when there is no work to do -- WithWriteBatch always takes
+// the write lock.
+//
+// fn returns (mutated, err). When err is non-nil, Save is skipped and
+// the error is wrapped with the message label. When mutated is false,
+// Save is skipped (no-op commits waste bbolt fsync + HEAD writes).
+// When both are clean, a single Save fires with the message as the
+// commit label.
+//
+// Logs batch_ms and save_ms at Info so lock-hold duration is
+// observable per phase. (T-06.)
+func (e *Engine) WithWriteBatch(message string, fn func() (mutated bool, err error)) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	lockStart := time.Now()
+	var mutated bool
+	var fnErr error
+	batchErr := e.indexes.batch(func() {
+		mutated, fnErr = fn()
+	})
+	batchDur := time.Since(lockStart)
+
+	if fnErr != nil {
+		return fmt.Errorf("withwritebatch %q: %w", message, fnErr)
+	}
+	if batchErr != nil {
+		return fmt.Errorf("withwritebatch %q: batch: %w", message, batchErr)
+	}
+
+	if !mutated {
+		slog.Info("write batch complete (no-op)",
+			"component", "engine",
+			"message", message,
+			"batch_ms", batchDur.Milliseconds())
+		return nil
+	}
+
+	saveStart := time.Now()
+	if _, err := e.Save(message); err != nil {
+		return fmt.Errorf("withwritebatch %q: save: %w", message, err)
+	}
+	slog.Info("write batch complete",
+		"component", "engine",
+		"message", message,
+		"batch_ms", batchDur.Milliseconds(),
+		"save_ms", time.Since(saveStart).Milliseconds())
+	return nil
 }
 
 // Close releases resources held by the engine (bbolt DB, mmap files).
