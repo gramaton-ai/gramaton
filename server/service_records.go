@@ -141,7 +141,8 @@ func (s *Server) serviceCapture(_ context.Context, req *captureRequest) (map[str
 			return nil, errConflict(msg)
 		}
 
-		// Auto-supersede: mark old record as historical.
+		// Default "supersede" semantics (see design-decisions.md D37):
+		// mark the older record historical and link via a supersedes edge.
 		now := time.Now().UTC()
 		oldNode, _ := s.engine.Graph().GetNode(dupID)
 		if oldNode != nil {

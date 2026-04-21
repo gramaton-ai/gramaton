@@ -249,6 +249,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Collapsed `dedup.action` enum to `supersede | reject`.** The
+  previous three-value enum (`flag | supersede | reject`) had `flag`
+  and `supersede` behaving identically across all three capture
+  paths -- both wrote `valid_until` + `resolution=superseded` + a
+  `supersedes` edge, with the distinction existing only in the
+  `DedupConfig.Action` comment. Default changes from `flag` to the
+  explicit `supersede`. Legacy configs containing `action: flag` are
+  silently coerced to `supersede` at `config.Load()` time (the
+  behavior they were already getting). Unrecognized values now error
+  at load so typos surface rather than being silently accepted.
+  Capture-path comments in `api/capture.go`, `api/sessions.go`, and
+  `server/service_records.go` updated to describe the default
+  behavior explicitly. Three new test cases in `config_test.go`
+  cover the legacy coercion, the empty-string default, and the
+  typo-erroring path. Curation's dedup pass
+  (`curation/deterministic.go`) was already independent of
+  `DedupConfig.Action` and is unchanged. Full reasoning, including
+  why two alternative shapes (a real warn-only `flag` mode, a
+  `NearDuplicates` response field) were rejected, is documented as
+  D37 in `docs/project-design/design-decisions.md`. Resolves dev
+  collection item 01KPPXGF8FETMYWQDQC5H7VKYN.
 - **Phase 3 of the documentation consolidation: targeted updates to
   the surviving `docs/project-design/` files.** Not rewrites -- each
   doc stays as historical design rationale but is scrubbed of stale

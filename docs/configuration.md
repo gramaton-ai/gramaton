@@ -324,10 +324,12 @@ Concept candidate *detection* is deterministic and always-on. *Promotion* of can
 ```yaml
 dedup:
   similarity_threshold: 0.92         # cosine similarity threshold for duplicate detection
-  action: flag                       # flag | supersede | reject (default: flag)
+  action: supersede                  # supersede | reject (default: supersede)
 ```
 
-In the current implementation (`api/capture.go`), `flag` and `supersede` behave identically: both mark the older near-duplicate historical (set `valid_until` + `resolution=superseded`) and add a `supersedes` edge from the new record to the old. `reject` refuses the capture with `ErrConflict` and rolls back the new node. The `flag` vs `supersede` distinction in the config comment describes an intent that the code does not currently enforce; treat them as aliases until that's reconciled. See the Gramaton development collection for the open tracking item.
+`supersede` (the default) marks the older near-duplicate historical (sets `valid_until` + `resolution=superseded`) and adds a `supersedes` edge from the new record to the old. `reject` refuses the capture with `ErrConflict` and rolls back the new node.
+
+**Legacy `action: flag`**: configs written before 2026-04 used `flag` as the default. The value is accepted and silently coerced to `supersede` at load time — the two values never had distinct behavior in any capture path. See `design-decisions.md` D37 for the full history. Any other value (typos, unsupported options) errors at config load rather than being silently ignored.
 
 ### Graph
 

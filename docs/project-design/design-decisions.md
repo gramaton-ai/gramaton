@@ -4,6 +4,24 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
+### D37: Collapse `dedup.action` to `supersede | reject`
+
+**Decision:** `DedupConfig.Action` accepts only `supersede` (default) and `reject`. The previous `flag` value was removed. Legacy configs with `action: flag` are silently coerced to `supersede` at load (`config.Load()`) for one release cycle; any other unrecognized value errors at load so typos surface. The three capture paths (`api/capture.go`, `api/sessions.go`, `server/service_records.go`'s `serviceCapture`) all explicitly describe the default behavior as "supersede" in their comments; curation's dedup pass (`curation/deterministic.go`) was already threshold-driven and unchanged.
+
+**Why:** A 2026-04 audit of the dedup pipeline surfaced that `flag` and `supersede` had identical behavior across all three capture readers — both wrote `valid_until` + `resolution=superseded` + a `supersedes` edge. The config comment described `flag` as "mark but don't delete," implying a warn-only mode, but no code implemented that intent. `config_test.go` asserted the default was `flag` and that `reject` round-tripped, but nothing exercised a behavioral difference between `flag` and `supersede`. The fused behavior predated T-02 (confirmed by diffing `server/service_records.go` at `3f37f48^`). So the enum carried two functionally-equivalent values whose config-level distinction was a lie to operators.
+
+Three resolution options were considered before picking (b):
+
+(a) **Implement a real warn-only `flag` mode** — skip the supersession block at capture, instead return a warning on `CaptureResponse.Warnings` and optionally add a `possible_duplicate` edge. Rejected because curation's dedup pass runs every minute (default) and does not read `Dedup.Action` — it would silently undo the "keep both records" state within 60 seconds. Making `flag` meaningful at capture time would require also teaching curation to respect the action, which forces either (i) persisting the capture-time action on records/edges (surprising when the global config later changes), or (ii) applying the current config retroactively (triggers cascading supersessions on a `flag`→`supersede` switch). Both are worse than the status quo.
+
+(b) **Collapse to `supersede | reject`** — picked. Resolves the user-visible complaint (two functionally identical values) with minimum scope. Preserves existing behavior under the explicit `supersede` label. Legacy configs coerce silently since behavior doesn't change.
+
+(c) **Add a `NearDuplicates` response field** listing below-threshold near-misses on every capture — rejected. Use cases turned out to be thin: agents following the recommended "search-before-capture" pattern already have this information earlier and richer; operators wanting post-hoc near-miss visibility can use `gramaton_duplicates` with a lower threshold; operators wanting bulk-ingest dry-run are better served by a dedicated `--dry-run` flag on the ingest path. Adding a default-empty response field to every capture call for a marginal convenience wasn't worth the surface expansion.
+
+The warn-only mode remains possible as a future feature if someone articulates a concrete need (most likely as part of a bulk-ingest dry-run story); the enum can be extended then rather than pre-implementing a capability without clear demand.
+
+---
+
 ### D36: Tiered LLM Models with Per-Task Effort Dials
 
 **Decision:** LLM configuration splits into a single `llm.model` (default for general calls) and an optional `llm.models` block with three tiers — `low`, `medium`, `high`. The autonomous curation pipeline (`llm_curation:`) names an effort level per task (`classification_short_effort`, `classification_long_effort`, `summarization_effort`, `contradiction_effort`, `concept_effort`, `manifest_effort`), and each effort maps to one of the three tiers. Default assignments are Haiku-grade for short classification / summarization / manifest rollup, Sonnet-grade for long classification / contradiction detection / concept synthesis.

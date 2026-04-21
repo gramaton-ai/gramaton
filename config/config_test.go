@@ -41,8 +41,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Dedup.SimilarityThreshold != 0.92 {
 		t.Fatalf("dedup.similarity_threshold: expected 0.92, got %f", cfg.Dedup.SimilarityThreshold)
 	}
-	if cfg.Dedup.Action != "flag" {
-		t.Fatalf("dedup.action: expected 'flag', got %q", cfg.Dedup.Action)
+	if cfg.Dedup.Action != "supersede" {
+		t.Fatalf("dedup.action: expected 'supersede', got %q", cfg.Dedup.Action)
 	}
 	if cfg.Graph.EdgeWeightTraversalThreshold != 0.3 {
 		t.Fatalf("graph.edge_weight_traversal_threshold: expected 0.3, got %f", cfg.Graph.EdgeWeightTraversalThreshold)
@@ -87,6 +87,73 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Dedup.Action != "reject" {
 		t.Fatalf("expected 'reject', got %q", loaded.Dedup.Action)
+	}
+}
+
+// TestLoadCoercesLegacyFlagAction asserts that pre-2026-04 configs with
+// dedup.action: "flag" are silently coerced to "supersede" at load time.
+// See design-decisions.md D37: "flag" never had behavior distinct from
+// "supersede" in any capture path, so the coercion is a cosmetic rename
+// preserving prior behavior.
+func TestLoadCoercesLegacyFlagAction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte("dedup:\n  action: flag\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Dedup.Action != "supersede" {
+		t.Fatalf("legacy 'flag' should coerce to 'supersede', got %q", cfg.Dedup.Action)
+	}
+}
+
+// TestLoadRejectsUnknownDedupAction asserts that typos or unsupported
+// values in dedup.action error at config load rather than silently
+// being ignored or coerced to a default. Surfaces invalid configs
+// before they produce surprising runtime behavior.
+func TestLoadRejectsUnknownDedupAction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Common typo: "supercede" (missing 's'). Should not silently coerce.
+	content := []byte("dedup:\n  action: supercede\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid dedup.action, got nil")
+	}
+}
+
+// TestLoadEmptyDedupActionCoercesToSupersede asserts that a config that
+// omits dedup.action (or sets it to the empty string explicitly) ends up
+// with the default value populated. This matches Defaults() and keeps
+// the downstream capture paths from having to handle the empty string.
+func TestLoadEmptyDedupActionCoercesToSupersede(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte("dedup:\n  action: \"\"\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Dedup.Action != "supersede" {
+		t.Fatalf("empty dedup.action should default to 'supersede', got %q", cfg.Dedup.Action)
 	}
 }
 

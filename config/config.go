@@ -831,8 +831,15 @@ type DedupConfig struct {
 	// bge-small-en-v1.5 embeddings.
 	SimilarityThreshold float64 `yaml:"similarity_threshold"`
 
-	// Action: "flag" (mark but don't delete) or "supersede" (set
-	// valid_until on the older record). Default "flag".
+	// Action: "supersede" (default) marks the older record historical
+	// (sets valid_until + resolution=superseded + adds a supersedes
+	// edge). "reject" refuses the capture with ErrConflict and rolls
+	// back the new node.
+	//
+	// The previous "flag" value was removed in 2026-04 (see
+	// design-decisions.md D37). Load() silently coerces legacy
+	// `action: flag` configs to "supersede" for one release cycle --
+	// the two values never had distinct behavior.
 	Action string `yaml:"action"`
 }
 
@@ -1063,7 +1070,7 @@ func Defaults() Config {
 
 		Dedup: DedupConfig{
 			SimilarityThreshold: 0.92,
-			Action:              "flag",
+			Action:              "supersede",
 		},
 
 		Graph: GraphConfig{
@@ -1115,6 +1122,21 @@ func Load(path string) (Config, error) {
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	// Dedup action coercion. See DedupConfig docs + design-decisions.md D37.
+	// "flag" is a legacy alias that never had behavior distinct from
+	// "supersede"; silently coerce for one release cycle. Empty (omitted
+	// in YAML) -> default. Anything else -> error so typos surface.
+	switch cfg.Dedup.Action {
+	case "":
+		cfg.Dedup.Action = "supersede"
+	case "flag":
+		cfg.Dedup.Action = "supersede"
+	case "supersede", "reject":
+		// ok
+	default:
+		return cfg, fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
 	}
 
 	// Enforce bounds on configurable limits.

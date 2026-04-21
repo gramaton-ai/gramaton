@@ -149,6 +149,11 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 			return CaptureResponse{}, ErrConflict(msg)
 		}
 
+		// Default action is "supersede": mark the older record historical
+		// and link the new record to it via a supersedes edge. Config.Load()
+		// validates Action to one of "supersede" or "reject" (see
+		// design-decisions.md D37), so reaching this branch implies
+		// "supersede" semantics.
 		now := time.Now().UTC()
 		oldNode, _ := a.engine.Graph().GetNode(dupID)
 		if oldNode != nil {

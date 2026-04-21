@@ -928,6 +928,10 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 				continue
 			}
 			cfg := a.engine.Config()
+			// Default "supersede" semantics: mark the older record historical
+			// and link the new record via a supersedes edge. See D37.
+			// Session commit does not honor "reject" -- each segment is a
+			// deliberate commit, not a capture the caller can cancel.
 			if cfg.Dedup.Action != "reject" {
 				oldNode, _ := a.engine.Graph().GetNode(dupID)
 				if oldNode != nil {
