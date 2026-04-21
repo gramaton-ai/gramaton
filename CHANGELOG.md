@@ -249,6 +249,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`docs/integrator-guide.md` rewritten around the three storage
+  paths.** Previous version was organized around "two retrieval
+  modes" (Knowledge Graph vs Collections) and gave `gramaton_observe`
+  as a first-class tool. Neither matches reality: T-02 introduced
+  the three-way split (Memory / Sessions / Collections) and
+  `gramaton_observe` is soft-deprecated in favor of the session
+  prepare/commit flow. Rewrite reorganizes around the current
+  model: sections for the decision rule ("will missing one item be
+  a failure?"), Memory depth (four write paths, context envelope,
+  classification guidance), Sessions depth (the commit triggers --
+  decisions landing, topic pivots, the ~10-turn fallback --
+  `promote_to_memory: false` for dead ends, the archive flow via
+  shipped hooks at `hooks/claude-code/` and `hooks/kiro/`),
+  Collections depth (schema field types verified against
+  `api/collection_schema.go`, current `ErrConflict` dedup
+  behavior replacing the soft `{duplicate: true}` response the old
+  doc described -- that was the pre-T-02 shape), retrieval funnel
+  (search -> inspect -> explore), agent prompt guidance, live
+  reference pointer to `gramaton_guide(topic=...)`. Search-filter
+  table expanded to match the actual `api.SearchRequest` fields
+  (confidence/importance min+max, `missing`, `max_edges`,
+  `similar_to`, `match`, `store`, `expires_before`, `since`,
+  `random`, `sort` with the verified sort keys). Surfaced one
+  code rough edge during the audit: the `store` filter takes
+  plural `sessions` but result rows emit singular `session`.
+  Called out in the doc as a known rough edge and tracked as
+  Gramaton development collection item 01KPPX53EHSQ0884FW0Z857PTQ.
 - **`docs/architecture.md` rewritten for the post-T-02 layered
   architecture.** Previous version predated T-02 and described a
   three-layer stack (CLI/MCP -> Server -> Engine) in which service
