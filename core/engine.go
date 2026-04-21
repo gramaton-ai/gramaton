@@ -285,6 +285,13 @@ func (e *Engine) RLock() { e.mu.RLock() }
 // RUnlock releases the read lock.
 func (e *Engine) RUnlock() { e.mu.RUnlock() }
 
+// TryRLock attempts to acquire a read lock without blocking. Returns
+// true on success (caller MUST RUnlock) and false if the write lock
+// is held by any goroutine (including the caller -- RWMutex is not
+// reentrant). Use when a background refresh should be skipped rather
+// than blocked when the engine is in a write phase.
+func (e *Engine) TryRLock() bool { return e.mu.TryRLock() }
+
 // Lock acquires a write lock. Use for write operations (capture,
 // update, classify, delete, etc.). Exclusive -- blocks all other
 // readers and writers.

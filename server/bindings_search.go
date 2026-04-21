@@ -89,7 +89,7 @@ func (s *Server) registerSearchRoutes(mux *http.ServeMux) {
 				"healthy":  resp.Embedding,
 			},
 		}
-		s.writeJSONLocked(w, http.StatusOK, status)
+		s.writeJSON(w, http.StatusOK, status)
 	})
 
 	mux.HandleFunc("POST /v1/duplicates", func(w http.ResponseWriter, r *http.Request) {

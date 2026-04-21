@@ -64,7 +64,7 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"reverted_to": core.TruncHash(fullHash),
 		"new_hash":    core.TruncHash(commit.Hash),
 	})
@@ -185,7 +185,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		}
 	}
 
-	s.writeJSONLocked(w, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ingested": ingested,
 		"skipped":  len(files) - ingested,
 		"warnings": warnings,

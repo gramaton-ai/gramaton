@@ -647,50 +647,40 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// writeJSON writes a JSON response with the standard envelope.
-// Callers that already hold a lock should use writeJSONLocked to
-// avoid deadlock (RWMutex is not reentrant).
-//
-// The curation envelope is cached for curationCacheTTL (5s) so this
-// hot path no longer takes an engine RLock + PropIdx lookup per
-// request. Stale data on a 5s window is fine -- the underlying
-// counters shift on the curation tick (~1 minute).
+// writeJSON writes a JSON response with the standard envelope. Safe
+// to call from any handler regardless of engine lock state. The
+// curation envelope is cached for curationCacheTTL (5s); when stale,
+// curationStatus tries an opportunistic refresh via TryRLock so
+// callers already holding the engine lock (write or otherwise) do
+// not deadlock -- in that case the stale (possibly zero) value is
+// used. Stale data on the 5s window is fine; counters shift on the
+// curation tick (~1 minute). (T-06 step 4 + P1-45 collapse.)
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
-	curation := s.curationStatus(true)
+	curation := s.curationStatus()
 	s.writeJSONRaw(w, status, data, curation)
 }
 
-// writeJSONLocked writes a JSON response when the caller already
-// holds the engine lock (read or write). Reads the curation cache
-// without refreshing -- refresh would require its own engine RLock,
-// which would deadlock.
-func (s *Server) writeJSONLocked(w http.ResponseWriter, status int, data any) {
-	curation := s.curationStatus(false)
-	s.writeJSONRaw(w, status, data, curation)
-}
-
-// curationStatus returns the cached curation envelope. If
-// allowRefresh is true and the cache is stale (or empty), refreshes
-// it under an engine RLock first. Callers that hold the engine
-// lock MUST pass allowRefresh=false to avoid deadlock; in that
-// case a stale value is returned (or zero-value if never populated,
-// which is harmless -- agents see "no curation status this turn"
-// rather than incorrect data).
-func (s *Server) curationStatus(allowRefresh bool) CurationStatus {
+// curationStatus returns the cached curation envelope, attempting
+// an opportunistic refresh when the cache is stale. The refresh is
+// gated by engine.TryRLock: if the lock is not immediately
+// available (typically because the caller or another goroutine holds
+// the write lock), the stale cached value is returned. Agents see a
+// slightly older backlog hint rather than a deadlock; zero-value on
+// first hit during a write phase is also harmless ("no curation
+// status this turn").
+func (s *Server) curationStatus() CurationStatus {
 	s.curationCacheMu.RLock()
 	cached := s.curationCache
 	cachedAt := s.curationCacheAt
 	s.curationCacheMu.RUnlock()
 
-	if !allowRefresh {
-		return cached
-	}
 	if !cachedAt.IsZero() && time.Since(cachedAt) < s.curationCacheTTL {
 		return cached
 	}
 
-	// Refresh under engine RLock + cache write lock.
-	s.engine.RLock()
+	if !s.engine.TryRLock() {
+		return cached
+	}
 	fresh := computeCuration(s.engine, s.runner, s.usageTracker)
 	s.engine.RUnlock()
 
@@ -731,7 +721,7 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 			Message:   message,
 			Retryable: retryable,
 		},
-		Curation: s.curationStatus(false),
+		Curation: s.curationStatus(),
 	})
 }
 

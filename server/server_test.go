@@ -380,6 +380,29 @@ func TestCurationInEnvelope(t *testing.T) {
 	}
 }
 
+// TestCurationStatusUnderWriteLock exercises the P1-45 collapse:
+// writeJSON must not deadlock even when the caller already holds
+// the engine write lock. curationStatus' TryRLock gate returns the
+// cached (possibly zero) value instead of blocking.
+func TestCurationStatusUnderWriteLock(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	srv.engine.Lock()
+	defer srv.engine.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = srv.curationStatus()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("curationStatus deadlocked while engine write lock held")
+	}
+}
+
 // --- Security headers ---
 
 func TestSecurityHeaders(t *testing.T) {
