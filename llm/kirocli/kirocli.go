@@ -76,6 +76,9 @@ func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (s
 
 func (c *Client) ModelID() string { return "kiro-cli:" + c.model }
 
+// ProviderName returns the identifier used in per-provider metrics.
+func (c *Client) ProviderName() string { return "kiro-cli" }
+
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
 	if !modelPattern.MatchString(model) {
 		return "", fmt.Errorf("kirocli: rejected model %q (must match [A-Za-z0-9._:/-]+)", model)

@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 func TestNewMissingModel(t *testing.T) {
@@ -88,6 +89,49 @@ func TestComplete(t *testing.T) {
 	}
 	if got != "Hello from Bedrock!" {
 		t.Errorf("Complete() = %q, want %q", got, "Hello from Bedrock!")
+	}
+}
+
+// TestCompleteRecordsUsage proves Complete reports token counts from the
+// Converse API's Usage field to a UsageRecorder attached to ctx. Skips
+// when the Smithy JSON mock doesn't deserialize cleanly -- same guard
+// TestComplete uses.
+func TestCompleteRecordsUsage(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"output": map[string]any{
+				"message": map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{
+						{"text": "ok"},
+					},
+				},
+			},
+			"stopReason": "end_turn",
+			"usage": map[string]any{
+				"inputTokens":  123,
+				"outputTokens": 45,
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}
+
+	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	recorder := &telemetry.UsageRecorder{}
+	ctx := telemetry.WithUsageRecorder(context.Background(), recorder)
+	ctx = telemetry.WithTask(ctx, "classify")
+
+	if _, err := c.Complete(ctx, "hi"); err != nil {
+		if strings.Contains(err.Error(), "converse") || strings.Contains(err.Error(), "deserialize") {
+			t.Skipf("Smithy protocol mismatch expected in unit test: %v", err)
+		}
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	got := recorder.Total()
+	want := telemetry.CallUsage{InputTokens: 123, OutputTokens: 45}
+	if got != want {
+		t.Errorf("recorded usage = %+v, want %+v", got, want)
 	}
 }
 

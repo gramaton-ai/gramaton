@@ -22,6 +22,7 @@ type noopLLM struct{}
 func (noopLLM) Complete(_ context.Context, _ string) (string, error)                { return "", nil }
 func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (noopLLM) ModelID() string                                                    { return "test-noop" }
+func (noopLLM) ProviderName() string                                               { return "noop" }
 
 func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	t.Helper()

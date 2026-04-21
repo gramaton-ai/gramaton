@@ -216,16 +216,12 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 		return "", fmt.Errorf("anthropic: unmarshal response: %w", err)
 	}
 
-	// Report token usage via any recorder attached to ctx. No-op when
-	// no recorder is set (e.g., direct calls outside the Metered wrapper).
-	if recorder := telemetry.RecorderFromContext(ctx); recorder != nil {
-		recorder.Record(telemetry.TaskFromContext(ctx), telemetry.CallUsage{
-			InputTokens:      result.Usage.InputTokens,
-			OutputTokens:     result.Usage.OutputTokens,
-			CacheReadTokens:  result.Usage.CacheReadInputTokens,
-			CacheWriteTokens: result.Usage.CacheCreationInputTokens,
-		})
-	}
+	telemetry.Record(ctx, telemetry.CallUsage{
+		InputTokens:      result.Usage.InputTokens,
+		OutputTokens:     result.Usage.OutputTokens,
+		CacheReadTokens:  result.Usage.CacheReadInputTokens,
+		CacheWriteTokens: result.Usage.CacheCreationInputTokens,
+	})
 
 	// Extract text from content blocks.
 	var text string
@@ -242,3 +238,6 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 func (c *Client) ModelID() string {
 	return c.model
 }
+
+// ProviderName returns the identifier used in per-provider metrics.
+func (c *Client) ProviderName() string { return "anthropic" }

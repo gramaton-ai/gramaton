@@ -136,3 +136,16 @@ func RecorderFromContext(ctx context.Context) *UsageRecorder {
 	r, _ := ctx.Value(recorderKey{}).(*UsageRecorder)
 	return r
 }
+
+// Record reports per-call usage against any UsageRecorder attached to
+// ctx, using the task label from ctx. No-op when no recorder is set
+// (e.g., direct provider calls outside the Metered wrapper). This is
+// the canonical path for providers to report token counts after parsing
+// a response -- callers construct a CallUsage from the provider's
+// native response shape and pass it through, without needing to touch
+// the recorder or task label plumbing.
+func Record(ctx context.Context, u CallUsage) {
+	if r := RecorderFromContext(ctx); r != nil {
+		r.Record(TaskFromContext(ctx), u)
+	}
+}

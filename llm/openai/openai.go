@@ -12,6 +12,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 const defaultBaseURL = "https://api.openai.com"
@@ -64,11 +65,24 @@ type chatMessage struct {
 
 type chatResponse struct {
 	Choices []chatChoice `json:"choices"`
+	Usage   chatUsage    `json:"usage"`
 	Error   *apiError    `json:"error,omitempty"`
 }
 
 type chatChoice struct {
 	Message chatMessage `json:"message"`
+}
+
+// chatUsage is the OpenAI token accounting. OpenAI reports a cached
+// portion of the input via prompt_tokens_details.cached_tokens (present
+// since 2024 prompt caching); writes aren't separately reported, so
+// CacheWriteTokens stays zero for this provider.
+type chatUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 type apiError struct {
@@ -134,6 +148,12 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("openai llm: no choices in response")
 	}
 
+	telemetry.Record(ctx, telemetry.CallUsage{
+		InputTokens:     result.Usage.PromptTokens,
+		OutputTokens:    result.Usage.CompletionTokens,
+		CacheReadTokens: result.Usage.PromptTokensDetails.CachedTokens,
+	})
+
 	return result.Choices[0].Message.Content, nil
 }
 
@@ -141,4 +161,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 func (c *Client) ModelID() string {
 	return c.model
 }
+
+// ProviderName returns the identifier used in per-provider metrics.
+func (c *Client) ProviderName() string { return "openai" }
 

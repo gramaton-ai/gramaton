@@ -24,6 +24,12 @@ type Provider interface {
 
 	// ModelID returns the identifier of the default model.
 	ModelID() string
+
+	// ProviderName returns a short identifier for the provider
+	// ("anthropic", "openai", "bedrock", "claude-cli", "kiro-cli").
+	// Used for per-provider accounting so CallMetrics can attribute
+	// usage to the actual backend instead of the Metered wrapper.
+	ProviderName() string
 }
 
 // SystemPromptSetter is an optional interface that providers can

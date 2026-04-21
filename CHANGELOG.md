@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Per-provider LLM telemetry (T-07 steps 1+3)** -- token usage is now
+  reported by every HTTP-based LLM provider, not just Anthropic.
+  `telemetry.Record(ctx, CallUsage)` is the canonical recorder entry
+  point; `openai` populates input/output/cache-read tokens from the
+  `usage` response block (including `prompt_tokens_details.cached_tokens`
+  when OpenAI returns it), and `bedrock` populates input/output from the
+  Converse API's Usage field. Cache fields stay zero for providers that
+  don't surface cache accounting. The `llm.Provider` interface gained
+  `ProviderName() string`; `Metered.record` propagates the inner
+  provider's name into `CallMetrics.Provider` instead of hardcoding
+  `"metered"`, so per-provider accounting is meaningful when multiple
+  backends run in one process. CLI providers (claude-cli, kiro-cli)
+  still report zero -- their cost/credit parsing lands in T-07 step 4.
+
 ### Added
 
 - **Bulk collection_add (P1-78)** -- new MCP tool

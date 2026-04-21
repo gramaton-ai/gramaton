@@ -55,7 +55,8 @@ func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string,
 	return m.responses[idx%len(m.responses)], nil
 }
 
-func (m *mockLLM) ModelID() string { return "mock-llm" }
+func (m *mockLLM) ModelID() string      { return "mock-llm" }
+func (m *mockLLM) ProviderName() string { return "mock" }
 
 // mockLLMWithSystem extends mockLLM with SystemPromptSetter support.
 type mockLLMWithSystem struct {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/awscfg"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // Client calls the Bedrock Converse API for LLM completions. The
@@ -74,6 +75,22 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 		}
 	}
 
+	// Converse API reports total input/output tokens. Cache accounting
+	// isn't surfaced here, so cache fields stay zero for this provider.
+	if out.Usage != nil {
+		var input, output int32
+		if out.Usage.InputTokens != nil {
+			input = *out.Usage.InputTokens
+		}
+		if out.Usage.OutputTokens != nil {
+			output = *out.Usage.OutputTokens
+		}
+		telemetry.Record(ctx, telemetry.CallUsage{
+			InputTokens:  int(input),
+			OutputTokens: int(output),
+		})
+	}
+
 	return text, nil
 }
 
@@ -81,3 +98,6 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 func (c *Client) ModelID() string {
 	return c.model
 }
+
+// ProviderName returns the identifier used in per-provider metrics.
+func (c *Client) ProviderName() string { return "bedrock" }

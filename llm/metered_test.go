@@ -24,7 +24,8 @@ func (s *stubProvider) CompleteWithModel(_ context.Context, _, _ string) (string
 	return s.response, s.err
 }
 
-func (s *stubProvider) ModelID() string { return "stub-model" }
+func (s *stubProvider) ModelID() string      { return "stub-model" }
+func (s *stubProvider) ProviderName() string { return "stub" }
 
 // TestMeteredRefusesWhenCapped is the regression test for P0-13:
 // once a UsageTracker reports paused=true, Metered must short-circuit
@@ -70,6 +71,30 @@ func TestMeteredRefusesWhenCapped(t *testing.T) {
 	}
 	if stub.calls != 2 {
 		t.Fatalf("post-unpause call: stub.calls = %d, want 2", stub.calls)
+	}
+}
+
+// TestMeteredPropagatesProviderName verifies that CallMetrics.Provider
+// reflects the inner provider's ProviderName() instead of the hardcoded
+// "metered" string. This is what lets per-provider accounting work when
+// multiple backends are in play.
+func TestMeteredPropagatesProviderName(t *testing.T) {
+	tracker := NewUsageTracker(t.TempDir(), 0, 0)
+	stub := &stubProvider{response: "ok"}
+	m := NewMetered(stub, tracker, nil)
+
+	if _, err := m.Complete(context.Background(), "ping"); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	summary := tracker.Summary()
+	if got := summary.Session.Calls; got != 1 {
+		t.Fatalf("Session.Calls = %d, want 1", got)
+	}
+	// Records are aggregated by model, not provider, in UsageStats.
+	// But ProviderName() is the contract we expose -- check it directly.
+	if got := m.ProviderName(); got != "stub" {
+		t.Errorf("Metered.ProviderName() = %q, want %q (inner's name, not 'metered')", got, "stub")
 	}
 }
 

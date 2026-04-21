@@ -103,6 +103,10 @@ func (m *Metered) checkCap() error {
 
 func (m *Metered) ModelID() string { return m.inner.ModelID() }
 
+// ProviderName delegates to the wrapped provider so CallMetrics.Provider
+// reflects the real backend (e.g. "anthropic") instead of the wrapper.
+func (m *Metered) ProviderName() string { return m.inner.ProviderName() }
+
 // Inner returns the wrapped provider for type assertions.
 func (m *Metered) Inner() Provider { return m.inner }
 
@@ -143,7 +147,7 @@ func (m *Metered) record(model, task string, usage telemetry.CallUsage, latency 
 	}
 
 	metrics := CallMetrics{
-		Provider:         "metered",
+		Provider:         m.inner.ProviderName(),
 		Model:            model,
 		Task:             task,
 		InputTokens:      usage.InputTokens,

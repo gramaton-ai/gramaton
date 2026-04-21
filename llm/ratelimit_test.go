@@ -20,7 +20,8 @@ func (d *dummyProvider) CompleteWithModel(_ context.Context, _, _ string) (strin
 	return "ok", nil
 }
 
-func (d *dummyProvider) ModelID() string { return "dummy" }
+func (d *dummyProvider) ModelID() string      { return "dummy" }
+func (d *dummyProvider) ProviderName() string { return "dummy" }
 
 func TestRateLimitedEnforcesInterval(t *testing.T) {
 	inner := &dummyProvider{}

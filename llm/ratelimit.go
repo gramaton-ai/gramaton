@@ -62,6 +62,12 @@ func (r *RateLimited) ModelID() string {
 	return r.inner.ModelID()
 }
 
+// ProviderName delegates to the wrapped provider so per-provider
+// metrics reflect the underlying backend, not the wrapper.
+func (r *RateLimited) ProviderName() string {
+	return r.inner.ProviderName()
+}
+
 // Inner returns the wrapped provider for type assertion.
 func (r *RateLimited) Inner() Provider {
 	return r.inner

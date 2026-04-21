@@ -21,6 +21,7 @@ type noopLLM struct{}
 func (noopLLM) Complete(_ context.Context, _ string) (string, error)             { return "", nil }
 func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (noopLLM) ModelID() string                                                  { return "test-noop" }
+func (noopLLM) ProviderName() string                                             { return "noop" }
 
 // setupTestAPI constructs an API + engine backed by a temp data dir.
 // Mirrors server.setupTestServer; kept in this package so tests can

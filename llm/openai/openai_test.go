@@ -9,6 +9,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 func TestNewMissingModel(t *testing.T) {
@@ -133,6 +134,41 @@ func TestCompleteNoKey(t *testing.T) {
 	}
 	if got != "ok" {
 		t.Errorf("Complete() = %q, want %q", got, "ok")
+	}
+}
+
+// TestCompleteRecordsUsage proves Complete reports token counts to a
+// UsageRecorder attached to ctx. Mirrors the anthropic/bedrock telemetry
+// contract so per-provider accounting in Metered works uniformly.
+func TestCompleteRecordsUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"choices": [{"message": {"role": "assistant", "content": "ok"}}],
+			"usage": {
+				"prompt_tokens": 42,
+				"completion_tokens": 7,
+				"prompt_tokens_details": {"cached_tokens": 10}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", client: srv.Client()}
+	recorder := &telemetry.UsageRecorder{}
+	ctx := telemetry.WithUsageRecorder(context.Background(), recorder)
+	ctx = telemetry.WithTask(ctx, "classify")
+
+	if _, err := c.Complete(ctx, "hello"); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	got := recorder.Total()
+	want := telemetry.CallUsage{InputTokens: 42, OutputTokens: 7, CacheReadTokens: 10}
+	if got != want {
+		t.Errorf("recorded usage = %+v, want %+v", got, want)
+	}
+	if byTask := recorder.ByTask(); byTask["classify"] != want {
+		t.Errorf("per-task usage = %+v, want %+v", byTask["classify"], want)
 	}
 }
 

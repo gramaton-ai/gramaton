@@ -16,7 +16,8 @@ type concurrentMockLLM struct {
 	totalCalls  int64
 }
 
-func (m *concurrentMockLLM) ModelID() string { return "test-mock" }
+func (m *concurrentMockLLM) ModelID() string      { return "test-mock" }
+func (m *concurrentMockLLM) ProviderName() string { return "mock" }
 
 func (m *concurrentMockLLM) Complete(_ context.Context, prompt string) (string, error) {
 	cur := atomic.AddInt64(&m.curConcur, 1)
