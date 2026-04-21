@@ -4,6 +4,24 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
+### D38: Persist Contradiction-Check Negative Results as `no_contradiction` Edges
+
+**Decision:** The autonomous contradiction-detection pass (`curation/autonomous.go` `detectContradictions`) now writes a `no_contradiction` edge with a `checked_at` timestamp property on every pair the LLM evaluated and reported as neither contradicting nor superseding. The read-phase `hasEdge` guard (which was already treating any inter-pair edge as "already handled") now also skips these marks, which drains the candidate pool across cycles on any store where the LLM finds no contradictions. Positive findings continue to produce `contradicts` or `supersedes` edges as before. No config knob for a recheck-interval TTL in this change — the `checked_at` property is recorded so a future TTL can be added without migration, but day-one behavior is "once checked, permanently marked."
+
+**Why:** Prior behavior had a feedback-loop cost bug. The read phase found candidate pairs in the `ContradictionMinSim`..`ContradictionMaxSim` similarity window (defaults 0.5..0.85) and skipped pairs with any existing edge. The LLM phase sent pairs to a Sonnet-grade model. The write phase added edges **only** for `contradicts` or `supersedes` results. "No contradiction" / "unrelated" / any other verdict produced zero persistent state. Next cycle, the shuffle picked the same (or different) pairs from the same pool; the LLM re-confirmed "no contradiction"; nothing was written; repeat. On 2026-04-19→20, this pattern burned ~16 hours unbroken at ~60 Sonnet calls/hour, ~950 contradiction_batch calls total, 0 contradictions found, ~$17 in API cost. The credit card exhausted before the pool drained because the pool was structurally un-drainable on a store where the LLM's correct answer for every pair was "no." The bug predates the current autonomous pipeline (the negative-result drop was never implemented in the first place); audit would not surface it because the code path was consistent-but-pointless rather than inconsistent.
+
+Three fixes were considered:
+
+(a) **Widen the cycle interval + narrow the similarity band + route to Haiku.** Reduces bleed rate; does not fix the structural issue. On a large store, the pool still grows faster than the drain even at 5-minute intervals.
+
+(b) **Write a `no_contradiction` edge on every negative result, with a `checked_at` timestamp.** Picked. The existing `hasEdge` guard becomes the drain mechanism. Pool drains linearly at `MaxContradictionChecks` pairs per cycle until empty, then per-cycle cost goes to zero for stable stores and rises only with genuine new-pair creation (new captures, session commits, ingest). Adding a TTL config to re-check stale negatives later requires no migration because `checked_at` is already persisted; the read-phase guard just needs a stale-edge carveout.
+
+(c) **Disable the task entirely.** Rejected as default — the task finds real contradictions when they exist, and keeping autonomous curation unbalanced (contradictions off, classification on) would be surprising. Operators who don't want the task can still set `llm_curation.max_contradiction_checks: 0`.
+
+Option (b) is correct even if contradiction detection is rarely valuable: the cost on a "nothing to contradict" store is now zero, which means the feature is usable by default without requiring operators to tune it to avoid bleed.
+
+---
+
 ### D37: Collapse `dedup.action` to `supersede | reject`
 
 **Decision:** `DedupConfig.Action` accepts only `supersede` (default) and `reject`. The previous `flag` value was removed. Legacy configs with `action: flag` are silently coerced to `supersede` at load (`config.Load()`) for one release cycle; any other unrecognized value errors at load so typos surface. The three capture paths (`api/capture.go`, `api/sessions.go`, `server/service_records.go`'s `serviceCapture`) all explicitly describe the default behavior as "supersede" in their comments; curation's dedup pass (`curation/deterministic.go`) was already threshold-driven and unchanged.

@@ -27,6 +27,12 @@ type AutonomousResult struct {
 	SummariesGenerated     int                             `json:"summaries_generated"`
 	ConceptsCreated        int                             `json:"concepts_created"`
 	ContradictionsDetected int                             `json:"contradictions_detected"`
+	// NoContradictionEdges counts pairs the LLM affirmatively said are not
+	// contradicting/superseding. Each such pair gets a "no_contradiction"
+	// edge so subsequent cycles don't re-ask. Without this counter (and
+	// its underlying edge) the candidate pool does not drain on negative
+	// results -- see design-decisions.md D38.
+	NoContradictionEdges   int                             `json:"no_contradiction_edges"`
 	ManifestSummary        string                          `json:"manifest_summary,omitempty"`
 	ManifestCacheHit       bool                            `json:"manifest_cache_hit,omitempty"` // true when manifest summary was reused from prior-cycle cache
 	Errors                 int                             `json:"errors"`
@@ -1276,6 +1282,14 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	}
 	var findings []detected
 
+	// Pairs the LLM successfully checked but reported NO contradiction
+	// or supersession. Each gets a "no_contradiction" edge written in
+	// the write phase so the hasEdge guard in the next cycle's read
+	// phase skips them, allowing the candidate pool to drain. See
+	// design-decisions.md D38 for the bug this addresses.
+	type checkedNegative struct{ idA, idB string }
+	var noContradictions []checkedNegative
+
 	batchSize := cfg.LLMCuration.ContradictionBatchSize
 	if batchSize < 1 {
 		batchSize = 1
@@ -1327,6 +1341,10 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 					confidence:   cr.Confidence,
 					explanation:  cr.Explanation,
 				})
+			} else {
+				// LLM explicitly evaluated the pair and reported no
+				// contradiction/supersession. Mark so next cycle skips it.
+				noContradictions = append(noContradictions, checkedNegative{idA: c.idA, idB: c.idB})
 			}
 		}
 	} else {
@@ -1397,12 +1415,16 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 						confidence:   br.Confidence,
 						explanation:  br.Explanation,
 					})
+				} else {
+					// LLM explicitly evaluated the pair and reported no
+					// contradiction/supersession. Mark so next cycle skips it.
+					noContradictions = append(noContradictions, checkedNegative{idA: c.idA, idB: c.idB})
 				}
 			}
 		}
 	}
 
-	if len(findings) == 0 {
+	if len(findings) == 0 && len(noContradictions) == 0 {
 		return
 	}
 
@@ -1424,6 +1446,9 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			})
 			result.ContradictionsDetected++
 		}
+		// noContradictions would-be edges: noted in the result but not
+		// listed individually in PlannedChanges (deterministic, low-signal).
+		result.NoContradictionEdges = len(noContradictions)
 		return
 	}
 
@@ -1462,15 +1487,41 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			result.ContradictionsDetected++
 		}
 	}
-	if result.ContradictionsDetected > 0 {
+	// Write no_contradiction edges for pairs the LLM successfully
+	// evaluated and found to be non-contradicting. The hasEdge guard in
+	// the read phase treats any inter-pair edge as "already handled," so
+	// these marks drain the candidate pool across cycles. Without this,
+	// negative results leave the pool untouched and the LLM re-asks the
+	// same pairs indefinitely. See design-decisions.md D38.
+	checkedAt := time.Now().UTC()
+	for _, nc := range noContradictions {
+		if _, ok := e.Graph().GetNode(nc.idA); !ok {
+			continue
+		}
+		if _, ok := e.Graph().GetNode(nc.idB); !ok {
+			continue
+		}
+		props := graph.Properties{
+			"checked_at": graph.TimestampProperty(checkedAt),
+		}
+		if _, err := e.Graph().AddEdge(nc.idA, nc.idB, "no_contradiction", 1.0, props); err != nil {
+			logger.Error("failed to add no_contradiction edge",
+				"component", "curation", "from", nc.idA, "to", nc.idB, "err", err)
+			continue
+		}
+		result.NoContradictionEdges++
+	}
+
+	if result.ContradictionsDetected > 0 || result.NoContradictionEdges > 0 {
 		e.SaveOrLog("curation: contradictions")
 	}
 	e.Unlock()
 
-	if result.ContradictionsDetected > 0 {
+	if result.ContradictionsDetected > 0 || result.NoContradictionEdges > 0 {
 		logger.Info("contradiction detection complete",
 			"component", "curation",
-			"detected", result.ContradictionsDetected)
+			"detected", result.ContradictionsDetected,
+			"no_contradiction_edges", result.NoContradictionEdges)
 	}
 }
 

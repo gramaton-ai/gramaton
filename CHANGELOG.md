@@ -247,6 +247,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `serviceCollectionSchemaRead`, `startPreparedSweeper`, unused
   constants in `server/validation.go`) will need their own pass.
 
+### Fixed
+
+- **Contradiction-detection candidate pool now drains on negative
+  results.** Previously the autonomous curation pass at
+  `curation/autonomous.go:detectContradictions` selected candidate
+  pairs in the 0.5..0.85 similarity window, sent them to the
+  configured LLM (Sonnet by default at `contradiction_effort:
+  medium`), and wrote `contradicts` / `supersedes` edges on positive
+  results. Negative results produced no persistent state. Because the
+  read-phase `hasEdge` guard was the only "already checked" signal,
+  the same pairs were eligible every cycle and the pool never drained
+  on stores where the LLM's correct verdict was "no contradiction."
+  Observed impact on a real store 2026-04-19→20: ~16 hours unbroken,
+  ~950 Sonnet calls, 0 contradictions found, ~$17 burned. Fix: the
+  write phase now persists negative results as `no_contradiction`
+  edges carrying a `checked_at` timestamp property, which the
+  existing `hasEdge` guard picks up on subsequent cycles. Draining
+  is linear at `max_contradiction_checks` pairs per cycle until the
+  pool is empty; per-cycle cost then goes to zero on stable stores
+  and rises only with genuinely new-pair creation (captures, session
+  commits, ingest). `AutonomousResult` grows a `no_contradiction_edges`
+  counter for observability. Two new tests in
+  `curation/autonomous_test.go` regression the behavior
+  (`TestDetectContradictionsWritesNoContradictionEdge` and
+  `TestDetectContradictionsSkipsPairsWithNoContradictionEdge`).
+  Full reasoning, including why three alternative fixes (widen
+  interval, narrow band, disable task) were rejected, is documented
+  as D38 in `docs/project-design/design-decisions.md`. Operators
+  running with pre-fix binaries should either upgrade or set
+  `llm_curation.max_contradiction_checks: 0` as a mitigation.
+
 ### Changed
 
 - **Collapsed `dedup.action` enum to `supersede | reject`.** The

@@ -955,6 +955,110 @@ func TestDetectContradictionsNoMatch(t *testing.T) {
 	}
 }
 
+// TestDetectContradictionsWritesNoContradictionEdge regressions the pool-
+// never-drains bug (see design-decisions.md D38). Two records land in the
+// contradiction-check similarity window; the LLM reports "none" (no
+// contradiction or supersession); the write phase must persist that
+// negative result as a no_contradiction edge so the next cycle skips the
+// pair. Before this fix, negative results produced zero persistent state
+// and the same pairs got re-checked every cycle, burning cost without
+// drain.
+func TestDetectContradictionsWritesNoContradictionEdge(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha observation about caching", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "Beta observation, similar-but-distinct topic", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"none","confidence":0.9,"explanation":"distinct observations"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.LLMCalls != 1 {
+		t.Fatalf("expected exactly 1 LLM call, got %d", result.LLMCalls)
+	}
+	if result.ContradictionsDetected != 0 {
+		t.Fatalf("expected 0 contradictions detected, got %d", result.ContradictionsDetected)
+	}
+	if result.NoContradictionEdges != 1 {
+		t.Fatalf("expected 1 no_contradiction edge, got %d", result.NoContradictionEdges)
+	}
+
+	// Read-phase shuffle can pick either node as the outer loop element,
+	// so the edge direction is not deterministic. Accept either A->B or
+	// B->A -- the hasEdge guard checks both directions anyway.
+	eng.RLock()
+	defer eng.RUnlock()
+	var edge *graph.Edge
+	for _, e := range eng.Graph().EdgesFrom(idA) {
+		if e.Type == "no_contradiction" && e.TargetID == idB {
+			edge = e
+			break
+		}
+	}
+	if edge == nil {
+		for _, e := range eng.Graph().EdgesFrom(idB) {
+			if e.Type == "no_contradiction" && e.TargetID == idA {
+				edge = e
+				break
+			}
+		}
+	}
+	if edge == nil {
+		t.Fatal("no_contradiction edge between A and B not found in either direction")
+	}
+	if _, ok := edge.Properties.GetTimestamp("checked_at"); !ok {
+		t.Fatal("no_contradiction edge missing checked_at property")
+	}
+}
+
+// TestDetectContradictionsSkipsPairsWithNoContradictionEdge regressions the
+// draining behavior. A pair that already has a no_contradiction edge must
+// not be sent to the LLM on subsequent cycles. Combined with the edge-
+// writing behavior above, this is what makes the pool drain.
+func TestDetectContradictionsSkipsPairsWithNoContradictionEdge(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha observation about caching", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "Beta observation, similar-but-distinct topic", []float32{0.7, 0.7, 0.0})
+
+	// Pre-seed a no_contradiction edge (simulating a prior cycle's negative result).
+	eng.Lock()
+	if _, err := eng.Graph().AddEdge(idA, idB, "no_contradiction", 1.0, graph.Properties{
+		"checked_at": graph.TimestampProperty(time.Now().UTC()),
+	}); err != nil {
+		eng.Unlock()
+		t.Fatalf("seed edge: %v", err)
+	}
+	eng.Unlock()
+
+	llm := &mockLLM{responses: []string{}} // must not be called
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, nil, false)
+
+	if result.LLMCalls != 0 {
+		t.Fatalf("expected 0 LLM calls (pair has no_contradiction edge), got %d", result.LLMCalls)
+	}
+	if result.NoContradictionEdges != 0 {
+		t.Fatalf("expected 0 new no_contradiction edges, got %d", result.NoContradictionEdges)
+	}
+}
+
 // --- Manifest summary tests ---
 
 func TestGenerateManifestSummary(t *testing.T) {
