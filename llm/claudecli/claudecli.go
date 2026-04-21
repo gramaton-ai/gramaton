@@ -12,6 +12,7 @@ import (
 	"regexp"
 
 	"github.com/gramaton-ai/gramaton/internal/strutil"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // modelPattern restricts model strings to a conservative shape:
@@ -49,12 +50,26 @@ func New(model string) (*Client, error) {
 }
 
 // cliResponse is the JSON output from claude -p --output-format json.
+// modelUsage is a per-model breakdown of token counts; we sum across
+// models for telemetry. total_cost_usd is the CLI's own authoritative
+// cost number (reflects actual subscription billing), but accounting
+// flows through the standard token pipeline so cross-provider
+// aggregation uses one cost formula.
 type cliResponse struct {
-	Result      string         `json:"result"`
-	IsError     bool           `json:"is_error"`
-	DurationMs  int            `json:"duration_ms"`
-	TotalCost   float64        `json:"total_cost_usd"`
-	ModelUsage  map[string]any `json:"modelUsage"`
+	Result     string                        `json:"result"`
+	IsError    bool                          `json:"is_error"`
+	DurationMs int                           `json:"duration_ms"`
+	TotalCost  float64                       `json:"total_cost_usd"`
+	ModelUsage map[string]cliModelUsageEntry `json:"modelUsage"`
+}
+
+// cliModelUsageEntry captures the per-model token breakdown surfaced
+// by the claude CLI's JSON output. Field names match the CLI's shape.
+type cliModelUsageEntry struct {
+	InputTokens              int `json:"inputTokens"`
+	OutputTokens             int `json:"outputTokens"`
+	CacheReadInputTokens     int `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int `json:"cacheCreationInputTokens"`
 }
 
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
@@ -107,6 +122,25 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 		return "", fmt.Errorf("claudecli: model returned error: %s", strutil.Truncate(resp.Result, 500))
 	}
 
+	telemetry.Record(ctx, sumModelUsage(resp.ModelUsage))
+
 	return resp.Result, nil
+}
+
+// sumModelUsage collapses the CLI's per-model map into a single
+// CallUsage so the standard pricing-table pipeline can compute cost
+// the same way it does for direct API providers. total_cost_usd from
+// the CLI is ignored: it reflects actual subscription billing, while
+// telemetry numbers use the shared pricing table so cross-provider
+// aggregation is apples-to-apples.
+func sumModelUsage(m map[string]cliModelUsageEntry) telemetry.CallUsage {
+	var u telemetry.CallUsage
+	for _, entry := range m {
+		u.InputTokens += entry.InputTokens
+		u.OutputTokens += entry.OutputTokens
+		u.CacheReadTokens += entry.CacheReadInputTokens
+		u.CacheWriteTokens += entry.CacheCreationInputTokens
+	}
+	return u
 }
 

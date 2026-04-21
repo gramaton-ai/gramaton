@@ -25,6 +25,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CLI provider telemetry (T-07 step 4)** -- `claudecli` now parses
+  the per-model token block from `claude -p --output-format json`
+  (`modelUsage.<model>.{inputTokens, outputTokens,
+  cacheReadInputTokens, cacheCreationInputTokens}`) and records it
+  via `telemetry.Record`, so cost flows through the standard pricing
+  pipeline the same way anthropic/openai/bedrock do. `kirocli` still
+  reports zero: its output surfaces only a "Credits:" footer (not
+  USD or tokens), and cross-provider aggregation expects tokens --
+  operators relying on `kirocli` should use `max_calls_per_day` as
+  the cost safety net.
+- **Cycle summary log polish (T-07 step 5)** -- the "autonomous
+  curation complete" log now includes per-model cost (`cost:<model>
+  $0.1234`) alongside the existing per-model classification counts,
+  and the per-task breakdown gains a cost field (`tokens:<task>
+  in=.../out=.../cache=.../cost=$X`). Map iteration is sorted so log
+  lines are deterministic across cycles.
 - **Per-provider LLM telemetry (T-07 steps 1+3)** -- token usage is now
   reported by every HTTP-based LLM provider, not just Anthropic.
   `telemetry.Record(ctx, CallUsage)` is the canonical recorder entry

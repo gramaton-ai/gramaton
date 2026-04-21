@@ -124,15 +124,20 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	// AutonomousResult so callers (and the log below) can read them.
 	result.TokenUsage = cycleUsage.Total()
 	result.TokenUsageByTask = cycleUsage.ByTask()
-	// Sum cost across all tasks. Per-task cost needs model attribution
-	// which the cycle recorder doesn't hold; we approximate cost via
-	// CallMetrics-side logging (per-call log emits cost_usd per call).
-	// Aggregate cycle cost is the sum of per-task cost using whichever
-	// model the task used most (looked up from cfg).
+	// Per-task cost via the pricing table. We don't have the real model
+	// per-call here (the cycle recorder holds only task labels), so we
+	// use the effort-to-model mapping from cfg -- the cost number is
+	// accurate when a task used its configured model, approximate
+	// otherwise.
+	perTaskCost := make(map[string]float64, len(result.TokenUsageByTask))
+	perModelCost := make(map[string]float64)
 	cycleCost := 0.0
 	for task, u := range result.TokenUsageByTask {
 		model := modelForTaskLabel(cfg, task)
-		cycleCost += llm.EstimateCost(model, u)
+		c := llm.EstimateCost(model, u)
+		perTaskCost[task] = c
+		perModelCost[model] += c
+		cycleCost += c
 	}
 	result.CycleCostUSD = cycleCost
 
@@ -155,17 +160,46 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 			"cost_usd", cycleCost,
 			"duration_ms", time.Since(start).Milliseconds(),
 		}
-		for model, count := range result.ModelCounts {
-			if model == "" {
-				model = "default"
-			}
-			logArgs = append(logArgs, "model:"+model, count)
+		// Sort model names for deterministic log output -- map iteration
+		// order otherwise interleaves keys differently per cycle, making
+		// grep-after-the-fact investigations harder.
+		modelKeys := make([]string, 0, len(result.ModelCounts))
+		for m := range result.ModelCounts {
+			modelKeys = append(modelKeys, m)
 		}
-		// Per-task token breakdown (compact form).
-		for task, u := range result.TokenUsageByTask {
+		sort.Strings(modelKeys)
+		for _, model := range modelKeys {
+			label := model
+			if label == "" {
+				label = "default"
+			}
+			logArgs = append(logArgs, "model:"+label, result.ModelCounts[model])
+		}
+		// Per-model cost: "which model burned the most" is the single
+		// question operators ask most often after a surprising bill.
+		costKeys := make([]string, 0, len(perModelCost))
+		for m := range perModelCost {
+			costKeys = append(costKeys, m)
+		}
+		sort.Strings(costKeys)
+		for _, model := range costKeys {
+			if perModelCost[model] == 0 {
+				continue // skip untracked (CLI providers, unknown pricing)
+			}
+			logArgs = append(logArgs, "cost:"+model, fmt.Sprintf("$%.4f", perModelCost[model]))
+		}
+		// Per-task token + cost breakdown (compact form).
+		taskKeys := make([]string, 0, len(result.TokenUsageByTask))
+		for t := range result.TokenUsageByTask {
+			taskKeys = append(taskKeys, t)
+		}
+		sort.Strings(taskKeys)
+		for _, task := range taskKeys {
+			u := result.TokenUsageByTask[task]
 			logArgs = append(logArgs,
 				"tokens:"+task,
-				fmt.Sprintf("in=%d/out=%d/cache=%d", u.InputTokens, u.OutputTokens, u.CacheReadTokens),
+				fmt.Sprintf("in=%d/out=%d/cache=%d/cost=$%.4f",
+					u.InputTokens, u.OutputTokens, u.CacheReadTokens, perTaskCost[task]),
 			)
 		}
 		logger.Info("autonomous curation complete", logArgs...)

@@ -100,6 +100,13 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 		return "", fmt.Errorf("kirocli: command failed (%v): %s", err, strutil.Truncate(stderr.String(), 200))
 	}
 
+	// No telemetry.Record call: kiro-cli's stdout surfaces only a
+	// "Credits: N" footer (denominated in subscription credits, not
+	// USD or tokens) and no input/output token counts. Cross-provider
+	// aggregation expects tokens, so there's nothing meaningful to
+	// record. Operators relying on kirocli need to lean on the count
+	// cap (MaxCallsPerDay) for cost safety; the USD cost cap stays at
+	// $0 for this provider.
 	return extractResponse(stdout.String())
 }
 
