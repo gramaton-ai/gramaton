@@ -188,11 +188,18 @@ func (w *Wizard) verifyMCPRegistration(ctx context.Context) {
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "gramaton:") {
-			w.writer.Check("MCP: Gramaton registered with Claude Code")
+			// State-neutral phrasing: this is a survey of what's
+			// currently in Claude Code's config, not an action this
+			// wizard just performed. An entry may be present because
+			// Step 3 added it on this run, a prior wizard run added
+			// it, or the user configured it manually -- all three
+			// cases render the same ✓ because the user's end state
+			// is the same.
+			w.writer.Check("MCP: gramaton entry present in Claude Code's config")
 			return
 		}
 	}
-	w.writer.Warn("MCP: Gramaton not in `claude mcp list`. Step 3 may have failed; try re-running the wizard.")
+	w.writer.Warn("MCP: gramaton not found in Claude Code's config. If you declined Step 3 or it failed, register manually: claude mcp add --scope user gramaton gramaton -- mcp")
 }
 
 // verifyHooks walks <configDir>/hooks/<client>/ for each known

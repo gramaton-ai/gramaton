@@ -68,6 +68,32 @@ func TestParagraphIndent(t *testing.T) {
 	}
 }
 
+// TestParagraphEmptyLineNoIndent verifies that blank lines between
+// prose paragraphs don't emit trailing whitespace. A common pattern
+// in the wizard is Paragraph("intro", "", "continuation") where the
+// middle "" should render as a bare empty line, not as "  \n".
+// Trailing-whitespace blank lines leak through git diff reviews and
+// confuse terminal tools that strip/preserve whitespace differently.
+func TestParagraphEmptyLineNoIndent(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.Paragraph("first", "", "second")
+
+	got := buf.String()
+	want := "  first\n\n  second\n"
+	if got != want {
+		t.Errorf("Paragraph with blank between:\ngot  %q\nwant %q", got, want)
+	}
+
+	// Same for embedded \n\n in a single arg.
+	buf.Reset()
+	w.Paragraph("first\n\nsecond")
+	got = buf.String()
+	if got != want {
+		t.Errorf("Paragraph with embedded blank:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 func TestPromptNoTrailingNewline(t *testing.T) {
 	// Prompt must not end with a newline; input sits on the same
 	// visible line. This is a common accidental regression.

@@ -118,7 +118,18 @@ func (w *TerminalWriter) Paragraph(lines ...string) {
 		// paragraphs sit flush-left with the ✓/⚠/✗ lines below them.
 		// Multi-line paragraphs (strings containing \n) are
 		// re-indented so pasted blocks render cleanly.
+		//
+		// Empty sub-lines (either `""` in the variadic args or a
+		// `\n\n` inside a single string) print as a bare blank line
+		// with no trailing whitespace. Otherwise a 2-space indent
+		// on a visually-empty line leaves invisible trailing
+		// whitespace that shows up in git diffs and IDE whitespace
+		// highlighters.
 		for _, sub := range strings.Split(line, "\n") {
+			if sub == "" {
+				fmt.Fprintln(w.out)
+				continue
+			}
 			fmt.Fprintf(w.out, "  %s\n", sub)
 		}
 	}
