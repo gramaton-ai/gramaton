@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"sync"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
@@ -50,6 +53,26 @@ type Wizard struct {
 	// DefaultHookBackend (embed.FS extraction + settings.json JSON
 	// patching). Tests swap it for a fake.
 	hookBackend HookBackend
+
+	// cleanups holds undo-actions registered by steps that wrote
+	// persistent state before the final Step 5 commit. On success,
+	// the list is discarded. On interrupt (Ctrl+C, panic, or
+	// explicit early-return), the list is executed LIFO so the
+	// user's filesystem ends in a clean state -- no orphan API key
+	// files, no half-baked embedded hook trees.
+	//
+	// Each entry is a nullary cleanup function. Steps are expected
+	// to be idempotent in their own cleanups (e.g., os.Remove is
+	// fine if the file was already removed by something else).
+	cleanups   []func()
+	cleanupsMu sync.Mutex
+
+	// committed flips to true once the wizard has reached its
+	// successful end state (Step 5 has persisted config.yaml and
+	// printed next-steps). After commit, the cleanup stack is
+	// discarded -- the user's state is the intended final state,
+	// any interrupt from here on should NOT roll back.
+	committed bool
 }
 
 // New constructs a Wizard. cfg may be any config.Config (typically
@@ -94,7 +117,90 @@ const totalSteps = 4
 // restored archive populates the data dir) but still walks through
 // Steps 2-4 because API keys, MCP registration, and hooks are all
 // per-machine and deliberately not included in backups.
+// addCleanup registers a function to be executed on wizard interrupt.
+// Called by steps after they write persistent state (e.g., API key
+// files). Safe for concurrent calls, though in practice the wizard
+// is single-threaded.
+func (w *Wizard) addCleanup(fn func()) {
+	w.cleanupsMu.Lock()
+	defer w.cleanupsMu.Unlock()
+	w.cleanups = append(w.cleanups, fn)
+}
+
+// runCleanups executes registered cleanups LIFO and clears the list.
+// Called from the SIGINT handler and from Run's deferred rollback on
+// error. Idempotent: calling it twice is a no-op the second time.
+func (w *Wizard) runCleanups() {
+	w.cleanupsMu.Lock()
+	cleanups := w.cleanups
+	w.cleanups = nil
+	w.cleanupsMu.Unlock()
+	for i := len(cleanups) - 1; i >= 0; i-- {
+		cleanups[i]()
+	}
+}
+
+// markCommitted flips the wizard into its post-success state:
+// registered cleanups are discarded without running (they would
+// destroy the user's intended final state), and subsequent
+// interrupts leave the filesystem as-is.
+func (w *Wizard) markCommitted() {
+	w.cleanupsMu.Lock()
+	defer w.cleanupsMu.Unlock()
+	w.cleanups = nil
+	w.committed = true
+}
+
+// installInterruptHandler registers a SIGINT handler that runs
+// cleanups before exiting. Returns an unregister function the caller
+// must call when the wizard completes (successfully or otherwise) so
+// the Go runtime can restore default signal handling.
+//
+// Why explicit signal handling (vs relying on deferred cleanups):
+// Go's default Ctrl+C behavior is os.Exit(130), which does NOT run
+// deferred functions. We need an explicit handler to get the
+// cleanup stack to fire on interrupt. Once the wizard exits by any
+// other path (error return, normal success), the unregister func
+// restores default behavior.
+func (w *Wizard) installInterruptHandler() func() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ch:
+			// Keep this short: printing much from a signal handler
+			// interleaves badly with terminal state (especially if
+			// we interrupted a hidden-input Secret() read). A single
+			// line is the best we can do cleanly.
+			w.writer.Blank()
+			w.writer.Warn("Interrupted -- rolling back partial state...")
+			w.runCleanups()
+			// 130 is the conventional exit code for SIGINT (128 + 2).
+			os.Exit(130)
+		case <-done:
+			return
+		}
+	}()
+	return func() {
+		signal.Stop(ch)
+		close(done)
+	}
+}
+
 func (w *Wizard) Run(ctx context.Context) error {
+	// Install the interrupt handler first so every downstream
+	// file-writing step can trust cleanup-on-Ctrl+C. Unregister on
+	// any exit path to restore default signal handling.
+	unregister := w.installInterruptHandler()
+	defer unregister()
+
+	// If Run returns with an error (any step blew up), roll back
+	// before unregistering. Success commits its own state via
+	// markCommitted, which zeroes the cleanup list -- the deferred
+	// runCleanups becomes a no-op.
+	defer w.runCleanups()
+
 	w.welcome()
 
 	importing, err := w.askImportOrFresh()
@@ -132,6 +238,10 @@ func (w *Wizard) Run(ctx context.Context) error {
 		return fmt.Errorf("hooks step: %w", err)
 	}
 	w.stepVerify(ctx)
+	// Commit before nextSteps: once stepVerify has persisted
+	// config.yaml, the user's state IS the intended final state.
+	// Any subsequent interrupt should leave everything in place.
+	w.markCommitted()
 	w.nextSteps()
 
 	return nil

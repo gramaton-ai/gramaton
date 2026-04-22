@@ -181,6 +181,11 @@ func (w *Wizard) llmAnthropic(ctx context.Context) error {
 	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
+	// Register cleanup: if the wizard is interrupted (Ctrl+C, error
+	// in a later step) before Step 5 commits, remove the orphan key
+	// file. Otherwise the user sees a half-wired install with a key
+	// file but no config.yaml referencing it.
+	w.addCleanup(func() { _ = os.Remove(keyPath) })
 	w.writer.Check(fmt.Sprintf("Saved to %s (0600 perms -- only you can read it)", keyPath))
 
 	// Update config in-memory; we save to disk later (either in
@@ -277,6 +282,7 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
+	w.addCleanup(func() { _ = os.Remove(keyPath) })
 	w.writer.Check(fmt.Sprintf("Saved to %s (0600 perms)", keyPath))
 
 	w.cfg.LLM.Provider = "openai"

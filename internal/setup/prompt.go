@@ -60,6 +60,21 @@ type Prompter interface {
 // and we translate here for callers to handle gracefully).
 var ErrAborted = errors.New("setup aborted by user")
 
+// ErrInputTooLong is returned when a single prompt receives more than
+// maxLineBytes bytes of input. Defensive cap against pathological
+// paste: a user who accidentally paste-bombs the terminal (very long
+// file dropped into the prompt by mistake, escaped ANSI sequences,
+// etc.) would otherwise force us to buffer the whole blob. With the
+// cap we fail fast and the caller can re-prompt.
+var ErrInputTooLong = errors.New("input too long")
+
+// maxLineBytes caps how much a single Text/Secret read will accept.
+// 8 KB is comfortably more than any legitimate wizard answer (the
+// longest expected input is an API key, which is <200 bytes for
+// known providers). Raised later if a future prompt genuinely needs
+// a longer value.
+const maxLineBytes = 8 * 1024
+
 // TerminalPrompter is the production Prompter backed by os.Stdin and
 // golang.org/x/term for secret input. It is NOT safe for concurrent
 // use (the wizard is single-threaded by design).
@@ -95,6 +110,13 @@ func (p *TerminalPrompter) Text(def string) (string, error) {
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
+	}
+	// Defensive cap against accidental paste-bombs. We check the
+	// pre-trim length so a blob of whitespace also triggers (trim
+	// first would let a 4MB-of-spaces paste slip through). Callers
+	// see ErrInputTooLong and can re-prompt.
+	if len(line) > maxLineBytes {
+		return "", ErrInputTooLong
 	}
 	if trimmed == "" {
 		return def, nil

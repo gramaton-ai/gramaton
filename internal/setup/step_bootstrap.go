@@ -188,6 +188,7 @@ func (w *Wizard) setupEmbeddingOpenAI(ctx context.Context) error {
 	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write openai key: %w", err)
 	}
+	w.addCleanup(func() { _ = os.Remove(keyPath) })
 
 	w.cfg.Embedding.Provider = "openai"
 	w.cfg.Embedding.Model = "text-embedding-3-small"
