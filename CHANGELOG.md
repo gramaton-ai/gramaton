@@ -40,6 +40,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `StripAPIKeys` regression fixtures in `backup/backup_test.go`,
   and test-only placeholder API keys throughout the test suite.
 
+### Changed
+
+- **Inclusive-language rename**: `whitelist` / `blacklist` ->
+  `allowlist` / `blocklist` throughout the codebase. Touches
+  `backup/backup.go` (including the unexported `stripToAllowlist`
+  function), `backup/backup_test.go` (test function
+  `TestStripAPIKeysAllowlistGaps`), `api/collections.go`
+  (projection-field comments), `.gitignore` comments, and the
+  user-facing `jsonschema` descriptions on the `fields` parameter
+  of `gramaton_collection_items` in both
+  `cli/mcp_proxy_collections.go` and `server/bindings_collections.go`.
+  No behavior change.
+
 ### Fixed
 
 - **P1-59: manifest-summary cache key now reflects epistemic /
@@ -139,9 +152,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **P1-38: config `Validate()` + strict YAML decoding** -- config/config.go
   gains an exported `Validate(*Config) error` that runs after `normalize`
-  in `Load` and `LoadWithFallback`. Enforces: LLM provider whitelist
+  in `Load` and `LoadWithFallback`. Enforces: LLM provider allowlist
   (`anthropic`, `openai`, `bedrock`, `claude-cli`, `kiro-cli`, or empty),
-  embedding provider whitelist (`bert`, `ollama`, `openai`, `bedrock`,
+  embedding provider allowlist (`bert`, `ollama`, `openai`, `bedrock`,
   or empty), `Server.Port` in [0, 65535], `Decay.Rates.Immutable == 0`,
   and non-negativity on decay rates + scoring + BM25 weights. Sum-to-1
   is NOT enforced because search/score.go re-normalizes meta weights
@@ -340,7 +353,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as the source of truth rather than duplicating conventions. Added
   `CLAUDE.md` at the repo root as a short skill index and governance
   reference. `.gitignore` narrowed from a blanket `.claude/` rule to
-  a default-deny whitelist: only `.claude/skills/` is shared; user-
+  a default-deny allowlist: only `.claude/skills/` is shared; user-
   local settings and session state stay out of the repo.
 - **HNSW vector index** -- pure Go Hierarchical Navigable Small World
   implementation behind the existing VectorIndex interface. O(log N)

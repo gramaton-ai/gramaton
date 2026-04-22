@@ -330,10 +330,10 @@ embedding:
 	}
 }
 
-// TestStripAPIKeysWhitelistGaps is the regression test for P1-03:
-// the previous blacklist missed several fields that leak secrets or
-// infrastructure. The whitelist rewrite must drop ALL of them.
-func TestStripAPIKeysWhitelistGaps(t *testing.T) {
+// TestStripAPIKeysAllowlistGaps is the regression test for P1-03:
+// the previous blocklist missed several fields that leak secrets or
+// infrastructure. The allowlist rewrite must drop ALL of them.
+func TestStripAPIKeysAllowlistGaps(t *testing.T) {
 	input := `llm:
   provider: anthropic
   model: claude-sonnet-4-6
@@ -370,7 +370,7 @@ embedding:
 		}
 	}
 
-	// Whitelist preserved fields.
+	// Allowlist preserved fields.
 	for _, kept := range []string{
 		"anthropic",
 		"claude-sonnet-4-6",

@@ -79,7 +79,7 @@ type proxyCollectionItemsInput struct {
 	Sort           string         `json:"sort,omitempty" jsonschema:"field name to sort by (default: created_at)"`
 	Order          string         `json:"order,omitempty" jsonschema:"asc or desc (default: asc)"`
 	IncludeRetired bool           `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
-	Fields         []string       `json:"fields,omitempty" jsonschema:"whitelist of schema field names to include per item (default: all fields). id, created_at, and needs_migration are always included."`
+	Fields         []string       `json:"fields,omitempty" jsonschema:"allowlist of schema field names to include per item (default: all fields). id, created_at, and needs_migration are always included."`
 	Filter         map[string]any `json:"filter,omitempty" jsonschema:"schema-field -> expected-value(s) map. Value may be a string (exact match) or []string (any-of). Items must match every entry."`
 }
 

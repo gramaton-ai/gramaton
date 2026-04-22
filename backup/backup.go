@@ -638,8 +638,8 @@ func addSanitizedConfig(tw *tar.Writer, cfgPath string) error {
 
 // StripAPIKeys removes sensitive and infrastructure-leaking fields
 // from config YAML before the config is written into a backup
-// archive. (P1-03 fix: was a blacklist of 4 fields; now a
-// whitelist of known-safe ones.)
+// archive. (P1-03 fix: was a blocklist of 4 fields; now a
+// allowlist of known-safe ones.)
 //
 // Stripped fields and rationale:
 //   - api_key, api_key_env, api_key_file: literal keys, env-var
@@ -652,10 +652,10 @@ func addSanitizedConfig(tw *tar.Writer, cfgPath string) error {
 //   - region: kept (region names like "us-east-1" are not sensitive).
 //
 // Implementation: inside the llm/embedding sections, only fields
-// in the whitelist below are preserved. Everything else (including
+// in the allowlist below are preserved. Everything else (including
 // fields added by future config changes) is stripped. New "safe"
-// fields must be added explicitly to the whitelist. This is
-// safer than a blacklist because forgetting to update the strip
+// fields must be added explicitly to the allowlist. This is
+// safer than a blocklist because forgetting to update the strip
 // list when adding a new sensitive field would silently leak.
 func StripAPIKeys(data []byte) ([]byte, error) {
 	var raw map[string]any
@@ -663,8 +663,8 @@ func StripAPIKeys(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	stripToWhitelist(raw, "llm", llmSafeFields)
-	stripToWhitelist(raw, "embedding", embeddingSafeFields)
+	stripToAllowlist(raw, "llm", llmSafeFields)
+	stripToAllowlist(raw, "embedding", embeddingSafeFields)
 
 	return yaml.Marshal(raw)
 }
@@ -687,10 +687,10 @@ var embeddingSafeFields = map[string]bool{
 	"region":    true,
 }
 
-// stripToWhitelist replaces the named section's contents with only
+// stripToAllowlist replaces the named section's contents with only
 // those keys present in the safe map. If the section is missing or
 // not a map, nothing happens.
-func stripToWhitelist(m map[string]any, section string, safe map[string]bool) {
+func stripToAllowlist(m map[string]any, section string, safe map[string]bool) {
 	sub, ok := m[section]
 	if !ok {
 		return

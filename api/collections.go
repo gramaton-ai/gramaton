@@ -388,7 +388,7 @@ type CollectionItemsRequest struct {
 	Order          string `json:"order,omitempty"`
 	IncludeRetired bool   `json:"include_retired,omitempty"`
 
-	// Fields is a whitelist of schema field names to include in each
+	// Fields is a allowlist of schema field names to include in each
 	// item's `fields` sub-map. Empty/nil means return every field
 	// (today's behavior). `id`, `created_at`, and `needs_migration`
 	// are always included at the top level regardless of this list.
@@ -409,7 +409,7 @@ type CollectionItemsRequest struct {
 // grows large enough to need pagination, it's a signal to split it.
 // Filter narrows the result by exact schema-field match (preserving the
 // exhaustive contract). Fields projects the per-item `fields` sub-map
-// down to a whitelist -- both are there so agents can audit large
+// down to a allowlist -- both are there so agents can audit large
 // collections without dragging the full-fidelity `details` payload.
 func (a *API) CollectionItems(ctx context.Context, collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
 	_ = ctx
@@ -558,7 +558,7 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 		return less
 	})
 	// Strip the sort-only field re-adds so the wire output actually
-	// honors the projection whitelist.
+	// honors the projection allowlist.
 	if sortField != "created_at" && projection != nil {
 		if _, projected := projection[sortField]; !projected {
 			for _, item := range items {
