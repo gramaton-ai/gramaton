@@ -209,25 +209,19 @@ func (w *Wizard) Run(ctx context.Context) error {
 	}
 
 	if importing {
-		// Import branch is TODO: needs the `backup.Restore` wiring
-		// and a server-start-for-restore dance. For this first pass
-		// we surface the gap clearly rather than silently fall back,
-		// so users who picked [2] understand they need to use the
-		// manual `gramaton restore` flow for now.
-		w.writer.Blank()
-		w.writer.Warn("Import flow is not yet implemented in the wizard.")
-		w.writer.Paragraph(
-			"For now, run `gramaton init` to bootstrap this machine, then",
-			"run `gramaton restore <path-to-backup>` to load your data.",
-			"You'll also need to re-run `gramaton set-key` afterwards --",
-			"API keys are stripped from backups for safety.",
-		)
-		return nil
+		// runImport replaces Step 1 bootstrap: restore populates the
+		// data directory atomically from the archive. Steps 2-4 still
+		// run because keys are stripped from backups and MCP/hooks
+		// are per-machine.
+		if err := w.runImport(ctx); err != nil {
+			return fmt.Errorf("import: %w", err)
+		}
+	} else {
+		if err := w.stepBootstrap(ctx); err != nil {
+			return fmt.Errorf("bootstrap step: %w", err)
+		}
 	}
 
-	if err := w.stepBootstrap(ctx); err != nil {
-		return fmt.Errorf("bootstrap step: %w", err)
-	}
 	if err := w.stepLLM(ctx); err != nil {
 		return fmt.Errorf("LLM step: %w", err)
 	}
