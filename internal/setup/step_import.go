@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/backup"
 )
@@ -100,12 +101,46 @@ func (w *Wizard) runImport(ctx context.Context) error {
 	}
 	w.writer.Check(fmt.Sprintf("Created %s", w.configDir))
 
+	// Heads-up before the long operation. backup.Restore reads the
+	// whole archive, extracts into a staging sibling of dataDir,
+	// and atomically swaps. For a typical personal store that's
+	// seconds-to-a-minute; for larger stores (or slow disks) it can
+	// be several minutes. The progress line below prints once at
+	// start, so without this pre-warning the user sees silence
+	// during the extraction and assumes the wizard hung.
+	size := "unknown size"
+	if info != nil {
+		size = humanBytes(info.Size())
+	}
+	w.writer.Paragraph(
+		fmt.Sprintf("About to restore %s of data. This can take a while for large", size),
+		"stores -- please don't close this window or interrupt.",
+	)
+	w.writer.Blank()
+
 	// Extract + swap. Atomic: on error, dataDir (if it existed) is
 	// untouched. On this code path dataDir usually doesn't exist yet
 	// because we're in a fresh-install wizard; Restore creates it.
+	//
+	// A heartbeat goroutine emits a "still working" line every 5
+	// seconds so the user has live feedback that the process is
+	// alive -- backup.Restore itself has no progress callback (a
+	// future enhancement). The heartbeat terminates via the done
+	// channel as soon as Restore returns, before any output that
+	// follows.
 	w.writer.ProgressStart(fmt.Sprintf("Restoring from %s", archivePath))
-	if restoreErr := backup.Restore(archivePath, w.cfg.DataDir); restoreErr != nil {
-		w.writer.ProgressEnd()
+	heartbeatDone := w.startHeartbeat("restoring")
+
+	restoreErr := backup.Restore(archivePath, w.cfg.DataDir)
+	close(heartbeatDone)
+	// Small settle delay so the heartbeat goroutine's last
+	// Fprintln (if any) lands before the subsequent check line.
+	// Without this, a "still working" line can race with the
+	// success line below and interleave oddly.
+	time.Sleep(10 * time.Millisecond)
+	w.writer.ProgressEnd()
+
+	if restoreErr != nil {
 		w.writer.ErrorLine(fmt.Sprintf("Restore failed: %v", restoreErr))
 		w.writer.Paragraph(
 			"Your backup archive couldn't be extracted. Common causes:",
@@ -118,7 +153,6 @@ func (w *Wizard) runImport(ctx context.Context) error {
 		return nil
 	}
 	_ = ctx
-	w.writer.ProgressEnd()
 	w.writer.Check(fmt.Sprintf("Data restored to %s", w.cfg.DataDir))
 
 	// Embedding-model warning. The archive carries vectors from the
@@ -139,6 +173,38 @@ func (w *Wizard) runImport(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+// startHeartbeat spins up a goroutine that emits a "  still <label>
+// (<elapsed>)" line every 5 seconds until the returned channel is
+// closed. Purpose: give live UX feedback during long operations
+// (backup.Restore, embed-model download) that don't expose their
+// own progress callbacks. Safe because fmt.Fprintln on os.Stdout
+// is concurrency-safe (file writes are locked by the kernel) and
+// the wizard isn't printing elsewhere while a long op runs.
+//
+// Caller MUST close the returned channel when the operation ends,
+// or the heartbeat goroutine leaks (it only exits on channel close).
+func (w *Wizard) startHeartbeat(label string) chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		start := time.Now()
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				elapsed := time.Since(start).Round(time.Second)
+				// Rendered at the same indent as the ProgressUpdate
+				// byte-counter so it looks intentional next to the
+				// "Restoring from ..." line from ProgressStart.
+				w.writer.Raw(fmt.Sprintf("    ... still %s (%s elapsed)", label, elapsed))
+			}
+		}
+	}()
+	return done
 }
 
 // expandUserPath handles the ~/ shorthand and resolves relative
