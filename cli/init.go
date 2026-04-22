@@ -9,36 +9,104 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/embed"
+	"github.com/gramaton-ai/gramaton/internal/setup"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+)
+
+var (
+	// nonInteractive forces the legacy non-interactive bootstrap even
+	// when stdin is a TTY. Useful for scripts that explicitly want the
+	// old behavior, or for debugging the non-interactive code path.
+	nonInteractive bool
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize Gramaton configuration",
 	Long: `Creates the configuration directory, default config file, and data
-directory. Detects and configures an embedding provider automatically.`,
+directory, and sets up embedding + LLM providers.
+
+When stdin is a terminal, init runs an interactive wizard that walks
+through provider choice, API key entry, and MCP client registration.
+With --non-interactive (or when stdin is piped), init bootstraps with
+defaults only and prints instructions for completing setup manually.`,
 	RunE: runInit,
 }
 
 func init() {
+	initCmd.Flags().BoolVar(&nonInteractive, "non-interactive", false,
+		"skip the interactive wizard and bootstrap with defaults only")
 	rootCmd.AddCommand(initCmd)
 }
 
+// runInit is the entry point for `gramaton init`. It decides between
+// the interactive wizard (TTY + no --non-interactive flag) and the
+// legacy non-interactive bootstrap, then dispatches.
+//
+// The decision tree:
+//
+//	--non-interactive OR stdin is not a TTY  ->  runInitNonInteractive
+//	otherwise                                 ->  runInitInteractive
+//
+// This is the only place where TTY detection happens; everything
+// downstream of this receives an explicit interactive/non-interactive
+// signal. Keeping the check here (rather than per-step) avoids a
+// class of bugs where one step guesses TTY state differently from
+// another.
 func runInit(cmd *cobra.Command, args []string) error {
 	dir := configDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 
-	// Check if already initialized.
+	// Guard against re-init. The wizard has an "existing install" menu
+	// planned (reconfigure MCP, reset everything, abort), but it's
+	// not implemented in the first pass -- just print the current
+	// friendly message and bail.
 	if _, err := os.Stat(cfgPath); err == nil {
 		fmt.Fprintf(os.Stderr, "Already initialized: %s\n", cfgPath)
 		fmt.Fprintln(os.Stderr, "Edit the config file directly, or delete it and re-run init.")
 		return nil
 	}
 
+	// Honor explicit opt-out of interactivity, and fall through when
+	// stdin isn't a terminal (piped/redirected). term.IsTerminal must
+	// be checked against the real os.Stdin fd; we don't let callers
+	// override it because masking a non-TTY as interactive would hang
+	// the wizard waiting on input that will never come.
+	interactive := !nonInteractive && term.IsTerminal(int(os.Stdin.Fd()))
+
 	cfg := config.Defaults()
 	cfg.DataDir = filepath.Join(dir, "data")
 
-	// Create data directory.
+	if interactive {
+		return runInitInteractive(cmd.Context(), &cfg, cfgPath, dir)
+	}
+	return runInitNonInteractive(cmd.Context(), cfg, cfgPath, dir)
+}
+
+// runInitInteractive drives the setup package's wizard. The cfg passed
+// in is defaults + DataDir resolved; the wizard mutates it through the
+// steps and persists at the verification step.
+func runInitInteractive(ctx context.Context, cfg *config.Config, cfgPath, dir string) error {
+	wiz := setup.New(
+		setup.NewTerminalPrompter(),
+		setup.NewTerminalWriter(),
+		cfg,
+		cfgPath,
+		dir,
+	)
+	return wiz.Run(ctx)
+}
+
+// runInitNonInteractive preserves the original `gramaton init` behavior
+// for scripts and piped stdin: create the dirs, auto-detect an
+// embedding provider via embed.SetupEmbedding, save the config, print
+// terse status. No prompts, no LLM setup, no MCP injection.
+//
+// This is the backward-compatibility path. The wizard (interactive
+// path) is the recommended flow for users; this path exists so
+// existing CI scripts and Docker-image bootstraps keep working.
+func runInitNonInteractive(ctx context.Context, cfg config.Config, cfgPath, dir string) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
@@ -48,30 +116,31 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Data:   %s\n", cfg.DataDir)
 	fmt.Println()
 
-	// Detect and configure embedding provider.
-	configured := setupEmbedding(&cfg, cfgPath)
+	configured := setupEmbeddingNonInteractive(ctx, &cfg, cfgPath)
 
-	// Save config.
 	if err := config.Save(cfg, cfgPath); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
 	if configured {
 		fmt.Println()
-		fmt.Println("Gramaton is ready. Start capturing knowledge.")
+		fmt.Println("Gramaton is set up but an LLM provider was not configured.")
+		fmt.Println("For autonomous curation (strongly recommended), run:")
+		fmt.Println("  gramaton init  (interactive, in a terminal)")
+		fmt.Println("or edit ~/.gramaton/config.yaml manually. See docs/providers.md.")
 	}
 
 	return nil
 }
 
-// setupEmbedding detects Ollama, starts it if needed, pulls the default
-// model, and configures the embedding provider. Returns true if embedding
-// was configured.
-func setupEmbedding(cfg *config.Config, cfgPath string) bool {
+// setupEmbeddingNonInteractive is the same flow the old gramaton init
+// used: detect + auto-configure an embedding provider, report status.
+// Factored into a named helper so the legacy path stays readable.
+func setupEmbeddingNonInteractive(ctx context.Context, cfg *config.Config, cfgPath string) bool {
 	fmt.Println("Checking for embedding providers...")
 	fmt.Println()
 
-	result := embed.SetupEmbedding(context.Background(), cfg)
+	result := embed.SetupEmbedding(ctx, cfg)
 	for _, msg := range result.Messages {
 		fmt.Printf("  %s\n", msg)
 	}
@@ -86,6 +155,9 @@ func setupEmbedding(cfg *config.Config, cfgPath string) bool {
 	return true
 }
 
+// printEmbeddingSetupFailed prints the recovery guidance when the
+// non-interactive flow can't configure an embedding provider. Kept
+// verbatim from the pre-wizard code; still accurate.
 func printEmbeddingSetupFailed() {
 	fmt.Println("  Embedding setup failed.")
 	fmt.Println()
@@ -110,11 +182,4 @@ func printEmbeddingSetupFailed() {
 	fmt.Println()
 	fmt.Println("  Gramaton also works without embeddings (keyword and graph search")
 	fmt.Println("  still work), but semantic similarity search requires them.")
-}
-
-func printManualSetup(cfgPath string) {
-	fmt.Println()
-	fmt.Printf("  To configure manually, edit %s:\n", cfgPath)
-	fmt.Println("    embedding:")
-	fmt.Println("      provider: ollama")
 }

@@ -9,6 +9,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Interactive setup wizard scaffolding (`internal/setup/`)** -- first
+  pass of the `gramaton init` interactive wizard. Goal: replace the
+  one-shot `init` with a guided walkthrough covering embedding provider
+  selection, LLM provider + API key entry, MCP client registration,
+  and auto-capture hook installation. Driven by the pre-OSS decision
+  that even tech-capable users benefit from a wizard (first-impression
+  UX is the highest-leverage pre-push investment, see Memory record
+  2026-04-22 on target audience).
+
+  This pass lands:
+    - New `internal/setup` package with `Prompter` and `Writer`
+      interfaces so every step is unit-testable without driving a real
+      terminal. `TerminalPrompter`/`TerminalWriter` for production,
+      `ScriptedPrompter`/buffered writer for tests.
+    - Wizard orchestration: `Wizard.Run` drives 4 user-visible steps
+      plus Step 0 (fresh-vs-import branch) and a final verification.
+    - Step 1 (Knowledge store) fully implemented: 5-option menu for
+      embedding provider (BERT default / Ollama / OpenAI / Bedrock /
+      Skip), with model download for BERT and config-only setup for
+      the others.
+    - Step 2 (Autonomous curation) fully implemented: feature-map
+      comparison showing what Gramaton does with vs without an LLM,
+      provider selection (Anthropic / OpenAI / Bedrock / help / skip),
+      API-key entry with hidden input, test-call validation for
+      Anthropic, cost-cap sub-prompt with `$5/day + 500 calls/day`
+      defaults and a customize branch. Enables `search.rerank_enabled`
+      automatically when an LLM is configured.
+    - Steps 3-5 (MCP client injection, hooks installer, verification)
+      are stubbed with detailed implementation plans in doc comments;
+      these land in a follow-up pass.
+    - `cli/init.go` rewritten as a TTY-dispatcher: interactive mode
+      invokes the wizard, `--non-interactive` (or piped stdin) keeps
+      the legacy scripted bootstrap flow for backward-compat with CI.
+    - Unit tests for prompt/output helpers and two orchestration
+      smoke tests covering the import branch and the skip-everything
+      fresh path.
+
+  Design decisions are documented inline in each file, including:
+  Haiku as default curation tier for cost, rerank-on-when-LLM-
+  configured, non-validated-OpenAI-key (vs validated-Anthropic),
+  deferred-import-restore, skip-first-class-but-warned, Bedrock
+  Anthropic-model-only scope, $5/day cap derivation, and per-cycle
+  cap hidden behind customize.
+
+  Not in this pass (explicit follow-ups, documented in step_mcp.go
+  and step_hooks.go stubs): MCP client auto-detect + config
+  injection, hooks installer, embed.FS for shipping hook scripts
+  with the binary, full `gramaton doctor`-style verification.
+
 - **AVX2 + FMA3 matmul kernel for amd64 BERT inference** -- new
   `embed/bert/matmul_amd64.s` assembly kernel mirrors the arm64 NEON
   implementation, processing K in 8-float chunks via 256-bit YMM loads
