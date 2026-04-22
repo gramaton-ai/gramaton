@@ -160,6 +160,20 @@ llm:
 
 Auth works the same as Bedrock embeddings (profile, env vars, or default credential chain).
 
+### CLI shims (unsupported — use at your own risk)
+
+Two additional providers exist in the codebase — `claude-cli` and `kiro-cli` —
+which proxy LLM requests through the vendor's interactive command-line tools
+rather than a first-party API.
+
+**These are not officially supported.** Automating an interactive CLI with a
+background process is outside the intended use of those tools and may violate
+the vendor's terms of service. Using them could result in your vendor account
+being suspended or banned. They are retained for local experimentation only.
+
+For production or shared use, configure `anthropic`, `openai`, or `bedrock`
+against a first-party API key.
+
 ## Mix and match
 
 Each provider is configured independently. Common combinations:

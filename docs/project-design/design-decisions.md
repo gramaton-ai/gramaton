@@ -38,7 +38,7 @@ Detailed stage-by-stage execution plan: [p2-06-writesession-plan.md](p2-06-write
 
 Three options were considered:
 
-(a) **Replace count caps with cost caps.** Simpler config surface; one knob per scope. Rejected because it requires every model to have a pricing entry — the pricing table covers anthropic (claude 3/4 tiers) and openai (gpt-4o, gpt-4o-mini), but CLI-shim providers (`claudecli`, `kirocli`) currently report 0 tokens, and any user-added custom model or future Bedrock Titan/Llama entry would silently evade the cap. Cost-only means the safety net has holes proportional to how many models are missing from the table.
+(a) **Replace count caps with cost caps.** Simpler config surface; one knob per scope. Rejected because it requires every model to have a pricing entry — the pricing table covers anthropic (claude 3/4 tiers) and openai (gpt-4o, gpt-4o-mini), but CLI-shim providers (`claude-cli`, `kiro-cli`) currently report 0 tokens, and any user-added custom model or future Bedrock Titan/Llama entry would silently evade the cap. Cost-only means the safety net has holes proportional to how many models are missing from the table.
 
 (b) **Cost cap on a new `LimitsConfig` field; count cap stays on `LLMConfig`.** The instinct was that dollars feel "limits-like" and belong with `max_json_size`. Rejected because symmetry matters more than category: `max_calls_per_day` already lives on `LLMConfig` for good reason (it's an LLM-specific cap, not a request-body cap), and splitting count cap from cost cap by section forces operators to look in two places to reason about spend.
 

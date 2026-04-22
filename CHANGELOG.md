@@ -7,6 +7,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **OSS-readiness scrub (pre-public-release)** -- audited the repo
+  for PII, secrets, and public-unfriendly content ahead of pushing
+  to GitHub. HEAD scrubs:
+  - Two sensitive few-shot examples in `curation/prompts.go`'s
+    classifyPrompt were replaced with generic equivalents. Because
+    one predated the start of the `[Unreleased]` window, a history
+    rewrite was required: 151 descendant commits were re-hashed
+    and the orphaned pre-rewrite chain (via a stale feature
+    branch) was deleted and gc'd to release it. Every commit on
+    that branch was verified to be a content-duplicate of a main
+    twin before deletion.
+  - Absolute `/Users/b/...` paths scrubbed from HEAD in
+    `cli/session_test.go` (test fixture) and `docs/benchmarks.md`
+    (templated `data_dir`; `claude mcp add` switched to the bare
+    `gramaton` command on PATH).
+  - A user-specific path convention in another few-shot record
+    was changed to a generic one so prompts shipped to the LLM
+    don't leak personal filesystem layout.
+  - Added a "CLI shims (unsupported -- use at your own risk)"
+    subsection to `docs/providers.md` documenting that the
+    `claude-cli` and `kiro-cli` providers automate interactive
+    vendor CLIs outside their intended use and may result in
+    vendor account suspension or ban.
+  - Normalized CLI-shim provider names in
+    `docs/project-design/design-decisions.md` to match the
+    config-accepted hyphenated spelling.
+  Accepted as-is after review: residual `/Users/b/` paths in four
+  historical commits (low-severity username leak), the intentional
+  `StripAPIKeys` regression fixtures in `backup/backup_test.go`,
+  and test-only placeholder API keys throughout the test suite.
+
 ### Fixed
 
 - **P1-59: manifest-summary cache key now reflects epistemic /

@@ -82,8 +82,8 @@ Examples of correct meta-level classification:
   -> temporality: immutable (historical financial data)
   -> confidence: 0.95 (specific numbers from records)
 
-  Record: "To deploy gramaton: run 'go build -o ~/bin/gramaton .'
-  then 'gramaton serve' to start the server."
+  Record: "To deploy gramaton: run 'go build -o ./gramaton .'
+  then './gramaton serve' to start the server."
   -> epistemic_status: probable (works now, may change)
   -> knowledge_type: procedural (how-to instructions)
   -> temporality: durable (deployment process is stable)

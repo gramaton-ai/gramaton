@@ -23,7 +23,7 @@ gramaton store create longmemeval-bench
 #    the global config. LoadWithFallback deep-merges (defaults ->
 #    global -> per-store), so unset keys inherit from the global.
 cat > ~/.gramaton/stores/longmemeval-bench/config.yaml <<'EOF'
-data_dir: /Users/b/.gramaton/stores/longmemeval-bench/data
+data_dir: /path/to/.gramaton/stores/longmemeval-bench/data
 server:
   port: 7338
   auto_start: false
@@ -32,7 +32,7 @@ EOF
 # 3. Register a second MCP server for Claude Code (stdio, proxies to
 #    the benchmark gramaton instance via --store).
 claude mcp add --scope user gramaton-bench \
-    /Users/b/bin/gramaton -- --store longmemeval-bench mcp
+    gramaton -- --store longmemeval-bench mcp
 
 # 4. Start the benchmark server.
 gramaton --store longmemeval-bench serve

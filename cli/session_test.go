@@ -10,7 +10,7 @@ func TestCwdSlug(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"/Users/b/workspaces/gramaton", "Users-b-workspaces-gramaton"},
+		{"/Users/test/workspaces/gramaton", "Users-test-workspaces-gramaton"},
 		{"/", ""},
 		{"", ""},
 		{"/a", "a"},
