@@ -1279,7 +1279,11 @@ func normalize(cfg *Config) error {
 }
 
 // Save writes the config to the given path, creating parent directories
-// as needed.
+// as needed. Permissions follow the convention used throughout Gramaton
+// for files under ~/.gramaton/: directories at 0700 (owner-only access),
+// files at 0600 (owner read/write only) -- they may carry credentials
+// (api_key, api_key_file paths, server bind addresses) so any group/
+// other access is wrong.
 func Save(cfg Config, path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

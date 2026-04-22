@@ -169,7 +169,7 @@ func (w *RotatingWriter) rotate() error {
 	os.Remove(w.path)
 
 	// Enforce disk budget.
-	w.enforcebudget()
+	w.enforceBudget()
 
 	// Open a new file.
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -235,13 +235,13 @@ func (w *RotatingWriter) compressedFiles() []string {
 	return result
 }
 
-// enforcebudget deletes the oldest compressed files until total size
+// enforceBudget deletes the oldest compressed files until total size
 // is under the budget. Stat/Remove failures are surfaced via the
 // shared stderr writer (same channel used elsewhere in this file)
 // so disk-budget overshoot is observable. Previously these errors
 // were silently dropped, which let the budget overshoot
 // indefinitely with no operator signal. (Wave 4 P1-08.)
-func (w *RotatingWriter) enforcebudget() {
+func (w *RotatingWriter) enforceBudget() {
 	files := w.compressedFiles()
 	if len(files) == 0 {
 		return

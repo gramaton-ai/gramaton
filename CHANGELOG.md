@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **P3-07 nits batch (cluster A wrap-up)** -- two surviving items
+  from the original P3-07 bundle, the rest were resolved or absorbed
+  by other work in this Unreleased window:
+  - `logging.RotatingWriter.enforcebudget` -> `enforceBudget` to
+    match Go method-naming convention.
+  - `config.Save` now documents the file/dir permission convention
+    (0700 dirs, 0600 files for everything under `~/.gramaton/`,
+    since these may carry credentials).
+  Bullets already addressed elsewhere: yaml.Decoder strict-mode
+  (P1-38, commit 1c8b665), Observe.Enabled default (config-drift
+  sweep, commit 34b3fb8), safeProperties indentation (Wave 7
+  P1-74), truncate maxLen byte/rune (T-08, separate item),
+  three integration-doc drifts (T-10, separate item).
+
 - **`limits.max_json_size` is now honored by HTTP bindings** -- the
   cap was hardcoded to 1 MB in `server/validation.go` behind a TODO,
   while `config.LimitsConfig.MaxJSONSize` defaulted to 2 MB. Every
