@@ -226,6 +226,80 @@ func TestSaveCreatesDirectories(t *testing.T) {
 	}
 }
 
+// TestLoadTrimsWhitespaceFromPathsAndIdentifiers exercises the
+// trim-on-load behavior. Users hand-editing config.yaml via `cat
+// >> <<EOF` heredocs, clipboard paste, or terminal emulators that
+// add trailing whitespace routinely leave values like:
+//
+//	api_key_file: /Users/b/.gramaton/anthropic.key[trailing spaces]
+//
+// Without trimming, gramaton tries to open a literal path containing
+// those trailing spaces and fails file-not-found. The CLI's server
+// startup timeout then hides the real error. The fix: trim on load
+// so downstream consumers see clean values.
+func TestLoadTrimsWhitespaceFromPathsAndIdentifiers(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+
+	// Seed a config where every trim-candidate field has trailing
+	// whitespace. Using string concatenation so a careless future
+	// editor doesn't accidentally "fix" the test data via auto-
+	// whitespace-strip. YAML spec: trailing spaces on a scalar
+	// value ARE part of the value -- that's the exact bug we're
+	// fixing on load.
+	yamlBody := "data_dir: /tmp/example   \n" +
+		"llm:\n" +
+		"    provider: anthropic  \n" +
+		"    model: claude-sonnet-4-6   \n" +
+		"    api_key_file: /tmp/key   \n" +
+		"    api_key_env: MY_ENV   \n" +
+		"    region: us-west-2  \n" +
+		"    aws_profile: my-profile   \n" +
+		"    base_url: https://example.com   \n" +
+		"embedding:\n" +
+		"    provider: bert   \n" +
+		"    model: bge-small-en-v1.5   \n" +
+		"    api_key_file: /tmp/openai.key   \n" +
+		"backup:\n" +
+		"    dir: /tmp/backups   \n"
+
+	if err := os.WriteFile(cfgPath, []byte(yamlBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"DataDir", cfg.DataDir, "/tmp/example"},
+		{"LLM.Provider", cfg.LLM.Provider, "anthropic"},
+		{"LLM.Model", cfg.LLM.Model, "claude-sonnet-4-6"},
+		{"LLM.APIKeyFile", cfg.LLM.APIKeyFile, "/tmp/key"},
+		{"LLM.APIKeyEnv", cfg.LLM.APIKeyEnv, "MY_ENV"},
+		{"LLM.Region", cfg.LLM.Region, "us-west-2"},
+		{"LLM.AWSProfile", cfg.LLM.AWSProfile, "my-profile"},
+		{"LLM.BaseURL", cfg.LLM.BaseURL, "https://example.com"},
+		{"Embedding.Provider", cfg.Embedding.Provider, "bert"},
+		{"Embedding.Model", cfg.Embedding.Model, "bge-small-en-v1.5"},
+		{"Embedding.APIKeyFile", cfg.Embedding.APIKeyFile, "/tmp/openai.key"},
+		{"Backup.Dir", cfg.Backup.Dir, "/tmp/backups"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+		if strings.HasSuffix(c.got, " ") || strings.HasPrefix(c.got, " ") {
+			t.Errorf("%s: value has leading/trailing whitespace: %q", c.name, c.got)
+		}
+	}
+}
+
 func TestNewConfigDefaults(t *testing.T) {
 	cfg := Defaults()
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -1232,9 +1233,65 @@ func overlay(cfg *Config, path string) error {
 	return nil
 }
 
+// trimConfigStrings strips leading/trailing whitespace from string
+// fields that represent paths, env var names, URLs, or identifiers.
+// YAML preserves trailing whitespace inside values by design, but
+// users hand-editing config.yaml (or generating it via here-docs,
+// copy-paste, terminal clipboard artifacts) routinely introduce it
+// by accident. Common symptom: api_key_file resolves to
+// "/path/to/key.key   " (trailing spaces), gramaton tries to open
+// that literal path, fails file-not-found, and the CLI's startup
+// timeout hides the real error.
+//
+// Trimming happens after YAML unmarshal, not during, so code that
+// constructs Config values directly (without Load / LoadWithFallback)
+// is unaffected. Only string fields that semantically can't contain
+// leading/trailing whitespace are trimmed -- identifiers and paths.
+// We don't touch freeform fields (content bodies, descriptions)
+// because Gramaton's config schema doesn't have any.
+func trimConfigStrings(cfg *Config) {
+	trim := func(s *string) { *s = strings.TrimSpace(*s) }
+
+	trim(&cfg.DataDir)
+
+	trim(&cfg.Embedding.Provider)
+	trim(&cfg.Embedding.Endpoint)
+	trim(&cfg.Embedding.Model)
+	trim(&cfg.Embedding.BaseURL)
+	trim(&cfg.Embedding.APIKeyFile)
+	trim(&cfg.Embedding.APIKeyEnv)
+	trim(&cfg.Embedding.APIKey)
+	trim(&cfg.Embedding.Region)
+	trim(&cfg.Embedding.AWSProfile)
+	trim(&cfg.Embedding.AWSAccessKeyIDEnv)
+	trim(&cfg.Embedding.AWSSecretAccessKeyEnv)
+
+	trim(&cfg.LLM.Provider)
+	trim(&cfg.LLM.Model)
+	trim(&cfg.LLM.BaseURL)
+	trim(&cfg.LLM.APIKeyFile)
+	trim(&cfg.LLM.APIKeyEnv)
+	trim(&cfg.LLM.APIKey)
+	trim(&cfg.LLM.Region)
+	trim(&cfg.LLM.AWSProfile)
+	trim(&cfg.LLM.AWSAccessKeyIDEnv)
+	trim(&cfg.LLM.AWSSecretAccessKeyEnv)
+	trim(&cfg.LLM.Models.Low)
+	trim(&cfg.LLM.Models.Medium)
+	trim(&cfg.LLM.Models.High)
+
+	trim(&cfg.Backup.Dir)
+}
+
 // normalize coerces legacy aliases and clamps out-of-range values on a
 // loaded config. Runs once per load after all overlays have been applied.
 func normalize(cfg *Config) error {
+	// Whitespace trim first: downstream checks in this function
+	// (empty-string comparisons for e.g. provider vs dedup.action)
+	// assume strings are already trimmed. Also positions the trim
+	// to run regardless of which error path follows.
+	trimConfigStrings(cfg)
+
 	// Dedup action coercion. See DedupConfig docs + design-decisions.md D37.
 	// "flag" is a legacy alias that never had behavior distinct from
 	// "supersede"; silently coerce for one release cycle. Empty (omitted
