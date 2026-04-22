@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"bufio"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -106,6 +108,48 @@ func TestScriptedPrompterYesNo(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestTerminalPrompterEOFReturnsErrAborted covers the fix for the
+// infinite-retry bug: if stdin closes mid-wizard (user piped a file
+// that ran out, or remote shell disconnect), Text must surface
+// ErrAborted so the calling for-loop can exit cleanly instead of
+// spinning on repeated empty reads.
+func TestTerminalPrompterEOFReturnsErrAborted(t *testing.T) {
+	// Build a TerminalPrompter whose reader is already at EOF. We
+	// construct it manually to bypass the normal os.Stdin setup.
+	p := &TerminalPrompter{
+		reader: bufio.NewReader(strings.NewReader("")),
+	}
+
+	// First Text at EOF must return ErrAborted, not "" + nil.
+	_, err := p.Text("")
+	if !errors.Is(err, ErrAborted) {
+		t.Fatalf("EOF with empty default: got %v, want ErrAborted", err)
+	}
+
+	// Same with a default -- the "stream closed" signal must
+	// override the default-fallback path.
+	_, err = p.Text("some-default")
+	if !errors.Is(err, ErrAborted) {
+		t.Fatalf("EOF with default: got %v, want ErrAborted", err)
+	}
+}
+
+// TestTerminalPrompterBlankLineIsNotEOF ensures the EOF fix didn't
+// regress the common "user pressed Enter at a prompt with a default"
+// case. Line with only newline must still yield the default.
+func TestTerminalPrompterBlankLineIsNotEOF(t *testing.T) {
+	p := &TerminalPrompter{
+		reader: bufio.NewReader(strings.NewReader("\n")),
+	}
+	got, err := p.Text("picked-default")
+	if err != nil {
+		t.Fatalf("blank line: unexpected err %v", err)
+	}
+	if got != "picked-default" {
+		t.Errorf("blank line: got %q, want default", got)
 	}
 }
 

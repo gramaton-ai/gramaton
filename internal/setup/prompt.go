@@ -83,14 +83,23 @@ func NewTerminalPrompter() *TerminalPrompter {
 
 func (p *TerminalPrompter) Text(def string) (string, error) {
 	line, err := p.reader.ReadString('\n')
+	// Distinguish "user pressed Enter at a prompt" (line="\n", err=nil)
+	// from "stdin closed mid-wizard" (line="", err=io.EOF). Treating
+	// both as "press Enter" causes infinite re-prompt loops when the
+	// wizard tries to re-read a closed stdin (e.g., the Step 2 LLM
+	// menu's for-loop). Surface real EOF-with-no-input as ErrAborted
+	// so callers propagate and exit cleanly instead of spinning.
+	trimmed := strings.TrimSpace(line)
+	if errors.Is(err, io.EOF) && trimmed == "" {
+		return "", ErrAborted
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
+	if trimmed == "" {
 		return def, nil
 	}
-	return line, nil
+	return trimmed, nil
 }
 
 func (p *TerminalPrompter) Secret() (string, error) {

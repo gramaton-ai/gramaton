@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,13 @@ func (w *Wizard) stepLLM(ctx context.Context) error {
 
 		idx, err := w.prompter.Choice(5, -1)
 		if err != nil {
+			// ErrAborted = stdin closed (EOF or user Ctrl+D).
+			// Don't re-prompt forever -- propagate so the wizard
+			// exits cleanly. Any other error is a validation
+			// message we want to show and retry.
+			if errors.Is(err, ErrAborted) {
+				return err
+			}
 			w.writer.ErrorLine(err.Error())
 			continue
 		}
@@ -426,9 +434,13 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Parse best-effort; bad input keeps the default.
-	if v, err := parseMoneyUSD(day); err == nil && v > 0 {
+	// Best-effort parse: on success apply, on failure print a
+	// user-visible warn explaining why we kept the default. Silent
+	// fallback would leave users thinking their value took effect.
+	if v, parseErr := parseMoneyUSD(day); parseErr == nil && v > 0 {
 		w.cfg.LLM.MaxCostUSDPerDay = v
+	} else if day != fmt.Sprintf("%.2f", w.cfg.LLM.MaxCostUSDPerDay) && parseErr != nil {
+		w.writer.Warn(fmt.Sprintf("Invalid USD/day value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLM.MaxCostUSDPerDay))
 	}
 
 	w.writer.Prompt(fmt.Sprintf("Max API calls per day (default %d):", w.cfg.LLM.MaxCallsPerDay))
@@ -436,8 +448,10 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if v, err := parseIntAtLeast(calls, 1); err == nil {
+	if v, parseErr := parseIntAtLeast(calls, 1); parseErr == nil {
 		w.cfg.LLM.MaxCallsPerDay = v
+	} else if calls != fmt.Sprintf("%d", w.cfg.LLM.MaxCallsPerDay) {
+		w.writer.Warn(fmt.Sprintf("Invalid calls/day value: %v. Keeping default %d.", parseErr, w.cfg.LLM.MaxCallsPerDay))
 	}
 
 	w.writer.Prompt(fmt.Sprintf("Max USD per curation cycle (default $%.2f):", w.cfg.LLMCuration.MaxCostUSDPerRun))
@@ -445,8 +459,10 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if v, err := parseMoneyUSD(run); err == nil && v > 0 {
+	if v, parseErr := parseMoneyUSD(run); parseErr == nil && v > 0 {
 		w.cfg.LLMCuration.MaxCostUSDPerRun = v
+	} else if run != fmt.Sprintf("%.2f", w.cfg.LLMCuration.MaxCostUSDPerRun) && parseErr != nil {
+		w.writer.Warn(fmt.Sprintf("Invalid USD/cycle value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLMCuration.MaxCostUSDPerRun))
 	}
 
 	w.writer.Check(fmt.Sprintf(
@@ -458,9 +474,22 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	return nil
 }
 
+// maxUSDCap is the upper bound the wizard accepts for any spending cap.
+// A user who types "10000" (or more) very likely meant something else
+// or is inflating a typo -- accepting it silently would defeat the
+// "safety net, not a budget" framing in the caps step. We reject
+// anything above this and keep the default, with a warning.
+const maxUSDCap = 10_000.0
+
+// maxCallsCap similarly bounds MaxCallsPerDay. 1 million calls/day is
+// already well past any realistic single-user workload.
+const maxCallsCap = 1_000_000
+
 // parseMoneyUSD accepts inputs like "5.00", "$5", "$5.00" and returns
-// the numeric value. Rejects negatives. Returns an error on any
-// parse failure so callers can fall back to defaults.
+// the numeric value. Rejects negatives, NaN, +/-Inf, and values above
+// maxUSDCap (sanity guard against typos like "10000000" that would
+// effectively disable the cost cap). Any rejection returns an error
+// so callers print a warning and keep the default.
 func parseMoneyUSD(s string) (float64, error) {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "$")
@@ -468,13 +497,21 @@ func parseMoneyUSD(s string) (float64, error) {
 	if _, err := fmt.Sscanf(s, "%f", &v); err != nil {
 		return 0, err
 	}
+	// NaN and Inf both slip past "< 0" checks; guard explicitly.
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("value must be a finite number")
+	}
 	if v < 0 {
 		return 0, fmt.Errorf("negative values not allowed")
+	}
+	if v > maxUSDCap {
+		return 0, fmt.Errorf("value too large (max $%.2f; edit config.yaml directly for higher)", maxUSDCap)
 	}
 	return v, nil
 }
 
-// parseIntAtLeast parses s as an integer and requires it to be >= min.
+// parseIntAtLeast parses s as an integer and requires it to be between
+// min and maxCallsCap inclusive.
 func parseIntAtLeast(s string, min int) (int, error) {
 	s = strings.TrimSpace(s)
 	var v int
@@ -483,6 +520,9 @@ func parseIntAtLeast(s string, min int) (int, error) {
 	}
 	if v < min {
 		return 0, fmt.Errorf("value must be >= %d", min)
+	}
+	if v > maxCallsCap {
+		return 0, fmt.Errorf("value too large (max %d; edit config.yaml directly for higher)", maxCallsCap)
 	}
 	return v, nil
 }
