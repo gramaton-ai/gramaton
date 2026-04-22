@@ -25,7 +25,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/branches", func(w http.ResponseWriter, r *http.Request) {
 		var req api.BranchCreateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -95,7 +95,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 			return
 		}
 		var req api.RestoreRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -114,7 +114,7 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 			return
 		}
 		var req api.ExportRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

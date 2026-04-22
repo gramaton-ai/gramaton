@@ -17,7 +17,7 @@ func TestParseJSON(t *testing.T) {
 		Name  string `json:"name"`
 		Value int    `json:"value"`
 	}
-	err := parseJSON(req, &result, maxJSONBodySize)
+	err := parseJSON(req, &result, getMaxJSONSize())
 	if err != nil {
 		t.Fatalf("parseJSON: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestParseJSON(t *testing.T) {
 func TestParseJSONEmptyBody(t *testing.T) {
 	body := strings.NewReader("")
 	req, _ := http.NewRequest("POST", "/", body)
-	err := parseJSON(req, &struct{}{}, maxJSONBodySize)
+	err := parseJSON(req, &struct{}{}, getMaxJSONSize())
 	if err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("expected empty body error, got: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestParseJSONEmptyBody(t *testing.T) {
 func TestParseJSONInvalidJSON(t *testing.T) {
 	body := strings.NewReader("not json")
 	req, _ := http.NewRequest("POST", "/", body)
-	err := parseJSON(req, &struct{}{}, maxJSONBodySize)
+	err := parseJSON(req, &struct{}{}, getMaxJSONSize())
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
 		t.Fatalf("expected invalid JSON error, got: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestParseJSONInvalidJSON(t *testing.T) {
 func TestParseJSONInvalidUTF8(t *testing.T) {
 	body := strings.NewReader("{\"key\":\"\xff\"}")
 	req, _ := http.NewRequest("POST", "/", body)
-	err := parseJSON(req, &struct{}{}, maxJSONBodySize)
+	err := parseJSON(req, &struct{}{}, getMaxJSONSize())
 	if err == nil || !strings.Contains(err.Error(), "UTF-8") {
 		t.Fatalf("expected UTF-8 error, got: %v", err)
 	}
@@ -130,6 +130,7 @@ func TestServerLimits_ConfigDriven(t *testing.T) {
 	setServerLimits(config.LimitsConfig{
 		MaxSummaryShort: 50,
 		MaxKeywords:     2,
+		MaxJSONSize:     4096,
 	})
 
 	if got := getMaxSummaryShort(); got != 50 {
@@ -137,6 +138,9 @@ func TestServerLimits_ConfigDriven(t *testing.T) {
 	}
 	if got := getMaxKeywords(); got != 2 {
 		t.Errorf("getMaxKeywords() = %d, want 2", got)
+	}
+	if got := getMaxJSONSize(); got != 4096 {
+		t.Errorf("getMaxJSONSize() = %d, want 4096", got)
 	}
 
 	// Keyword count enforcement reads from the live limits.
@@ -163,5 +167,8 @@ func TestServerLimits_ZeroValueFallback(t *testing.T) {
 	}
 	if got := getMaxKeywords(); got != 100 {
 		t.Errorf("getMaxKeywords() with zero config = %d, want 100 fallback", got)
+	}
+	if got := getMaxJSONSize(); got != maxJSONBodySizeFallback {
+		t.Errorf("getMaxJSONSize() with zero config = %d, want %d fallback", got, maxJSONBodySizeFallback)
 	}
 }

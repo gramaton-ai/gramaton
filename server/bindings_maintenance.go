@@ -36,7 +36,7 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 		var body struct {
 			DryRun bool `json:"dry_run"`
 		}
-		if err := parseJSON(r, &body, maxJSONBodySize); err != nil && !errors.Is(err, errEmptyBody) {
+		if err := parseJSON(r, &body, getMaxJSONSize()); err != nil && !errors.Is(err, errEmptyBody) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -90,7 +90,7 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 		// Body is optional -- no required fields. But if a body IS
 		// sent, it had better be valid JSON; silently defaulting on
 		// a malformed body would hide caller mistakes.
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil && !errors.Is(err, errEmptyBody) {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil && !errors.Is(err, errEmptyBody) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

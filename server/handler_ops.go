@@ -27,7 +27,7 @@ type ingestFile struct {
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	var req revertRequest
-	if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+	if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 		return
 	}

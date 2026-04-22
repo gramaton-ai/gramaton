@@ -13,7 +13,7 @@ import (
 func (s *Server) registerSearchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/search", func(w http.ResponseWriter, r *http.Request) {
 		var req api.SearchRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -27,7 +27,7 @@ func (s *Server) registerSearchRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/explore", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ExploreRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -94,7 +94,7 @@ func (s *Server) registerSearchRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/duplicates", func(w http.ResponseWriter, r *http.Request) {
 		var req api.DuplicatesRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`limits.max_json_size` is now honored by HTTP bindings** -- the
+  cap was hardcoded to 1 MB in `server/validation.go` behind a TODO,
+  while `config.LimitsConfig.MaxJSONSize` defaulted to 2 MB. Every
+  `parseJSON` call site in bindings_{records,collections,sessions,
+  search,admin,maintenance}.go, handler_{ops,intake}.go now routes
+  through a new `getMaxJSONSize()` helper that reads from the process-
+  level serverLimits (set in `Server.New`). Zero/negative config
+  falls back to the previous 1 MB hardcoded value so tests that
+  bypass `Server.New()` still get a safe cap. Net effect: a user's
+  configured `limits.max_json_size` in yaml now actually takes
+  effect. Default max body moves from 1 MB to 2 MB as documented.
+  New test coverage in `server/validation_test.go` for both the
+  config-driven and zero-value-fallback paths.
+
 ### Removed
 
 - **Dead config fields cleaned up (config-drift sweep, cluster A)** --

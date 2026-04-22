@@ -13,7 +13,7 @@ import (
 func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/collections", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionCreateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -94,7 +94,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/collections/{id}/items", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionAddRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -108,7 +108,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/collections/{id}/items/batch", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionAddBatchRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -122,7 +122,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PATCH /v1/collections/{id}/items/{item_id}", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionUpdateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -136,7 +136,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/collections/{id}/items/{item_id}/move", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionMoveRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -159,7 +159,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PATCH /v1/collections/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionRenameRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -191,7 +191,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PUT /v1/collections/{id}/schema", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionSchemaUpdateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -205,7 +205,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/collections/{id}/migrate", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CollectionMigrateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

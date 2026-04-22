@@ -14,7 +14,7 @@ import (
 func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/records", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CaptureRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -42,7 +42,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PATCH /v1/records/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var req api.UpdateRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -57,7 +57,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/records/{id}/classify", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ClassifyRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -72,7 +72,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/records/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ResolveRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -87,7 +87,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/records/{id}/edges", func(w http.ResponseWriter, r *http.Request) {
 		var req api.LinkRequest
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

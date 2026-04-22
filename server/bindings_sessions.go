@@ -17,7 +17,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			ClientSessionID string `json:"client_session_id"`
 			Source          string `json:"source,omitempty"`
 		}
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -55,7 +55,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			SessionID string               `json:"session_id"`
 			Segments  []api.CommitSegment  `json:"segments"`
 		}
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
@@ -80,7 +80,7 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 			SessionID  string `json:"session_id"`
 			SourcePath string `json:"source_path"`
 		}
-		if err := parseJSON(r, &req, maxJSONBodySize); err != nil {
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}

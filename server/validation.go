@@ -14,13 +14,11 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 )
 
-// maxJSONBodySize is the default max request body size for JSON endpoints.
-//
-// TODO: This is hardcoded to 1MB but config.LimitsConfig.MaxJSONSize
-// defaults to 2MB. Wiring the config value through would change
-// observable behavior for any client hitting the 1-2MB range; deferred
-// pending a deliberate decision on the right default.
-const maxJSONBodySize = 1 << 20 // 1MB
+// maxJSONBodySizeFallback is the safety-net cap used when no configured
+// value is available (serverLimits not initialized, or Limits.MaxJSONSize
+// <= 0). Production callers route through getMaxJSONSize() which honors
+// config.Limits.MaxJSONSize (defaults to 2 MB).
+const maxJSONBodySizeFallback int64 = 1 << 20 // 1MB
 
 // maxIngestBodySize is the max request body size for ingest uploads.
 const maxIngestBodySize = 200 << 20 // 200MB
@@ -76,6 +74,18 @@ func getMaxKeywords() int {
 		return 100
 	}
 	return serverLimits.MaxKeywords
+}
+
+// getMaxJSONSize returns the configured JSON request body cap. Falls
+// back to maxJSONBodySizeFallback when the limit is unset (zero or
+// negative), preserving a 1 MB floor for tests that bypass Server.New.
+func getMaxJSONSize() int64 {
+	serverLimitsMu.RLock()
+	defer serverLimitsMu.RUnlock()
+	if serverLimits.MaxJSONSize <= 0 {
+		return maxJSONBodySizeFallback
+	}
+	return int64(serverLimits.MaxJSONSize)
 }
 
 // validateKeywords checks keyword count and per-keyword length.
