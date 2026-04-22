@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **P1-59: manifest-summary cache key now reflects epistemic /
+  temporality / confidence shifts** -- `generateManifestSummary`'s
+  state fingerprint was `records=N|types=...|keywords=top15|span=...`,
+  which silently treated two very different stores as "same" if they
+  shared top-15 keywords + knowledge_type histogram + record count.
+  Bulk reclassification (50 records sliding speculative ->
+  well_established with confidence going from low to high) didn't
+  change any of the included dimensions, so the cached manifest
+  summary stuck across the change. Extended the fingerprint to
+  include sorted histograms of `epistemic_status`, `temporality`,
+  and a quartile-bucket histogram of `confidence` (low <0.4 / mid
+  0.4-0.7 / high >=0.7 / unset). Quartile-style bucketing keeps the
+  fingerprint stable to small drift while still busting the cache
+  on the kind of bulk shift that matters. Two new regression tests
+  in `curation/autonomous_test.go`.
+
 - **P3-07 nits batch (cluster A wrap-up)** -- two surviving items
   from the original P3-07 bundle, the rest were resolved or absorbed
   by other work in this Unreleased window:

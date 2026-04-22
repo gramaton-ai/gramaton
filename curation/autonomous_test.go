@@ -1296,6 +1296,100 @@ func TestManifestCacheInvalidatesOnChange(t *testing.T) {
 	}
 }
 
+// TestManifestCacheInvalidatesOnEpistemicShift covers P1-59: the
+// fingerprint must distinguish stores that differ only in the
+// epistemic_status / temporality / confidence distributions, so a
+// bulk reclassification (e.g. 50 records sliding speculative ->
+// well_established) busts the cache.
+func TestManifestCacheInvalidatesOnEpistemicShift(t *testing.T) {
+	eng := setupEngine(t)
+
+	ids := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		id := addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+		ids = append(ids, id)
+	}
+	// addProcessedNodeWithEmbedding sets temporality=durable and
+	// confidence=0.9 but no epistemic_status. Tag every record so
+	// the baseline run has a non-empty epistemic histogram.
+	eng.Lock()
+	for _, id := range ids {
+		eng.SetProp(id, "epistemic_status", graph.StringProperty("speculative"))
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	llm := &mockLLM{responses: []string{"baseline summary", "post-shift summary"}}
+
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	if result1.ManifestCacheHit {
+		t.Fatal("first run should be a cache miss")
+	}
+	firstHash := cache.Hash
+
+	// Bulk reclassification: every record moves speculative -> well_established
+	// AND confidence drops from 0.9 (high) to 0.3 (low). Top keywords,
+	// knowledge-type histogram, record count, and date span are all
+	// unchanged -- the pre-P1-59 fingerprint would treat this as the
+	// same store and serve the stale "baseline summary".
+	eng.Lock()
+	for _, id := range ids {
+		eng.SetProp(id, "epistemic_status", graph.StringProperty("well_established"))
+		eng.SetProp(id, "confidence", graph.Float64Property(0.3))
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+	if result2.ManifestCacheHit {
+		t.Fatal("epistemic + confidence shift should invalidate the cache")
+	}
+	if cache.Hash == firstHash {
+		t.Fatal("cache hash should change when fingerprint dimensions shift")
+	}
+	if result2.ManifestSummary != "post-shift summary" {
+		t.Fatalf("expected post-shift summary, got %q", result2.ManifestSummary)
+	}
+}
+
+// TestManifestCacheInvalidatesOnTemporalityShift mirrors the above
+// but flips temporality (durable -> ephemeral) on the same population,
+// holding all other dimensions constant.
+func TestManifestCacheInvalidatesOnTemporalityShift(t *testing.T) {
+	eng := setupEngine(t)
+
+	ids := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		id := addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about caching", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+		ids = append(ids, id)
+	}
+
+	llm := &mockLLM{responses: []string{"baseline", "post-shift"}}
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	firstHash := cache.Hash
+
+	eng.Lock()
+	for _, id := range ids {
+		eng.SetProp(id, "temporality", graph.StringProperty("ephemeral"))
+	}
+	eng.Save("test")
+	eng.Unlock()
+
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+	if result2.ManifestCacheHit {
+		t.Fatal("temporality shift should invalidate the cache")
+	}
+	if cache.Hash == firstHash {
+		t.Fatal("cache hash should change when temporality histogram shifts")
+	}
+}
+
 func TestClassifySystemPromptShortIsSmaller(t *testing.T) {
 	if ClassifySystemPromptShort == "" {
 		t.Fatal("ClassifySystemPromptShort must be defined")

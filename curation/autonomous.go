@@ -697,6 +697,16 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	e.RLock()
 	totalRecords := 0
 	typeMap := make(map[string]int)
+	epistemicMap := make(map[string]int)
+	temporalityMap := make(map[string]int)
+	// Confidence is a continuous [0,1] field; bucket into low (<0.4),
+	// mid (0.4-0.7), high (>=0.7), and "unset" for records that omit
+	// confidence entirely. Quartile-style bucketing keeps the
+	// fingerprint stable to small drift while still surfacing the
+	// kind of bulk reclassification (50 records sliding from
+	// speculative-low to well_established-high) that should
+	// invalidate the cached manifest summary.
+	confidenceMap := make(map[string]int)
 	kwCounts := e.PropIdx().KeywordCounts("content_keywords")
 	var earliest, latest time.Time
 
@@ -713,6 +723,24 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		totalRecords++
 		if kt, ok := n.Properties.GetString("knowledge_type"); ok {
 			typeMap[kt]++
+		}
+		if es, ok := n.Properties.GetString("epistemic_status"); ok && es != "" {
+			epistemicMap[es]++
+		}
+		if tp, ok := n.Properties.GetString("temporality"); ok && tp != "" {
+			temporalityMap[tp]++
+		}
+		if cf, ok := n.Properties.GetFloat64("confidence"); ok {
+			switch {
+			case cf < 0.4:
+				confidenceMap["low"]++
+			case cf < 0.7:
+				confidenceMap["mid"]++
+			default:
+				confidenceMap["high"]++
+			}
+		} else {
+			confidenceMap["unset"]++
 		}
 		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
 			if earliest.IsZero() || ca.Before(earliest) {
@@ -759,16 +787,28 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		kwStrs[i] = fmt.Sprintf("%s(%d)", kwList[i].kw, kwList[i].count)
 	}
 
-	// Build types string. Sort by key for canonical fingerprinting.
-	typeKeys := make([]string, 0, len(typeMap))
-	for kt := range typeMap {
-		typeKeys = append(typeKeys, kt)
+	// histogramString sorts the map by key and renders "k(v),k(v)..."
+	// for canonical fingerprinting. Stable across cycles given the
+	// same population.
+	histogramString := func(m map[string]int) string {
+		if len(m) == 0 {
+			return ""
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s(%d)", k, m[k]))
+		}
+		return strings.Join(parts, ",")
 	}
-	sort.Strings(typeKeys)
-	typeStrs := make([]string, 0, len(typeKeys))
-	for _, kt := range typeKeys {
-		typeStrs = append(typeStrs, fmt.Sprintf("%s(%d)", kt, typeMap[kt]))
-	}
+	typesStr := histogramString(typeMap)
+	epistemicStr := histogramString(epistemicMap)
+	temporalityStr := histogramString(temporalityMap)
+	confidenceStr := histogramString(confidenceMap)
 
 	earliestStr := "N/A"
 	latestStr := "N/A"
@@ -780,10 +820,17 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	}
 
 	// Compute the state fingerprint hash. Same inputs -> same summary,
-	// so we can skip the LLM call when nothing has changed.
-	fp := fmt.Sprintf("records=%d|types=%s|keywords=%s|span=%s..%s",
+	// so we can skip the LLM call when nothing has changed. The
+	// epistemic / temporality / confidence histograms are part of the
+	// fingerprint because bulk reclassification (e.g. 50 records moving
+	// speculative -> well_established) is exactly the kind of store
+	// shift the cached manifest summary should NOT survive. (P1-59.)
+	fp := fmt.Sprintf("records=%d|types=%s|epistemic=%s|temporality=%s|confidence=%s|keywords=%s|span=%s..%s",
 		totalRecords,
-		strings.Join(typeStrs, ","),
+		typesStr,
+		epistemicStr,
+		temporalityStr,
+		confidenceStr,
 		strings.Join(kwStrs, ","),
 		earliestStr, latestStr,
 	)
@@ -815,7 +862,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 
 	prompt := fmt.Sprintf(userPromptTemplate,
 		totalRecords,
-		strings.Join(typeStrs, ", "),
+		strings.ReplaceAll(typesStr, ",", ", "),
 		strings.Join(kwStrs, ", "),
 		earliestStr, latestStr,
 	)
