@@ -7,6 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **AVX2 + FMA3 matmul kernel for amd64 BERT inference** -- new
+  `embed/bert/matmul_amd64.s` assembly kernel mirrors the arm64 NEON
+  implementation, processing K in 8-float chunks via 256-bit YMM loads
+  and `VFMADD231PS`. Dispatcher in `embed/bert/matmul_amd64.go` gates
+  on `cpu.X86.HasAVX2 && cpu.X86.HasFMA` at runtime; pre-Haswell
+  hardware and Rosetta 2 fall through to the existing pure-Go tiled
+  implementation. Closes a first-impression performance gap on
+  Intel/AMD hosts where BERT embedding was 5-8x slower than on
+  Apple Silicon. Architectural note: amd64 has only 16 YMM registers
+  (vs 32 V registers on arm64), so the 4x4 output tile is computed
+  in two K-passes -- rows i/i+1 then i+2/i+3 -- with bT loads
+  repeated across passes. Register pressure stays within 16 YMM at
+  the cost of 2x bT memory reads; FMA throughput is the bottleneck
+  at BERT matmul sizes, not bT bandwidth, so the split-pass approach
+  is expected to land close to arm64's measured speedup. Build tag
+  on `matmul_generic.go` changed from `!arm64` to `!(arm64 || amd64)`
+  so pure-Go MatMul stays available for other architectures.
+  Correctness: existing `TestMatMul*` tests cover the new path with
+  identical assertions; benchmarks in `math_test.go` measure the
+  four BERT matmul shapes. Cross-compilation and vet are clean;
+  on-hardware validation pending.
+
 ### Security
 
 - **OSS-readiness scrub (pre-public-release)** -- audited the repo
