@@ -164,7 +164,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		// re-extracted on the next curation tick when the embedder
 		// recovers, so no data is lost. Stores running without an
 		// embedder at all (haveEmbedder=false) still create nodes --
-		// vector-less is the only option there. (P1-06.)
+		// vector-less is the only option there.
 		if embedFailed {
 			continue
 		}
@@ -229,7 +229,6 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 				"node_type":         graph.StringProperty("observation"),
 			}
 
-			// Inherit metadata from parent (D18).
 			for _, key := range []string{
 				"temporality", "confidence", "knowledge_type",
 				"epistemic_status", "content_keywords", "source_ref",

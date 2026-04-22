@@ -1172,7 +1172,7 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 	// assignment, which depends on the iteration order of the
 	// (now shuffled) candidate set, so the test asserts the
 	// invariant ("one survivor, one loser") rather than a
-	// specific identity. (Wave 7 P1-61 sort.)
+	// specific identity.
 	eng.RLock()
 	defer eng.RUnlock()
 	losers := 0

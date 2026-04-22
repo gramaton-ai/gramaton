@@ -110,7 +110,7 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 	// original-candidates indices we've already emitted so duplicates
 	// in the LLM response don't produce duplicate entries AND so the
 	// "unmentioned" pass below can use a simple origIdx lookup.
-	// (P1-35: the previous implementation mixed cands-index and
+	// (The previous implementation mixed cands-index and
 	// candidates-index in a single map, producing duplicates.)
 	emitted := make(map[int]bool)
 	var reranked []scored

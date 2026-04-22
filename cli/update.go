@@ -64,7 +64,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	// Property update. Forward every field the server's updateRequest
 	// accepts -- previously only 5 of 11 made it through, so users
 	// piping JSON with summary_short/keywords/valid_until/meta/etc.
-	// got a successful response with no change. (Wave 4 P1-02.)
+	// got a successful response with no change.
 	updateBody := make(map[string]any)
 	for _, key := range []string{
 		"confidence",

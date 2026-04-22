@@ -37,7 +37,7 @@ type BboltEdgeStore struct {
 	cache *edgeLRU
 }
 
-// EdgeBatch bundles the in-batch adjacency cache (P1-27).
+// EdgeBatch bundles the in-batch adjacency cache.
 // addToEdgeIDList decoded, linear-scanned, sorted, and re-encoded the
 // full edge ID list for each single-item write -- O(K log K) per
 // edge with K being the node's current degree. Bulk-loading a node
@@ -265,7 +265,7 @@ func (s *BboltEdgeStore) ForEach(fn func(e *Edge)) {
 // for cached edges short-circuit; uncached edges are batched into
 // a single bbolt View instead of one View per edge. Previously
 // each cache miss opened its own transaction, making EdgesFrom
-// cost O(N+1) views on a hot path. (Wave 5 P1-49.)
+// cost O(N+1) views on a hot path.
 func (s *BboltEdgeStore) loadEdgesFromBucket(bucket []byte, key string) []*Edge {
 	var edgeIDs []string
 	if err := s.db.View(func(tx *bolt.Tx) error {
@@ -527,7 +527,7 @@ func (c *edgeLRU) reset() {
 // Get/Put hits the cache during the swap. Even so, the cache is
 // emptied in place via reset() instead of pointer-reassigning the
 // cache field -- the latter would race with Get callers that
-// snapshot the field before the swap. (Wave 6 P1-50.)
+// snapshot the field before the swap.
 func (s *BboltEdgeStore) Clear() {
 	s.cache.reset()
 	if err := s.db.Update(func(tx *bolt.Tx) error {

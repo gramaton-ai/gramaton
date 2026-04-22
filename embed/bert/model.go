@@ -314,7 +314,7 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 // suffix (e.g. an HF re-export carrying both "bert.X" and "model.X"
 // for the same parameter), the higher-priority prefix wins -- but
 // the ambiguity is logged once at Warn so silent inference variance
-// across multi-format files is observable. (Wave 6 P1-71.)
+// across multi-format files is observable.
 func getWeight(st *SafeTensors, suffix string) ([]float32, error) {
 	prefixes := []string{"bert.", "model.", ""}
 	chosen := -1

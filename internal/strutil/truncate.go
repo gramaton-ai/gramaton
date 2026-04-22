@@ -6,7 +6,7 @@ package strutil
 // Truncate returns s shortened to at most n bytes, appending "..." when
 // the input was actually trimmed. Counts bytes, not runes -- callers
 // passing UTF-8 risk splitting a multi-byte character at the boundary.
-// (P2-19 / T-08 will revisit rune-safety as part of the broader UTF-8
+// (T-08 will revisit rune-safety as part of the broader UTF-8
 // helpers pass.)
 func Truncate(s string, n int) string {
 	if len(s) <= n {

@@ -57,7 +57,7 @@ func EnsureRunning(ctx context.Context, endpoint string) error {
 	// Detach from our process group so signals delivered to gramaton
 	// (SIGINT, SIGHUP) don't propagate to ollama. Without this, the
 	// child inherits our pgid and dies when we die -- the zombie
-	// processes the user has been seeing. See P1-39 / project memory.
+	// processes the user has been seeing.
 	detachProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ollama serve: %w", err)

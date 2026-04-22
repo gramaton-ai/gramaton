@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// Collection tests ported from server/service_collections_test.go when the
-// dead server-level collection services were retired. Tests that required
-// the HTTP boundary (doRequest) stayed in bindings_collections_test.go.
-
 func TestCollectionCreateAndList(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()

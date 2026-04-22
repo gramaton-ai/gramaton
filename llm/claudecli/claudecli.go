@@ -20,8 +20,7 @@ import (
 // blocks shell metacharacters today, but a future claude CLI parser
 // bug that splits on whitespace within an arg could turn an
 // unvalidated user-supplied "sonnet --dangerous-flag" into two argv
-// entries. Reject anything that doesn't match the pattern. (Wave 4
-// P1-22.)
+// entries. Reject anything that doesn't match the pattern.
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
 
 // modelAliases maps short names to Claude CLI model identifiers.

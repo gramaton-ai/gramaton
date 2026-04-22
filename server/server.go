@@ -73,7 +73,7 @@ type Server struct {
 	// PropIdx lookup ("processing_status" = "captured"), so it cost
 	// per-request CPU on busy servers. We cache for curationCacheTTL
 	// since the envelope's underlying counts shift on a curation
-	// tick (~1 minute), not per-request. (Wave 3 P1-29.)
+	// tick (~1 minute), not per-request.
 	curationCacheMu  sync.RWMutex
 	curationCache    CurationStatus
 	curationCacheAt  time.Time
@@ -462,7 +462,7 @@ func (s *Server) Shutdown() {
 // Caller is responsible for any response flushing -- this function
 // only signals SIGTERM. (The 100ms sleep + recover() that used to
 // be here was a magic number; handleShutdown now flushes explicitly
-// before calling here. Wave 7 P1-64.)
+// before calling here.)
 func (s *Server) RequestShutdown() {
 	go func() {
 		p, err := os.FindProcess(os.Getpid())
@@ -732,7 +732,7 @@ func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curat
 // writeError writes a JSON error response. Includes the curation
 // envelope so agents see the same backlog signals on a 4xx/5xx as
 // they do on a 2xx -- without it, an agent hammering an erroring
-// endpoint never learns the store has work pending. (P2-13 nit.)
+// endpoint never learns the store has work pending.
 func (s *Server) writeError(w http.ResponseWriter, status int, code, message string, retryable bool) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)

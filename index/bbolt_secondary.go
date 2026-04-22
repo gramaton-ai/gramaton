@@ -118,9 +118,9 @@ func (idx *BboltSecondaryIndex) SetLastAccessedTx(tx *bolt.Tx, nodeID string, t 
 // removeTimeEntry removes a nodeID's entry from a time bucket. Uses the
 // reverse index (nodeID -> timestamp-key) for O(log N) deletion. Falls
 // back to a full-bucket scan if the reverse index is missing for this
-// node -- handles legacy data from before P1-24 landed. After one full
-// update cycle, all nodes have reverse entries and the scan path is
-// unreachable.
+// node -- handles legacy data from before the reverse-index migration
+// landed. After one full update cycle, all nodes have reverse entries
+// and the scan path is unreachable.
 func (idx *BboltSecondaryIndex) removeTimeEntry(b, rev *bolt.Bucket, nodeID string) {
 	if rev != nil {
 		if oldKey := rev.Get([]byte(nodeID)); oldKey != nil {

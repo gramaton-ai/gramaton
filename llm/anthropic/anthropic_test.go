@@ -156,8 +156,8 @@ func TestCompleteSuccess(t *testing.T) {
 	}
 }
 
-// TestSetSystemPromptConcurrentWithComplete is the regression test
-// for P1-32: SetSystemPrompt and Complete share systemCache; before
+// TestSetSystemPromptConcurrentWithComplete is a regression test:
+// SetSystemPrompt and Complete share systemCache; before
 // the mutex was added, concurrent SetSystemPrompt + Complete races
 // fired under -race, and partial cache annotations could end up in
 // the request body. The test stresses both via interleaving and

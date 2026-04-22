@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// TestGetNodeConcurrentWithIterator stresses the cacheMu protocol that
-// fixes P0-04: GetNode mutated g.nodes during lazy load while
-// cachedIterator iterated it without a lock. Under -race this would
-// fire a data race; without -race the Go runtime can panic on
-// concurrent map write during iteration.
+// TestGetNodeConcurrentWithIterator stresses the cacheMu protocol.
+// GetNode mutated g.nodes during lazy load while cachedIterator
+// iterated it without a lock. Under -race this would fire a data
+// race; without -race the Go runtime can panic on concurrent map
+// write during iteration.
 //
 // In production these races were possible because both readers (search,
 // inspect) and lazy loads happen under engine.RLock, which permits
@@ -59,11 +59,11 @@ func TestGetNodeConcurrentWithIterator(t *testing.T) {
 	wg.Wait()
 }
 
-// TestRecordAccessLazyLoadsEvictedNode verifies the P0-07 fix:
-// RecordAccess used to read g.nodes directly, so for nodes that had
-// been evicted from the cache (lazy mode), it silently no-op'd. Now
-// it routes through GetNode, which lazy-loads the node back so the
-// access is actually recorded.
+// TestRecordAccessLazyLoadsEvictedNode verifies RecordAccess handles
+// evicted nodes. RecordAccess used to read g.nodes directly, so for
+// nodes that had been evicted from the cache (lazy mode), it silently
+// no-op'd. Now it routes through GetNode, which lazy-loads the node
+// back so the access is actually recorded.
 func TestRecordAccessLazyLoadsEvictedNode(t *testing.T) {
 	// Save a graph with one node, then load it into a tiny-cache
 	// graph, evict the node, and verify RecordAccess still works.

@@ -127,7 +127,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	// registered here so that any subsequent error returns a clean
 	// state. Previously some paths (g.Load, embed.New, mmap index
 	// creation) leaked boltDB or other handles depending on which
-	// step failed. (Wave 7 P1-52.)
+	// step failed.
 	success := false
 	cleanups := []func(){
 		func() { boltDB.Close() },
@@ -187,7 +187,7 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	}
 
 	// If no option provided a vector index, open the mmap'd flat
-	// vector index (D1 revised: flat as v1 default).
+	// vector index.
 	vecCleanup, err := idx.openDefaultVecIdx(cfg)
 	if err != nil {
 		return nil, err

@@ -30,7 +30,6 @@ import (
 // *bolt.Tx; the in-batch write cache is a *BM25Batch passed as a
 // parameter (nil disables caching and falls back to per-call
 // encode/decode). Removes the P2-06 stashed-pointer race class.
-// (Wave 7 P1-34.)
 type BboltBM25Index struct {
 	db *bolt.DB
 	k1 float64
@@ -42,7 +41,7 @@ type BboltBM25Index struct {
 	avgDL    float64
 }
 
-// BM25Batch bundles the in-batch write cache (P1-25). During a batch,
+// BM25Batch bundles the in-batch write cache. During a batch,
 // every addToPostingList previously had to decode -> linear-scan ->
 // sort -> encode the full posting list for each single-item write.
 // A common term like "the" with K postings produces O(K log K) work
@@ -106,7 +105,7 @@ func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
 // loadMeta restores numDocs/totalLen/avgDL from the on-disk meta
 // bucket. If this fails silently and avgDL stays 0, every Search
 // short-circuits at the avgDL==0 guard and returns nil -- a
-// catastrophic but invisible bug. (Wave 5 P1-56.)
+// catastrophic but invisible bug.
 func (idx *BboltBM25Index) loadMeta() error {
 	return idx.db.View(func(tx *bolt.Tx) error {
 		mb := tx.Bucket(bm25MetaBucket)
@@ -333,8 +332,7 @@ func (idx *BboltBM25Index) RemoveTx(tx *bolt.Tx, batch *BM25Batch, nodeID string
 // removeFromPostingsViaReverse uses the reverse index (nodeID -> terms)
 // to efficiently remove a node from only the posting lists it appears in.
 // O(terms_per_doc) instead of O(vocabulary). During a batch, writes go
-// through the posting-list cache rather than the per-write encode cycle
-// (P1-25).
+// through the posting-list cache rather than the per-write encode cycle.
 func (idx *BboltBM25Index) removeFromPostingsViaReverse(tx *bolt.Tx, batch *BM25Batch, nodeID string) {
 	rb := tx.Bucket(bm25ReverseBucket)
 	pb := tx.Bucket(bm25PostingsBucket)

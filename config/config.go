@@ -231,7 +231,7 @@ type CurationConfig struct {
 	// ObservationBatchSize is the number of parent records processed
 	// per observation extraction cycle. 0 = auto (500 for local
 	// providers, 20 for external). Observation is soft-deprecated;
-	// see ObserveConfig.Enabled.
+	// see ObserveConfig for the surviving TF-IDF extractor.
 	ObservationBatchSize int `yaml:"observation_batch_size"`
 
 	// ObservationMinContentLength is the minimum content_full length

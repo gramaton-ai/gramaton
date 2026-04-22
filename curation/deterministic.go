@@ -346,7 +346,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	cnIt.Close()
 
-	// Filter candidates to only new concepts.
 	var newConcepts []ConceptCandidate
 	maxNewConcepts := cfg.LLMCuration.MaxConceptsPerRun // reuse as deterministic budget
 	if maxNewConcepts <= 0 {
@@ -437,9 +436,9 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// is more destructive. Final fallback is lex order on
 				// ID, which matches FindDuplicates' canonical pair
 				// ordering and stays deterministic.
-				// (Wave 3 P1-36: previously the lex-smaller ID was
-				// silently chosen as "older" on identical timestamps,
-				// because pair.IDA = lex-smaller per FindDuplicates.)
+				// Previously the lex-smaller ID was silently chosen as
+				// "older" on identical timestamps, because pair.IDA =
+				// lex-smaller per FindDuplicates.
 				caA, _ := na.Properties.GetTimestamp("created_at")
 				caB, _ := nb.Properties.GetTimestamp("created_at")
 				olderID, newerID := pickOlder(ws.Graph(), pair.IDA, pair.IDB, caA, caB)
@@ -585,7 +584,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// it here avoids double-adding each property.
 				ws.IndexNode(cn.ID, templateFull, nil)
 
-				// Create instance_of edges from member records.
 				for _, memberID := range c.NodeIDs {
 					if _, ok := ws.Graph().GetNode(memberID); ok {
 						if _, err := ws.AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {

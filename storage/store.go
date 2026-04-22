@@ -109,7 +109,7 @@ func (s *Store) Write(data []byte) (string, error) {
 	// this, a crash after rename but before the next dir-sync can
 	// lose the entry on ext4 with certain mount options and on older
 	// filesystems. The advertised "atomic, content-addressed" store
-	// must actually be atomic on disk. (Wave 3 P1-42.)
+	// must actually be atomic on disk.
 	if err := fsyncDir(filepath.Dir(path)); err != nil {
 		return "", fmt.Errorf("storage: fsync parent dir: %w", err)
 	}

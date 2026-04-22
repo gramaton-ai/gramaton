@@ -36,10 +36,10 @@ func TestResolveKeyDirect(t *testing.T) {
 }
 
 // TestResolveKeyLegacyDirectViaEnvName is the regression test for
-// P0-09: the pre-Wave-2 sk- heuristic that turned envName into a
-// literal key when no env var matched still works for backward
-// compat (so existing user configs don't break), but emits a
-// one-shot deprecation warning.
+// the legacy sk- heuristic that turned envName into a literal key
+// when no env var matched. It still works for backward compat (so
+// existing user configs don't break), but emits a one-shot
+// deprecation warning.
 func TestResolveKeyLegacyDirectViaEnvName(t *testing.T) {
 	key := ResolveKey("", "sk-ant-legacy-overload", "")
 	if key != "sk-ant-legacy-overload" {

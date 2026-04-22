@@ -27,8 +27,8 @@ func (s *stubProvider) CompleteWithModel(_ context.Context, _, _ string) (string
 func (s *stubProvider) ModelID() string      { return "stub-model" }
 func (s *stubProvider) ProviderName() string { return "stub" }
 
-// TestMeteredRefusesWhenCapped is the regression test for P0-13:
-// once a UsageTracker reports paused=true, Metered must short-circuit
+// TestMeteredRefusesWhenCapped is a regression test: once a
+// UsageTracker reports paused=true, Metered must short-circuit
 // before invoking the inner provider. The previous behaviour
 // (post-call cap check) burned tokens on the call that flipped the
 // cap and on every subsequent call until the cap was manually

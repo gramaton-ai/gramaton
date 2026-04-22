@@ -52,7 +52,6 @@ func (e *Engine) Validate() *ValidationResult {
 	// EdgesFrom + EdgesTo. The old loop was N² (each node opens
 	// two adjacency lookups, each of which on BboltEdgeStore costs
 	// an extra View). This is a single pass over the edges bucket.
-	// (Wave 5 P1-47.)
 	edgeCount := 0
 	g.ForEachEdge(func(edge *graph.Edge) {
 		edgeCount++

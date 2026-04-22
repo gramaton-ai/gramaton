@@ -88,10 +88,10 @@ func TestRestoreInvalidArchive(t *testing.T) {
 }
 
 // TestRestoreFailureLeavesDataDirIntact is the regression test for
-// P0-01: before the staging-dir rewrite, Restore wiped dataDir
-// before validating archive contents, so a malformed archive (no
-// HEAD, path traversal, etc.) destroyed the user's existing data.
-// After the rewrite, dataDir must be untouched on any failure.
+// the staging-dir rewrite: previously Restore wiped dataDir before
+// validating archive contents, so a malformed archive (no HEAD,
+// path traversal, etc.) destroyed the user's existing data. After
+// the rewrite, dataDir must be untouched on any failure.
 func TestRestoreFailureLeavesDataDirIntact(t *testing.T) {
 	parent := t.TempDir()
 	dataDir := filepath.Join(parent, "store")
@@ -330,9 +330,10 @@ embedding:
 	}
 }
 
-// TestStripAPIKeysAllowlistGaps is the regression test for P1-03:
-// the previous blocklist missed several fields that leak secrets or
-// infrastructure. The allowlist rewrite must drop ALL of them.
+// TestStripAPIKeysAllowlistGaps is the regression test for the
+// allowlist rewrite: the previous blocklist missed several fields
+// that leak secrets or infrastructure. The allowlist rewrite must
+// drop ALL of them.
 func TestStripAPIKeysAllowlistGaps(t *testing.T) {
 	input := `llm:
   provider: anthropic

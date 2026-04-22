@@ -232,7 +232,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 // Bounded by cfg.LLMCuration.MaxCallsPerRun. Earlier versions
 // silently raised this to 100,000, which bypassed the circuit
 // breaker and let an admin trigger run unbounded LLM calls against
-// a paid provider. (Wave 3 P1-37.) Operators who want a larger
+// a paid provider. Operators who want a larger
 // run must raise the configured cap (clamped to 10,000 in
 // config.Load).
 //

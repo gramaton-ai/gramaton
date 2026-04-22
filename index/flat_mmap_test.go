@@ -129,8 +129,8 @@ func TestMmapFlatPersistence(t *testing.T) {
 	}
 }
 
-// TestMmapFlatRemoveThenReopen is the regression test for P0-02:
-// before the fix, Remove tombstoned an entry but Flush short-circuited
+// TestMmapFlatRemoveThenReopen is the regression test for Remove
+// across reopen. Before the fix, Remove tombstoned an entry but Flush short-circuited
 // when the buffer was empty, leaving the persisted header count
 // stale. On reopen, buildOffsetMap walked stale tombstones and
 // desynced the cursor, silently misreading every subsequent entry.
@@ -488,8 +488,8 @@ func TestMmapFlatSearchDiscrimination(t *testing.T) {
 	}
 }
 
-// TestCosineSimU8MatchesFloat32 is the regression test for P0-03:
-// the quantised cosine MUST track true float32 cosine. Before the
+// TestCosineSimU8MatchesFloat32 is the regression test for the
+// quantised cosine: it MUST track true float32 cosine. Before the
 // fix, cosineSimU8 computed dot/norms on shifted bytes (centre 128),
 // causing the 128-shift term to dominate and making near-orthogonal
 // vectors score ~0.99. After the fix, the shift is removed before

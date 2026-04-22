@@ -54,7 +54,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	// Use the slow-client (120s) -- export streams the full record set
 	// and can take a while on large stores. Raw http.Post (which this
 	// previously used) had no timeout, so a stuck server hung the CLI
-	// indefinitely. (Wave 3 P1-43.)
+	// indefinitely.
 	resp, err := httpPostSlow(url+"/v1/export", jsonBody)
 	if err != nil {
 		return fmt.Errorf("export: %w", err)

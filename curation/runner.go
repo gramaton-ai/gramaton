@@ -258,7 +258,7 @@ func (r *Runner) cycle(ctx context.Context) {
 		if llmPaused {
 			// Operators want to see this without enabling Debug --
 			// the breaker tripping is the whole reason curation
-			// is silent on this cycle. (Wave 7 P1-63.)
+			// is silent on this cycle.
 			r.logger.Info("LLM curation paused (circuit breaker)",
 				"component", "curation")
 			// Reset the LastAutonomous counters so /v1/status

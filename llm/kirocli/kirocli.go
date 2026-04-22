@@ -27,8 +27,7 @@ var modelAliases = map[string]string{
 // blocks shell metacharacters today, but a future kiro-cli parser
 // change that splits on whitespace within an arg could turn an
 // unvalidated user-supplied "auto --trust-all-tools" into two argv
-// entries. Reject anything that doesn't match the pattern. (Wave 4
-// P1-22.)
+// entries. Reject anything that doesn't match the pattern.
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
 
 // ansiRe strips ANSI escape sequences from kiro-cli output.

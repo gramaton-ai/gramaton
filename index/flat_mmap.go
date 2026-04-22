@@ -52,7 +52,7 @@ type MmapFlatIndex struct {
 	// tombstone (idLen=0) into the mmap'd region. Tombstones break
 	// buildOffsetMap on reopen because the original idLen is lost,
 	// so Flush MUST rewrite the file from scratch when this is true,
-	// even if buffer is empty. See P0-02 fix.
+	// even if buffer is empty.
 	hasTombstones bool
 }
 
@@ -225,7 +225,7 @@ func (idx *MmapFlatIndex) Add(nodeID string, vec []float32) {
 // bytes visible eventually but the ordering is not guaranteed
 // against the WriteAt / mmap view consistency model on macOS.
 // Compaction-on-Flush (see Flush + rewriteFromOffsetsLocked)
-// reconciles disk and offsets atomically. (Wave 7 P1-55.)
+// reconciles disk and offsets atomically.
 func (idx *MmapFlatIndex) Remove(nodeID string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -566,7 +566,7 @@ func quantizeF32ToU8(vec []float32, scale float32) []byte {
 // constant 128 offset, not the underlying signal: two near-orthogonal
 // L2-normalised vectors would score ~0.99 because their shifted
 // representations are close to (128, 128, ..., 128) which has very
-// high self-cosine. (P0-03 regression class.)
+// high self-cosine.
 func cosineSimU8(a, b []byte) float32 {
 	if len(a) != len(b) {
 		return 0

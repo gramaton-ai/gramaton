@@ -89,7 +89,7 @@ func (s *indexSet) openDefaultVecIdx(cfg config.Config) (func(), error) {
 	}
 	vecDim := cfg.Embedding.Dimension
 	if vecDim <= 0 {
-		vecDim = 384 // MiniLM-L6 default (D3)
+		vecDim = 384 // default dimension for bge-small-en-v1.5 (current default embedding model)
 	}
 	vecPath := filepath.Join(cfg.DataDir, "vec.flat")
 	mmapVec, err := index.NewMmapFlatIndex(vecPath, vecDim)

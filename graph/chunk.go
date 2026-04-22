@@ -10,7 +10,7 @@ import (
 // Returns nil if the text is at or below the threshold, or if
 // chunkTokens is non-positive (callers misconfiguring chunkSize=0
 // previously could trigger an infinite loop when nextStart didn't
-// advance past start). (Wave 5 P1-51.)
+// advance past start).
 func ChunkText(text string, thresholdTokens, chunkTokens, overlapTokens int) []string {
 	if chunkTokens <= 0 {
 		return nil

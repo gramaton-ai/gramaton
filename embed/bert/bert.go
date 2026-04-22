@@ -41,7 +41,7 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 		// filepath.SplitList splits on the OS PATH separator (':' on
 		// Unix), not '/' -- so a HF repo path "BAAI/bge-..." used to
 		// produce a single-element slice with the slash intact, then
-		// ModelDir would create two nested dirs. (P2-17 nit.)
+		// ModelDir would create two nested dirs.
 		model = filepath.Base(model)
 	}
 
@@ -90,8 +90,8 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 	// Clamp tokenizer.maxLen to the model's MaxPositionEmbeds. Scratch
 	// buffers in model.Forward are sized from MaxPositionEmbeds; if the
 	// tokenizer emits a longer sequence the buffer slicing panics.
-	// (P0-10: tokenizer.json's truncation.max_length defaults to 512
-	// but custom models may declare higher.)
+	// (tokenizer.json's truncation.max_length defaults to 512 but
+	// custom models may declare higher.)
 	if tok.MaxLen() > modelCfg.MaxPositionEmbeds {
 		tok.SetMaxLen(modelCfg.MaxPositionEmbeds)
 	}
@@ -153,7 +153,6 @@ func (p *Provider) ContextWindow() int {
 // as Embed so an in-flight Forward pass cannot read float32 slices
 // (which point into the mmap'd region) after Munmap. Without this
 // guard, a concurrent Embed during shutdown would segfault.
-// (Wave 7 P1-33.)
 //
 // Callers must NOT call Embed after Close returns; the model and
 // tokenizer fields are zeroed to make subsequent misuse panic

@@ -52,7 +52,6 @@ type AutonomousResult struct {
 	// LastRunPaused is set by the runner when the circuit breaker
 	// is engaged for an entire cycle, so /v1/status doesn't keep
 	// surfacing stale numbers from the previous successful cycle.
-	// (Wave 7 P1-63.)
 	LastRunPaused bool   `json:"last_run_paused,omitempty"`
 	PauseReason   string `json:"pause_reason,omitempty"`
 }
@@ -290,7 +289,6 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	// map-iteration order, which is quasi-stable but not FIFO --
 	// without the sort, a 50-record burst could starve behind
 	// later trickle captures depending on hash collisions.
-	// (Wave 6 P1-62.)
 	e.RLock()
 	pendingIDs := e.PropIdx().Lookup("processing_status", graph.StringProperty("captured"))
 	type pending struct {
@@ -1313,7 +1311,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	// newest-first because the contradiction-application path
 	// trusts the LLM's A/B assignment, which is sensitive to
 	// prompt ordering; a stable newest-first sort would change
-	// behavior for the same store across restarts. (Wave 7 P1-61.)
+	// behavior for the same store across restarts.
 	rand.Shuffle(len(processedIDs), func(i, j int) {
 		processedIDs[i], processedIDs[j] = processedIDs[j], processedIDs[i]
 	})
@@ -1883,7 +1881,6 @@ func validateEnum(val string, allowed []string) string {
 // surfacing "near-miss" responses that the silent-default-to-zero
 // path of validateEnum would otherwise drop -- e.g. relationship
 // "update" being dropped to "none" without anyone seeing why.
-// (Wave 6 P1-60.)
 func validateEnumLogged(val string, allowed []string, field string, logger *slog.Logger) string {
 	if val == "" {
 		return ""

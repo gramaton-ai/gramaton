@@ -69,7 +69,6 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /v1/sessions/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		// Loopback gate: SessionArchive reads a caller-supplied path.
-		// (Wave 2 P1-21.)
 		if !isLoopback(r) {
 			s.writeError(w, http.StatusForbidden, "forbidden",
 				"session archive is restricted to loopback connections", false)

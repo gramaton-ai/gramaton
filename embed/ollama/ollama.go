@@ -56,7 +56,7 @@ func (c *Client) detectContextWindow() {
 	// family but always ends in ".context_length" (e.g.,
 	// "bert.context_length", "llama.context_length"). HasSuffix is
 	// safer than the prior length+slice check, which had a fragile
-	// off-by-one and silently failed on key renames. (Wave 6 P1-68.)
+	// off-by-one and silently failed on key renames.
 	for k, v := range result.ModelInfo {
 		if strings.HasSuffix(k, ".context_length") {
 			if f, ok := v.(float64); ok && f > 0 {

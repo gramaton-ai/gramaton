@@ -187,7 +187,6 @@ func (m *Metered) record(model, task string, usage telemetry.CallUsage, latency 
 			// produce 20-30k log lines per curation cycle on a 10k
 			// record store, dominating log volume. Aggregate cycle
 			// totals are reported separately by the curation runner.
-			// (Wave 6 P1-70.)
 			m.logger.Debug("llm call", args...)
 		}
 	}

@@ -105,8 +105,8 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 			// so writing to w.file would hit a bad fd. Reopen the
 			// log path defensively; if that also fails, surface the
 			// error rather than silently dropping every future
-			// write. (P1-07: previously we ignored the rotate error
-			// and wrote to a stale fd, losing entries indefinitely.)
+			// write. (Previously we ignored the rotate error and
+			// wrote to a stale fd, losing entries indefinitely.)
 			_, _ = fmt.Fprintf(os.Stderr, "log rotation failed: %s\n", err)
 			if reopenErr := w.reopenCurrent(); reopenErr != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "log reopen after rotation failure failed: %s\n", reopenErr)
@@ -240,7 +240,7 @@ func (w *RotatingWriter) compressedFiles() []string {
 // shared stderr writer (same channel used elsewhere in this file)
 // so disk-budget overshoot is observable. Previously these errors
 // were silently dropped, which let the budget overshoot
-// indefinitely with no operator signal. (Wave 4 P1-08.)
+// indefinitely with no operator signal.
 func (w *RotatingWriter) enforceBudget() {
 	files := w.compressedFiles()
 	if len(files) == 0 {

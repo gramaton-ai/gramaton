@@ -536,9 +536,10 @@ func TestSweepPreparedSessionsRemovesStaleEntries(t *testing.T) {
 }
 
 // TestPreparedSessionsSurviveServerRestart is the regression test for
-// P1-44: a restart between prepare and commit must not break the
-// flow. Before on-disk persistence, the second instance saw an empty
-// preparedSessions map and rejected commit with prepare_required.
+// the on-disk persistence of prepared sessions: a restart between
+// prepare and commit must not break the flow. Before on-disk
+// persistence, the second instance saw an empty preparedSessions map
+// and rejected commit with prepare_required.
 func TestPreparedSessionsSurviveServerRestart(t *testing.T) {
 	a1, _ := setupTestAPI(t)
 

@@ -27,9 +27,9 @@ func TestPickOlderTimestampDifference(t *testing.T) {
 }
 
 // TestPickOlderTieBreakOnInboundEdges is the regression test for
-// P1-36: identical created_at must NOT silently keep pair.IDA as
-// "older" (which is just lex order). Tie-break on inbound edge
-// count, keeping the more-referenced record alive.
+// the tie-break behavior: identical created_at must NOT silently
+// keep pair.IDA as "older" (which is just lex order). Tie-break
+// on inbound edge count, keeping the more-referenced record alive.
 func TestPickOlderTieBreakOnInboundEdges(t *testing.T) {
 	g := graph.New()
 	a := g.AddNode(graph.Properties{"content_full": graph.StringProperty("a")})

@@ -257,7 +257,6 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 	// Explicit Close + error checks. Defer would swallow errors from
 	// these flushes -- and gzip/tar buffer their final blocks until
 	// Close, so Close failure means the archive is truncated.
-	// (Wave 4 P1-04.)
 	if err := tw.Close(); err != nil {
 		return "", fmt.Errorf("close tar writer: %w", err)
 	}
@@ -299,7 +298,7 @@ func Restore(archivePath, dataDir string) error {
 	defer f.Close()
 
 	// Restore is destructive: if it fails midway, the user's data
-	// directory must remain intact. Strategy (P0-01 rewrite):
+	// directory must remain intact. Strategy:
 	//   1. Extract the archive into a sibling staging directory
 	//      created next to dataDir (same filesystem, so the later
 	//      rename is atomic).
@@ -638,8 +637,8 @@ func addSanitizedConfig(tw *tar.Writer, cfgPath string) error {
 
 // StripAPIKeys removes sensitive and infrastructure-leaking fields
 // from config YAML before the config is written into a backup
-// archive. (P1-03 fix: was a blocklist of 4 fields; now a
-// allowlist of known-safe ones.)
+// archive. Was a blocklist of 4 fields; now an allowlist of
+// known-safe ones.
 //
 // Stripped fields and rationale:
 //   - api_key, api_key_env, api_key_file: literal keys, env-var

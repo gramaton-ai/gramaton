@@ -42,6 +42,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Code-comment audit and cleanup (pre-public-release)** -- audited
+  all ~8000 lines of Go code comments across 196 production files
+  for (a) references to files/symbols/tickets that no longer exist,
+  (b) comments that contradict current code, and (c) task-specific
+  chatter that a public reader can't resolve. Results:
+  - Stripped ~100 internal ticket/Wave-phase tags from code comments
+    (shapes like `(Wave 5 P1-58.)`, `(P1-07: <explanation>)`, and
+    inline `before P1-24 landed`). These referenced a private
+    internal tracking system with no public analogue. Substantive
+    WHY rationale around the tags was preserved -- only the dead
+    pointer itself was removed. Tickets that DO resolve in
+    CHANGELOG.md or `docs/project-design/design-decisions.md`
+    (P1-23, P1-40, P1-45, P1-59, P1-69, P1-74, P1-76, P1-78, P2-06,
+    T-06, D12, D40, etc.) were kept.
+  - Dropped a stale "ported from server/service_collections_test.go"
+    lineage comment in `api/collections_test.go` (the cited file was
+    removed long ago).
+  - Fixed a comment in `config/config.go` that referenced
+    `ObserveConfig.Enabled` after the field was removed in the
+    config-drift sweep; now points at the surviving ObserveConfig
+    struct.
+  - Corrected two design-decision misattributions in `core/engine.go`
+    and `core/indexes.go` that cited D1 (Metadata Is the Product)
+    and D3 (Filter -> Rank -> Traverse) for decisions those entries
+    don't cover -- rewrote to reference the current behavior
+    (bge-small-en-v1.5 default dimension) directly rather than citing
+    the wrong D-numbers.
+  - Deleted three pure-WHAT comments in `curation/` that restated
+    the for-loop immediately below them, per the project's
+    "explain WHY not WHAT" convention.
+  No behavior change. Build, vet, and touched tests all clean.
+
 - **Inclusive-language rename**: `whitelist` / `blacklist` ->
   `allowlist` / `blocklist` throughout the codebase. Touches
   `backup/backup.go` (including the unexported `stripToAllowlist`

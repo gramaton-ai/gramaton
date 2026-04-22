@@ -151,7 +151,7 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 	// passes: node creation + property indexing first, then edge
 	// creation referencing the fresh IDs. For a bulk import of N
 	// nodes with ~K edges each, edge-creation cost drops from
-	// O(N*K) fsyncs to O(1). (P1-09, P2-06.)
+	// O(N*K) fsyncs to O(1). (P2-06.)
 	idMap := make(map[string]string, len(records))
 	batchErr := e.WithWriteBatch("import", func(ws *core.WriteSession) (bool, error) {
 		// Pass 1: create nodes, build old-to-new ID map.
@@ -437,7 +437,7 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 			result.Imported++
 		}
 
-		// Pass 2: create edges from wikilinks. (P1-09.)
+		// Pass 2: create edges from wikilinks.
 		for _, f := range files {
 			sourceID, ok := nameToID[strings.ToLower(f.name)]
 			if !ok {

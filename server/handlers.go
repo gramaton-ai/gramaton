@@ -24,7 +24,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // "to give the response time to send" -- a magic number that under
 // load could fire before the response left the kernel buffer,
 // dropping the response with connection-reset. Flushing explicitly
-// makes the timing deterministic. (Wave 7 P1-64.)
+// makes the timing deterministic.
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if !isLoopback(r) {
 		s.writeError(w, http.StatusForbidden, "forbidden",
@@ -49,7 +49,6 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 // indicating the full set fit. The fixed 1MB previous version
 // silently truncated on processes with many goroutines -- defeating
 // the purpose of a debug endpoint when you most need it.
-// (Wave 6 P1-66.)
 func (s *Server) handleDebugGoroutines(w http.ResponseWriter, r *http.Request) {
 	if !isLoopback(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)

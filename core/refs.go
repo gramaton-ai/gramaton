@@ -11,7 +11,7 @@ import (
 // rename. The parent directory is fsynced after the rename so that a
 // crash between the rename(2) syscall and the next sync cannot lose
 // the directory entry change. POSIX requires this -- a fsync on the
-// regular file does NOT make the rename durable. (Wave 3 P1-42.)
+// regular file does NOT make the rename durable.
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -38,7 +38,6 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	// older Go versions). All current callers ask for 0o600 so the
 	// observable window is zero today, but doing it this way keeps
 	// the function safe for callers that ask for a different mode.
-	// (Wave 6 P1-53.)
 	if err := tmp.Chmod(perm); err != nil {
 		return fmt.Errorf("chmod temp file: %w", err)
 	}

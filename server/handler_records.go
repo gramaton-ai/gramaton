@@ -67,7 +67,6 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 	// summary; the temporary embed at capture time should at least
 	// match the cap that subsequent rewrites are bounded by, so
 	// vector geometry is consistent across the lifecycle.
-	// (Wave 5 P1-65.)
 	sources := []struct {
 		sourceKey string
 		embedKey  string

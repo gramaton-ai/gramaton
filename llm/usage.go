@@ -274,12 +274,11 @@ func (t *UsageTracker) saveToDisk() {
 		return
 	}
 	// Persist t.todayStr verbatim, NOT a fresh time.Now() snapshot.
-	// (Wave 4 P1-05.) Previously: if a Record at 23:59:59 UTC ran
-	// then this save fired at 00:00:01, the saved date label was
-	// "tomorrow" but t.today still held yesterday's counters. On
-	// reload the loader checked p.TodayStr == today() and treated
-	// the loaded counters as today's, double-counting and skipping
-	// the daily cap on the day boundary.
+	// Previously: if a Record at 23:59:59 UTC ran then this save fired
+	// at 00:00:01, the saved date label was "tomorrow" but t.today
+	// still held yesterday's counters. On reload the loader checked
+	// p.TodayStr == today() and treated the loaded counters as today's,
+	// double-counting and skipping the daily cap on the day boundary.
 	p := persistedUsage{
 		Today:    t.today,
 		TodayStr: t.todayStr,

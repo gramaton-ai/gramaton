@@ -80,7 +80,7 @@ func TestAPIDiffTopicCap(t *testing.T) {
 // TestAPIDiffTopicFilterNegative: when topic=kafka is provided, the
 // api must never surface records that don't contain "kafka" in their
 // keywords or summary_short. This is a negative-only assertion: if
-// the diff is empty (P1-54: prolly tree Diff degrades to full scan
+// the diff is empty (prolly tree Diff degrades to full scan, which
 // surfaces here as empty results in tests), the test still proves
 // the filter doesn't leak unrelated records.
 func TestAPIDiffTopicFilterNegative(t *testing.T) {

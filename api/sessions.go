@@ -342,7 +342,7 @@ const preparedSweepInterval = 5 * time.Minute
 // preparedSessions map across server restarts. Without this, a
 // restart between an agent's prepare call and its follow-up commit
 // permanently breaks the flow with prepare_required, even though
-// the agent acted correctly. (Wave 4 P1-44.)
+// the agent acted correctly.
 const preparedSessionsFilename = "prepared_sessions.json"
 
 // preparedSessionsPath returns the on-disk path for the persisted
@@ -572,7 +572,7 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 
 	// Set prepared flag (protected by mu since preparedSessions is not engine-locked).
 	// Persist to disk so a restart between prepare and commit doesn't
-	// permanently break the agent's flow. (Wave 4 P1-44.)
+	// permanently break the agent's flow.
 	a.preparedMu.Lock()
 	a.preparedSessions[sessionID] = time.Now()
 	a.savePreparedSessionsLocked()

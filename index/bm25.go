@@ -50,8 +50,8 @@ type MemoryBM25Index struct {
 
 	// totalLen is the sum of docLen values, maintained incrementally
 	// on every Add/Remove. avgDL is derived from totalLen / numDocs.
-	// (Wave 5 P1-58: was recomputed via O(N) scan over docLen on
-	// every Add/Remove; now O(1) per write.)
+	// (Was recomputed via O(N) scan over docLen on every Add/Remove;
+	// now O(1) per write.)
 	totalLen int
 
 	// Average document length (maintained incrementally).

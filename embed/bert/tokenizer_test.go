@@ -333,8 +333,8 @@ func TestIsPunct(t *testing.T) {
 	}
 }
 
-// TestValidateSpecialTokensRejectsMissingPAD covers P0-12: a vocab
-// missing [PAD] previously slipped through validation, leaving
+// TestValidateSpecialTokensRejectsMissingPAD covers the case where a
+// vocab missing [PAD] previously slipped through validation, leaving
 // id("[PAD]") to silently return 0 and collide with whatever real
 // token owned ID 0.
 func TestValidateSpecialTokensRejectsMissingPAD(t *testing.T) {
@@ -354,7 +354,7 @@ func TestValidateSpecialTokensRejectsMissingPAD(t *testing.T) {
 }
 
 // TestSetMaxLen covers the clamp path used by Provider to enforce
-// tokenizer.maxLen <= model.MaxPositionEmbeds (P0-10).
+// tokenizer.maxLen <= model.MaxPositionEmbeds.
 func TestSetMaxLen(t *testing.T) {
 	tok, err := NewTokenizerFromJSON([]byte(buildTestTokenizerJSON()))
 	if err != nil {
