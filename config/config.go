@@ -251,13 +251,12 @@ type LLMConfig struct {
 
 	// Model is the default used by code paths that call the provider's
 	// Complete() without specifying a model. Current call sites:
-	//   - search/rerank.go          (active when search.rerank_enabled)
-	//   - search/decompose.go       (complex query decomposition)
-	//   - server/handler_observe.go (active when observe.enabled; soft-deprecated)
-	//   - curation/parallel.go      (fallback when a task's effort tier
-	//                                resolves to an empty model; should
-	//                                never fire with a properly configured
-	//                                LLM.Models)
+	//   - search/rerank.go     (active when search.rerank_enabled)
+	//   - search/decompose.go  (complex query decomposition)
+	//   - curation/parallel.go (fallback when a task's effort tier
+	//                           resolves to an empty model; should
+	//                           never fire with a properly configured
+	//                           LLM.Models)
 	// Does NOT affect session extraction (done agent-side) or capture-time
 	// classification (no server-side LLM call; deferred to curation).
 	Model string `yaml:"model"`
@@ -544,46 +543,25 @@ func (c Config) ModelForTask(task CurationTask) string {
 	return c.ModelAtEffort(c.EffortForTask(task))
 }
 
-// ObserveConfig controls the soft-deprecated observe pipeline. Prefer
-// the session flow (gramaton_session_prepare / gramaton_session_commit)
-// for automatic knowledge capture. Kept here for backwards compatibility;
-// set Enabled=false in new setups.
+// ObserveConfig controls the deterministic TF-IDF observation extractor
+// that runs every curation cycle (curation/observe.go). It decomposes
+// long records (>= CurationConfig.ObservationMinContentLength) into
+// sub-fact nodes that inherit the parent's metadata, for narrow-target
+// semantic recall. Not related to automatic conversation capture --
+// that is handled by the sessions flow (gramaton_session_prepare /
+// gramaton_session_commit).
+//
+// The original `/v1/observe` LLM-driven endpoint plus its gating flag
+// and metadata-default knobs (DefaultConfidence, DefaultTemporality,
+// SubstanceMinLength, FeedbackLoopHours, FeedbackLoopSimilarity,
+// RetrievalTracking, RetrievalSimilarity, and Enabled itself) were
+// removed when sessions replaced it; the struct is now a single-field
+// holder.
 type ObserveConfig struct {
-	// Enabled toggles the observe pipeline. Defaults to true for
-	// backwards compatibility; recommend false for new setups.
-	Enabled bool `yaml:"enabled"`
-
-	// MaxFactsPerCall caps facts extracted per observation LLM call.
+	// MaxFactsPerCall caps sub-facts extracted per parent record.
+	// Defaults to 20 (D23). Each TF-IDF sentence becomes one
+	// observation child node.
 	MaxFactsPerCall int `yaml:"max_facts_per_call"`
-
-	// DefaultConfidence is the confidence value assigned to observed
-	// facts that don't include one.
-	DefaultConfidence float64 `yaml:"default_confidence"`
-
-	// DefaultTemporality is the temporality assigned to observed facts
-	// that don't include one. "ephemeral" suits short-lived session
-	// observations.
-	DefaultTemporality string `yaml:"default_temporality"`
-
-	// SubstanceMinLength is the minimum fact length (chars) to keep.
-	// Below this, facts are too trivial to store.
-	SubstanceMinLength int `yaml:"substance_min_length"`
-
-	// FeedbackLoopHours is the look-back window for suppressing
-	// re-observation of recently observed facts.
-	FeedbackLoopHours int `yaml:"feedback_loop_hours"`
-
-	// FeedbackLoopSimilarity is the cosine threshold for "same fact"
-	// dedup during the feedback window.
-	FeedbackLoopSimilarity float64 `yaml:"feedback_loop_similarity"`
-
-	// RetrievalTracking records which records surfaced in recent
-	// retrievals so the observe pipeline can focus on new ground.
-	RetrievalTracking bool `yaml:"retrieval_tracking"`
-
-	// RetrievalSimilarity is the cosine threshold for "previously
-	// retrieved" membership.
-	RetrievalSimilarity float64 `yaml:"retrieval_similarity"`
 }
 
 // LimitsConfig holds request-level safety caps. These are not tuning
@@ -591,13 +569,15 @@ type ObserveConfig struct {
 // prevent unreasonably large inputs. Operators may raise these for
 // unusual workloads (e.g., importing large documents).
 type LimitsConfig struct {
+	// NOTE: LimitsConfig only declares the caps the code actually
+	// enforces. MaxNestingDepth and MaxWritesPerSecond were declared
+	// but never wired; they were removed in the 2026-04-21 config-
+	// drift sweep. Add a field here only when introducing the code
+	// path that reads it.
+
 	// MaxJSONSize is the largest JSON request body accepted by the
 	// HTTP API, in bytes. Guards against memory exhaustion.
 	MaxJSONSize int `yaml:"max_json_size"`
-
-	// MaxNestingDepth is the maximum JSON nesting depth. Prevents
-	// pathological inputs that would blow the stack.
-	MaxNestingDepth int `yaml:"max_nesting_depth"`
 
 	// MaxContentLength caps the size of record content_full, in bytes.
 	MaxContentLength int `yaml:"max_content_length"`
@@ -611,9 +591,6 @@ type LimitsConfig struct {
 
 	// StdinTimeout caps how long CLI commands wait for stdin input.
 	StdinTimeout time.Duration `yaml:"stdin_timeout"`
-
-	// MaxWritesPerSecond rate-limits mutating HTTP requests per client.
-	MaxWritesPerSecond int `yaml:"max_writes_per_second"`
 }
 
 // SearchConfig holds search parameters. The first four fields are
@@ -1004,25 +981,15 @@ func Defaults() Config {
 		},
 
 		Observe: ObserveConfig{
-			Enabled:                true,
-			MaxFactsPerCall:        20,
-			DefaultConfidence:      0.3,
-			DefaultTemporality:     "ephemeral",
-			SubstanceMinLength:     20,
-			FeedbackLoopHours:      4,
-			FeedbackLoopSimilarity: 0.85,
-			RetrievalTracking:      true,
-			RetrievalSimilarity:    0.7,
+			MaxFactsPerCall: 20,
 		},
 
 		Limits: LimitsConfig{
-			MaxJSONSize:        2 * 1024 * 1024,
-			MaxNestingDepth:    10,
-			MaxContentLength:   1024 * 1024,
-			MaxKeywords:        100,
-			MaxSummaryShort:    1000,
-			StdinTimeout:       30 * time.Second,
-			MaxWritesPerSecond: 100,
+			MaxJSONSize:      2 * 1024 * 1024,
+			MaxContentLength: 1024 * 1024,
+			MaxKeywords:      100,
+			MaxSummaryShort:  1000,
+			StdinTimeout:     30 * time.Second,
 		},
 
 		Search: SearchConfig{
@@ -1041,6 +1008,7 @@ func Defaults() Config {
 			RetrievalCandidates: 200,
 			RerankEnabled:       false,
 			RerankCandidates:    50,
+			SessionDedupEnabled: true,
 		},
 
 		// --- Internal tuning defaults ---

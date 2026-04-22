@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/server"
 )
 
@@ -33,7 +35,12 @@ func serverURL() (string, error) {
 		server.RemoveServerInfo(dir)
 	}
 
-	// No running server -- auto-start.
+	// No running server. Respect server.auto_start (defaults true).
+	// A user running gramaton under systemd / launchd flips it to
+	// false so the CLI stops silently spawning a second server.
+	if !shouldAutoStart(dir) {
+		return "", fmt.Errorf("no running server (server.auto_start=false); run `gramaton serve` first")
+	}
 	if err := startBackground(); err != nil {
 		return "", fmt.Errorf("auto-start server: %w", err)
 	}
@@ -44,6 +51,21 @@ func serverURL() (string, error) {
 	}
 
 	return fmt.Sprintf("http://%s:%d", info.Bind, info.Port), nil
+}
+
+// shouldAutoStart resolves server.auto_start from the effective config.
+// Config load errors fall open to the historical default (true) so a
+// broken config doesn't wedge every CLI command before the user can
+// fix it -- they'll see the startup error when the child fails to
+// come up instead.
+func shouldAutoStart(dir string) bool {
+	cfgPath := filepath.Join(dir, "config.yaml")
+	globalPath := filepath.Join(baseConfigDir(), "config.yaml")
+	cfg, err := config.LoadWithFallback(cfgPath, globalPath)
+	if err != nil {
+		return true
+	}
+	return cfg.Server.AutoStart
 }
 
 // verifyServer checks that a URL responds to the gramaton health check.

@@ -195,19 +195,13 @@ The effort dials are the primary cost/quality knob. Short classification, summar
 
 ## Observe
 
-Gramaton's `gramaton_observe` tool is **soft-deprecated**. The Sessions flow (`gramaton_session_prepare` / `_commit`) is the current autonomous-capture path. The `observe:` config section remains for backward compatibility but new integrations should use sessions.
+Controls the deterministic TF-IDF observation extractor that runs in every curation cycle (`curation/observe.go`). It finds records over `curation.observation_min_content_length` (default 1500 chars) that don't yet have observation children, picks key sentences via TF-IDF, and creates sub-fact nodes that inherit the parent's metadata. Provides narrow-target semantic recall for long documents.
+
+Unrelated to automatic conversation capture — that lives in the Sessions flow (`gramaton_session_prepare` / `_commit`). The original `/v1/observe` LLM-driven endpoint was replaced by sessions and removed; its knobs (`enabled`, `default_confidence`, `default_temporality`, `substance_min_length`, feedback-loop and retrieval-tracking dials) were removed in the 2026-04-21 config-drift sweep.
 
 ```yaml
 observe:
-  enabled: true
-  max_facts_per_call: 20
-  default_confidence: 0.3
-  default_temporality: ephemeral
-  substance_min_length: 20           # min fact length to pass quality gate
-  feedback_loop_hours: 4             # suppress near-duplicates within this window
-  feedback_loop_similarity: 0.85
-  retrieval_tracking: true           # track which records were retrieved
-  retrieval_similarity: 0.7
+  max_facts_per_call: 20             # TF-IDF sentences kept per parent record
 ```
 
 ## Limits
@@ -216,25 +210,25 @@ Request and content size limits enforced at the boundary.
 
 ```yaml
 limits:
-  max_json_size: 2097152             # 2 MB max request body
-  max_nesting_depth: 10
-  max_content_length: 1048576        # 1 MB max content field
-  max_keywords: 100
-  max_summary_short: 1000            # characters (was 500 pre-2026-04)
-  stdin_timeout: 30s
-  max_writes_per_second: 100
+  max_json_size: 2097152             # 2 MB max request body (HTTP + stdin file loads)
+  max_content_length: 1048576        # 1 MB cap on record content_full
+  max_keywords: 100                  # per-record keyword cap
+  max_summary_short: 1000            # characters (~750 target; 500 pre-2026-04)
+  stdin_timeout: 30s                 # how long CLI commands wait for stdin input
 ```
 
 `max_summary_short` is the cap on `summary_short` per record. The session-extract flow targets ~750 chars; the limit is set higher to give segment extractors room to write complete semantic anchors.
+
+Only the limits with active enforcement points are listed. Previous versions advertised `max_nesting_depth` and `max_writes_per_second` knobs that had no enforcement code; both were removed in the 2026-04-21 config-drift sweep.
 
 ## Search
 
 ```yaml
 search:
   # User-facing dials
-  retrieval_candidates: 100          # candidates pulled from vector + BM25 before reranking
+  retrieval_candidates: 200          # candidates pulled from vector + BM25 before reranking
   rerank_enabled: false              # LLM reranking of candidates
-  rerank_candidates: 20              # how many candidates sent to LLM when rerank_enabled
+  rerank_candidates: 50              # how many candidates sent to LLM when rerank_enabled
   session_dedup_enabled: true        # suppress Session segments when their extracted Memory record is in results
 
   # Internal scoring / index parameters (rarely adjust)

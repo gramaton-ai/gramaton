@@ -36,6 +36,13 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	// archive file gets included in its own walk, producing the
 	// "archive/tar: write too long" race when the file grows.
 	cfg.Backup.Dir = t.TempDir() + "/backups"
+	// Tests assert cross-store visibility of overlapping content
+	// (e.g. a session segment and its extracted Memory record both
+	// surface). The production default (true) suppresses the segment
+	// when its Memory counterpart is in the result set, which hides
+	// what most tests are trying to observe. Individual tests that
+	// assert the dedup behavior should flip this back on locally.
+	cfg.Search.SessionDedupEnabled = false
 	config.Save(cfg, dir+"/config.yaml")
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{

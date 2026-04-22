@@ -7,6 +7,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead config fields cleaned up (config-drift sweep, cluster A)** --
+  nine yaml fields had no enforcement code anywhere in the repo; strict
+  YAML decoding (1c8b665) turned their presence in `config.yaml` into
+  a false promise. Removed from the schema:
+  - `observe.enabled`, `observe.default_confidence`,
+    `observe.default_temporality`, `observe.substance_min_length`,
+    `observe.feedback_loop_hours`, `observe.feedback_loop_similarity`,
+    `observe.retrieval_tracking`, `observe.retrieval_similarity` --
+    knobs for the original LLM-driven `/v1/observe` endpoint, which
+    was removed when the sessions flow replaced it. Config cleanup
+    didn't land with the handler deletion. `curation/observe.go` is
+    a separate, surviving deterministic TF-IDF extractor that only
+    reads `observe.max_facts_per_call`; the struct is now a single-
+    field holder, with doc comment clarifying the split.
+  - `limits.max_nesting_depth`, `limits.max_writes_per_second` --
+    aspirational safety caps with no enforcement (no recursive depth
+    validator, no per-client rate limiter). Their `Defaults()` values
+    were cargo; nothing consulted them.
+  Any `config.yaml` with these keys now fails loud at load time with
+  the offending key + line, the same way typos did after 1c8b665.
+
+### Fixed
+
+- **`server.auto_start` is now honored** -- the field has been in
+  `config.yaml` since the named-store design but `cli/client.go` never
+  read it; the CLI auto-spawned regardless. Users running gramaton
+  under systemd/launchd who set `auto_start: false` got a second
+  server forked anyway. `serverURL()` now loads the effective config
+  (defaults -> global -> per-store) and returns a clear error
+  (`no running server (server.auto_start=false); run gramaton serve first`)
+  when auto_start is disabled and no server is running. Config load
+  errors fall open to the historical default (true).
+- **`search.session_dedup_enabled` actually defaults to `true`** --
+  documented as the default, but `Defaults().Search` omitted the
+  field so Go's zero-value (`false`) took over. A Memory record and
+  its extracted Session segment could both surface in a result set,
+  despite docs promising the segment would be suppressed. Fixed in
+  `Defaults()`. The server test helper `setupTestServer` now flips
+  it back to `false` with a comment -- most tests assert cross-store
+  visibility of overlapping content, which dedup was hiding.
+- **`docs/configuration.md` defaults match code** --
+  `search.retrieval_candidates: 100` -> `200`,
+  `search.rerank_candidates: 20` -> `50`. The `observe:` section is
+  rewritten around the surviving TF-IDF extractor. The `limits:`
+  block drops the two dead fields. Stale `server/handler_observe.go`
+  reference in the `llm.model` doc comment removed.
+
 ### Added
 
 - **P1-38: config `Validate()` + strict YAML decoding** -- config/config.go
