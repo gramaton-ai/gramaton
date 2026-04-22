@@ -46,9 +46,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       fall-back-to-manual error if the syntax differs. Partial
       success supported: one client registered + another failed is a
       valid outcome, per-client warn/check lines.
-    - Steps 4-5 (hooks installer, verification) remain stubbed with
-      detailed follow-up plans in doc comments; these land in a
-      follow-up pass.
+    - Step 4 (automatic-capture hooks installer) now implemented:
+      hook scripts for Claude Code and kiro-cli are shipped inside
+      the binary via `//go:embed internal/setup/embed_hooks` so
+      `go install` builds carry working hooks without needing a
+      repo clone. On user confirm, scripts are materialized to
+      `<configDir>/hooks/<client>/` with 0700 dirs + 0755 scripts.
+      For Claude Code: auto-patches `~/.claude/settings.json` by
+      parsing existing JSON, preserving every unrelated top-level
+      key AND every user-owned hook entry, and replacing only
+      gramaton-owned entries (identified by `/.gramaton/hooks/`
+      command-path prefix). Idempotent on re-run (byte-identical
+      JSON check), backs up settings.json before writing, atomic
+      tmp+rename write. For kiro-cli: scripts materialized but
+      auto-patch skipped because kiro-cli's hook config schema
+      isn't verified in our corpus; the wizard prints the
+      materialized paths and a manual-config hint. Tech-debt: the
+      embedded hook tree duplicates the canonical hooks/ tree at
+      repo root; a go:generate directive re-copies on demand but
+      a follow-up should unify the two locations (post-OSS item).
+    - Step 5 (verification) now implemented: persists config via
+      config.Save, then runs a sequence of graceful health checks:
+      config file permissions (warns if != 0600), data directory
+      writability via a probe file, per-provider summaries for
+      embedding + LLM (including api_key_file existence and
+      perms), MCP registration survey via `claude mcp list`, and
+      per-client hook installation + executable-bit check. Each
+      check reports ✓ or ⚠ with a specific remediation hint.
+      Network-facing test-calls (LLM ping, embedding round-trip)
+      and log-file error scan are deferred to a dedicated
+      `gramaton doctor` post-OSS command.
     - `cli/init.go` rewritten as a TTY-dispatcher: interactive mode
       invokes the wizard, `--non-interactive` (or piped stdin) keeps
       the legacy scripted bootstrap flow for backward-compat with CI.

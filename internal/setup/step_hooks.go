@@ -1,54 +1,156 @@
 package setup
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+)
 
-// stepHooks is Step 4: install the auto-capture hooks into the
-// detected MCP clients' hook directories. Hooks are bash scripts
-// shipped under hooks/claude-code/ and hooks/kiro/; the installer
-// copies or symlinks them into place with executable bits set.
+// stepHooks is Step 4: install automatic-capture hooks for detected
+// MCP clients. This wires Gramaton's session lifecycle (start / stop
+// / pre-compact / post-compact) to the client so session-prepare and
+// session-commit run automatically without the user having to
+// remember.
 //
-// NOT YET IMPLEMENTED. Stub for the first-pass wizard commit; full
-// implementation plan below.
+// Flow:
+//  1. Depend on Step 3's detection results: if no clients were
+//     detected, skip entirely with a short message.
+//  2. Ask one Yes/No "install auto-capture hooks for the detected
+//     clients? [Y/n]".
+//  3. On confirm, for each detected client:
+//     - Materialize embedded scripts to
+//       <configDir>/hooks/<client>/.
+//     - For Claude Code: auto-patch ~/.claude/settings.json to route
+//       the event hooks at our scripts. Preserves all other
+//       settings and user hooks.
+//     - For kiro-cli: scripts are materialized but settings auto-
+//       patching is skipped because kiro-cli's hook-config schema
+//       isn't documented in our corpus. Print the script paths and
+//       tell the user to wire them in via kiro-cli's config.
+//  4. Warn at the end that users need to restart their clients for
+//     the new hooks to take effect.
 //
-// Implementation plan:
-//
-//  1. Depend on stepMCP's detection results: if no clients were
-//     detected in Step 3, skip Step 4 entirely with a short message.
-//
-//  2. For each detected client:
-//     - Locate the client's hooks directory (e.g.,
-//       ~/.claude/hooks/ for Claude Code). Create it if missing
-//       with 0700 perms.
-//     - For each hook script in the corresponding hooks/<client>/
-//       directory in this repo, place it into the client's hooks
-//       directory.
-//     - Placement mechanism: symlink preferred so upgrades
-//       (re-running the wizard after a gramaton upgrade)
-//       propagate automatically. Fall back to copy-with-executable-
-//       bit on filesystems that don't support symlinks (rare but
-//       possible on some Windows FS).
-//     - Idempotency: detect existing symlinks pointing at our
-//       shipped hooks; update rather than duplicate. Detect
-//       existing user-custom hooks (not our symlinks) and prompt
-//       before overwriting.
-//
-//  3. The "shipped hooks location" is resolved at runtime from the
-//     gramaton binary's install location. For `go install` builds,
-//     the hooks/ directory isn't packaged with the binary -- we'd
-//     need to either bundle them via embed.FS and materialize to
-//     ~/.gramaton/hooks/ at wizard time, or tell the user to clone
-//     the repo. Decision point for the follow-up pass: which
-//     strategy? embed.FS is the cleanest but pulls the hook
-//     scripts into the binary (trivial size impact, ~few KB).
-//
-//  4. Report ✓ per hook installed. Warn that users need to restart
-//     the client for hooks to take effect.
+// Dependencies: this step re-runs Detect on the MCP backend rather
+// than threading detected clients through from Step 3. Both calls
+// go to the same backend; the cost is a couple of exec.LookPath
+// calls, negligible. Decouples the steps so Step 4 can run
+// independently if we later add a "re-install hooks only" code path.
 func (w *Wizard) stepHooks(ctx context.Context) error {
-	w.writer.StepHeader(4, totalSteps, "Automatic knowledge capture")
+	w.writer.StepHeader(4, totalSteps, "Automatic knowledge capture (recommended)")
+
+	clients := w.mcpBackend.Detect()
+	if len(clients) == 0 {
+		w.writer.Paragraph(
+			"No MCP clients detected, so there's nothing to install hooks into.",
+			"If you install Claude Code or kiro-cli later, re-run `gramaton init`.",
+		)
+		return nil
+	}
+
 	w.writer.Paragraph(
-		"(Hook installer is still being built. For now, see",
-		"hooks/claude-code/ and hooks/kiro/ for the scripts to copy",
-		"into your client's hooks directory manually.)",
+		"Gramaton can automatically save knowledge from your AI",
+		"conversations so it builds up a memory across sessions",
+		"without you having to do anything.",
+		"",
+		"Install auto-capture hooks for the detected clients?",
 	)
+	w.writer.Blank()
+	w.writer.Raw("    [Y] Yes, install")
+	w.writer.Raw("    [n] Not now")
+	w.writer.Blank()
+	w.writer.Prompt(">")
+
+	confirm, err := w.prompter.YesNo(true)
+	if err != nil {
+		// One retry, then default to safe (no install). Same pattern
+		// as Step 3's MCP confirm -- destructive-ish operations
+		// prefer the conservative default.
+		w.writer.ErrorLine(err.Error())
+		w.writer.Prompt(">")
+		confirm, err = w.prompter.YesNo(true)
+		if err != nil {
+			w.writer.Warn("Couldn't parse answer twice; skipping hook installation.")
+			return nil
+		}
+	}
+	if !confirm {
+		w.writer.Warn("Skipping hook installation.")
+		w.writer.Paragraph(
+			"",
+			"You can install hooks later by re-running `gramaton init`, or",
+			"manually by inspecting ~/.gramaton/hooks/ and wiring the",
+			"scripts into your client's hook config.",
+		)
+		return nil
+	}
+
+	installed := 0
+	for _, c := range clients {
+		// Translate the user-facing name to the embed-tree directory
+		// name. Detect uses "Claude Code"/"kiro-cli" for display;
+		// the hook backend uses "claude-code"/"kiro" for embed paths
+		// (matching the on-disk hooks/ layout at repo root).
+		embedName := hookDirName(c.Name)
+		if embedName == "" {
+			w.writer.Warn(fmt.Sprintf("No hooks bundled for %s; skipping.", c.Name))
+			continue
+		}
+
+		paths, err := w.hookBackend.Materialize(embedName, w.configDir)
+		if err != nil {
+			w.writer.Warn(fmt.Sprintf("%s: materialize failed: %v", c.Name, err))
+			continue
+		}
+		w.writer.Check(fmt.Sprintf("%s: installed %d hook script(s) to %s",
+			c.Name, len(paths), filepath.Join(w.configDir, "hooks", embedName)))
+
+		// Auto-patch only Claude Code's settings.json. kiro-cli's
+		// config format isn't verified; we print manual instructions
+		// instead.
+		switch c.Name {
+		case "Claude Code":
+			unchanged, err := w.hookBackend.RegisterClaudeHooks(ctx, paths)
+			if err != nil {
+				w.writer.Warn(fmt.Sprintf("%s: settings.json update failed: %v", c.Name, err))
+				continue
+			}
+			if unchanged {
+				w.writer.Check(fmt.Sprintf("%s: hook config already up to date", c.Name))
+			} else {
+				w.writer.Check(fmt.Sprintf("%s: updated ~/.claude/settings.json", c.Name))
+			}
+			installed++
+
+		case "kiro-cli":
+			// kiro-cli hook registration mechanism is not verified in
+			// Gramaton's corpus. Print paths and manual-config guidance
+			// rather than guess a schema.
+			w.writer.Warn(fmt.Sprintf("%s: auto-config not yet supported. Wire these scripts into kiro-cli's hooks manually:", c.Name))
+			for _, p := range paths {
+				w.writer.Raw(fmt.Sprintf("        %s", p))
+			}
+			installed++
+		}
+	}
+
+	if installed > 0 {
+		w.writer.Blank()
+		w.writer.Warn("Restart your AI client(s) so the hooks take effect.")
+	}
 	return nil
+}
+
+// hookDirName translates the DetectedClient.Name used in wizard
+// output ("Claude Code", "kiro-cli") to the embed-tree directory
+// name ("claude-code", "kiro"). Keeping the mapping local here
+// avoids coupling the DetectedClient struct to the embed layout;
+// when we add more clients, add them here.
+func hookDirName(clientName string) string {
+	switch clientName {
+	case "Claude Code":
+		return "claude-code"
+	case "kiro-cli":
+		return "kiro"
+	}
+	return ""
 }
