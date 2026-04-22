@@ -24,6 +24,47 @@ func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error)
 func (noopLLM) ModelID() string                                                    { return "test-noop" }
 func (noopLLM) ProviderName() string                                               { return "noop" }
 
+// TestServerNewAcceptsNilLLM is the regression guard for backlog
+// item 01KPVP9HDJM9YZ37QB4315KGAF: a server that would have refused
+// to construct without LLM broke the wizard's "skip LLM" path, made
+// `gramaton serve` fail with an opaque timeout, and contradicted
+// the documented deterministic-only curation contract. After the
+// fix, Server.New must succeed with an engine whose LLM() returns
+// nil, and startup must report deterministic-only mode.
+func TestServerNewAcceptsNilLLM(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = "" // explicit: no LLM
+	cfg.Backup.Dir = t.TempDir() + "/backups"
+	config.Save(cfg, dir+"/config.yaml")
+
+	// Construct an engine WITHOUT WithLLM. engine.LLM() returns nil.
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithVectorIndex(index.NewFlatIndex()),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+	t.Cleanup(func() { eng.Close() })
+
+	if eng.LLM() != nil {
+		t.Fatal("test precondition: engine.LLM() should be nil")
+	}
+
+	// Server.New must succeed despite nil LLM. Before the fix this
+	// returned an error; after it, construction completes and
+	// deterministic-only curation runs behind the scenes.
+	srv, err := New(eng, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatalf("Server.New with nil LLM should succeed, got: %v", err)
+	}
+	if srv == nil {
+		t.Fatal("Server.New returned nil server")
+	}
+}
+
 func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	t.Helper()
 	dir := t.TempDir()

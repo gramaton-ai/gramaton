@@ -158,14 +158,24 @@ func (rt *retrievalTracker) pruneOldest() {
 	}
 }
 
-// New creates a new server wrapping the given engine.
-// New creates a server. Requires an engine with a configured LLM
-// provider -- the server performs classification on every record and
-// cannot operate without one. Returns an error if LLM is not configured.
+// New creates a server. An engine without a configured LLM provider
+// is fine: autonomous curation (classification, summarization,
+// contradiction detection, concept synthesis) silently skips when
+// nil and the store falls back to the deterministic-only curation
+// pipeline (lifecycle transitions, orphan linking, duplicate
+// consolidation, concept candidate detection). See CLAUDE.md's
+// "without LLM, curation runs in deterministic-only mode"
+// contract. Downstream code already guards every LLM() use with a
+// nil check; this function imposes no additional requirement.
+//
+// Historical note: prior to the wizard shipping, server.New
+// refused to construct without LLM. That constraint contradicted
+// the documented deterministic-only contract and made the wizard's
+// Skip-LLM option silently lead to a broken `gramaton serve`
+// (CLI swallowed the server's startup error behind its 10s
+// timeout). Removed per backlog item
+// 01KPVP9HDJM9YZ37QB4315KGAF.
 func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) {
-	if engine.LLM() == nil {
-		return nil, fmt.Errorf("LLM provider is required: configure llm.provider and llm.model in config")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -173,22 +183,26 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 
 	// Warn on partial LLM.Models configuration at startup so operators
 	// discover effort-tier gaps before curation silently falls back to
-	// the provider default. (P1-76.)
-	var emptyTiers []string
-	if engineCfg.LLM.Models.Low == "" {
-		emptyTiers = append(emptyTiers, "low")
-	}
-	if engineCfg.LLM.Models.Medium == "" {
-		emptyTiers = append(emptyTiers, "medium")
-	}
-	if engineCfg.LLM.Models.High == "" {
-		emptyTiers = append(emptyTiers, "high")
-	}
-	if len(emptyTiers) > 0 {
-		logger.Warn("llm.models tier(s) empty; curation tasks mapped to those tiers will use the provider default",
-			"component", "server",
-			"empty_tiers", emptyTiers,
-			"default_model", engineCfg.LLM.Model)
+	// the provider default. (P1-76.) Only relevant when an LLM is
+	// actually configured -- otherwise all tier fields are empty by
+	// design and the warning would be noise.
+	if engineCfg.LLM.Provider != "" {
+		var emptyTiers []string
+		if engineCfg.LLM.Models.Low == "" {
+			emptyTiers = append(emptyTiers, "low")
+		}
+		if engineCfg.LLM.Models.Medium == "" {
+			emptyTiers = append(emptyTiers, "medium")
+		}
+		if engineCfg.LLM.Models.High == "" {
+			emptyTiers = append(emptyTiers, "high")
+		}
+		if len(emptyTiers) > 0 {
+			logger.Warn("llm.models tier(s) empty; curation tasks mapped to those tiers will use the provider default",
+				"component", "server",
+				"empty_tiers", emptyTiers,
+				"default_model", engineCfg.LLM.Model)
+		}
 	}
 
 
