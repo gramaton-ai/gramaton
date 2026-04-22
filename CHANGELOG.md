@@ -36,9 +36,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       Anthropic, cost-cap sub-prompt with `$5/day + 500 calls/day`
       defaults and a customize branch. Enables `search.rerank_enabled`
       automatically when an LLM is configured.
-    - Steps 3-5 (MCP client injection, hooks installer, verification)
-      are stubbed with detailed implementation plans in doc comments;
-      these land in a follow-up pass.
+    - Step 3 (MCP client auto-detect + registration) now implemented:
+      detects `claude` (Claude Code) and `kiro` (kiro-cli) on PATH,
+      shells out to `claude mcp add --scope user gramaton gramaton --
+      mcp` for registration. Pre-checks `claude mcp list` for existing
+      gramaton entry so re-running the wizard is idempotent. kiro-cli
+      path is best-effort (tries the claude-compatible `mcp add`
+      syntax); documents its uncertainty and surfaces a clear
+      fall-back-to-manual error if the syntax differs. Partial
+      success supported: one client registered + another failed is a
+      valid outcome, per-client warn/check lines.
+    - Steps 4-5 (hooks installer, verification) remain stubbed with
+      detailed follow-up plans in doc comments; these land in a
+      follow-up pass.
     - `cli/init.go` rewritten as a TTY-dispatcher: interactive mode
       invokes the wizard, `--non-interactive` (or piped stdin) keeps
       the legacy scripted bootstrap flow for backward-compat with CI.

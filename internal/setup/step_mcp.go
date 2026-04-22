@@ -1,58 +1,110 @@
 package setup
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // stepMCP is Step 3: detect installed MCP clients (Claude Code,
-// kiro-cli) and inject Gramaton into their configs.
+// kiro-cli) and register Gramaton as an MCP server with each.
 //
-// NOT YET IMPLEMENTED. This is a deliberate stub for the first-pass
-// wizard commit. The design is fully captured in the backlog item
-// 01KPVD3YD0RHKJJKX847H6F95J and the implementation plan below;
-// this function currently just prints a placeholder message so the
-// wizard flow completes end-to-end.
+// Flow:
+//  1. Call w.mcpBackend.Detect() to find installed clients.
+//  2. If none, print a short "add manually later" note and continue
+//     (not a failure -- users can always add clients later).
+//  3. Show the detected list as a checkbox-style report and ask
+//     once for confirmation.
+//  4. For each client, call w.mcpBackend.Register(ctx, client).
+//     Report per-client status as ✓ success, ✓ already-registered,
+//     or ⚠ with the error string for diagnosis.
+//  5. Warn at the end that users need to restart their clients for
+//     the new MCP config to take effect.
 //
-// Implementation plan for the follow-up pass:
-//
-//  1. Detection helpers in a new detect.go:
-//     - findClaudeCodeConfig() (path string, installed bool)
-//     - findKiroCliConfig() (path string, installed bool)
-//     Each returns the path to the client's config file (even if
-//     the file doesn't exist yet -- MCP entries can be the first
-//     thing written) plus a bool for "did we detect the binary."
-//     Binary detection via exec.LookPath; config paths follow each
-//     client's documented convention. For kiro-cli, verify against
-//     integration/kiro/ and hooks/kiro/ before committing to a path.
-//
-//  2. Config injection helper in a new inject.go:
-//     - injectMCPServer(configPath string, serverName string, serverCfg map[string]any) error
-//     Reads existing JSON (create empty if missing), preserves any
-//     other mcpServers entries, adds/updates just our key, writes
-//     atomically (tmp + rename). Backs up to <path>.bak-<ts>
-//     before touching.
-//
-//  3. The "gramaton" MCP entry contents: {"command": "gramaton",
-//     "args": ["mcp"]}. Relies on gramaton being on PATH; verified
-//     by stepVerify afterwards.
-//
-//  4. User interaction:
-//     - Show detected list as a checkbox-style report.
-//     - Single [Y/n] "Configure these?" prompt.
-//     - On confirm, inject for all detected clients.
-//     - If none detected, print "no clients detected; add manually
-//       later" message and continue gracefully.
-//
-//  5. Report ✓ per client with the specific config file edited.
-//     Warn about restarts.
-//
-// File refs: integration/claude-code/, integration/kiro/,
-// hooks/claude-code/, hooks/kiro/ are the current-behavior source
-// of truth for what paths and config shapes each client expects.
+// The per-client errors are surfaced but do NOT abort the wizard.
+// Partial success (Claude Code registered, kiro-cli failed) is a
+// valid end-state; the user can use Gramaton with whichever client
+// worked.
 func (w *Wizard) stepMCP(ctx context.Context) error {
 	w.writer.StepHeader(3, totalSteps, "Connecting to your AI tools")
-	w.writer.Paragraph(
-		"(Auto-detect + config injection is still being built. For now,",
-		"add Gramaton to your MCP client's config manually. See the",
-		"README's Quick Start section for the JSON snippet.)",
-	)
+
+	clients := w.mcpBackend.Detect()
+	if len(clients) == 0 {
+		w.writer.Paragraph(
+			"No supported MCP clients were found on this computer.",
+			"",
+			"Gramaton still works via CLI. When you install Claude Code",
+			"or kiro-cli, re-run `gramaton init` or register Gramaton",
+			"manually:",
+			"",
+			"  claude mcp add --scope user gramaton gramaton -- mcp",
+		)
+		return nil
+	}
+
+	// Render the detected list. Checkboxes are all [x] because we
+	// only list what we actually detected; unsupported clients don't
+	// appear. (If we later add a "deselect individual clients"
+	// feature, this becomes [x]/[ ] with per-item toggles.)
+	w.writer.Paragraph("Looking for AI tools on your computer...", "Found:")
+	w.writer.Blank()
+	for _, c := range clients {
+		w.writer.Raw(fmt.Sprintf("    [x] %-12s  (%s)", c.Name, c.Binary))
+	}
+	w.writer.Blank()
+
+	// Single confirm covers all detected clients. Rationale:
+	// per-client granularity (asking about each) triples the
+	// keystrokes for the common case where the user wants to
+	// register with everything detected. A user who wants to
+	// exclude one client can re-run the wizard or remove via the
+	// client's own CLI after the fact.
+	w.writer.Paragraph("I'll add Gramaton to these as their MCP backend.")
+	w.writer.Prompt("Continue? [Y/n]")
+	confirm, err := w.prompter.YesNo(true)
+	if err != nil {
+		// Invalid input: print the error, re-prompt once, then
+		// default to No on a second failure. This is the safer path
+		// for a destructive-ish operation (modifying the user's
+		// client config).
+		w.writer.ErrorLine(err.Error())
+		w.writer.Prompt("Continue? [Y/n]")
+		confirm, err = w.prompter.YesNo(true)
+		if err != nil {
+			w.writer.Warn("Couldn't parse answer twice; skipping MCP registration.")
+			return nil
+		}
+	}
+	if !confirm {
+		w.writer.Warn("Skipping MCP client registration.")
+		w.writer.Paragraph(
+			"Register manually with any of:",
+			"  claude mcp add --scope user gramaton gramaton -- mcp",
+			"  (kiro-cli's equivalent -- check `kiro mcp --help`)",
+		)
+		return nil
+	}
+
+	// Register each detected client. Failures are per-client; we
+	// continue past them to give other clients a chance.
+	registered := 0
+	for _, c := range clients {
+		already, regErr := w.mcpBackend.Register(ctx, c)
+		if regErr != nil {
+			w.writer.Warn(fmt.Sprintf("%s: %v", c.Name, regErr))
+			continue
+		}
+		if already {
+			w.writer.Check(fmt.Sprintf("Gramaton already registered with %s (no change)", c.Name))
+		} else {
+			w.writer.Check(fmt.Sprintf("Added Gramaton to %s", c.Name))
+		}
+		registered++
+	}
+
+	if registered > 0 {
+		w.writer.Blank()
+		w.writer.Warn("Restart your AI client(s) so the new MCP config takes effect.")
+	}
+
 	return nil
 }

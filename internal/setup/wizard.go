@@ -37,6 +37,13 @@ type Wizard struct {
 	cfg       *config.Config
 	cfgPath   string
 	configDir string
+
+	// mcpBackend handles MCP client detection + registration in
+	// Step 3. Defaulted in New to DefaultMCPBackend (shells out to
+	// `claude mcp add` etc.). Tests override by assigning a fake
+	// after construction; the field is unexported so only the
+	// setup package itself (including its tests) can swap it.
+	mcpBackend MCPBackend
 }
 
 // New constructs a Wizard. cfg may be any config.Config (typically
@@ -46,11 +53,12 @@ type Wizard struct {
 // wizard drops ancillary files (API key files, model cache, etc.).
 func New(prompter Prompter, writer Writer, cfg *config.Config, cfgPath, configDir string) *Wizard {
 	return &Wizard{
-		prompter:  prompter,
-		writer:    writer,
-		cfg:       cfg,
-		cfgPath:   cfgPath,
-		configDir: configDir,
+		prompter:   prompter,
+		writer:     writer,
+		cfg:        cfg,
+		cfgPath:    cfgPath,
+		configDir:  configDir,
+		mcpBackend: DefaultMCPBackend{},
 	}
 }
 
