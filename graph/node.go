@@ -33,6 +33,27 @@ func (g *Graph) AddNode(props Properties) *Node {
 	return n
 }
 
+// AddNodeWithIDForTest creates a node with a caller-chosen ID. Exists
+// only to let tests construct the record-deleted-then-recreated-with-
+// same-ID scenario (RC-4 regression) that no user-facing API path
+// produces. Do not call from production code -- the ID collision
+// risk defeats the ULID invariant.
+func (g *Graph) AddNodeWithIDForTest(id string, props Properties) *Node {
+	n := &Node{
+		ID:         id,
+		Properties: props.Clone(),
+	}
+	if n.Properties == nil {
+		n.Properties = make(Properties)
+	}
+	g.cacheMu.Lock()
+	g.nodes[n.ID] = n
+	g.nodeTotal++
+	g.cacheMu.Unlock()
+	g.markNodeDirty(n.ID)
+	return n
+}
+
 // GetNode returns the node with the given ID, or nil and false if not found.
 // When the graph has a backing store (after Load), cache misses trigger a
 // lazy load from the prolly tree. Accessed nodes are promoted in the LRU;

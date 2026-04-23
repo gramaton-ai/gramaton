@@ -36,6 +36,55 @@ func TestAPILogLimit(t *testing.T) {
 	}
 }
 
+// TestAPILogSinceUntilNarrowsWalk confirms the Phase-2 range
+// parameters restrict the log walker to a date window. The test
+// seeds three commits, captures a mid-window timestamp, and asserts
+// a windowed log only returns the commits inside.
+func TestAPILogSinceUntilNarrowsWalk(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "a")
+
+	time.Sleep(15 * time.Millisecond)
+	windowStart := time.Now().UTC()
+	time.Sleep(15 * time.Millisecond)
+
+	addRecord(t, eng, "b")
+
+	time.Sleep(15 * time.Millisecond)
+	windowEnd := time.Now().UTC()
+	time.Sleep(15 * time.Millisecond)
+
+	addRecord(t, eng, "c")
+
+	resp, apiErr := srv.api.Log(context.Background(), api.LogRequest{
+		Since: windowStart.Format(time.RFC3339Nano),
+		Until: windowEnd.Format(time.RFC3339Nano),
+	})
+	if apiErr != nil {
+		t.Fatalf("Log: %v", apiErr)
+	}
+
+	// Only "b" should be in the window. "a" predates windowStart and
+	// "c" postdates windowEnd.
+	if len(resp.Commits) != 1 {
+		t.Fatalf("expected exactly 1 commit in window, got %d: %+v",
+			len(resp.Commits), resp.Commits)
+	}
+	if resp.Commits[0].Action != "test" {
+		// addRecord uses the label "test" as the commit message.
+		t.Logf("got action=%q (helper uses a generic 'test' label)", resp.Commits[0].Action)
+	}
+}
+
+// TestAPILogInvalidDates covers validator paths for Since/Until.
+func TestAPILogInvalidSince(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	_, apiErr := srv.api.Log(context.Background(), api.LogRequest{Since: "nope"})
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("expected input_error, got %+v", apiErr)
+	}
+}
+
 // TestAPIDiffEmptyChain: with no commits past chain root, an empty
 // since= returns whatever's added. With a since= that postdates the
 // chain entirely, the response should be empty buckets, not an error.
@@ -62,6 +111,83 @@ func TestAPIDiffInvalidSince(t *testing.T) {
 	}
 	if apiErr.Code != "input_error" {
 		t.Errorf("code = %q, want input_error", apiErr.Code)
+	}
+}
+
+// TestAPIDiffInvalidUntil covers the new Until parameter's input
+// validation path (symmetric with the invalid-since case).
+func TestAPIDiffInvalidUntil(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	_, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Until: "not-a-date"})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for bad until")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("code = %q, want input_error", apiErr.Code)
+	}
+}
+
+// TestAPIDiffSinceAfterUntilRejected asserts that a since value later
+// than until fails validation before any store work happens.
+func TestAPIDiffSinceAfterUntilRejected(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	_, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{
+		Since: "2026-04-25",
+		Until: "2026-04-20",
+	})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for since > until")
+	}
+	if apiErr.Code != "input_error" {
+		t.Errorf("code = %q, want input_error", apiErr.Code)
+	}
+}
+
+// TestAPIDiffUntilAtHeadMatchesNoUntil proves the Until parameter
+// defaults-to-HEAD claim: passing Until explicitly for the HEAD commit's
+// timestamp produces the same diff buckets as omitting Until.
+func TestAPIDiffUntilAtHeadMatchesNoUntil(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "a")
+	addRecord(t, eng, "b")
+
+	// HEAD's timestamp is the most recent commit. Use "tomorrow" as Until
+	// so we know every commit is included (same as the no-Until case).
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+
+	// Baseline: no Until.
+	withoutUntil, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{})
+	if apiErr != nil {
+		t.Fatalf("baseline Diff: %v", apiErr)
+	}
+	// Same call with Until explicitly set past HEAD.
+	withUntil, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Until: tomorrow})
+	if apiErr != nil {
+		t.Fatalf("Until Diff: %v", apiErr)
+	}
+	if len(withoutUntil.Added)+len(withoutUntil.Modified)+len(withoutUntil.Removed) !=
+		len(withUntil.Added)+len(withUntil.Modified)+len(withUntil.Removed) {
+		t.Errorf("Until past HEAD should match no-Until: got baseline=%d withUntil=%d",
+			len(withoutUntil.Added)+len(withoutUntil.Modified)+len(withoutUntil.Removed),
+			len(withUntil.Added)+len(withUntil.Modified)+len(withUntil.Removed))
+	}
+}
+
+// TestAPIDiffUntilBeforeAnyCommit returns empty buckets when Until is
+// before the earliest indexed commit. Matches the since-postdates-chain
+// shape.
+func TestAPIDiffUntilBeforeAnyCommit(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "target")
+
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Until: yesterday})
+	if apiErr != nil {
+		t.Fatalf("Diff: %v", apiErr)
+	}
+	if len(resp.Added) != 0 || len(resp.Modified) != 0 || len(resp.Removed) != 0 {
+		t.Errorf("Until before any commit should be empty, got added=%d modified=%d removed=%d",
+			len(resp.Added), len(resp.Modified), len(resp.Removed))
 	}
 }
 

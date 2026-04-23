@@ -9,8 +9,10 @@ import (
 
 // DiffRequest carries the diff window + optional topic filter.
 // Since is empty -> diff against the chain root (full history).
+// Until is empty -> diff up to HEAD. Both accept YYYY-MM-DD or RFC3339.
 type DiffRequest struct {
 	Since string `json:"since,omitempty" jsonschema:"show changes after date (YYYY-MM-DD or RFC3339); empty means against chain root"`
+	Until string `json:"until,omitempty" jsonschema:"show changes up to date (YYYY-MM-DD or RFC3339); empty means up to HEAD"`
 	Topic string `json:"topic,omitempty" jsonschema:"filter by topic substring (matches content_keywords + content_short, case-insensitive)"`
 	Limit int    `json:"limit,omitempty" jsonschema:"max changes to return (default 50, max 1000)"`
 }
@@ -37,13 +39,19 @@ type DiffResponse struct {
 // DiffDescription is shared by HTTP, MCP, and CLI proxy transports.
 const DiffDescription = "Show what changed since a date: added, modified, and removed records with summaries. Use to audit curation, catch up after time away, or review what other agents captured."
 
-// Diff computes added/modified/removed records since a given date.
-// When since is empty, diffs against the chain root (full history).
-// When the date is provided but no commit before it exists in the
-// chain (newer store), returns empty buckets rather than an error.
+// Diff computes added/modified/removed records between two commits
+// identified by since and until. When since is empty, diffs against
+// the chain root (full history). When until is empty, diffs up to
+// HEAD. When since is provided but no commit before it exists
+// (newer store), returns empty buckets rather than an error; same
+// for until set to a date before the earliest indexed commit.
 func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIError) {
 	if len(req.Topic) > MaxTopicLength {
 		return DiffResponse{}, ErrInvalid(fmt.Sprintf("topic exceeds maximum length of %d", MaxTopicLength))
+	}
+	sinceT, untilT, err := validateSinceUntil(req.Since, req.Until)
+	if err != nil {
+		return DiffResponse{}, ErrInvalid(err.Error())
 	}
 	limit := req.Limit
 	if limit <= 0 {
@@ -58,34 +66,45 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 
 	store := a.engine.Store()
 	headHash := a.engine.HeadHashLocked()
+	tsIdx := a.engine.TSIndex()
 
-	// Find the commit immediately before `since` so the diff window
-	// captures every change AT or after that timestamp.
+	// Resolve the since-boundary. Diff window should INCLUDE commits
+	// at exactly `since`, so sinceCommit is the latest commit STRICTLY
+	// before since -- use CommitBefore (not CommitAt). When since is
+	// set but no such commit exists, there's nothing to compare
+	// against and the response is empty (matches pre-D7 behaviour).
 	var sinceHash string
-	if req.Since != "" {
-		sinceTime, err := parseDateArg(req.Since)
-		if err != nil {
-			return DiffResponse{}, ErrInvalid(err.Error())
-		}
-		hash := headHash
-		traversed := 0
-		for hash != "" && traversed < MaxLogTraversal {
-			traversed++
-			commit, err := loadCommit(store, hash)
-			if err != nil {
-				break
-			}
-			if commit.Timestamp.Before(sinceTime) {
-				sinceHash = hash
-				break
-			}
-			hash = commit.Parent
+	if !sinceT.IsZero() {
+		if h, ok := tsIdx.CommitBefore(sinceT); ok {
+			sinceHash = h
+		} else {
+			return DiffResponse{
+				Added:    []DiffEntry{},
+				Modified: []DiffEntry{},
+				Removed:  []DiffEntry{},
+			}, nil
 		}
 	}
 
-	// since requested but the entire chain post-dates it -> nothing
-	// to compare against.
-	if sinceHash == "" && req.Since != "" {
+	// Resolve the until-boundary. Diff window should INCLUDE commits
+	// at exactly `until`, so untilCommit is the latest commit AT OR
+	// BEFORE until -- use CommitAt. Empty => HEAD.
+	untilHash := headHash
+	if !untilT.IsZero() {
+		if h, ok := tsIdx.CommitAt(untilT); ok {
+			untilHash = h
+		} else {
+			// until is before the earliest indexed commit; no range.
+			return DiffResponse{
+				Added:    []DiffEntry{},
+				Modified: []DiffEntry{},
+				Removed:  []DiffEntry{},
+			}, nil
+		}
+	}
+
+	if untilHash == "" {
+		// No HEAD (empty store).
 		return DiffResponse{
 			Added:    []DiffEntry{},
 			Modified: []DiffEntry{},
@@ -93,10 +112,10 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 		}, nil
 	}
 
-	headCommit, err := loadCommit(store, headHash)
+	untilCommit, err := loadCommit(store, untilHash)
 	if err != nil {
-		a.log.Warn("diff: load HEAD failed", "component", "diff", "err", err)
-		return DiffResponse{}, ErrInternal("failed to load HEAD commit")
+		a.log.Warn("diff: load until commit failed", "component", "diff", "err", err)
+		return DiffResponse{}, ErrInternal("failed to load until commit")
 	}
 
 	var sinceCommit *graph.Commit
@@ -109,7 +128,7 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 		sinceCommit = c
 	}
 
-	diff, err := graph.DiffCommits(store, sinceCommit, headCommit)
+	diff, err := graph.DiffCommits(store, sinceCommit, untilCommit)
 	if err != nil {
 		a.log.Warn("diff: compute failed", "component", "diff", "err", err)
 		return DiffResponse{}, ErrInternal("failed to compute diff")

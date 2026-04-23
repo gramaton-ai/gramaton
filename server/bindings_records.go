@@ -124,9 +124,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /v1/records/{id}/history", func(w http.ResponseWriter, r *http.Request) {
 		limit := parseIntParam(r, "limit", 20, maxLogLimit)
+		query := r.URL.Query()
 		resp, apiErr := s.api.History(r.Context(), api.HistoryRequest{
 			ID:    r.PathValue("id"),
 			Limit: limit,
+			Since: query.Get("since"),
+			Until: query.Get("until"),
 		})
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -314,6 +317,8 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	type historyArgs struct {
 		ID    string `json:"id" jsonschema:"record ID"`
 		Limit int    `json:"limit,omitempty" jsonschema:"max entries (default 20, max 500)"`
+		Since string `json:"since,omitempty" jsonschema:"only include changes on or after this date (YYYY-MM-DD or RFC3339)"`
+		Until string `json:"until,omitempty" jsonschema:"only include changes up to this date (YYYY-MM-DD or RFC3339); empty means up to HEAD"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_history",
@@ -324,7 +329,12 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
-		resp, apiErr := s.api.History(ctx, api.HistoryRequest{ID: args.ID, Limit: args.Limit})
+		resp, apiErr := s.api.History(ctx, api.HistoryRequest{
+			ID:    args.ID,
+			Limit: args.Limit,
+			Since: args.Since,
+			Until: args.Until,
+		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

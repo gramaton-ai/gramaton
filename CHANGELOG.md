@@ -9,6 +9,51 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Date-range params on the three temporal tools (temporal-queries
+  Phase 2).** `gramaton_diff` gains an `until` parameter (defaults to
+  HEAD) so callers can ask for a bounded window instead of
+  `since → HEAD`. `gramaton_log` and `gramaton_history` gain
+  `since` + `until`. All three feed through one validator
+  (`validateSinceUntil`) that parses both dates and rejects
+  `since > until` with `ErrInvalid`. With D7 in place, date-bounded
+  calls bypass `MaxLogTraversal` because the range itself bounds
+  the work -- the walker starts at `CommitAt(until)` and stops when
+  `commit.Timestamp < since`. `gramaton_diff`'s since-hunter walker
+  was replaced with `TSIndex.CommitBefore(since)`, which preserves
+  the inclusive-of-`since` semantic (a commit at exactly `since` is
+  INCLUDED in the diff window, matching the pre-D7 behaviour).
+- **`graph.TSIndex.CommitBefore(t)`** — strict-before variant of
+  `CommitAt`. Returns the latest commit whose timestamp is strictly
+  less than `t`. Used by `Diff` for the since-boundary, where an
+  equality match must not be returned (otherwise the diff window
+  would exclude commits at exactly `since`).
+
+### Changed
+
+- **`graph.DiffCommits` now treats a `nil` oldCommit as "no prior
+  state"** (every entry in the new commit is reported as `Added`),
+  instead of nil-dereffing on `oldCommit.NodeTreeRoot`. Latent panic
+  uncovered while writing Phase 2's diff-with-empty-since tests --
+  no in-tree caller actually triggered it in practice, but
+  `gramaton_diff` without a `since` value would have crashed the
+  server once a populated store met that code path.
+
+### Fixed
+
+- **`gramaton_history` prevHash stale-across-gap (RC-4).** The
+  per-record history walker's `prevHash` wasn't updated when
+  `NodeHashInCommit` returned `found=false`. If a record was
+  deleted at commit C2 and recreated at C3 with the same content
+  hash as its original creation at C1, the walker compared C1's
+  hash against the stale `prevHash` carried across the C2 gap and
+  silently dropped the C1 entry. Fix: reset `prevHash` to empty
+  on `found=false` so a later reappearance registers as a first-
+  appearance. Regression covered by
+  `TestHistoryRC4DeleteRecreateSameHashSurfacesBoth`. No user-
+  facing API path reuses IDs today (ULIDs are generated on
+  `AddNode`), so the bug required branch-merge-shaped flows or
+  the new `graph.AddNodeWithIDForTest` hook to repro.
+
 - **D7 timestamp-indexed commits (temporal-queries Phase 1).** New
   `graph.TSIndex` type, a bbolt-backed index mapping commit
   timestamps to commit hashes. Every `engine.Save()` now adds an

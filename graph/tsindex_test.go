@@ -117,6 +117,36 @@ func TestTSIndexCommitAtAfterLast(t *testing.T) {
 	}
 }
 
+func TestTSIndexCommitBefore(t *testing.T) {
+	idx := newTestTSIndex(t)
+	t1 := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	h1 := putAt(t, idx, t1, "a")
+	h2 := putAt(t, idx, t2, "b")
+
+	// Strictly before t1: nothing.
+	if h, ok := idx.CommitBefore(t1); ok || h != "" {
+		t.Errorf("before-first: got (%q, %v), want (\"\", false)", h, ok)
+	}
+	// Exactly at t1: strict-before excludes t1, so nothing.
+	if h, ok := idx.CommitBefore(t1); ok || h != "" {
+		t.Errorf("equal-t1: got (%q, %v), want (\"\", false)", h, ok)
+	}
+	// Between t1 and t2: h1.
+	midpoint := t1.Add(12 * time.Hour)
+	if h, _ := idx.CommitBefore(midpoint); h != h1 {
+		t.Errorf("between: got %q, want %q", h, h1)
+	}
+	// Exactly at t2: h1 (strict-before t2).
+	if h, _ := idx.CommitBefore(t2); h != h1 {
+		t.Errorf("equal-t2: got %q, want %q (strict-before excludes t2)", h, h1)
+	}
+	// After t2: h2 (last commit).
+	if h, _ := idx.CommitBefore(t2.Add(time.Hour)); h != h2 {
+		t.Errorf("after-last: got %q, want %q", h, h2)
+	}
+}
+
 func TestTSIndexCommitsBetweenInclusive(t *testing.T) {
 	idx := newTestTSIndex(t)
 	t1 := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)

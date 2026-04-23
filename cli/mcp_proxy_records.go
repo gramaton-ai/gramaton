@@ -194,6 +194,8 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	type historyArgs struct {
 		ID    string `json:"id" jsonschema:"record ID"`
 		Limit int    `json:"limit,omitempty" jsonschema:"max entries (default 20, max 500)"`
+		Since string `json:"since,omitempty" jsonschema:"only include changes on or after this date (YYYY-MM-DD or RFC3339)"`
+		Until string `json:"until,omitempty" jsonschema:"only include changes up to this date (YYYY-MM-DD or RFC3339); empty means up to HEAD"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_history",
@@ -202,9 +204,19 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		if args.ID == "" {
 			return proxyErr("id is required")
 		}
-		path := fmt.Sprintf("/v1/records/%s/history", url.PathEscape(args.ID))
+		params := url.Values{}
 		if args.Limit > 0 {
-			path += fmt.Sprintf("?limit=%d", args.Limit)
+			params.Set("limit", fmt.Sprintf("%d", args.Limit))
+		}
+		if args.Since != "" {
+			params.Set("since", args.Since)
+		}
+		if args.Until != "" {
+			params.Set("until", args.Until)
+		}
+		path := fmt.Sprintf("/v1/records/%s/history", url.PathEscape(args.ID))
+		if len(params) > 0 {
+			path += "?" + params.Encode()
 		}
 		return proxyGet(path)
 	})

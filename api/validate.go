@@ -5,6 +5,7 @@ import (
 	"math"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
@@ -185,6 +186,33 @@ func validateEnum(name, val string, allowed map[string]bool) error {
 		return fmt.Errorf("%s must be one of %v, got %q", name, keys, val)
 	}
 	return nil
+}
+
+// validateSinceUntil parses optional Since/Until date strings and
+// rejects since > until. Empty inputs are fine -- the returned time
+// is the zero value in that case, and callers check .IsZero() to
+// know whether the bound is set. Errors are shaped for wrapping in
+// `ErrInvalid(err.Error())`.
+func validateSinceUntil(since, until string) (time.Time, time.Time, error) {
+	var sinceT, untilT time.Time
+	var err error
+	if since != "" {
+		sinceT, err = parseDateArg(since)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("since: %s", err)
+		}
+	}
+	if until != "" {
+		untilT, err = parseDateArg(until)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("until: %s", err)
+		}
+	}
+	if !sinceT.IsZero() && !untilT.IsZero() && sinceT.After(untilT) {
+		return time.Time{}, time.Time{}, fmt.Errorf("since (%s) must not be after until (%s)",
+			sinceT.Format(time.RFC3339), untilT.Format(time.RFC3339))
+	}
+	return sinceT, untilT, nil
 }
 
 // validateMeta checks that meta keys and values are within limits and

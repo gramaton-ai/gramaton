@@ -15,12 +15,23 @@ type DiffResult struct {
 // DiffCommits computes the structural difference between two commits
 // using prolly tree diff. For v1 commits, this efficiently skips
 // unchanged subtrees. Falls back to flat list comparison for v0.
+//
+// A nil oldCommit means "no prior state" -- every entry in newCommit
+// is reported as Added. Callers diffing against chain-root (empty
+// Since) rely on this.
 func DiffCommits(s *storage.Store, oldCommit, newCommit *Commit) (DiffResult, error) {
 	var result DiffResult
 
+	oldTreeRoot, oldHashes, oldVer := "", []string(nil), 1
+	if oldCommit != nil {
+		oldTreeRoot = oldCommit.NodeTreeRoot
+		oldHashes = oldCommit.NodeHashes
+		oldVer = oldCommit.Version
+	}
+
 	// Diff node trees.
-	nodeAdded, nodeRemoved, err := diffTrees(s, oldCommit.NodeTreeRoot, newCommit.NodeTreeRoot,
-		oldCommit.NodeHashes, newCommit.NodeHashes, oldCommit.Version, newCommit.Version)
+	nodeAdded, nodeRemoved, err := diffTrees(s, oldTreeRoot, newCommit.NodeTreeRoot,
+		oldHashes, newCommit.NodeHashes, oldVer, newCommit.Version)
 	if err != nil {
 		return result, err
 	}

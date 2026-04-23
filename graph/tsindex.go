@@ -85,6 +85,40 @@ func (idx *TSIndex) PutTx(tx *bolt.Tx, c *Commit) {
 	b.Put(tsKey(c.Timestamp, c.Hash), []byte(c.Hash))
 }
 
+// CommitBefore returns the full hash of the latest commit STRICTLY
+// before t. Unlike CommitAt, a commit at exactly t is NOT returned.
+// Useful for diff since-boundaries: a diff window "since X" should
+// include commits at X, so sinceCommit must be before X.
+func (idx *TSIndex) CommitBefore(t time.Time) (string, bool) {
+	targetNs := t.UTC().UnixNano()
+	// Seek to first key with ns >= target. Step Prev gives us the
+	// last key with ns < target.
+	upper := make([]byte, 8)
+	binary.BigEndian.PutUint64(upper, uint64(targetNs))
+
+	var hash string
+	_ = idx.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(commitTimestampsBucket)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		k, _ := c.Seek(upper)
+		var v []byte
+		if k == nil {
+			k, v = c.Last()
+		} else {
+			k, v = c.Prev()
+		}
+		if k == nil {
+			return nil
+		}
+		hash = string(v)
+		return nil
+	})
+	return hash, hash != ""
+}
+
 // CommitAt returns the full hash of the commit at or strictly before
 // t (snap-to-prior semantics, following Fluree's as-of-date contract).
 // Returns ("", false) when the bucket is empty or t is before the
