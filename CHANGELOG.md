@@ -9,6 +9,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`gramaton_collection_add_batch` now mirrors single-add's
+  curation-profile dedup semantics (P1-78 follow-up,
+  `01KPEERMWYTFPJSDCNAH148B7W`).** On `curation=minimal` collections
+  (shopping-list / packing-list shape), duplicate titles land in
+  `Added` with `deduplicated=true` pointing at the existing item's
+  ID instead of `Failed` with `code=duplicate`. This matches the
+  Phase 5 Layer 2 behavior already shipped for single-add, so a
+  loader batch-importing into a minimal-curation collection gets
+  idempotent results rather than spurious per-item failures.
+  Intra-batch dedupes on minimal collections follow the same rule.
+  On any other profile (standard / default), duplicates still land
+  in `Failed` — T-02 semantics preserved.
+  Dedup now also uses a shared `normalizeTitle` helper (trim +
+  lowercase) across both paths. Previously batch used `ToLower`
+  only, so `"foo"` would fail to dedupe against an existing
+  `"foo "` under batch but would under single-add.
+  `BatchAddSuccess` gains an optional `deduplicated` JSON field;
+  omitted when false so the wire shape is unchanged for fresh
+  inserts. Idempotent entries emit no `collection_add`
+  CommitAction (nothing mutated); an all-dedupe batch skips the
+  engine `Save` entirely.
+
 - **`storage.ProllyTree.Diff` no longer degrades to a full scan on
   internal-vs-internal subtree differences (P1-54,
   `01KPED3C7C8S1MWTSF9ZZ1AD68`).** Previously the diff short-circuited

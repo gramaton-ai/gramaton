@@ -195,6 +195,143 @@ func TestCollectionAddBatchIntraBatchDedup(t *testing.T) {
 	}
 }
 
+// TestCollectionAddBatchMinimalCurationIdempotent verifies that on
+// curation=minimal collections, duplicate titles land in Added with
+// Deduplicated=true pointing at the existing item -- matching single-
+// add's idempotent behavior. Also exercises the shared title
+// normalization: " already " with leading/trailing whitespace and
+// different case still collides with the seeded "already".
+func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{
+		Name:     "Shopping",
+		Curation: "minimal",
+	})
+	if apiErr != nil {
+		t.Fatalf("create minimal collection: %v", apiErr)
+	}
+	collID := result["id"].(string)
+
+	// Seed an existing item.
+	seed, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
+		Fields: map[string]any{"title": "already"},
+	})
+	if apiErr != nil {
+		t.Fatalf("seed: %v", apiErr)
+	}
+	seedID := seed["id"].(string)
+
+	req := api.CollectionAddBatchRequest{
+		Items: []api.CollectionAddItem{
+			{Fields: map[string]any{"title": "already"}, ClientRef: "exact"},
+			{Fields: map[string]any{"title": "  ALREADY  "}, ClientRef: "normalized"},
+			{Fields: map[string]any{"title": "brand new"}, ClientRef: "new"},
+		},
+	}
+	resp, apiErr := srv.api.CollectionAddBatch(context.Background(), collID, req)
+	if apiErr != nil {
+		t.Fatalf("CollectionAddBatch: %v", apiErr)
+	}
+	if len(resp.Failed) != 0 {
+		t.Fatalf("Failed = %d, want 0 on minimal collection (got %+v)", len(resp.Failed), resp.Failed)
+	}
+	if len(resp.Added) != 3 {
+		t.Fatalf("Added = %d, want 3", len(resp.Added))
+	}
+	byRef := make(map[string]api.BatchAddSuccess, len(resp.Added))
+	for _, a := range resp.Added {
+		byRef[a.ClientRef] = a
+	}
+	if got := byRef["exact"]; !got.Deduplicated || got.ID != seedID {
+		t.Errorf("exact dup: Deduplicated=%v ID=%q, want Deduplicated=true ID=%q", got.Deduplicated, got.ID, seedID)
+	}
+	if got := byRef["normalized"]; !got.Deduplicated || got.ID != seedID {
+		t.Errorf("normalized dup: Deduplicated=%v ID=%q, want Deduplicated=true ID=%q", got.Deduplicated, got.ID, seedID)
+	}
+	if got := byRef["new"]; got.Deduplicated || got.ID == "" || got.ID == seedID {
+		t.Errorf("new item: Deduplicated=%v ID=%q, want Deduplicated=false and a fresh non-seed ID", got.Deduplicated, got.ID)
+	}
+}
+
+// TestCollectionAddBatchMinimalIntraBatchIdempotent covers the intra-
+// batch first-write-wins path on a curation=minimal collection: two
+// items in the same batch share a title, second lands as Added with
+// Deduplicated=true pointing at the first's generated ID.
+func TestCollectionAddBatchMinimalIntraBatchIdempotent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{
+		Name:     "Packing",
+		Curation: "minimal",
+	})
+	if apiErr != nil {
+		t.Fatalf("create minimal collection: %v", apiErr)
+	}
+	collID := result["id"].(string)
+
+	req := api.CollectionAddBatchRequest{
+		Items: []api.CollectionAddItem{
+			{Fields: map[string]any{"title": "socks"}, ClientRef: "first"},
+			{Fields: map[string]any{"title": "SOCKS"}, ClientRef: "second"},
+			{Fields: map[string]any{"title": "toothbrush"}, ClientRef: "third"},
+		},
+	}
+	resp, apiErr := srv.api.CollectionAddBatch(context.Background(), collID, req)
+	if apiErr != nil {
+		t.Fatalf("CollectionAddBatch: %v", apiErr)
+	}
+	if len(resp.Failed) != 0 {
+		t.Fatalf("Failed = %d, want 0 (%+v)", len(resp.Failed), resp.Failed)
+	}
+	if len(resp.Added) != 3 {
+		t.Fatalf("Added = %d, want 3", len(resp.Added))
+	}
+	byRef := make(map[string]api.BatchAddSuccess, len(resp.Added))
+	for _, a := range resp.Added {
+		byRef[a.ClientRef] = a
+	}
+	first := byRef["first"]
+	if first.Deduplicated {
+		t.Errorf("first: Deduplicated=true, want false (it's the real insert)")
+	}
+	if got := byRef["second"]; !got.Deduplicated || got.ID != first.ID {
+		t.Errorf("second: Deduplicated=%v ID=%q, want Deduplicated=true ID=%q", got.Deduplicated, got.ID, first.ID)
+	}
+	if got := byRef["third"]; got.Deduplicated {
+		t.Errorf("third: Deduplicated=true, want false (distinct title)")
+	}
+}
+
+// TestCollectionAddBatchTitleNormalization confirms batch-add matches
+// single-add's title equivalence (trim + lowercase). Without the
+// shared helper, whitespace-padded variants would slip through as
+// new items rather than dup-failing.
+func TestCollectionAddBatchTitleNormalization(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	collID := makeCollection(t, srv, "Backlog")
+
+	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
+		Fields: map[string]any{"title": "focus"},
+	}); apiErr != nil {
+		t.Fatalf("seed: %v", apiErr)
+	}
+
+	req := api.CollectionAddBatchRequest{
+		Items: []api.CollectionAddItem{
+			{Fields: map[string]any{"title": "  Focus  "}, ClientRef: "padded"},
+		},
+	}
+	resp, apiErr := srv.api.CollectionAddBatch(context.Background(), collID, req)
+	if apiErr != nil {
+		t.Fatalf("CollectionAddBatch: %v", apiErr)
+	}
+	if len(resp.Added) != 0 {
+		t.Errorf("Added = %d, want 0 (normalized dup should not create new item)", len(resp.Added))
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0].Code != "duplicate" {
+		t.Fatalf("Failed = %+v, want one duplicate entry", resp.Failed)
+	}
+}
+
 func TestCollectionAddBatchCollectionNotFound(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

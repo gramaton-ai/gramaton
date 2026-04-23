@@ -78,6 +78,15 @@ func (a *API) isCollection(nodeID string) (*graph.Node, *APIError) {
 	return n, nil
 }
 
+// normalizeTitle is the canonical form used when comparing item
+// titles for duplicate detection. Trims surrounding whitespace and
+// lowercases, so "foo", "FOO", and " foo " all collide. Single-add
+// and batch-add both go through this so they share a single
+// definition of "equivalent title".
+func normalizeTitle(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
 // isRetired checks if a collection has a valid_until in the past.
 func isRetired(n *graph.Node) bool {
 	vu, ok := n.Properties.GetTimestamp("valid_until")
@@ -245,7 +254,7 @@ const CollectionSchemaDescription = "Read a collection's schema and migration st
 
 const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
 
-const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Returns per-item {index, client_ref, id} on success and {index, client_ref, code, message} on failure."
+const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=minimal collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On any other profile, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure."
 
 // --- service methods ---
 
@@ -989,7 +998,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *Colle
 	if title, ok := req.Fields["title"]; ok {
 		titleStr, isStr := title.(string)
 		if isStr {
-			normalized := strings.TrimSpace(titleStr)
+			normalized := normalizeTitle(titleStr)
 			if normalized != "" {
 				for _, e := range a.collectionItemEdges(collectionID) {
 					n, ok := a.engine.Graph().GetNode(e.SourceID)
@@ -1000,7 +1009,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *Colle
 					if !ok {
 						continue
 					}
-					if !strings.EqualFold(strings.TrimSpace(existing), normalized) {
+					if normalizeTitle(existing) != normalized {
 						continue
 					}
 					if CollectionCuration(coll) == CurationMinimal {
@@ -1070,11 +1079,16 @@ type CollectionAddBatchRequest struct {
 }
 
 // BatchAddSuccess is one entry in CollectionAddBatchResponse.Added.
-// Exactly one of {ID} or {Code, Message} is populated per item.
+// Deduplicated=true means the item's title already existed on a
+// curation=minimal collection and ID points to the pre-existing item;
+// the batch did not create a new node for this entry. This mirrors
+// single-add's idempotent-return shape so callers don't need to
+// branch on batch vs. single for the same collection profile.
 type BatchAddSuccess struct {
-	Index     int    `json:"index"`
-	ClientRef string `json:"client_ref,omitempty"`
-	ID        string `json:"id"`
+	Index        int    `json:"index"`
+	ClientRef    string `json:"client_ref,omitempty"`
+	ID           string `json:"id"`
+	Deduplicated bool   `json:"deduplicated,omitempty"`
 }
 
 // BatchAddFailure is one entry in CollectionAddBatchResponse.Failed.
@@ -1203,17 +1217,24 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	}
 
 	// Build the existing-title set once. Iterating collectionItemEdges
-	// per item would be O(N*M); doing it once is O(M).
-	existingTitles := make(map[string]string) // lowercased title -> existing item ID
+	// per item would be O(N*M); doing it once is O(M). Keys go through
+	// normalizeTitle so this matches single-add's dedup semantics.
+	existingTitles := make(map[string]string) // normalized title -> existing item ID
 	for _, e := range a.collectionItemEdges(collectionID) {
 		n, ok := a.engine.Graph().GetNode(e.SourceID)
 		if !ok {
 			continue
 		}
 		if existing, ok := n.Properties.GetString("field.title"); ok {
-			existingTitles[strings.ToLower(existing)] = e.SourceID
+			existingTitles[normalizeTitle(existing)] = e.SourceID
 		}
 	}
+
+	// Curation profile controls how duplicates land in the response.
+	// On curation=minimal, a duplicate title returns an idempotent
+	// success pointing to the existing item (Phase 5 Layer 2, mirrored
+	// here for batch). On any other profile, duplicates are failures.
+	idempotentOnDup := CollectionCuration(coll) == CurationMinimal
 
 	added := make([]BatchAddSuccess, 0, len(survivors))
 	emb := a.engine.Embedder()
@@ -1244,17 +1265,32 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			}
 
 			// Dedup pass: check against existing members AND against
-			// prior items in this batch (first-write-wins).
+			// prior items in this batch (first-write-wins). On
+			// curation=minimal collections the duplicate lands in
+			// Added with Deduplicated=true; elsewhere it lands in
+			// Failed with code=duplicate.
 			if title, ok := s.item.Fields["title"]; ok {
-				if titleStr, isStr := title.(string); isStr && titleStr != "" {
-					if existingID, dup := existingTitles[strings.ToLower(titleStr)]; dup {
-						failed = append(failed, BatchAddFailure{
-							Index:     s.reqIdx,
-							ClientRef: s.item.ClientRef,
-							Code:      "duplicate",
-							Message:   fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, existingID),
-						})
-						continue
+				if titleStr, isStr := title.(string); isStr {
+					normalized := normalizeTitle(titleStr)
+					if normalized != "" {
+						if existingID, dup := existingTitles[normalized]; dup {
+							if idempotentOnDup {
+								added = append(added, BatchAddSuccess{
+									Index:        s.reqIdx,
+									ClientRef:    s.item.ClientRef,
+									ID:           existingID,
+									Deduplicated: true,
+								})
+							} else {
+								failed = append(failed, BatchAddFailure{
+									Index:     s.reqIdx,
+									ClientRef: s.item.ClientRef,
+									Code:      "duplicate",
+									Message:   fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, existingID),
+								})
+							}
+							continue
+						}
 					}
 				}
 			}
@@ -1296,8 +1332,10 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			// Register intra-batch title so later items see this one
 			// as a duplicate.
 			if title, ok := s.item.Fields["title"]; ok {
-				if titleStr, isStr := title.(string); isStr && titleStr != "" {
-					existingTitles[strings.ToLower(titleStr)] = n.ID
+				if titleStr, isStr := title.(string); isStr {
+					if normalized := normalizeTitle(titleStr); normalized != "" {
+						existingTitles[normalized] = n.ID
+					}
 				}
 			}
 
@@ -1321,17 +1359,24 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 		}
 	}
 
-	// Batch saves a separate CommitAction per added item so
+	// Batch saves one CommitAction per newly-created item so
 	// gramaton_log filters by action + RecordID surface every item.
+	// Idempotent dedupes (Deduplicated=true) mutated nothing, so they
+	// don't emit actions; an all-dedupe batch skips Save entirely.
 	batchActions := make([]graph.CommitAction, 0, len(added))
 	for _, r := range added {
+		if r.Deduplicated {
+			continue
+		}
 		batchActions = append(batchActions, graph.CommitAction{
 			Kind: "collection_add", RecordID: r.ID,
 		})
 	}
-	if _, err := a.engine.Save("collection_add_batch", batchActions...); err != nil {
-		a.log.Warn("collection batch save failed", "component", "collection", "err", err)
-		return CollectionAddBatchResponse{}, ErrInternal("failed to save batch")
+	if len(batchActions) > 0 {
+		if _, err := a.engine.Save("collection_add_batch", batchActions...); err != nil {
+			a.log.Warn("collection batch save failed", "component", "collection", "err", err)
+			return CollectionAddBatchResponse{}, ErrInternal("failed to save batch")
+		}
 	}
 
 	return CollectionAddBatchResponse{
