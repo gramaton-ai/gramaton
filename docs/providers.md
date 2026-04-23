@@ -19,7 +19,7 @@ embedding:
   dimension: 384
 ```
 
-**Setup:** nothing — `gramaton init` downloads the model automatically. Internet required on the first run (subsequent runs use the cache).
+**Setup:** pick `bert` at the embedding prompt in `gramaton init`'s wizard (it's the default), or leave the `embedding:` section off your config entirely. The model downloads automatically on first use; internet required for the first run, subsequent runs serve from cache.
 
 **Custom BERT models:** set `model` to a HuggingFace repo path. The provider expects the repo to contain `config.json`, `tokenizer.json`, and `model.safetensors`. Context window is read from `config.json` (`max_position_embeddings`).
 
@@ -30,7 +30,7 @@ embedding:
   dimension: 768
 ```
 
-**Performance note:** the arm64 (Apple Silicon) build uses a hand-written NEON matmul kernel and runs at full tilt. The amd64 build currently falls back to a pure-Go matmul (tracked in-repo at `embed/bert/matmul_amd64.go`); an AVX2 kernel is planned. amd64 embedding latency is noticeably higher than arm64 until that lands.
+**Performance note:** both the arm64 (Apple Silicon) and amd64 builds use hand-written SIMD matmul kernels (NEON and AVX2+FMA3 respectively). The amd64 kernel requires Haswell-class silicon or newer; pre-Haswell hosts and Apple Rosetta 2 translation fall back to the pure-Go path automatically. A parity test (`embed/bert/math_test.go::TestMatMulKernelParity`) guards kernel-vs-generic correctness.
 
 ### Ollama (alternative local)
 
@@ -51,7 +51,7 @@ embedding:
 ollama pull mxbai-embed-large
 ```
 
-If `provider: ollama` is set in config, `gramaton init` will detect the Ollama binary, start it if it isn't already running, and pull the configured model. At server runtime Gramaton does **not** supervise Ollama — if Ollama crashes while the server is running, embedding calls will error and records land without vectors (still searchable by BM25). Run Ollama as a service if you need it always-on.
+If `provider: ollama` is set in config (or selected at the wizard prompt), `gramaton init` will detect the Ollama binary, start it if it isn't already running, and pull the configured model. At server runtime Gramaton does **not** supervise Ollama — if Ollama crashes while the server is running, embedding calls will error and records land without vectors (still searchable by BM25). Run Ollama as a service if you need it always-on.
 
 **Other local models:** any Ollama model that supports embeddings works. Set `model` to the model name (e.g., `nomic-embed-text`, `all-minilm`) and update `dimension` to match.
 

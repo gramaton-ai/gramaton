@@ -39,6 +39,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **README + `docs/providers.md` updated for the interactive
+  wizard.** README Quick Start now describes the 5-step wizard
+  flow (bootstrap → LLM → MCP → hooks → verify) and documents
+  `--non-interactive` as the legacy scripted path. The CLI
+  quick-reference table's `gramaton init` row reflects the new
+  behavior. `docs/providers.md` BERT setup line notes the
+  wizard menu; the pre-existing "AVX2 kernel is planned" note
+  is replaced by current state (AVX2+FMA3 hand-written kernel
+  on Haswell+; Rosetta and pre-Haswell fall back to the pure-Go
+  path; `TestMatMulKernelParity` guards correctness).
 - **`config.trimConfigStrings` no longer touches `LLM.APIKey` or
   `Embedding.APIKey` literals** (M3 from the post-wizard security
   review). Previously the load-time whitespace trimmer ran

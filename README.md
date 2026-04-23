@@ -45,14 +45,23 @@ What Gramaton isn't:
 # Install
 go install github.com/gramaton-ai/gramaton@latest
 
-# Initialize — downloads the default embedding model (~130MB, one-time),
-# creates the config, and starts the server.
+# Launch the interactive setup wizard.
 gramaton init
 ```
 
-No external runtime to install. Gramaton ships a pure-Go BERT embedder as the default, so a fresh install is just the Go binary plus a model download on first run. Ollama, OpenAI-compatible, and AWS Bedrock remain available if you prefer a different embedding provider.
+The wizard (when run in a terminal) walks five steps:
 
-Then add Gramaton to your MCP client (Claude Code, Kiro, etc.):
+1. **Bootstrap** — choose an embedding provider. BERT is the default (pure-Go, local, no API cost) and downloads the 130MB model on first use. Ollama, OpenAI-compatible, and AWS Bedrock are also available, as is `skip` for memory-only / air-gapped setups.
+2. **LLM** — optionally configure an LLM provider for curation, reranking, and session extraction. Anthropic (Claude Haiku default), OpenAI-compatible, and AWS Bedrock are supported; skipping is fine — Gramaton runs with a deterministic-only curator otherwise.
+3. **MCP client registration** — auto-detects `claude` and `kiro` CLIs and registers the `gramaton` MCP entry in each.
+4. **Hooks** — installs Gramaton's session-capture hook scripts into your Claude Code / kiro-cli configs.
+5. **Verify** — writes `~/.gramaton/config.yaml`, probes perms + writability, and summarizes what's configured.
+
+The whole flow is idempotent: re-running won't double-register MCP entries or clobber existing hooks. Pass `--non-interactive` to run the legacy scripted path that defaults everything without prompting (useful for CI or automated provisioning).
+
+No external runtime to install. Gramaton ships a pure-Go BERT embedder as the default, so a fresh install is just the Go binary plus a model download on first run.
+
+Prefer a manual setup? The wizard emits exactly what you'd write by hand — drop a `~/.gramaton/config.yaml` and add Gramaton to your MCP client:
 
 ```json
 {
@@ -215,7 +224,7 @@ A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curate
 
 | Command | Description |
 |---------|-------------|
-| `gramaton init` | First-run setup — detect Ollama, pull embedding model, start server |
+| `gramaton init` | Interactive setup wizard (embed provider, LLM, MCP clients, hooks, verify). `--non-interactive` runs the legacy scripted defaults path. |
 | `gramaton serve` | Run the server in the foreground (otherwise auto-started on first use) |
 | `gramaton status` | Server and store health |
 | `gramaton store <subcmd>` | Manage named stores (create, list, delete) |
