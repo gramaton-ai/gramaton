@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton_collection_items(as_of=...)` — point-in-time
+  membership (temporal-queries Phase 6).** Passing `as_of` switches
+  the tool from HEAD to historical-commit mode: the response lists
+  the members the collection had at the commit at-or-before
+  `as_of` (via D7's `TSIndex.CommitAt`), with each member's
+  per-commit state read through `NodeHashInCommit` + CAS. Response
+  carries `as_of` + `semantics: "point_in_time"` so agents see
+  which contract produced the result. Future dates rejected with
+  `ErrInvalid`; as_of values before the collection's creation
+  return an empty item list with the semantic fields still set
+  (so agents can distinguish "didn't exist yet" from "empty at
+  HEAD"). The existing filter / projection / sort knobs apply to
+  the historical read unchanged; migration accounting is skipped
+  because historical snapshots are read-only.
+- **`api.validateAsOf` helper.** Extracts the as_of parse +
+  future-rejection that future `as_of` readers across search /
+  inspect / stats will reuse when that phase lands.
+
 - **Date-range params on the three temporal tools (temporal-queries
   Phase 2).** `gramaton_diff` gains an `until` parameter (defaults to
   HEAD) so callers can ask for a bounded window instead of

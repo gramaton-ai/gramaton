@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCollectionCreateAndList(t *testing.T) {
@@ -110,6 +111,127 @@ func TestCollectionWithSchema(t *testing.T) {
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for unknown field")
+	}
+}
+
+// TestCollectionItemsAsOfFutureRejected covers the basic validator
+// path: an as_of value after "now" is input-error, same shape as
+// other future-date rejections.
+func TestCollectionItemsAsOfFutureRejected(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "L"})
+	collID := coll["id"].(string)
+
+	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{AsOf: tomorrow})
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("expected input_error for future as_of, got %+v", apiErr)
+	}
+}
+
+// TestCollectionItemsAsOfInvalidDate rejects garbage as_of input.
+func TestCollectionItemsAsOfInvalidDate(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "L"})
+	collID := coll["id"].(string)
+
+	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{AsOf: "nope"})
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("expected input_error for bad as_of, got %+v", apiErr)
+	}
+}
+
+// TestCollectionItemsAsOfPointInTime exercises the happy path:
+// seed a collection, add two items, capture a mid-point timestamp,
+// add a third item, then verify as_of at the mid-point returns
+// exactly the first two members. Point-in-time correctness.
+func TestCollectionItemsAsOfPointInTime(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "PIT"})
+	collID := coll["id"].(string)
+
+	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "first"},
+	}); err != nil {
+		t.Fatalf("add first: %v", err)
+	}
+	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "second"},
+	}); err != nil {
+		t.Fatalf("add second: %v", err)
+	}
+
+	// Capture midpoint after two adds.
+	time.Sleep(15 * time.Millisecond)
+	midpoint := time.Now().UTC()
+	time.Sleep(15 * time.Millisecond)
+
+	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "third"},
+	}); err != nil {
+		t.Fatalf("add third: %v", err)
+	}
+
+	resp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+		AsOf: midpoint.Format(time.RFC3339Nano),
+	})
+	if apiErr != nil {
+		t.Fatalf("as_of items: %v", apiErr)
+	}
+
+	if sem, _ := resp["semantics"].(string); sem != "point_in_time" {
+		t.Errorf("semantics = %q, want point_in_time", sem)
+	}
+	if _, hasAsOf := resp["as_of"]; !hasAsOf {
+		t.Errorf("response missing as_of field")
+	}
+	count, _ := resp["count"].(int)
+	if count != 2 {
+		t.Errorf("midpoint count = %d, want 2 (third was added after midpoint)", count)
+	}
+
+	// Sanity: HEAD read returns all three.
+	headResp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	if apiErr != nil {
+		t.Fatalf("HEAD items: %v", apiErr)
+	}
+	if c, _ := headResp["count"].(int); c != 3 {
+		t.Errorf("HEAD count = %d, want 3", c)
+	}
+}
+
+// TestCollectionItemsAsOfBeforeCreation returns empty when the
+// caller asks for a point before the collection's own creation
+// commit. The response shape still carries as_of + semantics so
+// agents can tell the difference from a HEAD-empty collection.
+func TestCollectionItemsAsOfBeforeCreation(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	// Lock in a "before" timestamp first.
+	before := time.Now().UTC().Add(-time.Hour)
+
+	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "LateBloomer"})
+	collID := coll["id"].(string)
+	_, _ = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "x"},
+	})
+
+	resp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+		AsOf: before.Format(time.RFC3339Nano),
+	})
+	if apiErr != nil {
+		t.Fatalf("as_of: %v", apiErr)
+	}
+	if c, _ := resp["count"].(int); c != 0 {
+		t.Errorf("before-creation count = %d, want 0", c)
+	}
+	if sem, _ := resp["semantics"].(string); sem != "point_in_time" {
+		t.Errorf("semantics = %q, want point_in_time", sem)
 	}
 }
 

@@ -188,6 +188,28 @@ func validateEnum(name, val string, allowed map[string]bool) error {
 	return nil
 }
 
+// validateAsOf parses an optional as_of date string. Empty input
+// returns the zero time. Future dates are rejected -- by definition
+// there's no committed state after now to snapshot. Accepts a clock
+// function so tests can inject a deterministic "now" when exercising
+// the near-future rejection path.
+func validateAsOf(asOf string, now func() time.Time) (time.Time, error) {
+	if asOf == "" {
+		return time.Time{}, nil
+	}
+	t, err := parseDateArg(asOf)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("as_of: %s", err)
+	}
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	if t.After(now()) {
+		return time.Time{}, fmt.Errorf("as_of %s is in the future", t.Format(time.RFC3339))
+	}
+	return t, nil
+}
+
 // validateSinceUntil parses optional Since/Until date strings and
 // rejects since > until. Empty inputs are fine -- the returned time
 // is the zero value in that case, and callers check .IsZero() to

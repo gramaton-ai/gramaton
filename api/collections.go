@@ -11,6 +11,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/storage"
 )
 
 // --- helpers ---
@@ -402,6 +403,16 @@ type CollectionItemsRequest struct {
 	// preserves the exhaustive-retrieval contract because matches are
 	// exact, not ranked.
 	Filter map[string]any `json:"filter,omitempty"`
+
+	// AsOf, when set, returns point-in-time membership: the members
+	// that had `member_of` edges to the collection at the commit
+	// immediately before AsOf, with each member's state at that
+	// commit. Response carries `as_of` + `semantics: "point_in_time"`
+	// so agents don't have to guess. Accepts YYYY-MM-DD or RFC3339.
+	// Future dates are rejected. The filter/sort/projection knobs
+	// still apply, but migration accounting is skipped (historical
+	// snapshots are read-only).
+	AsOf string `json:"as_of,omitempty"`
 }
 
 // CollectionItems is deliberately unpaginated -- exhaustive retrieval is the
@@ -411,8 +422,17 @@ type CollectionItemsRequest struct {
 // exhaustive contract). Fields projects the per-item `fields` sub-map
 // down to a allowlist -- both are there so agents can audit large
 // collections without dragging the full-fidelity `details` payload.
+//
+// When req.AsOf is set, CollectionItems switches to point-in-time mode:
+// the response reflects the commit at-or-before AsOf (D7 CommitAt), and
+// each member is read at its per-commit state. The response carries
+// `as_of` + `semantics: "point_in_time"` so agents don't have to guess.
 func (a *API) CollectionItems(ctx context.Context, collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
 	_ = ctx
+	asOfT, asOfErr := validateAsOf(req.AsOf, nil)
+	if asOfErr != nil {
+		return nil, ErrInvalid(asOfErr.Error())
+	}
 	filterMatchers, filterErr := buildFilterMatchers(req.Filter)
 	if filterErr != nil {
 		return nil, ErrInvalid(filterErr.Error())
@@ -424,6 +444,14 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 
 	a.engine.RLock()
 	defer a.engine.RUnlock()
+
+	// Point-in-time branch: read the collection membership at the
+	// historical commit. No interaction with the live graph state --
+	// everything flows through the CAS store via the commit's prolly
+	// tree roots.
+	if !asOfT.IsZero() {
+		return a.collectionItemsAtCommit(collectionID, asOfT, filterMatchers, projection, req)
+	}
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
@@ -581,6 +609,181 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req *Col
 	}
 
 	return result, nil
+}
+
+// collectionItemsAtCommit answers "what members did this collection
+// have at commit CommitAt(asOf), and what was each member's state
+// then?" It reads only the CAS store and the timestamp index -- the
+// live graph is never touched, so concurrent writes and HEAD
+// mutations don't affect the snapshot. Response shape mirrors the
+// HEAD path plus `as_of` + `semantics: "point_in_time"`.
+//
+// Caller must hold at least RLock.
+func (a *API) collectionItemsAtCommit(
+	collectionID string,
+	asOfT time.Time,
+	filterMatchers map[string]map[string]struct{},
+	projection map[string]struct{},
+	req *CollectionItemsRequest,
+) (map[string]any, *APIError) {
+	tsIdx := a.engine.TSIndex()
+	commitHash, ok := tsIdx.CommitAt(asOfT)
+	if !ok {
+		return emptyHistoricalResponse(collectionID, asOfT), nil
+	}
+	store := a.engine.Store()
+
+	commit, err := graph.LoadCommitMeta(store, commitHash)
+	if err != nil {
+		a.log.Warn("collection_items as_of: load commit",
+			"component", "collections", "commit", commitHash, "err", err)
+		return nil, ErrInternal("failed to load historical commit")
+	}
+
+	// The collection itself must exist at this commit; otherwise the
+	// caller asked about a point in time before the collection was
+	// created (or after it was hard-deleted -- no such path today).
+	collHash, collFound, err := graph.NodeHashInCommit(store, commitHash, collectionID)
+	if err != nil {
+		return nil, ErrInternal("failed to resolve collection at commit")
+	}
+	if !collFound {
+		return emptyHistoricalResponse(collectionID, asOfT), nil
+	}
+	collData, err := store.Read(collHash)
+	if err != nil {
+		return nil, ErrInternal("failed to read collection node")
+	}
+	collNode, err := graph.UnmarshalNode(collData)
+	if err != nil {
+		return nil, ErrInternal("failed to unmarshal collection node")
+	}
+	kt, _ := collNode.Properties.GetString("knowledge_type")
+	if kt != "collection" {
+		return nil, ErrNotFound("not a collection")
+	}
+	if !req.IncludeRetired {
+		if vu, ok := collNode.Properties.GetTimestamp("valid_until"); ok && vu.Before(asOfT) {
+			return nil, ErrNotFound("collection is retired")
+		}
+	}
+
+	// Walk the edge tree at this commit to find member_of edges
+	// pointing at the collection. Each edge's CAS entry has the
+	// source ID (the member).
+	if commit.EdgeTreeRoot == "" {
+		return emptyHistoricalResponse(collectionID, asOfT), nil
+	}
+	edgeTree := storage.LoadProllyTree(store, commit.EdgeTreeRoot)
+	edgeEntries, err := edgeTree.AllEntries()
+	if err != nil {
+		return nil, ErrInternal("failed to read edge tree at commit")
+	}
+
+	var memberIDs []string
+	for _, e := range edgeEntries {
+		data, readErr := store.Read(e.Value)
+		if readErr != nil {
+			continue
+		}
+		edge, unmErr := graph.UnmarshalEdge(data)
+		if unmErr != nil {
+			continue
+		}
+		if edge.Type != "member_of" || edge.TargetID != collectionID {
+			continue
+		}
+		memberIDs = append(memberIDs, edge.SourceID)
+	}
+
+	items := make([]map[string]any, 0, len(memberIDs))
+	for _, mid := range memberIDs {
+		nodeHash, found, nhErr := graph.NodeHashInCommit(store, commitHash, mid)
+		if nhErr != nil || !found {
+			continue
+		}
+		data, readErr := store.Read(nodeHash)
+		if readErr != nil {
+			continue
+		}
+		n, unmErr := graph.UnmarshalNode(data)
+		if unmErr != nil {
+			continue
+		}
+		fullFields := extractFields(n)
+
+		if len(filterMatchers) > 0 && !matchesFilter(fullFields, filterMatchers) {
+			continue
+		}
+
+		projectedFields := fullFields
+		if projection != nil {
+			projectedFields = make(map[string]any, len(projection))
+			for name := range projection {
+				if v, ok := fullFields[name]; ok {
+					projectedFields[name] = v
+				}
+			}
+		}
+
+		item := map[string]any{
+			"id":     mid,
+			"fields": projectedFields,
+		}
+		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
+			item["created_at"] = ca.Format(time.RFC3339)
+		}
+		items = append(items, item)
+	}
+
+	sortField := req.Sort
+	if sortField == "" {
+		sortField = "created_at"
+	}
+	descending := req.Order == "desc"
+	sort.SliceStable(items, func(i, j int) bool {
+		var vi, vj any
+		if sortField == "created_at" {
+			vi = items[i]["created_at"]
+			vj = items[j]["created_at"]
+		} else {
+			if fi, ok := items[i]["fields"].(map[string]any); ok {
+				vi = fi[sortField]
+			}
+			if fj, ok := items[j]["fields"].(map[string]any); ok {
+				vj = fj[sortField]
+			}
+		}
+		less := compareAny(vi, vj)
+		if descending {
+			return !less
+		}
+		return less
+	})
+
+	resp := map[string]any{
+		"collection_id": collectionID,
+		"items":         items,
+		"count":         len(items),
+		"as_of":         asOfT.Format(time.RFC3339),
+		"semantics":     "point_in_time",
+	}
+	return resp, nil
+}
+
+// emptyHistoricalResponse returns the empty-result shape for an as_of
+// read when the collection didn't exist at that point or the index
+// has no commit at-or-before the requested time. Keeps the semantic-
+// naming contract (`as_of` + `semantics`) consistent whether or not
+// data was found.
+func emptyHistoricalResponse(collectionID string, asOfT time.Time) map[string]any {
+	return map[string]any{
+		"collection_id": collectionID,
+		"items":         []map[string]any{},
+		"count":         0,
+		"as_of":         asOfT.Format(time.RFC3339),
+		"semantics":     "point_in_time",
+	}
 }
 
 // buildFilterMatchers validates the filter request and returns a map of
