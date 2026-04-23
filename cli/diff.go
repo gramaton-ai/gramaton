@@ -9,6 +9,7 @@ import (
 
 var (
 	diffSince string
+	diffUntil string
 	diffTopic string
 )
 
@@ -18,17 +19,18 @@ var diffCmd = &cobra.Command{
 	Long: `Compares two commits and shows what changed.
 
 Usage:
-  gramaton diff                              # HEAD vs parent
-  gramaton diff abc123..def456               # two specific commits
-  gramaton diff --since 2026-03-01           # changes since a date
-  gramaton diff --topic "authentication"     # filter by topic
-  gramaton diff --since 2026-03-01 --topic "caching"`,
+  gramaton diff                                    # HEAD vs parent
+  gramaton diff abc123..def456                     # two specific commits
+  gramaton diff --since 2026-03-01                 # since a date
+  gramaton diff --since 2026-03-01 --until 2026-03-07
+  gramaton diff --topic "authentication"           # filter by topic`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runDiff,
 }
 
 func init() {
-	diffCmd.Flags().StringVar(&diffSince, "since", "", "show changes since this date (YYYY-MM-DD)")
+	diffCmd.Flags().StringVar(&diffSince, "since", "", "show changes since this date (YYYY-MM-DD or RFC3339)")
+	diffCmd.Flags().StringVar(&diffUntil, "until", "", "show changes up to this date (YYYY-MM-DD or RFC3339); empty = HEAD")
 	diffCmd.Flags().StringVar(&diffTopic, "topic", "", "filter changes by topic (keyword + semantic match)")
 	rootCmd.AddCommand(diffCmd)
 }
@@ -41,6 +43,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 	if diffSince != "" {
 		params.Set("since", diffSince)
+	}
+	if diffUntil != "" {
+		params.Set("until", diffUntil)
 	}
 	if diffTopic != "" {
 		params.Set("topic", diffTopic)

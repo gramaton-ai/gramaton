@@ -9,6 +9,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CLI parity + `temporal-queries` guide topic (temporal-queries
+  Phase 9, release-gate prep).** The user-facing CLI commands now
+  match the MCP + HTTP surface for the temporal tools:
+    - `gramaton log` gains `--since`, `--until`, `--action`
+      (repeatable), `--exclude-curation`, `--include-records`.
+      `--record` is kept for source-compatibility but documented
+      as superseded by `gramaton history <id>`.
+    - `gramaton diff` gains `--until`.
+    - New `gramaton history <id>` subcommand with `--limit`,
+      `--since`, `--until`, `--action`.
+  A new `gramaton_guide(topic="temporal-queries")` topic covers
+  the four axes (A/B/C/D), the four tools, and the anti-patterns
+  agents keep falling into (client-side date filtering, bare
+  `collection_items` for history questions, `search`+`inspect`
+  fan-out). Topic content ships embedded in the binary.
+  **Release gate: the cold-agent smoke test is manual.** Fresh
+  Claude Code session with only CLAUDE.md defaults, prompt
+  "what did I close yesterday in gramaton?", expect ONE call to
+  `gramaton_log(since, until, actions=[resolve, collection_update],
+  include_record_mutations=true)`. Fail = any fan-out, bare
+  `collection_items`, or >3 tool calls. If the smoke test fails,
+  iterate on tool descriptions before alpha ships.
+
 - **Idempotent `gramaton_collection_add` on minimal-curation
   collections (temporal-queries Phase 5 Layer 2).** When a
   collection's `curation` profile is `minimal` (shopping-list /

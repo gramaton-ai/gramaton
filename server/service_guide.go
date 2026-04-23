@@ -12,7 +12,7 @@ import (
 var embeddedGuide embed.FS
 
 var validGuideTopics = []string{
-	"metadata", "capture", "search", "sessions", "collections", "curation",
+	"metadata", "capture", "search", "sessions", "collections", "curation", "temporal-queries",
 }
 
 // serviceGuide returns guide content for a topic. Loads from the data
