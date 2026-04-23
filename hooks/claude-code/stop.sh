@@ -19,6 +19,14 @@ if [ -z "$SESSION_ID" ]; then
     exit 0  # Silent exit for non-session contexts.
 fi
 
+# SESSION_ID is used below as a filesystem path component.
+case "$SESSION_ID" in
+    *[!A-Za-z0-9_-]*)
+        log "SESSION_ID has unsafe shape, skipping"
+        exit 0
+        ;;
+esac
+
 mkdir -p "$COUNTER_DIR"
 COUNTER_FILE="$COUNTER_DIR/$SESSION_ID.count"
 

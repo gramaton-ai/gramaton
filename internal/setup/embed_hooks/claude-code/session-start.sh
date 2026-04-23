@@ -23,6 +23,16 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
+# SESSION_ID is used below as a filesystem path component. Fail closed
+# on any shape we don't recognize rather than let a stray `..` or slash
+# escape $COUNTER_DIR. Claude Code emits UUIDs in practice.
+case "$SESSION_ID" in
+    *[!A-Za-z0-9_-]*)
+        log "SESSION_ID has unsafe shape, skipping"
+        exit 0
+        ;;
+esac
+
 # Check gramaton CLI is available.
 if ! command -v "$GRAMATON" &>/dev/null; then
     log "ERROR: gramaton CLI not found at $GRAMATON"
@@ -41,9 +51,10 @@ if [ -n "$GRAMATON_SESSION_ID" ]; then
     # Legacy shared file -- still written so older agents/CLAUDE.md
     # instructions keep working. Last-writer-wins under concurrent
     # Claude Code instances; the per-cwd file below is the disambig.
-    cat > "$COUNTER_DIR/current-session.json" <<ENDJSON
-{"session_id": "$GRAMATON_SESSION_ID", "client_session_id": "$SESSION_ID"}
-ENDJSON
+    # Emit via python argv so values can't break out of the JSON
+    # (a stray " or newline in upstream output would corrupt a heredoc).
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"session_id": sys.argv[1], "client_session_id": sys.argv[2]}))' \
+        "$GRAMATON_SESSION_ID" "$SESSION_ID" > "$COUNTER_DIR/current-session.json"
     log "wrote current-session.json: gramaton=$GRAMATON_SESSION_ID client=$SESSION_ID"
 
     # Per-cwd canonical file. The slug strips the leading slash and
@@ -55,9 +66,8 @@ ENDJSON
         CWD_SLUG=$(echo "$CWD" | sed 's|^/||; s|/|-|g')
         BY_CWD_DIR="$COUNTER_DIR/by-cwd"
         mkdir -p "$BY_CWD_DIR"
-        cat > "$BY_CWD_DIR/$CWD_SLUG.session.json" <<ENDJSON
-{"session_id": "$GRAMATON_SESSION_ID", "client_session_id": "$SESSION_ID", "cwd": "$CWD"}
-ENDJSON
+        python3 -c 'import json,sys; sys.stdout.write(json.dumps({"session_id": sys.argv[1], "client_session_id": sys.argv[2], "cwd": sys.argv[3]}))' \
+            "$GRAMATON_SESSION_ID" "$SESSION_ID" "$CWD" > "$BY_CWD_DIR/$CWD_SLUG.session.json"
         log "wrote by-cwd file: $BY_CWD_DIR/$CWD_SLUG.session.json"
     fi
 fi

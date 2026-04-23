@@ -20,6 +20,14 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
+# SESSION_ID is used below as a filesystem path component.
+case "$SESSION_ID" in
+    *[!A-Za-z0-9_-]*)
+        log "SESSION_ID has unsafe shape, skipping"
+        exit 0
+        ;;
+esac
+
 mkdir -p "$FLAG_DIR"
 FLAG_FILE="$FLAG_DIR/$SESSION_ID.compacted"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$FLAG_FILE"

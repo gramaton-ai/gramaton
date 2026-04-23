@@ -7,6 +7,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Hook script JSON emission and path-component validation.** The
+  Claude Code and kiro-cli hook scripts under `hooks/` (mirrored
+  into `internal/setup/embed_hooks/`) previously interpolated
+  `$SESSION_ID`, `$GRAMATON_SESSION_ID`, and `$CWD` verbatim into
+  `cat > ... <<ENDJSON` heredocs and used `$SESSION_ID` as a
+  filesystem path component without validating its shape. Inputs
+  come from trusted processes (Claude Code's JSON envelope +
+  `gramaton session start` output) so there was no live
+  exploitation, but a stray `"` or newline in upstream output
+  would have corrupted the emitted JSON, and a crafted session id
+  containing `..` or `/` would have escaped
+  `~/.gramaton/hook-state/` confinement. Hardening:
+    - Every script now runs
+      `case "$SESSION_ID" in *[!A-Za-z0-9_-]*) exit 0 ;; esac`
+      (or the `CLIENT_SESSION_ID` equivalent) after extraction, so
+      non-UUID-ish shapes fail closed.
+    - `session-start.sh` and `pre-compact.sh` now emit JSON via
+      `python3 -c 'import json,sys; sys.stdout.write(json.dumps({...}))'`
+      with values passed as argv, so `json.dumps` handles quote
+      and newline escaping.
+  The two trees (`hooks/` and `internal/setup/embed_hooks/`) stay
+  in sync via `go:generate cp -rp`; unifying the duplication is
+  a post-OSS TODO.
+
 ### Added
 
 - **Interactive setup wizard scaffolding (`internal/setup/`)** -- first

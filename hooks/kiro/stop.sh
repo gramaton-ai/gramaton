@@ -16,6 +16,11 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
+# SESSION_ID is used below as a filesystem path component.
+case "$SESSION_ID" in
+    *[!A-Za-z0-9_-]*) exit 0 ;;
+esac
+
 mkdir -p "$COUNTER_DIR"
 COUNTER_FILE="$COUNTER_DIR/$SESSION_ID.count"
 

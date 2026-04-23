@@ -30,6 +30,14 @@ if [ -z "$CLIENT_SESSION_ID" ]; then
     exit 0
 fi
 
+# CLIENT_SESSION_ID is used below as a filesystem path component.
+case "$CLIENT_SESSION_ID" in
+    *[!A-Za-z0-9_-]*)
+        log "CLIENT_SESSION_ID has unsafe shape, skipping"
+        exit 0
+        ;;
+esac
+
 if ! command -v "$GRAMATON" &>/dev/null; then
     log "ERROR: gramaton CLI not found"
     exit 0
@@ -92,10 +100,11 @@ fi
 
 # Write the nudge flag. serviceSessionPrepare surfaces this (single-shot,
 # 2h TTL) as pending_uncaptured on the next prepare response.
+# Emit via python argv so ARCHIVE_PATH (gramaton CLI output) and TS
+# can't corrupt the JSON.
 mkdir -p "$STATE_DIR"
 FLAG_FILE="$STATE_DIR/$CLIENT_SESSION_ID.precompact-uncaptured"
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > "$FLAG_FILE" <<ENDJSON
-{"count": $UNCAPTURED, "warned_at": "$TS", "archive_path": "$ARCHIVE_PATH"}
-ENDJSON
+python3 -c 'import json,sys; sys.stdout.write(json.dumps({"count": int(sys.argv[1]), "warned_at": sys.argv[2], "archive_path": sys.argv[3]}))' \
+    "$UNCAPTURED" "$TS" "$ARCHIVE_PATH" > "$FLAG_FILE"
 log "wrote precompact-uncaptured flag: $FLAG_FILE (count=$UNCAPTURED)"
