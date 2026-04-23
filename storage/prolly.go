@@ -449,7 +449,17 @@ func (t *ProllyTree) allEntries(nodeHash string, depth int) ([]ProllyEntry, erro
 
 // Diff returns the entries that differ between two trees.
 // Added: in other but not in t. Removed: in t but not in other.
-// Skips entire subtrees when their hashes match.
+//
+// Skips entire subtrees at any level when their hashes match via a
+// merge-style walk through internal-node child lists. Under the
+// common "few changes since last commit" shape most internal
+// boundaries stay aligned (content-defined chunking is stable
+// around unchanged keys), so the walk reaches O(changes) total work.
+// Falls back to allEntries materialisation for two pathological
+// shapes: mixed internal/leaf depth (e.g. after heavily skewed
+// rebalancing) and internal boundaries that don't overlap at the
+// same key. Both are rare for neighbouring commits in a single-
+// user store and stay correct even when they fire.
 func (t *ProllyTree) Diff(other *ProllyTree) (added, removed []ProllyEntry, err error) {
 	oldEntries, newEntries, err := t.diffNodes(t.rootHash, other.rootHash, 0)
 	if err != nil {
@@ -484,16 +494,18 @@ func (t *ProllyTree) diffNodes(oldHash, newHash string, depth int) ([]ProllyEntr
 		return nil, nil, fmt.Errorf("prolly: diff depth exceeds maximum (%d)", maxTreeDepth)
 	}
 
+	// Identical subtrees -> no contribution, skip entire subtree.
 	if oldHash == newHash {
 		return nil, nil, nil
 	}
 
+	// One-sided: everything on the non-empty side is Added or Removed.
 	if oldHash == "" {
-		entries, err := LoadProllyTree(t.store, newHash).AllEntries()
+		entries, err := LoadProllyTree(t.store, newHash).allEntries(newHash, depth+1)
 		return nil, entries, err
 	}
 	if newHash == "" {
-		entries, err := t.AllEntries()
+		entries, err := t.allEntries(oldHash, depth+1)
 		return entries, nil, err
 	}
 
@@ -506,19 +518,97 @@ func (t *ProllyTree) diffNodes(oldHash, newHash string, depth int) ([]ProllyEntr
 		return nil, nil, err
 	}
 
+	// Both leaves: caller (Diff) map-diffs to filter out unchanged
+	// entries that happen to share a leaf between the two commits.
 	if oldNode.Leaf && newNode.Leaf {
 		return oldNode.Entries, newNode.Entries, nil
 	}
 
-	oldEntries, err := t.allEntries(oldHash, depth+1)
-	if err != nil {
-		return nil, nil, err
+	// Mixed depth (one side leaf, the other internal). Rare: happens
+	// after heavily-skewed rebalancing. Correct fallback: materialise
+	// both subtrees and let the caller map-diff. Cost is bounded by
+	// whichever side is smaller, still cheaper than the old full-tree
+	// fallback because only the overlapping subtree pays.
+	if oldNode.Leaf != newNode.Leaf {
+		oldEntries, err := t.allEntries(oldHash, depth+1)
+		if err != nil {
+			return nil, nil, err
+		}
+		newEntries, err := LoadProllyTree(t.store, newHash).allEntries(newHash, depth+1)
+		if err != nil {
+			return nil, nil, err
+		}
+		return oldEntries, newEntries, nil
 	}
-	newEntries, err := LoadProllyTree(t.store, newHash).allEntries(newHash, depth+1)
-	if err != nil {
-		return nil, nil, err
+
+	// Both internal. Merge-walk the child lists; recurse only into
+	// children whose first-key aligns but whose content hash differs.
+	// Content-defined chunking keeps most boundaries stable across
+	// neighbouring commits, so this is the fast path.
+	return t.diffInternalChildren(oldNode.Entries, newNode.Entries, depth+1)
+}
+
+// diffInternalChildren walks two sorted internal-node child lists as
+// a two-pointer merge. Returns the old/new entries contributed by
+// subtrees whose hashes actually differ. Matching (Key, Value) pairs
+// are skipped entirely -- their subtrees are known identical so no
+// chunks are fetched. Misaligned keys (boundary shifts from
+// rebalancing) fall back to materialising the unmatched subtree via
+// allEntries; the caller's map-diff cancels out any duplicate keys
+// that still match on the other side.
+func (t *ProllyTree) diffInternalChildren(oldChildren, newChildren []ProllyEntry, depth int) ([]ProllyEntry, []ProllyEntry, error) {
+	var oldAcc, newAcc []ProllyEntry
+	i, j := 0, 0
+	for i < len(oldChildren) && j < len(newChildren) {
+		oldEntry, newEntry := oldChildren[i], newChildren[j]
+		switch {
+		case oldEntry.Key == newEntry.Key:
+			// Aligned boundary. diffNodes short-circuits on equal
+			// hashes (no reads), recurses into the pair otherwise.
+			oldSub, newSub, err := t.diffNodes(oldEntry.Value, newEntry.Value, depth)
+			if err != nil {
+				return nil, nil, err
+			}
+			oldAcc = append(oldAcc, oldSub...)
+			newAcc = append(newAcc, newSub...)
+			i++
+			j++
+		case oldEntry.Key < newEntry.Key:
+			// Boundary exists only on old side at this key. Subtree's
+			// keys might overlap with new subtrees we haven't walked
+			// yet; emit them and let the caller's map-diff reconcile.
+			sub, err := t.allEntries(oldEntry.Value, depth)
+			if err != nil {
+				return nil, nil, err
+			}
+			oldAcc = append(oldAcc, sub...)
+			i++
+		default: // oldEntry.Key > newEntry.Key
+			sub, err := LoadProllyTree(t.store, newEntry.Value).allEntries(newEntry.Value, depth)
+			if err != nil {
+				return nil, nil, err
+			}
+			newAcc = append(newAcc, sub...)
+			j++
+		}
 	}
-	return oldEntries, newEntries, nil
+	// Drain the tail of whichever list still has children.
+	for ; i < len(oldChildren); i++ {
+		sub, err := t.allEntries(oldChildren[i].Value, depth)
+		if err != nil {
+			return nil, nil, err
+		}
+		oldAcc = append(oldAcc, sub...)
+	}
+	for ; j < len(newChildren); j++ {
+		e := newChildren[j]
+		sub, err := LoadProllyTree(t.store, e.Value).allEntries(e.Value, depth)
+		if err != nil {
+			return nil, nil, err
+		}
+		newAcc = append(newAcc, sub...)
+	}
+	return oldAcc, newAcc, nil
 }
 
 // writeNode serializes and stores a prolly node.

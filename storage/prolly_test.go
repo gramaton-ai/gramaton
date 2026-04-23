@@ -312,6 +312,198 @@ func TestProllyTreeDiffEmptyToFull(t *testing.T) {
 	}
 }
 
+// TestProllyTreeDiffSmallChangeInLargeTree exercises the P1-54 fix:
+// diffing two large trees that differ by a single key in the middle
+// must walk only the path down to that change, not both entire trees.
+// Correctness assertion is the visible one; the benchmark
+// BenchmarkProllyDiffSmallChange quantifies the perf win. Before the
+// fix this was O(N); after, it's O(log N) in the happy path.
+func TestProllyTreeDiffSmallChangeInLargeTree(t *testing.T) {
+	s := testStore(t)
+
+	entries1 := make([]ProllyEntry, 2000)
+	for i := range entries1 {
+		entries1[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("v%05d", i)}
+	}
+	tree1 := NewProllyTree(s, ProllyConfig{})
+	if err := tree1.Build(entries1); err != nil {
+		t.Fatalf("build tree1: %v", err)
+	}
+
+	// Change one entry deep in the middle.
+	entries2 := make([]ProllyEntry, 2000)
+	copy(entries2, entries1)
+	entries2[1000] = ProllyEntry{Key: "k01000", Value: "v01000-updated"}
+	tree2 := NewProllyTree(s, ProllyConfig{})
+	if err := tree2.Build(entries2); err != nil {
+		t.Fatalf("build tree2: %v", err)
+	}
+
+	added, removed, err := tree1.Diff(tree2)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(added) != 1 || added[0].Key != "k01000" || added[0].Value != "v01000-updated" {
+		t.Errorf("expected single added {k01000, v01000-updated}, got %+v", added)
+	}
+	if len(removed) != 1 || removed[0].Key != "k01000" || removed[0].Value != "v01000" {
+		t.Errorf("expected single removed {k01000, v01000}, got %+v", removed)
+	}
+}
+
+// TestProllyTreeDiffBoundaryShift exercises the rebalanced-boundary
+// path: the second tree adds 100 keys past the end of the first,
+// which shifts chunk boundaries and produces internal-node children
+// whose keys don't align one-to-one with the first tree's children.
+// Correctness must hold through the merge-walk's "unmatched key"
+// fallback.
+func TestProllyTreeDiffBoundaryShift(t *testing.T) {
+	s := testStore(t)
+
+	entries1 := make([]ProllyEntry, 1000)
+	for i := range entries1 {
+		entries1[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("v%05d", i)}
+	}
+	tree1 := NewProllyTree(s, ProllyConfig{})
+	if err := tree1.Build(entries1); err != nil {
+		t.Fatalf("build tree1: %v", err)
+	}
+
+	entries2 := make([]ProllyEntry, 1100)
+	copy(entries2, entries1)
+	for i := 1000; i < 1100; i++ {
+		entries2[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("v%05d", i)}
+	}
+	tree2 := NewProllyTree(s, ProllyConfig{})
+	if err := tree2.Build(entries2); err != nil {
+		t.Fatalf("build tree2: %v", err)
+	}
+
+	added, removed, err := tree1.Diff(tree2)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(added) != 100 {
+		t.Errorf("expected 100 added, got %d", len(added))
+	}
+	if len(removed) != 0 {
+		t.Errorf("expected 0 removed, got %d", len(removed))
+	}
+	// Sanity: the added keys should be exactly k01000..k01099.
+	seen := make(map[string]bool, len(added))
+	for _, e := range added {
+		seen[e.Key] = true
+	}
+	for i := 1000; i < 1100; i++ {
+		if !seen[fmt.Sprintf("k%05d", i)] {
+			t.Errorf("missing expected key k%05d in added", i)
+		}
+	}
+}
+
+// TestProllyTreeDiffDeepIdenticalSubtreesSkipped asserts that when
+// two trees share a large identical subtree, the diff short-circuits
+// on matching internal-node (key, value) pairs rather than walking
+// the shared subtree end-to-end. Correctness is the observable
+// assertion; the mechanism (hash-equality skip in diffNodes) is
+// exercised by TestProllyTreeDiffSmallChangeInLargeTree's sibling-
+// skipping behaviour and benchmarked by BenchmarkProllyDiffSmallChange.
+func TestProllyTreeDiffDeepIdenticalSubtreesSkipped(t *testing.T) {
+	s := testStore(t)
+
+	// Two trees that share the first 1500 entries and differ in the
+	// last 500 via a value rewrite.
+	baseEntries := make([]ProllyEntry, 1500)
+	for i := range baseEntries {
+		baseEntries[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("v%05d", i)}
+	}
+
+	entries1 := make([]ProllyEntry, 2000)
+	copy(entries1, baseEntries)
+	for i := 1500; i < 2000; i++ {
+		entries1[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("old-v%05d", i)}
+	}
+
+	entries2 := make([]ProllyEntry, 2000)
+	copy(entries2, baseEntries)
+	for i := 1500; i < 2000; i++ {
+		entries2[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("new-v%05d", i)}
+	}
+
+	tree1 := NewProllyTree(s, ProllyConfig{})
+	if err := tree1.Build(entries1); err != nil {
+		t.Fatalf("build tree1: %v", err)
+	}
+	tree2 := NewProllyTree(s, ProllyConfig{})
+	if err := tree2.Build(entries2); err != nil {
+		t.Fatalf("build tree2: %v", err)
+	}
+
+	added, removed, err := tree1.Diff(tree2)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	// All 500 tail entries should show up; the shared 1500-entry
+	// prefix should not contribute.
+	if len(added) != 500 || len(removed) != 500 {
+		t.Fatalf("expected 500 added + 500 removed, got %d added + %d removed",
+			len(added), len(removed))
+	}
+	for _, e := range added {
+		if !stringsHasPrefix(e.Value, "new-v") {
+			t.Errorf("unexpected added value %q (expected new-v* from tail)", e.Value)
+		}
+	}
+	for _, e := range removed {
+		if !stringsHasPrefix(e.Value, "old-v") {
+			t.Errorf("unexpected removed value %q (expected old-v* from tail)", e.Value)
+		}
+	}
+}
+
+// BenchmarkProllyDiffSmallChange is the P1-54 perf evidence. Diffs
+// two 2000-entry trees differing by a single key. Before the fix the
+// diff walked all 2000 entries on both sides (the allEntries fallback
+// in the internal-vs-internal branch). After the fix the merge-walk
+// skips identical subtrees at every level and touches only the path
+// down to the changed leaf. Expected ns/op: microseconds instead of
+// milliseconds.
+func BenchmarkProllyDiffSmallChange(b *testing.B) {
+	s, err := New(filepath.Join(b.TempDir(), "chunks"))
+	if err != nil {
+		b.Fatalf("New: %v", err)
+	}
+	entries1 := make([]ProllyEntry, 2000)
+	for i := range entries1 {
+		entries1[i] = ProllyEntry{Key: fmt.Sprintf("k%05d", i), Value: fmt.Sprintf("v%05d", i)}
+	}
+	entries2 := make([]ProllyEntry, 2000)
+	copy(entries2, entries1)
+	entries2[1000] = ProllyEntry{Key: "k01000", Value: "v01000-updated"}
+
+	tree1 := NewProllyTree(s, ProllyConfig{})
+	if err := tree1.Build(entries1); err != nil {
+		b.Fatalf("build tree1: %v", err)
+	}
+	tree2 := NewProllyTree(s, ProllyConfig{})
+	if err := tree2.Build(entries2); err != nil {
+		b.Fatalf("build tree2: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := tree1.Diff(tree2); err != nil {
+			b.Fatalf("Diff: %v", err)
+		}
+	}
+}
+
+// stringsHasPrefix avoids importing strings into the test file just
+// for one call.
+func stringsHasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
 func TestProllyTreeSortedEntries(t *testing.T) {
 	m := map[string]string{
 		"z": "3",

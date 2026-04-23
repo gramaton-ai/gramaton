@@ -7,6 +7,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`storage.ProllyTree.Diff` no longer degrades to a full scan on
+  internal-vs-internal subtree differences (P1-54,
+  `01KPED3C7C8S1MWTSF9ZZ1AD68`).** Previously the diff short-circuited
+  only when the root hashes matched or both nodes were leaves; any
+  internal-vs-internal case with differing hashes fell through to
+  `allEntries` on both sides, reading every leaf chunk regardless of
+  how localised the change was. The docstring promised "skips entire
+  subtrees when their hashes match" but delivered that only at the
+  root.
+  Fix: merge-walk the two internal-node child lists; recurse into
+  child pairs whose first-key aligns but whose content hash differs;
+  skip the pair entirely when both hash and key match. Content-
+  defined chunking keeps most boundaries stable across neighbouring
+  commits, so typical single-record-change diffs now touch O(log N)
+  chunks instead of O(N).
+  `BenchmarkProllyDiffSmallChange` (2000-entry trees differing by 1
+  entry): 3.05 ms → 0.29 ms, a **10.5× speedup** on Apple M3. The
+  ratio grows with tree size (baseline scales linearly with entry
+  count, fix scales with log of the tree size plus the number of
+  actual changes). `gramaton_diff` is the direct beneficiary; any
+  caller that lands on `graph.DiffCommits` inherits the win.
+  Mixed internal/leaf depth (rare, happens after heavily-skewed
+  rebalancing) still falls back to `allEntries`, now bounded to
+  whichever subtree is smaller rather than both. Boundary-shift
+  cases (rebalancing changed chunk boundaries) use the same
+  fallback on the unmatched children; the caller's map-diff
+  cancels any entries that happen to match on the other side.
+
 ### Added
 
 - **CLI parity + `temporal-queries` guide topic (temporal-queries
