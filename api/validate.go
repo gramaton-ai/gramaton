@@ -70,6 +70,12 @@ const (
 	MaxDuplicatePairs = 1000
 	MaxLogLimit       = 500
 	MaxLogTraversal   = 5000
+	// MaxLogActionsFilter bounds the size of the Actions filter
+	// array on gramaton_log. A caller passing thousands of Kinds
+	// would otherwise inflate the in-memory set and force a scan
+	// of every commit's Actions slice against all of them. 64 is
+	// generous -- the Kind set today is under 20.
+	MaxLogActionsFilter = 64
 )
 
 // Collection item listing limits. Bounds on the new projection and

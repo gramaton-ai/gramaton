@@ -229,7 +229,7 @@ const CollectionListDescription = "List collections with names, item counts, and
 
 const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]})."
 
-const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Returns ErrConflict if an item with the same title already exists in the collection."
+const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=minimal collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On any other profile (backlog / todo / default standard), a duplicate returns ErrConflict with the existing id in the message."
 
 const CollectionUpdateDescription = "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema."
 

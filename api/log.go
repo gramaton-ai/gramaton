@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -88,6 +89,9 @@ func (a *API) Log(ctx context.Context, req LogRequest) (LogResponse, *APIError) 
 		// it catches callers that pass a literal [] expecting "match
 		// nothing" instead of "no filter".
 		return LogResponse{}, ErrInvalid("actions filter must be nil or non-empty")
+	}
+	if len(req.Actions) > MaxLogActionsFilter {
+		return LogResponse{}, ErrInvalid(fmt.Sprintf("actions filter exceeds maximum of %d entries", MaxLogActionsFilter))
 	}
 	actionFilter := make(map[string]struct{}, len(req.Actions))
 	for _, k := range req.Actions {
