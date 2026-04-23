@@ -18,9 +18,8 @@ A few things up front:
   provenance signal, sign your commits with `git commit -s` -- it's
   not required today, just appreciated.)
 - **Code of conduct**: be kind, assume good faith, focus on the
-  work. Detailed CODE_OF_CONDUCT is forthcoming; in the meantime
-  the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)
-  applies.
+  work. This project adopts the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md);
+  report concerns per the contact in that file.
 - **Scope**: contributions of any size are welcome -- typo fixes
   through major features. For anything beyond a small bug fix,
   **open an issue first to discuss the approach** before sending

@@ -7,6 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`SECURITY.md`** (`01KPV62W41C44YKMX9K782AEE9`): responsible-
+  disclosure policy. Routes vulnerability reports through GitHub's
+  private vulnerability reporting (Security tab → Report a
+  vulnerability), keeping the maintainer's email off the repo. Lists
+  supported versions (alpha: `main` only), triage expectations
+  (solo maintainer, no SLA, ~7-day ack target), scope (CLI + serve +
+  store format + loopback gates + secret handling), and credit
+  policy. GitHub surfaces this on the Security tab and the
+  Community profile.
+
+- **`CODE_OF_CONDUCT.md`** (`01KPV62W41C44YKMX9K8TCK9MM`):
+  Contributor Covenant v2.1, fetched verbatim from the canonical
+  source at github.com/EthicalSource/contributor_covenant with the
+  `[INSERT CONTACT METHOD]` placeholder replaced by
+  `brandonlattin@gmail.com`. `CONTRIBUTING.md` no longer links out
+  to the external Covenant URL; it points to the local file
+  instead. Closes the "forthcoming" stub that has been in
+  CONTRIBUTING since the repo went public-prep.
+
 ### Changed
 
 - **`gramaton_collection_add_batch` now mirrors single-add's
