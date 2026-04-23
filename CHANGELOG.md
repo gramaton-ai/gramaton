@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **AVX2 ↔ generic matmul parity test**
+  (`embed/bert/math_test.go::TestMatMulKernelParity`). Existing
+  `TestMatMul*` cases call the dispatched public `MatMul`, which
+  on AMD64 with AVX2+FMA3 runs the assembly kernel exclusively
+  and never exercises the pure-Go `matMulGeneric` path. New test
+  runs both kernels on aligned-body, M-remainder, N-remainder,
+  both-remainders, below-SIMD-threshold, and BERT-sized shapes
+  (128x384x385, 128x384x1536) and asserts element-wise equality.
+  Guards against a future SIMD-kernel regression surfacing only
+  under full BERT inference.
+
 ### Changed
 
 - **`config.trimConfigStrings` no longer touches `LLM.APIKey` or

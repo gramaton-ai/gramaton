@@ -106,6 +106,63 @@ func TestMatMulBERTSized(t *testing.T) {
 	}
 }
 
+// TestMatMulKernelParity asserts the dispatched public MatMul produces
+// element-wise-identical output to the pure-Go matMulGeneric path across
+// aligned, non-aligned, below-threshold, and BERT-sized inputs.
+//
+// On amd64 with AVX2+FMA3 and arm64 with NEON, MatMul routes the
+// (M & ~3) x (N & ~3) tile body through an assembly kernel and handles
+// remainder rows/cols via generic. Without this test, a bug in the
+// kernel itself or in the remainder handler would only surface under
+// real BERT inference (golden-vector divergence against Python). This
+// exercises both paths directly. See 753d407.
+func TestMatMulKernelParity(t *testing.T) {
+	cases := []struct {
+		name    string
+		M, K, N int
+	}{
+		// Aligned body, no remainder.
+		{"aligned_16x16x16", 16, 16, 16},
+		// M remainder (M%4 != 0) forces the mTail loop.
+		{"m_remainder_17x16x16", 17, 16, 16},
+		// N remainder (N%4 != 0) forces the nTail loop.
+		{"n_remainder_16x16x17", 16, 16, 17},
+		// Both remainders.
+		{"m_n_remainder_19x16x21", 19, 16, 21},
+		// Below matMulSIMDMinSize -- must take generic fallback.
+		{"small_3x8x3", 3, 8, 3},
+		// BERT attention projection, deliberately non-aligned N.
+		{"bert_like_128x384x385", 128, 384, 385},
+		// BERT FFN-up, aligned: stresses the main AVX2/NEON body.
+		{"bert_ffn_up_128x384x1536", 128, 384, 1536},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := make([]float32, c.M*c.K)
+			bT := make([]float32, c.N*c.K)
+			// Deterministic pseudo-random values in [-0.7, 0.7]-ish
+			// range: large enough to catch sign/accumulation bugs,
+			// small enough to avoid fp32 overflow on big matrices.
+			for i := range a {
+				a[i] = float32((i*7)%11)*0.013 - 0.07
+			}
+			for i := range bT {
+				bT[i] = float32((i*5)%13)*0.007 - 0.03
+			}
+			dispatched := make([]float32, c.M*c.N)
+			generic := make([]float32, c.M*c.N)
+			MatMul(a, bT, c.M, c.K, c.N, dispatched)
+			matMulGeneric(a, bT, c.M, c.K, c.N, generic)
+			for i := range dispatched {
+				if !approxEqual(dispatched[i], generic[i]) {
+					t.Fatalf("parity mismatch at index %d (row %d, col %d): dispatched=%v generic=%v",
+						i, i/c.N, i%c.N, dispatched[i], generic[i])
+				}
+			}
+		})
+	}
+}
+
 func TestAddBias(t *testing.T) {
 	out := []float32{1, 2, 3, 4, 5, 6}
 	bias := []float32{10, 20, 30}
