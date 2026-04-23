@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Idempotent `gramaton_collection_add` on minimal-curation
+  collections (temporal-queries Phase 5 Layer 2).** When a
+  collection's `curation` profile is `minimal` (shopping-list /
+  packing-list style), a second `collection_add` with a
+  case-insensitive + trim-normalised title match returns the
+  existing item's ID with `deduplicated: true` in the response
+  instead of `ErrConflict`. Short-content items ("eggs", "milk")
+  treat identical content as the same item; Layer 1's existing
+  collection-member skip already blocks cross-collection
+  contamination at the auto-supersession path. Structured
+  collections (default `standard` curation -- backlog, todo, etc.)
+  keep the T-02 `ErrConflict` behaviour: same-title-different-
+  context is legitimate there. Layer 3 (context-enriched embedding
+  input) and per-stage curation-profile skip logic stay deferred
+  to a Phase 5 follow-on.
+
 - **Collection templates + five starter templates (temporal-queries
   Phase 7).** `gramaton_collection_create` now accepts a
   `template` parameter. When set, the named template populates any

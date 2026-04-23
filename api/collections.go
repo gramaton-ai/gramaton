@@ -974,23 +974,43 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *Colle
 		return nil, ErrInvalid(err.Error())
 	}
 
-	// Dedup check: look for existing item with same title. A duplicate
-	// is a state conflict (the caller's add does not commit) rather
-	// than a partial success, so return ErrConflict with the existing
-	// ID in the message. Contract: non-nil APIError iff the op did not
-	// commit. Matches Capture's reject-mode semantics.
+	// Dedup check: look for existing item with the same title
+	// (case-insensitive, after trim). Behaviour branches on the
+	// collection's curation profile:
+	//
+	//   - curation=minimal (shopping/packing style, short-content items):
+	//     idempotent return of the existing item's ID with
+	//     deduplicated=true in the response. Layer 2 of the Phase 5
+	//     short-content dedup fix. No ErrConflict.
+	//   - any other profile (structured data): ErrConflict with the
+	//     existing ID in the message. Preserves T-02 semantics for
+	//     backlog/todo-style collections where same-title-different-
+	//     context is legitimate.
 	if title, ok := req.Fields["title"]; ok {
 		titleStr, isStr := title.(string)
-		if isStr && titleStr != "" {
-			for _, e := range a.collectionItemEdges(collectionID) {
-				n, ok := a.engine.Graph().GetNode(e.SourceID)
-				if !ok {
-					continue
-				}
-				if existing, ok := n.Properties.GetString("field.title"); ok {
-					if strings.EqualFold(existing, titleStr) {
-						return nil, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
+		if isStr {
+			normalized := strings.TrimSpace(titleStr)
+			if normalized != "" {
+				for _, e := range a.collectionItemEdges(collectionID) {
+					n, ok := a.engine.Graph().GetNode(e.SourceID)
+					if !ok {
+						continue
 					}
+					existing, ok := n.Properties.GetString("field.title")
+					if !ok {
+						continue
+					}
+					if !strings.EqualFold(strings.TrimSpace(existing), normalized) {
+						continue
+					}
+					if CollectionCuration(coll) == CurationMinimal {
+						return map[string]any{
+							"id":             e.SourceID,
+							"collection_id":  collectionID,
+							"deduplicated":   true,
+						}, nil
+					}
+					return nil, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
 				}
 			}
 		}

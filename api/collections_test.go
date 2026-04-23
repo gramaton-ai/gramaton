@@ -797,6 +797,56 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 	}
 }
 
+// TestCollectionAddIdempotentOnMinimalCuration covers Phase 5 Layer 2:
+// collections with curation=minimal (shopping-list / packing-list
+// style) make duplicate adds idempotent instead of returning
+// ErrConflict. Short-content items like "eggs" or "milk" treat
+// identical content as the same item; the response surfaces
+// deduplicated=true + the existing ID.
+func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{
+		Name:     "Groceries",
+		Curation: "minimal",
+	})
+	collID := result["id"].(string)
+
+	first, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "eggs"},
+	})
+	if apiErr != nil {
+		t.Fatalf("first add: %v", apiErr)
+	}
+	firstID := first["id"].(string)
+
+	// Second add: same content -> idempotent success with existing ID.
+	second, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": "eggs"},
+	})
+	if apiErr != nil {
+		t.Fatalf("second add should be idempotent, got: %v", apiErr)
+	}
+	if second["id"] != firstID {
+		t.Errorf("second add id = %v, want %q (existing)", second["id"], firstID)
+	}
+	if dedup, _ := second["deduplicated"].(bool); !dedup {
+		t.Errorf("second add should flag deduplicated=true, got %+v", second)
+	}
+
+	// Trim + case-insensitive: " EGGS " matches "eggs".
+	third, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		Fields: map[string]any{"title": " EGGS "},
+	})
+	if apiErr != nil {
+		t.Fatalf("third add (case/trim variant): %v", apiErr)
+	}
+	if third["id"] != firstID {
+		t.Errorf("case/trim variant id = %v, want %q", third["id"], firstID)
+	}
+}
+
 // TestCollectionDedup pins the T-02 behavior change: CollectionAdd
 // rejects a duplicate-title add with ErrConflict (instead of the
 // pre-T-02 success-with-duplicate=true map). The existing item's ID
