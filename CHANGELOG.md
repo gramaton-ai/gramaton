@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Wizard step-branch tests** (`internal/setup/step_bootstrap_test.go`,
+  `step_verify_test.go`, expanded `step_llm_test.go`). Per-step
+  coverage of branches previously exercised only through the two
+  `wizard_test.go` smoke paths:
+    - Step 1 (bootstrap): Skip / OpenAI-key / Bedrock (with and
+      without profile) / data-dir-perms branches.
+    - Step 2 (LLM): Skip / help-then-skip / Anthropic-empty-key-
+      falls-back-to-skip / Bedrock / customize-caps-with-invalid-
+      inputs branches.
+    - Step 5 (verify): skip-everything baseline / config-perms /
+      BERT / OpenAI-key-present / OpenAI-key-missing / LLM-key-good /
+      LLM-key-wrong-perms / hooks-executable / hooks-missing-exec
+      branches.
+  Package coverage: 51.6% → 67.4%. Tests are offline and
+  deterministic (fake MCP backend, scripted prompter); the
+  network-dependent BERT fallback branch is gated behind
+  `GRAMATON_TEST_NETWORK=1`.
 - **AVX2 ↔ generic matmul parity test**
   (`embed/bert/math_test.go::TestMatMulKernelParity`). Existing
   `TestMatMul*` cases call the dispatched public `MatMul`, which

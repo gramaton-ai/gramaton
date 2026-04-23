@@ -1,8 +1,14 @@
 package setup
 
 import (
+	"bytes"
+	"context"
 	"math"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // Parser tests — covers input-hardening fixes that stop silent
@@ -78,5 +84,165 @@ func TestParseIntAtLeast(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Step 2 menu-branch tests.
+
+// newWizardForLLMTest builds a wizard that reaches Step 2 with "1"
+// (fresh) and "5" (skip embedding) pre-scripted, then feeds the
+// caller's Step 2 answers. Steps 3/4 are short-circuited via a
+// fakeMCPBackend with no detected clients. Keeps tests fast and
+// deterministic — no network, no real filesystem mutation beyond
+// the tmpdir.
+func newWizardForLLMTest(t *testing.T, llmAnswers ...string) (*Wizard, *bytes.Buffer, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	answers := append([]string{"1", "5"}, llmAnswers...)
+
+	var buf bytes.Buffer
+	prompter := NewScriptedPrompter(answers...)
+	cfg := config.Defaults()
+	cfg.DataDir = filepath.Join(tmpDir, "data")
+
+	wiz := New(prompter, NewWriter(&buf), &cfg, filepath.Join(tmpDir, "config.yaml"), tmpDir)
+	wiz.mcpBackend = &fakeMCPBackend{}
+	return wiz, &buf, tmpDir
+}
+
+// TestStepLLMSkipBranch covers [5] Skip: provider stays empty,
+// rerank stays default-off, warning fires about deterministic-only
+// curation mode.
+func TestStepLLMSkipBranch(t *testing.T) {
+	wiz, buf, _ := newWizardForLLMTest(t, "5")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if wiz.cfg.LLM.Provider != "" {
+		t.Errorf("LLM.Provider: got %q, want empty", wiz.cfg.LLM.Provider)
+	}
+	if wiz.cfg.Search.RerankEnabled {
+		t.Errorf("Search.RerankEnabled: should stay false when LLM is skipped")
+	}
+	if !strings.Contains(out, "deterministic-only mode") {
+		t.Errorf("skip warning missing:\n%s", out)
+	}
+}
+
+// TestStepLLMHelpThenSkip covers [4] (help) → re-enter menu → [5]
+// skip. Verifies the help guidance prints AND the menu loops back
+// to the provider choice rather than aborting after help.
+func TestStepLLMHelpThenSkip(t *testing.T) {
+	wiz, buf, _ := newWizardForLLMTest(t, "4", "5")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "console.anthropic.com") {
+		t.Errorf("help guidance missing signup URL:\n%s", out)
+	}
+	if wiz.cfg.LLM.Provider != "" {
+		t.Errorf("LLM.Provider: got %q, want empty after help→skip", wiz.cfg.LLM.Provider)
+	}
+}
+
+// TestStepLLMAnthropicEmptyKeyFallsBackToSkip covers [1] Anthropic
+// with an empty Secret — the wizard must warn, call llmSkip, and
+// leave provider empty. No network call because Secret is empty.
+func TestStepLLMAnthropicEmptyKeyFallsBackToSkip(t *testing.T) {
+	wiz, buf, _ := newWizardForLLMTest(t, "1", "") // pick Anthropic, press Enter at secret
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if wiz.cfg.LLM.Provider != "" {
+		t.Errorf("LLM.Provider: got %q, want empty after empty key", wiz.cfg.LLM.Provider)
+	}
+	if !strings.Contains(out, "No key entered") {
+		t.Errorf("empty-key warning missing:\n%s", out)
+	}
+	if !strings.Contains(out, "deterministic-only mode") {
+		t.Errorf("fall-through to skip missing its warning:\n%s", out)
+	}
+}
+
+// TestStepLLMBedrockBranch covers [3] Bedrock with profile + region.
+// Sets Models tier map to Bedrock ARNs; no AWS calls.
+func TestStepLLMBedrockBranch(t *testing.T) {
+	// [3] = Bedrock, profile = "test-profile", region = "", use default caps "y".
+	wiz, buf, _ := newWizardForLLMTest(t, "3", "test-profile", "", "y")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if wiz.cfg.LLM.Provider != "bedrock" {
+		t.Errorf("LLM.Provider: got %q, want bedrock", wiz.cfg.LLM.Provider)
+	}
+	if wiz.cfg.LLM.AWSProfile != "test-profile" {
+		t.Errorf("AWSProfile: got %q", wiz.cfg.LLM.AWSProfile)
+	}
+	if wiz.cfg.LLM.Region != "us-west-2" {
+		t.Errorf("Region: got %q, want us-west-2 (default)", wiz.cfg.LLM.Region)
+	}
+	if !strings.HasPrefix(wiz.cfg.LLM.Model, "anthropic.claude-") {
+		t.Errorf("LLM.Model: got %q, want anthropic.claude-* Bedrock ID", wiz.cfg.LLM.Model)
+	}
+	if wiz.cfg.LLM.Models.Low == "" || wiz.cfg.LLM.Models.Medium == "" || wiz.cfg.LLM.Models.High == "" {
+		t.Errorf("Models tier map should be populated with Bedrock IDs, got: %+v", wiz.cfg.LLM.Models)
+	}
+	if !wiz.cfg.Search.RerankEnabled {
+		t.Errorf("Search.RerankEnabled: should flip to true when LLM is configured")
+	}
+	if !strings.Contains(out, "Bedrock with Anthropic models configured") {
+		t.Errorf("success line missing:\n%s", out)
+	}
+	if !strings.Contains(out, "Spending caps set") {
+		t.Errorf("caps confirmation missing:\n%s", out)
+	}
+}
+
+// TestStepLLMBedrockCustomCapsWithBadInputs covers the customize-caps
+// path: if the user enters an invalid number, the wizard must keep
+// the default AND emit a visible warn naming the bad value.
+func TestStepLLMBedrockCustomCapsWithBadInputs(t *testing.T) {
+	// [3] Bedrock, profile "", region "", [n] customize caps, then
+	// bad USD/day, bad calls/day, bad USD/cycle.
+	wiz, buf, _ := newWizardForLLMTest(t,
+		"3", "", "", "n",
+		"abc",       // invalid USD/day
+		"abc",       // invalid calls/day
+		"abc",       // invalid USD/cycle
+	)
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	// Defaults must survive.
+	if wiz.cfg.LLM.MaxCostUSDPerDay != 5.00 {
+		t.Errorf("MaxCostUSDPerDay: got %v, want 5.00 (default preserved)", wiz.cfg.LLM.MaxCostUSDPerDay)
+	}
+	if wiz.cfg.LLM.MaxCallsPerDay != 500 {
+		t.Errorf("MaxCallsPerDay: got %d, want 500 (default preserved)", wiz.cfg.LLM.MaxCallsPerDay)
+	}
+	if wiz.cfg.LLMCuration.MaxCostUSDPerRun != 1.00 {
+		t.Errorf("MaxCostUSDPerRun: got %v, want 1.00 (default preserved)", wiz.cfg.LLMCuration.MaxCostUSDPerRun)
+	}
+	// User-visible warns should name the invalid inputs (one per bad
+	// field). Anything silently ignored would leave the user thinking
+	// their value took effect.
+	if !strings.Contains(out, "Invalid USD/day") {
+		t.Errorf("missing USD/day warn:\n%s", out)
+	}
+	if !strings.Contains(out, "Invalid calls/day") {
+		t.Errorf("missing calls/day warn:\n%s", out)
+	}
+	if !strings.Contains(out, "Invalid USD/cycle") {
+		t.Errorf("missing USD/cycle warn:\n%s", out)
 	}
 }
