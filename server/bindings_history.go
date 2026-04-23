@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,10 +16,25 @@ import (
 func (s *Server) registerHistoryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/log", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		// Actions filter: repeated &action=resolve&action=collection_update
+		var actions []string
+		if vs := query["action"]; len(vs) > 0 {
+			actions = vs
+		} else if v := query.Get("actions"); v != "" {
+			// Comma-separated fallback for simple callers.
+			for _, part := range strings.Split(v, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					actions = append(actions, p)
+				}
+			}
+		}
 		result, apiErr := s.api.Log(r.Context(), api.LogRequest{
-			Limit: parseIntParam(r, "limit", 0, api.MaxLogLimit),
-			Since: query.Get("since"),
-			Until: query.Get("until"),
+			Limit:                  parseIntParam(r, "limit", 0, api.MaxLogLimit),
+			Since:                  query.Get("since"),
+			Until:                  query.Get("until"),
+			Actions:                actions,
+			ExcludeCuration:        query.Get("exclude_curation") == "true",
+			IncludeRecordMutations: query.Get("include_record_mutations") == "true",
 		})
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -48,9 +64,12 @@ func (s *Server) registerHistoryRoutes(mux *http.ServeMux) {
 // lives.
 func (s *Server) registerHistoryMCPTools(mcpServer *mcp.Server) {
 	type logArgs struct {
-		Limit int    `json:"limit,omitempty" jsonschema:"max entries (default 20, max 500)"`
-		Since string `json:"since,omitempty" jsonschema:"only include commits on or after this date (YYYY-MM-DD or RFC3339)"`
-		Until string `json:"until,omitempty" jsonschema:"only include commits up to this date (YYYY-MM-DD or RFC3339); empty means up to HEAD"`
+		Limit                  int      `json:"limit,omitempty" jsonschema:"max entries (default 20, max 500)"`
+		Since                  string   `json:"since,omitempty" jsonschema:"only include commits on or after this date (YYYY-MM-DD or RFC3339)"`
+		Until                  string   `json:"until,omitempty" jsonschema:"only include commits up to this date (YYYY-MM-DD or RFC3339); empty means up to HEAD"`
+		Actions                []string `json:"actions,omitempty" jsonschema:"filter by CommitAction.Kind (e.g. [resolve, collection_update]). Commit matches if ANY of its actions has a Kind in this list."`
+		ExcludeCuration        bool     `json:"exclude_curation,omitempty" jsonschema:"skip commits whose message starts with 'curation:' (server-side curation noise)"`
+		IncludeRecordMutations bool     `json:"include_record_mutations,omitempty" jsonschema:"enrich each commit with per-record {record_id, kind, field, title, summary_short} from its CommitAction list (capped at 20 per commit)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_log",
@@ -59,9 +78,12 @@ func (s *Server) registerHistoryMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_log")
 		defer done(nil)
 		result, apiErr := s.api.Log(ctx, api.LogRequest{
-			Limit: args.Limit,
-			Since: args.Since,
-			Until: args.Until,
+			Limit:                  args.Limit,
+			Since:                  args.Since,
+			Until:                  args.Until,
+			Actions:                args.Actions,
+			ExcludeCuration:        args.ExcludeCuration,
+			IncludeRecordMutations: args.IncludeRecordMutations,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

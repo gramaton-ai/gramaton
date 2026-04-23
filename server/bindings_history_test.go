@@ -77,6 +77,125 @@ func TestAPILogSinceUntilNarrowsWalk(t *testing.T) {
 }
 
 // TestAPILogInvalidDates covers validator paths for Since/Until.
+// TestAPILogActionsFilter confirms Phase 8: a log call with an
+// actions filter only returns commits whose CommitAction.Kind matches.
+// The end-to-end assertion that Phase 3's emission + Phase 8's filter
+// compose correctly -- this is the smoke-test-critical path.
+func TestAPILogActionsFilter(t *testing.T) {
+	srv, eng := setupTestServer(t)
+
+	// Seed one capture + one resolve + one bare "test" commit so the
+	// filter has heterogeneous commits to exclude.
+	id := addRecord(t, eng, "filter target")
+	_, apiErr := srv.api.Resolve(context.Background(), api.ResolveRequest{
+		ID: id, Resolution: "completed",
+	})
+	if apiErr != nil {
+		t.Fatalf("Resolve: %v", apiErr)
+	}
+
+	resp, apiErr := srv.api.Log(context.Background(), api.LogRequest{
+		Actions: []string{"resolve"},
+	})
+	if apiErr != nil {
+		t.Fatalf("Log: %v", apiErr)
+	}
+	if len(resp.Commits) != 1 {
+		t.Fatalf("expected 1 resolve commit, got %d: %+v", len(resp.Commits), resp.Commits)
+	}
+	if resp.Commits[0].Action != "resolve" {
+		t.Errorf("Action = %q, want resolve", resp.Commits[0].Action)
+	}
+}
+
+// TestAPILogEmptyActionsRejected covers the validator that makes
+// an explicit empty array an error (distinct from "no filter").
+func TestAPILogEmptyActionsRejected(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	_, apiErr := srv.api.Log(context.Background(), api.LogRequest{
+		Actions: []string{},
+	})
+	// nil vs empty-slice is tricky: []string{} is non-nil but len 0.
+	// The validator rejects exactly this case.
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for empty actions array")
+	}
+}
+
+// TestAPILogIncludeRecordMutations verifies that the new
+// include_record_mutations flag enriches each commit with per-record
+// mutation summaries from its CommitAction list.
+func TestAPILogIncludeRecordMutations(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	id := addRecord(t, eng, "mutation target")
+	_, apiErr := srv.api.Resolve(context.Background(), api.ResolveRequest{
+		ID: id, Resolution: "completed",
+	})
+	if apiErr != nil {
+		t.Fatalf("Resolve: %v", apiErr)
+	}
+
+	// With the flag off: no mutations inline.
+	bare, _ := srv.api.Log(context.Background(), api.LogRequest{
+		Actions: []string{"resolve"},
+	})
+	for _, c := range bare.Commits {
+		if c.Mutations != nil {
+			t.Errorf("Mutations leaked without flag: %+v", c.Mutations)
+		}
+	}
+
+	// With the flag on: each commit includes its CommitActions.
+	withMut, apiErr := srv.api.Log(context.Background(), api.LogRequest{
+		Actions:                []string{"resolve"},
+		IncludeRecordMutations: true,
+	})
+	if apiErr != nil {
+		t.Fatalf("Log: %v", apiErr)
+	}
+	if len(withMut.Commits) != 1 {
+		t.Fatalf("expected 1 commit, got %d", len(withMut.Commits))
+	}
+	muts := withMut.Commits[0].Mutations
+	if len(muts) != 1 {
+		t.Fatalf("mutations = %d, want 1 for the single resolve", len(muts))
+	}
+	if muts[0].Kind != "resolve" || muts[0].RecordID != id {
+		t.Errorf("mutation = %+v, want kind=resolve + record_id=%q", muts[0], id)
+	}
+}
+
+// TestAPILogExcludeCuration: commits whose Message starts with
+// "curation:" are filtered out. Uses a direct engine.Save to synthesize
+// a curation commit without running the curation pipeline.
+func TestAPILogExcludeCuration(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "user activity")
+
+	// Synthesize a curation-shaped commit.
+	eng.Lock()
+	eng.Graph().AddNode(graph.Properties{"content_full": graph.StringProperty("curation-touched")})
+	if _, err := eng.Save("curation: synthetic for test"); err != nil {
+		eng.Unlock()
+		t.Fatalf("synthetic curation save: %v", err)
+	}
+	eng.Unlock()
+
+	// Without the flag: both commits are present.
+	all, _ := srv.api.Log(context.Background(), api.LogRequest{})
+	if len(all.Commits) < 2 {
+		t.Fatalf("expected at least 2 commits without filter, got %d", len(all.Commits))
+	}
+
+	// With exclude_curation: the curation commit drops.
+	filtered, _ := srv.api.Log(context.Background(), api.LogRequest{ExcludeCuration: true})
+	for _, c := range filtered.Commits {
+		if strings.HasPrefix(c.Action, "curation:") {
+			t.Errorf("curation commit leaked through: %+v", c)
+		}
+	}
+}
+
 func TestAPILogInvalidSince(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	_, apiErr := srv.api.Log(context.Background(), api.LogRequest{Since: "nope"})

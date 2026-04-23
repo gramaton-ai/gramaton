@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton_log` extended with `actions` / `exclude_curation` /
+  `include_record_mutations` (temporal-queries Phase 8).** The
+  commit-timeline tool gains three filters that compose with
+  Phase 2's date range to cover the agent-facing temporal-query
+  smoke test ("what did I close yesterday") in a single call:
+    - `actions: ["resolve", "collection_update"]` filters commits
+      by Phase 3's CommitAction.Kind. A commit matches when any of
+      its actions' Kind is in the filter. Empty-array input is
+      rejected with ErrInvalid (distinct from "no filter").
+    - `exclude_curation: true` drops commits whose Message starts
+      with `"curation:"`. Message-prefix based so it works against
+      pre-D3 commits without needing the Phase 3 migration to
+      cover curation emission.
+    - `include_record_mutations: true` enriches each LogEntry with
+      a per-record `Mutations []MutationSummary` slice built from
+      the commit's CommitActions. Each summary carries
+      `{record_id, kind, field, title, summary_short}`; title /
+      summary_short come from the HEAD record when available.
+      Capped at 20 mutations per commit (exposed via
+      `mutations_truncated: true` when the cap fires) to keep
+      response size predictable on curation-heavy days.
+  HTTP: `GET /v1/log` accepts `?action=<kind>` (repeated) or
+  comma-separated `?actions=a,b`, plus `?exclude_curation=true`
+  and `?include_record_mutations=true`. MCP + CLI proxy carry the
+  typed fields directly.
+
 - **D3 structured `CommitAction` on commits (temporal-queries Phase 3,
   partial land).** Commits now carry an optional `Actions []CommitAction`
   slice alongside `Message`. Each action has `Kind` (e.g.
