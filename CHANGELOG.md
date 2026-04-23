@@ -7,6 +7,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`config.trimConfigStrings` no longer touches `LLM.APIKey` or
+  `Embedding.APIKey` literals** (M3 from the post-wizard security
+  review). Previously the load-time whitespace trimmer ran
+  `strings.TrimSpace` on every string field including inline
+  API-key values. Current providers (Anthropic / OpenAI / Bedrock)
+  ship whitespace-free keys so no bug exists today, but a future
+  proxy emitting padded tokens would have been silently
+  corrupted. `APIKeyFile` and `APIKeyEnv` paths / env names are
+  still trimmed -- those are user-typed identifiers, not opaque
+  secrets. New regression test `TestLoadDoesNotTrimAPIKeyLiterals`
+  guards the carve-out.
+
 ### Security
 
 - **Hook script JSON emission and path-component validation.** The

@@ -1260,7 +1260,12 @@ func trimConfigStrings(cfg *Config) {
 	trim(&cfg.Embedding.BaseURL)
 	trim(&cfg.Embedding.APIKeyFile)
 	trim(&cfg.Embedding.APIKeyEnv)
-	trim(&cfg.Embedding.APIKey)
+	// APIKey is an opaque secret -- don't trim. Current providers
+	// (Anthropic, OpenAI, Bedrock) use whitespace-free keys, but a
+	// future proxy could legitimately emit a padded token, and
+	// silent trimming would corrupt it. The APIKeyFile path and
+	// APIKeyEnv name (which are trimmed) are the common input
+	// modes; inline APIKey values are power-user territory.
 	trim(&cfg.Embedding.Region)
 	trim(&cfg.Embedding.AWSProfile)
 	trim(&cfg.Embedding.AWSAccessKeyIDEnv)
@@ -1271,7 +1276,8 @@ func trimConfigStrings(cfg *Config) {
 	trim(&cfg.LLM.BaseURL)
 	trim(&cfg.LLM.APIKeyFile)
 	trim(&cfg.LLM.APIKeyEnv)
-	trim(&cfg.LLM.APIKey)
+	// APIKey is an opaque secret -- don't trim. See Embedding.APIKey
+	// comment above for rationale.
 	trim(&cfg.LLM.Region)
 	trim(&cfg.LLM.AWSProfile)
 	trim(&cfg.LLM.AWSAccessKeyIDEnv)

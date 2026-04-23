@@ -300,6 +300,44 @@ func TestLoadTrimsWhitespaceFromPathsAndIdentifiers(t *testing.T) {
 	}
 }
 
+// TestLoadDoesNotTrimAPIKeyLiterals guards the carve-out in
+// trimConfigStrings: APIKey fields hold opaque secrets and are
+// deliberately NOT trimmed. Current providers use whitespace-free
+// keys, but a future proxy could emit a padded token, and silent
+// trimming would corrupt it. Users should supply APIKeyFile or
+// APIKeyEnv in practice; this test just asserts the escape hatch.
+func TestLoadDoesNotTrimAPIKeyLiterals(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+
+	// Note the padded api_key values -- the test asserts they
+	// round-trip untouched.
+	yamlBody := "llm:\n" +
+		"    provider: anthropic\n" +
+		"    api_key: \"  sk-padded-secret  \"\n" +
+		"embedding:\n" +
+		"    provider: openai\n" +
+		"    api_key: \"  another-padded-key  \"\n"
+
+	if err := os.WriteFile(cfgPath, []byte(yamlBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.LLM.APIKey != "  sk-padded-secret  " {
+		t.Errorf("LLM.APIKey got %q, want %q (trim must not touch APIKey)",
+			cfg.LLM.APIKey, "  sk-padded-secret  ")
+	}
+	if cfg.Embedding.APIKey != "  another-padded-key  " {
+		t.Errorf("Embedding.APIKey got %q, want %q (trim must not touch APIKey)",
+			cfg.Embedding.APIKey, "  another-padded-key  ")
+	}
+}
+
 func TestNewConfigDefaults(t *testing.T) {
 	cfg := Defaults()
 
