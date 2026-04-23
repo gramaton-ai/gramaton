@@ -222,9 +222,12 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 // registerCollectionsMCPTools wires the collections cluster MCP tools.
 func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	type createArgs struct {
-		Name        string                `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
-		Description string                `json:"description,omitempty" jsonschema:"optional description"`
-		Schema      *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+		Name         string                `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
+		Description  string                `json:"description,omitempty" jsonschema:"optional description"`
+		Schema       *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+		ClearMode    string                `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
+		Supersession string                `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
+		Curation     string                `json:"curation,omitempty" jsonschema:"per-collection curation profile: full (every stage), standard (default), minimal (only embed + concepts), or none (BM25 only)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_create",
@@ -233,7 +236,12 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_collection_create")
 		defer done(nil)
 		result, apiErr := s.api.CollectionCreate(ctx, &api.CollectionCreateRequest{
-			Name: args.Name, Description: args.Description, Schema: args.Schema,
+			Name:         args.Name,
+			Description:  args.Description,
+			Schema:       args.Schema,
+			ClearMode:    args.ClearMode,
+			Supersession: args.Supersession,
+			Curation:     args.Curation,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

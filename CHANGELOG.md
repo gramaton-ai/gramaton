@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Collection behaviour config: `clear_mode`, `supersession`,
+  `curation` (temporal-queries Phase 4).** `gramaton_collection_create`
+  accepts three optional behaviour knobs that tell future phases how
+  to treat items in the collection. Stored as plain node properties
+  (`collection_clear_mode`, `collection_supersession`,
+  `collection_curation`) so Phase 5 (dedup layers) and Phase 8 (log
+  filters) can read them without parsing the item-schema blob.
+  Values:
+    - `clear_mode`: `resolve` (default) or `unlink`
+    - `supersession`: `collection` (default), `store`, or `none`
+    - `curation`: `full`, `standard` (default), `minimal`, or `none`
+  Getters `api.CollectionClearMode(n)`, `CollectionSupersession(n)`,
+  `CollectionCuration(n)` fall back to the default when the
+  property is absent, which is why no migration sweep is needed for
+  existing collections -- consumers that read these fields through
+  the getters get correct-by-default behaviour regardless of when
+  the collection was created.
+
 - **`gramaton_collection_items(as_of=...)` — point-in-time
   membership (temporal-queries Phase 6).** Passing `as_of` switches
   the tool from HEAD to historical-commit mode: the response lists

@@ -253,6 +253,15 @@ type CollectionCreateRequest struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description,omitempty"`
 	Schema      *CollectionSchema `json:"schema,omitempty"`
+
+	// Behaviour knobs (Phase 4). All three are optional -- absent
+	// means "use the default", via the read-time fallback in
+	// collection_config.go. Passing an explicit value stores it on
+	// the collection node so future reads surface it without the
+	// fallback (useful for visibility).
+	ClearMode    string `json:"clear_mode,omitempty"`
+	Supersession string `json:"supersession,omitempty"`
+	Curation     string `json:"curation,omitempty"`
 }
 
 func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) (map[string]any, *APIError) {
@@ -260,6 +269,9 @@ func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) 
 		return nil, ErrInvalid(err.Error())
 	}
 	if err := validateSchema(req.Schema); err != nil {
+		return nil, ErrInvalid(err.Error())
+	}
+	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
 
@@ -288,6 +300,15 @@ func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) 
 			return nil, ErrInternal("failed to serialize schema")
 		}
 		props["collection_schema"] = graph.StringProperty(raw)
+	}
+	if req.ClearMode != "" {
+		props[propClearMode] = graph.StringProperty(req.ClearMode)
+	}
+	if req.Supersession != "" {
+		props[propSupersession] = graph.StringProperty(req.Supersession)
+	}
+	if req.Curation != "" {
+		props[propCuration] = graph.StringProperty(req.Curation)
 	}
 
 	n := a.engine.Graph().AddNode(props)

@@ -28,9 +28,12 @@ func registerCollectionProxyTools(mcpServer *mcp.Server) {
 // --- create ---
 
 type proxyCollectionCreateInput struct {
-	Name        string `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
-	Description string `json:"description,omitempty" jsonschema:"optional description"`
-	Schema      any    `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+	Name         string `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
+	Description  string `json:"description,omitempty" jsonschema:"optional description"`
+	Schema       any    `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+	ClearMode    string `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
+	Supersession string `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
+	Curation     string `json:"curation,omitempty" jsonschema:"per-collection curation profile: full (every stage), standard (default), minimal (only embed + concepts), or none (BM25 only)"`
 }
 
 func registerCollectionCreateProxy(s *mcp.Server) {
