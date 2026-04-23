@@ -188,6 +188,40 @@ func TestHistoryInvalidUntil(t *testing.T) {
 	}
 }
 
+// TestD3ResolveEmitsAction confirms that api.Resolve writes a D3
+// CommitAction on the resulting commit. This is the smoke-test-
+// critical path: Phase 8's gramaton_log(actions=["resolve"]) filter
+// only works if resolve-commits carry the structured action.
+func TestD3ResolveEmitsAction(t *testing.T) {
+	a, eng := setupTestAPI(t)
+	id := addRecord(t, eng, "resolve target")
+
+	resp, apiErr := a.Resolve(context.Background(), ResolveRequest{ID: id, Resolution: "completed"})
+	if apiErr != nil {
+		t.Fatalf("Resolve: %v", apiErr)
+	}
+	if !resp.Resolved {
+		t.Fatal("Resolve should return Resolved=true")
+	}
+
+	// Load HEAD commit and inspect Actions.
+	store := eng.Store()
+	headHash := eng.HeadHash()
+	commit, err := graph.LoadCommitMeta(store, headHash)
+	if err != nil {
+		t.Fatalf("LoadCommitMeta: %v", err)
+	}
+	if len(commit.Actions) != 1 {
+		t.Fatalf("HEAD commit Actions len = %d, want 1 (resolve)", len(commit.Actions))
+	}
+	if commit.Actions[0].Kind != "resolve" {
+		t.Errorf("Actions[0].Kind = %q, want resolve", commit.Actions[0].Kind)
+	}
+	if commit.Actions[0].RecordID != id {
+		t.Errorf("Actions[0].RecordID = %q, want %q", commit.Actions[0].RecordID, id)
+	}
+}
+
 func TestHistorySinceAfterUntilRejected(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	_, apiErr := a.History(context.Background(), HistoryRequest{

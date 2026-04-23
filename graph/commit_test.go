@@ -17,6 +17,57 @@ func tempStorage(t *testing.T) *storage.Store {
 	return s
 }
 
+// TestSaveWithActionsRoundTrip confirms the D3 Actions field
+// survives commit marshal/unmarshal: populated actions on the way
+// in show up on the way out, and an empty slice omits the field
+// (so old-binary consumers read these commits unchanged).
+func TestSaveWithActionsRoundTrip(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	actions := []CommitAction{
+		{Kind: "resolve", RecordID: "01ABC"},
+		{Kind: "collection_update", RecordID: "01DEF", Field: "status"},
+	}
+	commit, err := g.SaveWithActions(s, "", "mixed batch", actions)
+	if err != nil {
+		t.Fatalf("SaveWithActions: %v", err)
+	}
+	loaded, err := LoadCommitMeta(s, commit.Hash)
+	if err != nil {
+		t.Fatalf("LoadCommitMeta: %v", err)
+	}
+	if len(loaded.Actions) != 2 {
+		t.Fatalf("loaded Actions len = %d, want 2", len(loaded.Actions))
+	}
+	if loaded.Actions[0].Kind != "resolve" || loaded.Actions[0].RecordID != "01ABC" {
+		t.Errorf("Actions[0] = %+v", loaded.Actions[0])
+	}
+	if loaded.Actions[1].Kind != "collection_update" || loaded.Actions[1].Field != "status" {
+		t.Errorf("Actions[1] = %+v", loaded.Actions[1])
+	}
+}
+
+// TestSaveEmptyActionsOmitsField: no actions -> Actions stays nil on
+// the re-loaded commit (not an empty slice), and pre-D3 parsers that
+// don't know the field read the commit unchanged.
+func TestSaveEmptyActionsOmitsField(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	commit, err := g.Save(s, "", "no-actions commit")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := LoadCommitMeta(s, commit.Hash)
+	if err != nil {
+		t.Fatalf("LoadCommitMeta: %v", err)
+	}
+	if loaded.Actions != nil {
+		t.Errorf("expected nil Actions on empty-actions commit, got %+v", loaded.Actions)
+	}
+}
+
 func TestSaveAndLoadEmpty(t *testing.T) {
 	g := New()
 	s := tempStorage(t)

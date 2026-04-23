@@ -72,7 +72,9 @@ func (a *API) Classify(ctx context.Context, req ClassifyRequest) (ClassifyRespon
 
 	a.engine.SetProp(req.ID, "processing_status", graph.StringProperty("processed"))
 
-	if _, err := a.engine.Save("classify"); err != nil {
+	if _, err := a.engine.Save("classify", graph.CommitAction{
+		Kind: "classify", RecordID: req.ID,
+	}); err != nil {
 		return ClassifyResponse{}, ErrInternal("failed to save")
 	}
 

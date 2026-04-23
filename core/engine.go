@@ -318,7 +318,13 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 //
 // Persists indexes (BM25, vector, property) alongside the commit
 // so startup can skip expensive rebuilds.
-func (e *Engine) Save(message string) (*graph.Commit, error) {
+//
+// actions is the optional D3 structured action descriptor list.
+// Empty variadic = no structured actions (commit still filterable
+// via Message-prefix matching for pre-D3 consumers). Cluster
+// migration to explicit action emission lands incrementally per
+// the Phase 3 build plan.
+func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Commit, error) {
 	// Flush buffered vector writes to disk before committing.
 	if f, ok := e.indexes.vecIdx.(interface{ Flush() error }); ok {
 		if err := f.Flush(); err != nil {
@@ -368,7 +374,7 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		}
 	}
 
-	commit, err := e.graph.Save(e.store, e.headHash, message, storage.ProllyConfig{
+	commit, err := e.graph.SaveWithActions(e.store, e.headHash, message, actions, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
 		SplitBits:       e.cfg.Storage.ProllySplitBits,
 	})
@@ -540,8 +546,10 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 	lockStart := time.Now()
 	var mutated bool
 	var fnErr error
+	var collectedActions []graph.CommitAction
 	batchErr := e.indexes.batch(e, func(ws *WriteSession) error {
 		mutated, fnErr = fn(ws)
+		collectedActions = ws.actions
 		return fnErr
 	})
 	batchDur := time.Since(lockStart)
@@ -562,7 +570,7 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 	}
 
 	saveStart := time.Now()
-	if _, err := e.Save(message); err != nil {
+	if _, err := e.Save(message, collectedActions...); err != nil {
 		return fmt.Errorf("withwritebatch %q: save: %w", message, err)
 	}
 	slog.Info("write batch complete",

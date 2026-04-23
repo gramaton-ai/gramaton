@@ -26,6 +26,23 @@ type WriteSession struct {
 	edges   *graph.EdgeBatch
 	engine  *Engine
 	indexes *indexSet
+	// actions accumulates D3 structured action descriptors for the
+	// batch. Engine.WithWriteBatch passes them to Save so the
+	// resulting commit carries per-record intent, not just the free-
+	// form Message. Callers accumulate via ws.AddAction within the
+	// batch closure; nil/empty is fine (commit still filterable by
+	// Message prefix).
+	actions []graph.CommitAction
+}
+
+// AddAction records a D3 structured action for the current batch.
+// Callers emit one per record-scoped change (capture, resolve,
+// collection_add, curation-touch-record, etc.). Duplicate actions
+// are stored verbatim -- consumers that want dedup should filter
+// at read time. Thread-safe only under the engine write lock,
+// which WithWriteBatch already holds while fn runs.
+func (ws *WriteSession) AddAction(a graph.CommitAction) {
+	ws.actions = append(ws.actions, a)
 }
 
 // Tx returns the underlying bbolt transaction. Exposed for low-level

@@ -68,7 +68,9 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 		a.engine.SetProp(req.ID, "valid_until", graph.TimestampProperty(now))
 	}
 
-	if _, err := a.engine.Save("resolve"); err != nil {
+	if _, err := a.engine.Save("resolve", graph.CommitAction{
+		Kind: "resolve", RecordID: req.ID,
+	}); err != nil {
 		return ResolveResponse{}, ErrInternal("failed to save")
 	}
 

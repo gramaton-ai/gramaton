@@ -45,7 +45,9 @@ func (a *API) DeleteRecord(ctx context.Context, req DeleteRecordRequest) (Delete
 		a.engine.SetProp(req.ID, "delete_reason", graph.StringProperty(req.Reason))
 	}
 
-	if _, err := a.engine.Save("delete"); err != nil {
+	if _, err := a.engine.Save("delete", graph.CommitAction{
+		Kind: "delete", RecordID: req.ID,
+	}); err != nil {
 		return DeleteRecordResponse{}, ErrInternal("failed to save")
 	}
 

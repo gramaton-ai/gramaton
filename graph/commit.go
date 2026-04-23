@@ -10,6 +10,23 @@ import (
 	"github.com/gramaton-ai/gramaton/storage"
 )
 
+// CommitAction is a structured descriptor of an intent-level change
+// carried by a commit. Unlike the free-form Commit.Message, actions
+// are addressable per-record and filterable by Kind (D3). A single
+// commit may carry many actions (e.g. a curation cycle touching
+// multiple records, a batch collection add, a migration sweep).
+//
+// Emission is loose: callers populate the slice at each `Save` site,
+// the server trusts the contents, and a future CI lint enforces
+// coverage. The field is omitempty so existing commits serialize
+// unchanged and old-binary reads of new commits fall back to
+// Message-based filtering.
+type CommitAction struct {
+	Kind     string `json:"kind"`                // e.g. "resolve", "capture", "collection_update", "curation"
+	RecordID string `json:"record_id,omitempty"` // target record when action is record-scoped
+	Field    string `json:"field,omitempty"`     // target property when action is field-scoped
+}
+
 // Commit is an immutable snapshot of the graph state.
 type Commit struct {
 	Version      int       `json:"version"`
@@ -31,13 +48,30 @@ type Commit struct {
 	// NodeHashes/EdgeHashes retained for reading v0 commits only.
 	NodeHashes []string `json:"node_hashes,omitempty"`
 	EdgeHashes []string `json:"edge_hashes,omitempty"`
+	// Structured per-commit actions (D3). Optional; old commits
+	// deserialize with Actions == nil. Omitempty on write keeps
+	// pre-D3 consumers readable and bounds commit JSON size.
+	Actions []CommitAction `json:"actions,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.
 // Uses dirty tracking to only marshal modified nodes/edges. The
 // full entry maps (nodeHashes/edgeHashes) are rebuilt for the
 // prolly tree, but unchanged chunks deduplicate via content-addressing.
+//
+// Equivalent to SaveWithActions with no D3 action descriptors.
+// Kept for source-compatibility with pre-Phase-3 tests and callers
+// that don't carry structured actions.
 func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...storage.ProllyConfig) (*Commit, error) {
+	return g.SaveWithActions(s, parent, message, nil, pCfg...)
+}
+
+// SaveWithActions is Save extended with the optional D3 structured
+// action descriptor list. Empty slice / nil = no structured actions
+// (commit is filterable by Message prefix only). Callers that emit
+// actions (api/ cluster, future curation/ cluster) invoke this
+// directly; engine.Save routes here via its variadic actions arg.
+func (g *Graph) SaveWithActions(s *storage.Store, parent string, message string, actions []CommitAction, pCfg ...storage.ProllyConfig) (*Commit, error) {
 	var treeCfg storage.ProllyConfig
 	if len(pCfg) > 0 {
 		treeCfg = pCfg[0]
@@ -187,6 +221,7 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 		Message:      message,
 		NodeTreeRoot: nodeTreeRoot,
 		EdgeTreeRoot: edgeTreeRoot,
+		Actions:      actions,
 	}
 
 	commitData, err := json.Marshal(commit)

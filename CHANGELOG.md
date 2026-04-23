@@ -9,6 +9,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **D3 structured `CommitAction` on commits (temporal-queries Phase 3,
+  partial land).** Commits now carry an optional `Actions []CommitAction`
+  slice alongside `Message`. Each action has `Kind` (e.g.
+  `"resolve"`, `"collection_update"`, `"capture"`) and optional
+  `RecordID` / `Field` for record-scoped intent. `engine.Save`
+  gains a variadic `actions ...graph.CommitAction` parameter that
+  routes to the new `graph.SaveWithActions`; old-style `engine.Save(msg)`
+  call sites keep working with `Actions == nil` (and the field is
+  omitempty on write so pre-D3 binaries read post-D3 commits
+  unchanged). `WriteSession.AddAction` accumulates actions inside
+  `engine.WithWriteBatch` closures for batched callers.
+  Migrated api/ sites: `api.Resolve`, `api.Capture`,
+  `api.Update`, `api.Classify`, `api.DeleteRecord`, `api.Link`,
+  `api.Unlink`, and every `api/collections.go` Save site
+  (create / add / add_batch / remove / update / move / rename /
+  retire / unretire / schema_update / migrate). Deferred to a
+  follow-on: `curation/` cluster per-record actions and the
+  `tools/lint/saveactions` AST lint that prevents future drift.
+  Phase 8's `gramaton_log(actions=[...])` filter is now wire-
+  ready against these commits.
+
 - **Collection behaviour config: `clear_mode`, `supersession`,
   `curation` (temporal-queries Phase 4).** `gramaton_collection_create`
   accepts three optional behaviour knobs that tell future phases how

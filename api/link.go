@@ -74,7 +74,9 @@ func (a *API) Link(ctx context.Context, req LinkRequest) (LinkResponse, *APIErro
 		return LinkResponse{}, ErrInternal("failed to create edge")
 	}
 
-	if _, err := a.engine.Save("link"); err != nil {
+	if _, err := a.engine.Save("link", graph.CommitAction{
+		Kind: "link", RecordID: req.SourceID,
+	}); err != nil {
 		return LinkResponse{}, ErrInternal("failed to save")
 	}
 
@@ -109,7 +111,9 @@ func (a *API) Unlink(ctx context.Context, req UnlinkRequest) (UnlinkResponse, *A
 		return UnlinkResponse{}, ErrNotFound("edge not found")
 	}
 
-	if _, err := a.engine.Save("unlink"); err != nil {
+	if _, err := a.engine.Save("unlink", graph.CommitAction{
+		Kind: "unlink",
+	}); err != nil {
 		return UnlinkResponse{}, ErrInternal("failed to save")
 	}
 
