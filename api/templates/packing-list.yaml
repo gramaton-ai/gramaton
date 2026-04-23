@@ -1,0 +1,16 @@
+name: packing-list
+description: Trip-scoped packing checklist. One-off so items are ephemeral; minimal curation because LLM passes add nothing to "socks" or "charger".
+clear_mode: resolve
+supersession: collection
+curation: minimal
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: category
+      type: string
+      required: false
+    - name: packed
+      type: boolean
+      required: false

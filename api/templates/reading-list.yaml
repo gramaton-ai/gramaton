@@ -1,0 +1,26 @@
+name: reading-list
+description: Books, articles, and papers. Clear via unlink (an unread book stays a record you can re-add later) with full curation on captured notes and takeaways.
+clear_mode: unlink
+supersession: collection
+curation: full
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: author
+      type: string
+      required: false
+    - name: status
+      type: enum
+      required: true
+      values: [queued, reading, finished, abandoned]
+    - name: rating
+      type: number
+      required: false
+    - name: notes
+      type: string
+      required: false
+    - name: url
+      type: string
+      required: false

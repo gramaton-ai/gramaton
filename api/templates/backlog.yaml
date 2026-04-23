@@ -1,0 +1,27 @@
+name: backlog
+description: Dev ticket backlog with rich per-item metadata. Full curation so classification, summarization, and concept detection run on captured rationale.
+clear_mode: resolve
+supersession: collection
+curation: full
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: status
+      type: enum
+      required: true
+      values: [open, in_progress, resolved, abandoned]
+    - name: severity
+      type: enum
+      required: false
+      values: [P0, P1, P2, P3]
+    - name: area
+      type: string
+      required: false
+    - name: details
+      type: string
+      required: false
+    - name: file_refs
+      type: string
+      required: false

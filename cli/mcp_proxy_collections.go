@@ -34,6 +34,7 @@ type proxyCollectionCreateInput struct {
 	ClearMode    string `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
 	Supersession string `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
 	Curation     string `json:"curation,omitempty" jsonschema:"per-collection curation profile: full (every stage), standard (default), minimal (only embed + concepts), or none (BM25 only)"`
+	Template     string `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
 }
 
 func registerCollectionCreateProxy(s *mcp.Server) {

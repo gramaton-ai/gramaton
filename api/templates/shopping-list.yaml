@@ -1,0 +1,16 @@
+name: shopping-list
+description: Grocery-shaped list. Short-content items like "eggs" or "milk" - LLM classification adds no value, so curation is minimal (embed + concepts only, for intra-collection search + cross-list pattern detection). Resolve on clear so "when did I last buy eggs" works.
+clear_mode: resolve
+supersession: collection
+curation: minimal
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: quantity
+      type: string
+      required: false
+    - name: notes
+      type: string
+      required: false

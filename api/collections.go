@@ -262,11 +262,24 @@ type CollectionCreateRequest struct {
 	ClearMode    string `json:"clear_mode,omitempty"`
 	Supersession string `json:"supersession,omitempty"`
 	Curation     string `json:"curation,omitempty"`
+
+	// Template names a pre-built Collection shape (Phase 7). Valid
+	// names are exposed via api.ListTemplates; ships with backlog /
+	// todo / reading-list / shopping-list / packing-list. When set,
+	// the template's schema + behaviour fields populate any caller
+	// fields that are left empty. Caller-provided fields always
+	// win (shallow merge).
+	Template string `json:"template,omitempty"`
 }
 
 func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) (map[string]any, *APIError) {
 	if err := validateCollectionName(req.Name); err != nil {
 		return nil, ErrInvalid(err.Error())
+	}
+	// Apply the template BEFORE validation: the resulting merged
+	// request is what gets validated + stored.
+	if tmplErr := applyTemplate(req); tmplErr != nil {
+		return nil, tmplErr
 	}
 	if err := validateSchema(req.Schema); err != nil {
 		return nil, ErrInvalid(err.Error())

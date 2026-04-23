@@ -1,0 +1,20 @@
+name: todo
+description: Personal task list. Resolving items preserves history for pattern recall ("what did I complete last week").
+clear_mode: resolve
+supersession: collection
+curation: standard
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: status
+      type: enum
+      required: true
+      values: [open, in_progress, done]
+    - name: due
+      type: date
+      required: false
+    - name: notes
+      type: string
+      required: false

@@ -9,6 +9,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Collection templates + five starter templates (temporal-queries
+  Phase 7).** `gramaton_collection_create` now accepts a
+  `template` parameter. When set, the named template populates any
+  caller fields that are left empty (schema, description,
+  clear_mode, supersession, curation) via shallow merge --
+  caller-provided fields always win. Ships with five starter
+  templates embedded in the binary:
+    - `backlog` -- dev tickets, full curation, rich schema.
+    - `todo` -- personal tasks, standard curation, due-date field.
+    - `reading-list` -- books/articles with notes, `clear_mode:
+      unlink` so paused reads stay as records, full curation on
+      captured notes.
+    - `shopping-list` -- grocery-shaped short-content items,
+      `curation: minimal` so embed + concepts run but LLM-expensive
+      stages don't waste compute on "eggs".
+    - `packing-list` -- trip-scoped checklist, minimal curation.
+  Template descriptors live in `api/templates/*.yaml`, loaded via
+  `//go:embed` on first use. `api.LookupTemplate(name)` and
+  `api.ListTemplates()` are the programmatic surface; a future
+  creation-wizard or `gramaton template list` CLI can build on
+  those.
+
 - **`gramaton_log` extended with `actions` / `exclude_curation` /
   `include_record_mutations` (temporal-queries Phase 8).** The
   commit-timeline tool gains three filters that compose with
