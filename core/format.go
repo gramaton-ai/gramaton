@@ -35,10 +35,19 @@ func WriteFormatVersion(dataDir string) error {
 	return AtomicWriteFile(filepath.Join(dataDir, "FORMAT"), []byte(s), 0o600)
 }
 
-// CheckFormatVersion reads the store format version and returns an
-// error if the store was created by a newer version of gramaton.
-// If no FORMAT file exists (pre-format-version store), it writes
-// the current version.
+// CheckFormatVersion reads the store format version and enforces the
+// boot-time compatibility gate. Behaviors by read value:
+//
+//   - v == 0 (no FORMAT file): treated as a fresh store. Writes the
+//     current version and returns nil.
+//   - v == current: compatible. Returns nil.
+//   - v < current: OLDER than current. Returns an error telling the
+//     user to run `gramaton migrate`. No auto-upgrade at boot by
+//     design (see feedback_ad_hoc_migrations). Migration paths call
+//     this function's peer, ReadFormatVersion, to inspect without
+//     enforcing.
+//   - v > current: NEWER than the running binary. Returns an error
+//     asking the user to upgrade gramaton.
 func CheckFormatVersion(dataDir string) error {
 	v, err := ReadFormatVersion(dataDir)
 	if err != nil {
@@ -58,8 +67,12 @@ func CheckFormatVersion(dataDir string) error {
 		)
 	}
 
-	// v <= StoreFormatVersion: compatible. Future migrations would
-	// go here (e.g., if v == 1 && StoreFormatVersion == 2, migrate).
+	if v < version.StoreFormatVersion {
+		return fmt.Errorf(
+			"store format version %d is older than this binary supports (%d); run `gramaton migrate` to upgrade",
+			v, version.StoreFormatVersion,
+		)
+	}
 
 	return nil
 }

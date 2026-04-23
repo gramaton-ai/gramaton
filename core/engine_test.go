@@ -101,6 +101,69 @@ func TestSaveAndReload(t *testing.T) {
 	}
 }
 
+// TestSaveWritesTimestampIndex confirms engine.Save() populates the
+// D7 commit_timestamps bucket for every commit, so temporal queries
+// can find commits by wall-clock time without walking the parent
+// chain. Phase 1's write-path hook.
+func TestSaveWritesTimestampIndex(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	if eng.TSIndex() == nil {
+		t.Fatal("TSIndex should be non-nil after engine load")
+	}
+	if got := eng.TSIndex().Count(); got != 0 {
+		t.Fatalf("fresh engine: tsIndex count = %d, want 0", got)
+	}
+
+	// First save.
+	before1 := time.Now().UTC().Add(-time.Second)
+	eng.Lock()
+	eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("first"),
+	})
+	c1, err := eng.Save("first")
+	eng.Unlock()
+	if err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	after1 := time.Now().UTC().Add(time.Second)
+
+	if got := eng.TSIndex().Count(); got != 1 {
+		t.Errorf("after first save: count = %d, want 1", got)
+	}
+	// CommitAt at save timestamp should return the commit we just made.
+	if h, ok := eng.TSIndex().CommitAt(c1.Timestamp); !ok || h != c1.Hash {
+		t.Errorf("CommitAt(c1.Timestamp) = (%q, %v), want (%q, true)", h, ok, c1.Hash)
+	}
+	// CommitsBetween covering save window includes it.
+	hashes := eng.TSIndex().CommitsBetween(before1, after1)
+	if len(hashes) != 1 || hashes[0] != c1.Hash {
+		t.Errorf("CommitsBetween around first save: got %v, want [%q]", hashes, c1.Hash)
+	}
+
+	// Second save.
+	eng.Lock()
+	eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("second"),
+	})
+	c2, err := eng.Save("second")
+	eng.Unlock()
+	if err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	if got := eng.TSIndex().Count(); got != 2 {
+		t.Errorf("after second save: count = %d, want 2", got)
+	}
+	// Both commits retrievable by their own timestamps.
+	if h, _ := eng.TSIndex().CommitAt(c1.Timestamp); h != c1.Hash {
+		t.Errorf("c1 lookup after c2 save: got %q, want %q", h, c1.Hash)
+	}
+	if h, _ := eng.TSIndex().CommitAt(c2.Timestamp); h != c2.Hash {
+		t.Errorf("c2 lookup: got %q, want %q", h, c2.Hash)
+	}
+}
+
 func TestHeadHash(t *testing.T) {
 	eng := setupTestEngine(t)
 

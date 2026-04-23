@@ -205,6 +205,24 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 	return commit, nil
 }
 
+// LoadCommitMeta reads a commit's JSON from storage without mutating
+// graph state. Used by callers that only need commit-level fields
+// (parent, timestamp, index roots) -- chain traversal, timestamp
+// backfill, history walkers -- and want to avoid the prolly-tree
+// load that full (*Graph).Load performs.
+func LoadCommitMeta(s *storage.Store, commitHash string) (*Commit, error) {
+	data, err := s.Read(commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("load commit meta %s: %w", commitHash, err)
+	}
+	var c Commit
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, fmt.Errorf("unmarshal commit %s: %w", commitHash, err)
+	}
+	c.Hash = commitHash
+	return &c, nil
+}
+
 // RewriteCommit re-serializes a commit with updated fields (e.g.,
 // index roots) and returns the new commit with updated hash. The
 // old commit chunk remains in the store but is unreferenced.

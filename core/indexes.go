@@ -38,6 +38,7 @@ type indexSet struct {
 	secIdx    *index.BboltSecondaryIndex
 	collCache *index.BboltCollectionCache
 	edgeStore *graph.BboltEdgeStore
+	tsIndex   *graph.TSIndex
 	boltDB    *bolt.DB
 }
 
@@ -70,12 +71,17 @@ func newIndexSet(boltDB *bolt.DB, cfg config.Config) (*indexSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create collection cache: %w", err)
 	}
+	tsIndex, err := graph.NewTSIndex(boltDB)
+	if err != nil {
+		return nil, fmt.Errorf("create timestamp index: %w", err)
+	}
 	return &indexSet{
 		propIdx:   propIdx,
 		bm25Full:  bm25Full,
 		secIdx:    secIdx,
 		collCache: collCache,
 		edgeStore: edgeStore,
+		tsIndex:   tsIndex,
 		boltDB:    boltDB,
 	}, nil
 }

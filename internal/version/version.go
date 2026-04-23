@@ -22,4 +22,9 @@ var (
 // History:
 //   1 -- initial format (prolly trees, content-addressed chunks,
 //        property encoding, collection nodes with member_of edges)
-const StoreFormatVersion = 1
+//   2 -- D7 timestamp-indexed commits (commit_timestamps bbolt
+//        bucket populated on every Save); collection schema gains
+//        clear_mode and curation fields with explicit defaults on
+//        existing collections. Migration is manual via `gramaton
+//        migrate` -- engine refuses to boot on v1 stores.
+const StoreFormatVersion = 2

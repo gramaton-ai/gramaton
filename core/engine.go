@@ -90,6 +90,16 @@ func LoadEngine(cfgDir string, globalCfgDir ...string) (*Engine, error) {
 // for dependency injection. Options are applied after all default
 // initialization is complete.
 func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineOption) (*Engine, error) {
+	return loadEngineWithOptions(cfgDir, globalCfgDirs, opts, false)
+}
+
+// loadEngineWithOptions is the internal body of LoadEngineWithOptions.
+// skipFormatCheck bypasses the store-format gate and is reserved for
+// the `gramaton migrate` code path -- no other caller should set it.
+// A v1 store can only be opened by migration; everything else must
+// refuse to boot so temporal queries never run against unindexed
+// history.
+func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineOption, skipFormatCheck bool) (*Engine, error) {
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 
 	var cfg config.Config
@@ -113,8 +123,10 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
 
-	if err := CheckFormatVersion(cfg.DataDir); err != nil {
-		return nil, fmt.Errorf("store format: %w", err)
+	if !skipFormatCheck {
+		if err := CheckFormatVersion(cfg.DataDir); err != nil {
+			return nil, fmt.Errorf("store format: %w", err)
+		}
 	}
 
 	// Open the shared bbolt database for property index and edge store.
@@ -385,6 +397,17 @@ func (e *Engine) Save(message string) (*graph.Commit, error) {
 		return nil, fmt.Errorf("rewrite commit with indexes: %w", err)
 	}
 
+	// Index the commit's timestamp for D7 temporal queries. Fires on
+	// every Save so new commits are always reachable by CommitAt /
+	// CommitsBetween without walking the parent chain. A rare failure
+	// here leaves the commit saved but unindexed; `gramaton migrate`
+	// is idempotent and can backfill gaps.
+	if e.indexes.tsIndex != nil {
+		if err := e.indexes.tsIndex.Put(commit); err != nil {
+			return nil, fmt.Errorf("write timestamp index: %w", err)
+		}
+	}
+
 	headPath := filepath.Join(e.cfg.DataDir, "HEAD")
 	if err := AtomicWriteFile(headPath, []byte(commit.Hash), 0o600); err != nil {
 		return nil, fmt.Errorf("write HEAD: %w", err)
@@ -460,6 +483,10 @@ func (e *Engine) SecIdx() *index.BboltSecondaryIndex { return e.indexes.secIdx }
 // CollCache returns the collection membership cache.
 // May be nil in tests that don't create one.
 func (e *Engine) CollCache() *index.BboltCollectionCache { return e.indexes.collCache }
+
+// TSIndex returns the commit-timestamp index (D7). Used by temporal
+// queries (Phase 2+) and the `gramaton migrate` backfill path.
+func (e *Engine) TSIndex() *graph.TSIndex { return e.indexes.tsIndex }
 
 // BatchIndexWrites executes fn within a single bbolt write transaction
 // shared across all bbolt-backed indexes (PropIdx, BM25, SecIdx,

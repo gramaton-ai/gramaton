@@ -80,7 +80,7 @@ See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step pro
 `core/engine.go` owns the wiring. An `Engine` holds:
 
 - The loaded graph (`graph.Graph`).
-- The index set (`indexSet`: BM25, vector HNSW/Flat, property, secondary, collections).
+- The index set (`indexSet`: BM25, vector HNSW/Flat, property, secondary, collections, commit-timestamp).
 - A `searcherSubsystem` that wraps `search.Tool` — pure computation on top of the graph and indexes.
 - Provider references (`embed.Provider`, `llm.Provider`).
 - The storage layer (`storage.Store`).
@@ -94,7 +94,7 @@ The Engine never knows about the transports or the api/ layer. It exposes primit
 ### 4. Data layer (`graph/`, `index/`, `storage/`)
 
 - **`graph/`**: in-memory property graph. Nodes with typed key-value properties, edges with type + weight + optional properties. Pure data structure — no I/O. `graph.Properties` is a `map[string]Property`; property types are a sum (`String`, `Float64`, `Int64`, `Bool`, `Timestamp`, `Vector`, `StringList`, `Bytes`).
-- **`index/`**: BM25 (`bbolt_bm25.go`), vector indexes (`hnsw.go`, `flat_mmap.go`, switched dynamically by candidate-set size), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). All persisted via bbolt buckets or a mmap'd flat file for vectors.
+- **`index/`**: BM25 (`bbolt_bm25.go`), vector indexes (`hnsw.go`, `flat_mmap.go`, switched dynamically by candidate-set size), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
 - **`storage/`**: prolly tree — a probabilistic B-tree with content-addressed chunks. Mutations create new root hashes; old roots stay reachable as commit history. `storage/cas.go` is the content-addressed store; `storage/prolly.go` is the tree itself; `storage/gc.go` garbage-collects unreferenced chunks.
 
 The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted alongside each commit and loaded from disk at startup, skipping re-tokenization.

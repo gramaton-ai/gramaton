@@ -51,11 +51,37 @@ func TestCheckFormatVersionNewStore(t *testing.T) {
 
 func TestCheckFormatVersionCompatible(t *testing.T) {
 	dir := t.TempDir()
-	// Write current version.
-	os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("1"), 0o600)
+	// Write the current version; the check is the no-op happy path.
+	if err := WriteFormatVersion(dir); err != nil {
+		t.Fatalf("write current version: %v", err)
+	}
 
 	if err := CheckFormatVersion(dir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestCheckFormatVersionNeedsMigration covers the boot-time refuse-
+// to-boot gate added alongside StoreFormatVersion=2. An older store
+// must not auto-upgrade; CheckFormatVersion returns an error that
+// tells the user to run `gramaton migrate`.
+func TestCheckFormatVersionNeedsMigration(t *testing.T) {
+	dir := t.TempDir()
+	// Write version 1 (older than current 2).
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CheckFormatVersion(dir)
+	if err == nil {
+		t.Fatal("expected error for older format version")
+	}
+	msg := err.Error()
+	if !contains(msg, "older than this binary") {
+		t.Errorf("error message should mention older-than-binary, got: %v", err)
+	}
+	if !contains(msg, "gramaton migrate") {
+		t.Errorf("error message should point at `gramaton migrate`, got: %v", err)
 	}
 }
 

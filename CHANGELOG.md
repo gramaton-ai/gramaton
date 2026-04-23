@@ -9,6 +9,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **D7 timestamp-indexed commits (temporal-queries Phase 1).** New
+  `graph.TSIndex` type, a bbolt-backed index mapping commit
+  timestamps to commit hashes. Every `engine.Save()` now adds an
+  entry to the `commit_timestamps` bucket keyed by 8-byte big-
+  endian unix nanos + `#` + 12-char commit hash prefix; lexicographic
+  key order equals chronological order so cursor `Seek` gives
+  O(log N) snap-to-prior lookups (`CommitAt`) and range scans
+  (`CommitsBetween`). Foundational primitive for upcoming temporal
+  queries (Axis A / B / D); replaces the walker-model HEAD-backward
+  traversal that was bounded by `MaxLogTraversal=5000` and broke
+  for deep-history date queries on active stores. Exposed on the
+  engine via `Engine.TSIndex()`. Also adds `graph.LoadCommitMeta`,
+  a commit-only read helper that callers use for chain traversal
+  without paying for the prolly-tree load in `Graph.Load`.
+- **`gramaton migrate` CLI subcommand.** One-shot, idempotent
+  migration for the 1 → 2 store format bump. Opens the store via
+  a migration-private code path that bypasses the boot gate,
+  walks the commit chain HEAD → root to backfill the timestamp
+  index, and writes `FORMAT=2` on success. Refuses to run while
+  a server is active. Rerun-safe after a partial failure because
+  bbolt Puts are idempotent on identical (key, value) pairs.
+
+### Changed
+
+- **Store format bumped 1 → 2 with refuse-to-boot gate.**
+  `internal/version.StoreFormatVersion` is now 2. `core.CheckFormatVersion`
+  rejects v1 stores with a clear message pointing at `gramaton
+  migrate`; no auto-upgrade at boot by design (single-user
+  lifecycle, manual migration is simpler than resumable-sentinel
+  code). Fresh stores still write the current version
+  transparently. Collection-level defaults (`clear_mode`,
+  `curation`) were considered for the migrate sweep but deferred
+  to Phase 4 when those fields land on the collection schema;
+  read-time fallback covers correctness in the interim.
+
 - **Wizard step-branch tests** (`internal/setup/step_bootstrap_test.go`,
   `step_verify_test.go`, expanded `step_llm_test.go`). Per-step
   coverage of branches previously exercised only through the two
