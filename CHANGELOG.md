@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **GitHub Actions CI with three-OS matrix (Phase 1 of Windows support,
+  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New `.github/workflows/ci.yml`
+  runs `build`, `test`, and `test -race` on `ubuntu-latest`,
+  `macos-latest`, and `windows-latest`; `vet` on ubuntu only (static
+  analysis is portable). Go 1.26, 20-minute per-job timeout,
+  `fail-fast: false` so one OS failing doesn't cancel the others.
+  Windows jobs will be red until the mmap abstraction lands in
+  commits 2-5 of Phase 1; this is expected and unblocks
+  surface-assumption discovery on the other two OSes in the
+  meantime.
+
 - **Structured-output implementation for OpenAI and Bedrock
   (Cluster 2 Phases 2b + 2c, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** Both
   providers now return `SupportsStructuredOutput()=true` and have
