@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`embed/bert/safetensors.go` migrated to `internal/mmap`
+  (Phase 1 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  Six direct `syscall.Mmap`/`Munmap` callsites replaced with
+  `mmap.Region` from the new internal package. Per-error-path
+  cleanup consolidated into a small `fail` closure so we never
+  leak the mapping or fd. No behavior change on Unix; the file
+  now cross-compiles and runs on Windows. Bert unit tests
+  unchanged, still green under `-race`.
+
 ### Added
 
 - **`internal/mmap` package: cross-platform read-only file mapping

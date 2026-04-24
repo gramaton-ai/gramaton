@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"syscall"
 	"unsafe"
+
+	"github.com/gramaton-ai/gramaton/internal/mmap"
 )
 
 // SafeTensors provides zero-copy access to tensors stored in the
@@ -16,7 +17,8 @@ import (
 // Format: [8-byte header_len (uint64 LE)] [JSON header] [tensor data]
 type SafeTensors struct {
 	meta       map[string]tensorMeta
-	data       []byte // mmap'd region (entire file)
+	region     *mmap.Region
+	data       []byte // alias of region.Bytes() cached for hot-path access
 	file       *os.File
 	dataOffset int // byte offset where tensor data begins
 }
@@ -47,34 +49,37 @@ func OpenSafeTensors(path string) (*SafeTensors, error) {
 		return nil, fmt.Errorf("safetensors: file too small (%d bytes)", size)
 	}
 
-	// Mmap the entire file read-only.
-	data, err := syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	// Mmap the entire file read-only via the platform-abstracted package.
+	region, err := mmap.Open(f, int(size))
 	if err != nil {
 		f.Close()
 		return nil, fmt.Errorf("safetensors: mmap: %w", err)
+	}
+	data := region.Bytes()
+
+	// fail closes the region + file and returns err. Used in every
+	// post-mmap error path so we don't leak the mapping or the fd.
+	fail := func(err error) error {
+		_ = region.Close()
+		f.Close()
+		return err
 	}
 
 	// Parse header length.
 	headerLen := binary.LittleEndian.Uint64(data[:8])
 	if headerLen > maxHeaderSize {
-		syscall.Munmap(data)
-		f.Close()
-		return nil, fmt.Errorf("safetensors: header too large (%d bytes, max %d)", headerLen, maxHeaderSize)
+		return nil, fail(fmt.Errorf("safetensors: header too large (%d bytes, max %d)", headerLen, maxHeaderSize))
 	}
 	dataOffset := 8 + int(headerLen)
 	if dataOffset > int(size) {
-		syscall.Munmap(data)
-		f.Close()
-		return nil, fmt.Errorf("safetensors: header extends past end of file")
+		return nil, fail(fmt.Errorf("safetensors: header extends past end of file"))
 	}
 
 	// Parse JSON header. The header maps tensor names to metadata.
 	// The special key "__metadata__" holds arbitrary string KV pairs.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data[8:dataOffset], &raw); err != nil {
-		syscall.Munmap(data)
-		f.Close()
-		return nil, fmt.Errorf("safetensors: parse header: %w", err)
+		return nil, fail(fmt.Errorf("safetensors: parse header: %w", err))
 	}
 
 	meta := make(map[string]tensorMeta, len(raw))
@@ -84,15 +89,14 @@ func OpenSafeTensors(path string) (*SafeTensors, error) {
 		}
 		var m tensorMeta
 		if err := json.Unmarshal(msg, &m); err != nil {
-			syscall.Munmap(data)
-			f.Close()
-			return nil, fmt.Errorf("safetensors: parse tensor %q: %w", name, err)
+			return nil, fail(fmt.Errorf("safetensors: parse tensor %q: %w", name, err))
 		}
 		meta[name] = m
 	}
 
 	return &SafeTensors{
 		meta:       meta,
+		region:     region,
 		data:       data,
 		file:       f,
 		dataOffset: dataOffset,
@@ -146,8 +150,9 @@ func (st *SafeTensors) Names() []string {
 // Close unmaps the file and releases resources.
 func (st *SafeTensors) Close() error {
 	var err error
-	if st.data != nil {
-		err = syscall.Munmap(st.data)
+	if st.region != nil {
+		err = st.region.Close()
+		st.region = nil
 		st.data = nil
 	}
 	if st.file != nil {
