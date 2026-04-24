@@ -110,7 +110,7 @@ Merge semantics (vs the earlier full-replace-fallback behaviour, fixed 2026-04-2
 
 **Why:** Single-binary install, no external runtime, offline-first after first-run model download. The Quick Start becomes `go install && gramaton init` — one tool, one command, no separate daemon to manage. A ~130MB model download is acceptable for a knowledge store that otherwise owns its state end-to-end. Ollama remains the right escape hatch for users who want larger or multilingual encoders than the shipped BERT.
 
-Open follow-up (dev collection item): the amd64 build currently falls back to a pure-Go matmul (`embed/bert/matmul_generic.go`); arm64 has a hand-written NEON kernel (`matmul_arm64.s`). An AVX2 kernel for amd64 is the direct path to closing the perf gap on Intel/AMD hardware. User accepted this regression to proceed with the default-flip rather than gate it on assembly work.
+Update 2026-04-24: AVX2+FMA3 kernel shipped (`embed/bert/matmul_amd64.s`) and validated on real amd64 Windows hardware (Ryzen 7 5800X3D, Zen 3). All scalar-vs-SIMD parity tests pass, including tile-boundary edge cases (m/n remainder) and the production BERT shapes. Measured single-core throughput ~90 GFLOPS (~63% of the CPU's theoretical peak), in the ballpark of tuned BLAS. Per-matmul times on that hardware: AttnProj (128×384×384) ~411µs; FFN Up/Down (128×384×1536) ~1.65ms; AttnScores (128×32×128) ~21µs. A full 12-layer BERT forward pass lands around 60-100ms per 128-token embedding — comfortably inside the 200ms capture budget. The original aspirational PoC targets (<500µs AttnProj, <1ms FFN, <50µs AttnScores) pass on the smaller shapes and are reality-calibrated upward by ~1.65× on the larger FFN shapes, driven by work-volume scaling rather than kernel inefficiency.
 
 ---
 

@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **D34 + BERT matmul benchmark comments reality-calibrated from
+  real AMD64 Windows hardware validation
+  (`01KPVBNJGNQFJF5KN7TS9RS9M7`).** The AVX2+FMA3 kernel was
+  validated on a Ryzen 7 5800X3D (Zen 3): all scalar-vs-SIMD
+  parity tests pass including tile-boundary edge cases, and
+  measured throughput is ~90 GFLOPS single-core (~63% of
+  theoretical peak, tuned-BLAS ballpark). `docs/project-design/
+  design-decisions.md` D34 gains an "Update 2026-04-24" note
+  with the measurements. Benchmark comments in
+  `embed/bert/math_test.go` were updated to reflect observed
+  reality: AttnProj ~411µs (target <500µs — holds), FFN Up/Down
+  ~1.67ms / ~1.65ms (original aspirational target <1ms was
+  work-volume optimistic; live target is <2ms, which scales
+  linearly from AttnProj and is not a kernel-efficiency issue),
+  AttnScores ~21µs (target <50µs — holds).
+
 - **`server/info.go` split + `RequestShutdown` refactored for
   cross-platform shutdown (Phase 1 of Windows support,
   `01KQ0DNH8S97F13R4ZS2EDDWH4`).** `IsProcessAlive` moves into
