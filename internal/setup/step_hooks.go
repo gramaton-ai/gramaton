@@ -36,7 +36,7 @@ import (
 // calls, negligible. Decouples the steps so Step 4 can run
 // independently if we later add a "re-install hooks only" code path.
 func (w *Wizard) stepHooks(ctx context.Context) error {
-	w.writer.StepHeader(4, totalSteps, "Automatic knowledge capture (recommended)")
+	w.writer.StepHeader(5, totalSteps, "Automatic knowledge capture (recommended)")
 
 	clients := w.mcpBackend.Detect()
 	if len(clients) == 0 {

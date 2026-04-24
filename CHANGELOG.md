@@ -7,6 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **New wizard Step 4: install agent-usage instructions into
+  ~/.claude/CLAUDE.md (`01KQ0RWSSSBD18CD83776G6XXH`).** Surfaces the
+  onboarding gap discovered on the Windows end-to-end test: Gramaton
+  hooks were wired and MCP was registered, but Claude Code had no
+  CLAUDE.md telling it when to autonomously call `gramaton_search`,
+  when to capture, or how the Session flow works — so the agent
+  defaulted to "I don't have memory of that" until the user
+  explicitly prompted it. The new step offers (Y/n) to install a
+  canonical agent-usage guide into each detected MCP client's
+  instruction file. Content is fence-marker-bounded so re-runs
+  (`gramaton init --force`) update only the gramaton-managed
+  region; user content outside the fence is preserved. Skipping is
+  first-class for users who curate their own CLAUDE.md. totalSteps
+  bumped 4→5 (hooks becomes Step 5). Canonical template lives at
+  `internal/setup/agent_instructions.md`, //go:embed'd into the
+  binary. 7 new tests cover the fresh-file, append-to-existing,
+  replace-fenced-block, idempotent-unchanged, unbalanced-fence-
+  errors, per-client-path, and template-non-empty cases. Kiro-cli
+  marked "not yet supported" (its user-scope instruction-file
+  convention isn't verified); deliberate skip with a specific
+  message rather than a guess-written file.
+
 ### Fixed
 
 - **Gramaton server failed to start on Windows: fsync on directory

@@ -133,10 +133,11 @@ func TestWizardFreshPathSkipEverything(t *testing.T) {
 	// Every step header should have printed.
 	for _, want := range []string{
 		"Welcome to Gramaton",
-		"Step 1 of 4: Knowledge store",
-		"Step 2 of 4: Autonomous curation",
-		"Step 3 of 4: Connecting to your AI tools",
-		"Step 4 of 4: Automatic knowledge capture",
+		"Step 1 of 5: Knowledge store",
+		"Step 2 of 5: Autonomous curation",
+		"Step 3 of 5: Connecting to your AI tools",
+		"Step 4 of 5: Agent usage instructions",
+		"Step 5 of 5: Automatic knowledge capture",
 		"Verification",
 		"Gramaton is ready.",
 	} {

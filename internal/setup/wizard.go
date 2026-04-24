@@ -97,7 +97,7 @@ func New(prompter Prompter, writer Writer, cfg *config.Config, cfgPath, configDi
 // fresh vs import -- is a single prompt, not a numbered step). Kept
 // as a constant so a refactor that adds/removes a step updates every
 // header consistently.
-const totalSteps = 4
+const totalSteps = 5
 
 // Run drives the full wizard flow. It returns a non-nil error only
 // for fatal problems that leave the system in an unusable state;
@@ -227,6 +227,9 @@ func (w *Wizard) Run(ctx context.Context) error {
 	}
 	if err := w.stepMCP(ctx); err != nil {
 		return fmt.Errorf("MCP step: %w", err)
+	}
+	if err := w.stepInstructions(ctx); err != nil {
+		return fmt.Errorf("instructions step: %w", err)
 	}
 	if err := w.stepHooks(ctx); err != nil {
 		return fmt.Errorf("hooks step: %w", err)

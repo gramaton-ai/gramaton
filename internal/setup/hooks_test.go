@@ -46,25 +46,34 @@ func (f *fakeHookBackend) RegisterClaudeHooks(_ context.Context, paths []string)
 }
 
 // newWizardForHooksTest mirrors newWizardForMCPTest but reaches Step
-// 4 by scripting through Steps 0-3 quickly. Detects clients via the
-// injected MCP backend so Step 4's branch on Detect() can exercise
-// the two cases (clients present vs empty).
+// 5 (hooks) by scripting through Steps 0-4 quickly. Detects clients
+// via the injected MCP backend so Step 5's branch on Detect() can
+// exercise the two cases (clients present vs empty).
 //
 // Script answers in order (prompter):
 //
-//	[0] Step 0 fresh-vs-import: "1" (fresh)
-//	[1] Step 1 embedding menu:  "5" (skip)
-//	[2] Step 2 LLM menu:        "5" (skip)
-//	[3] Step 3 MCP confirm:     "y" or "n" (caller picks)
-//	[4] Step 4 hooks confirm:   "y" or "n" (caller picks)
+//	[0] Step 0 fresh-vs-import:      "1" (fresh)
+//	[1] Step 1 embedding menu:       "5" (skip)
+//	[2] Step 2 LLM menu:             "5" (skip)
+//	[3] Step 3 MCP confirm:          "y" or "n" (caller picks)
+//	[4] Step 4 instructions confirm: always "n" (skip install; tests
+//	                                 for step 4 are in
+//	                                 step_instructions_test.go and
+//	                                 don't need full-wizard driving)
+//	[5] Step 5 hooks confirm:        "y" or "n" (caller picks)
+//
+// HOME is pointed at the tmpDir so the skipped instructions step
+// (and any other step that might touch $HOME) doesn't scribble on
+// the real user's home directory.
 func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend HookBackend, mcpConfirm, hookConfirm string) (*Wizard, *bytes.Buffer) {
 	t.Helper()
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm, hookConfirm)
+	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm, "n", hookConfirm)
 
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
 	cfg := config.Defaults()
 	cfg.DataDir = tmpDir + "/data"
 
