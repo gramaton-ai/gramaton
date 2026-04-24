@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -66,7 +67,16 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 // fsyncDir opens the given directory and fsyncs it. Required after
 // rename(2) so that the directory entry change is durable.
+//
+// No-op on Windows: NTFS doesn't permit opening a directory handle
+// with write/sync access, so os.File.Sync() on a directory returns
+// ERROR_ACCESS_DENIED. Go's rename on Windows uses MoveFileEx which
+// is durable without the explicit parent-dir flush the POSIX model
+// requires.
 func fsyncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 )
 
@@ -120,7 +121,12 @@ func (s *Store) Write(data []byte) (string, error) {
 
 // fsyncDir opens the given directory and fsyncs it. Required after
 // rename(2) for full durability of the directory entry change.
+//
+// No-op on Windows: see the fsyncDir doc comment in core/refs.go.
 func fsyncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err

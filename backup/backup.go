@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -474,7 +475,12 @@ func writeRestoredFile(target string, tr *tar.Reader) error {
 // durability of the rename(2) operations performed during Restore;
 // POSIX fsync on a regular file does not guarantee that the parent
 // directory entry is durable.
+//
+// No-op on Windows: see the fsyncDir doc comment in core/refs.go.
 func fsyncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err

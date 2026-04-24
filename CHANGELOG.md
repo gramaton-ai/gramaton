@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gramaton server failed to start on Windows: fsync on directory
+  returns "Access is denied" (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** The
+  atomic-write discipline used in `core/refs.go`, `storage/store.go`,
+  and `backup/backup.go` (write → fsync file → rename → fsync parent
+  dir) worked on Unix but broke the server's startup path on Windows:
+  NTFS doesn't allow opening a directory handle with sync access, so
+  `os.File.Sync()` on a directory returns ERROR_ACCESS_DENIED. The
+  server's write of `server.json` and its load of the engine's FORMAT
+  file both hit this and aborted — which in turn made `gramaton mcp`
+  fail to auto-start the HTTP server, which made Claude Code's
+  `/mcp` show `gramaton · ✘ failed`. Fix: `fsyncDir` is now a no-op
+  on Windows across all three call sites. Go's `os.Rename` on
+  Windows uses `MoveFileEx` which is durable without the explicit
+  parent-dir flush the POSIX model requires, so skipping the sync
+  doesn't weaken durability guarantees. The three identical
+  `fsyncDir` implementations are follow-up candidates for
+  consolidation into a shared helper; for now keeping them parallel
+  matches the existing code layout. Surfaced when `gramaton mcp`
+  manually on Windows printed the real cause from the child
+  process's stderr tail.
+
 ### Added
 
 - **`gramaton init --force` re-runs the wizard on an already-
