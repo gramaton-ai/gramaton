@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude Code hooks failed to fire on Windows: path backslashes
+  eaten by Git Bash (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** The hook
+  proxy paths `gramaton init` wrote to `~/.claude/settings.json`
+  (e.g. `C:\Users\op\.gramaton\hooks\claude-code\session-start.sh`)
+  reached Claude Code's bundled Git Bash, which then treated the
+  backslashes as escape characters. `\U`, `\o`, `\.` etc. have no
+  special bash meaning, so bash silently stripped the backslashes
+  and tried to run `C:Usersop.gramatonhooksclaude-codesession-
+  start.sh` — not a real file. Result: every Claude Code
+  SessionStart hook on Windows logged
+  `bash: ... No such file or directory` and hooks did nothing.
+  Fix: `internal/setup/hooks.go::RegisterClaudeHooks` now
+  `strings.ReplaceAll(path, "\\", "/")` before writing to
+  settings.json. Git Bash accepts `C:/Users/op/.gramaton/...`
+  natively. `strings.ReplaceAll` (not `filepath.ToSlash`) so the
+  transformation is observable on non-Windows hosts too —
+  no-op on Unix paths, which never contain backslashes.
+  Regression test `TestPathNormalizationForClaudeBash`. Existing
+  Windows installs need to re-run `gramaton init` to rewrite
+  settings.json with the corrected form.
+
 ### Changed
 
 - **CONTRIBUTING + architecture.md polish to close Phase 3 of

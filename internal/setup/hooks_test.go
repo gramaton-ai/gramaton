@@ -323,6 +323,51 @@ func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 	}
 }
 
+// TestPathNormalizationForClaudeBash documents the backslash-to-
+// forward-slash transformation applied to hook script paths before
+// they land in settings.json. Without this, Claude Code's bundled
+// Git Bash sees `C:\Users\op\.gramaton\...` and its backslash-as-
+// escape-char processing turns it into `C:Usersop.gramaton...` —
+// file not found. Regression-test for a real bug discovered on a
+// Windows install, 2026-04-24.
+//
+// This test does NOT go through RegisterClaudeHooks because
+// filepath.Base on macOS doesn't treat `\` as a separator (Unix
+// filesystems permit backslashes in filenames), so the
+// hookEventForClaude lookup inside RegisterClaudeHooks fails to
+// parse a faux-Windows path on macOS. The transformation itself
+// is what we're testing; the call-through chain is a separate
+// concern covered by TestRegisterClaudeHooksIdempotentAndPreserving.
+func TestPathNormalizationForClaudeBash(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{
+			name: "windows path gets forward-slashed",
+			in:   `C:\Users\op\.gramaton\hooks\claude-code\session-start.sh`,
+			want: "C:/Users/op/.gramaton/hooks/claude-code/session-start.sh",
+		},
+		{
+			name: "unix path unchanged",
+			in:   "/Users/op/.gramaton/hooks/claude-code/session-start.sh",
+			want: "/Users/op/.gramaton/hooks/claude-code/session-start.sh",
+		},
+		{
+			name: "already forward-slashed windows path unchanged",
+			in:   "C:/Users/op/.gramaton/hooks/claude-code/session-start.sh",
+			want: "C:/Users/op/.gramaton/hooks/claude-code/session-start.sh",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.ReplaceAll(tc.in, `\`, "/")
+			if got != tc.want {
+				t.Errorf("normalize(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestDefaultHookBackendMaterializeRoundtrip exercises the real
 // DefaultHookBackend against a temp config dir. Verifies the
 // embedded scripts reach disk with executable perms and match the

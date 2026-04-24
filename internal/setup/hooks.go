@@ -207,13 +207,26 @@ func (DefaultHookBackend) RegisterClaudeHooks(_ context.Context, scriptPaths []s
 	}
 
 	// Build the set of entries we want, keyed by event name.
+	// Paths are converted to forward slashes so Claude Code's
+	// bundled Git Bash (which runs hook commands on Windows)
+	// doesn't treat the backslashes in a native Windows path as
+	// escape characters. `C:\Users\op\.gramaton\...` would reach
+	// bash as `C:Usersop.gramaton...` with the \U, \o, \. all
+	// silently stripped, and `bash: ... No such file or
+	// directory` results. Git Bash accepts forward-slashed
+	// Windows paths (`C:/Users/op/.gramaton/...`) natively.
+	//
+	// strings.ReplaceAll (not filepath.ToSlash) because ToSlash is
+	// a no-op on Unix and we want the behavior to be testable on
+	// any OS — Unix paths never contain backslashes, so the
+	// ReplaceAll is a no-op there too.
 	wanted := map[string]string{}
 	for _, p := range scriptPaths {
 		event := hookEventForClaude(filepath.Base(p))
 		if event == "" {
 			continue
 		}
-		wanted[event] = p
+		wanted[event] = strings.ReplaceAll(p, `\`, "/")
 	}
 	if len(wanted) == 0 {
 		return true, nil // nothing to register; technically unchanged
