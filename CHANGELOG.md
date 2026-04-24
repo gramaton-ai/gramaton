@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/windows.md` — Windows-user documentation (Phase 3 of
+  Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Covers
+  installation via `go install`, first-run setup, per-OS hook
+  proxy behavior (Claude Code uses `.sh` via bundled Git Bash;
+  Kiro uses `.cmd` natively), known Windows-specific caveats
+  (perm checks skipped under NTFS ACL model, python3 no longer
+  required, bbolt lock recovery), and deferred items (signed
+  installers, Credential Manager integration, Windows Service
+  registration). README gains a platforms line mentioning Linux
+  + macOS + Windows with a pointer to the new doc.
+
 ### Removed
 
 - **Legacy shell hook scripts + embed_hooks duplication (Phase 2

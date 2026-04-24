@@ -29,7 +29,7 @@ Gramaton's differences:
 - **Three retrieval shapes, not one.** Ranked fuzzy retrieval for knowledge, automatic extraction from conversation, and exhaustive-every-item collections for tasks. The right guarantee for the right question. See [Three Ways to Store Knowledge](#three-ways-to-store-knowledge) below.
 - **Versioned by design.** Every mutation is a commit. Branch, diff, log, revert. You can ask *what changed*, not just *what is*.
 - **A graph, not a list.** Records are nodes connected by typed, weighted edges. Hybrid search (vector + BM25) ranks candidates, then traversal fans out to related knowledge. Recurring keywords graduate to concept nodes that act as hubs.
-- **Local and portable.** A single Go binary. State lives in a directory on your filesystem. Exportable, inspectable, moveable. No managed service, no vendor lock-in, no cloud dependency.
+- **Local and portable.** A single Go binary that runs on Linux, macOS, and Windows (amd64 and arm64 where applicable). State lives in a directory on your filesystem. Exportable, inspectable, moveable. No managed service, no vendor lock-in, no cloud dependency. See [docs/windows.md](docs/windows.md) for Windows-specific notes.
 - **Cross-tool.** The MCP interface means the same store serves Claude Code, Kiro, custom agents, or anything else that speaks MCP. Your knowledge survives tool changes.
 - **Automatic curation.** The store actively maintains itself — stale records expire, orphans get linked, duplicates get consolidated, concept candidates get detected. With an LLM provider configured, classification and contradiction-detection run too.
 
