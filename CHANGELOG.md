@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`internal/mmap` package: cross-platform read-only file mapping
+  (Phase 1 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New
+  `Region` type with `Open`, `Bytes`, `Close`. Unix implementation
+  wraps `syscall.Mmap`/`Munmap` (MAP_SHARED, PROT_READ); Windows
+  implementation wraps `CreateFileMapping` + `MapViewOfFile` via
+  `golang.org/x/sys/windows`. Both platforms share the same public
+  surface via a `//go:build` split. Close is idempotent and safe
+  on a nil receiver. Round-trip, empty-file, negative-size,
+  multi-page, and double-close tests run on every CI OS. Unblocks
+  commits 3-4 (safetensors + flat_mmap migrations) without
+  touching the existing syscall callsites yet.
+
 - **GitHub Actions CI with three-OS matrix (Phase 1 of Windows support,
   `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New `.github/workflows/ci.yml`
   runs `build`, `test`, and `test -race` on `ubuntu-latest`,
