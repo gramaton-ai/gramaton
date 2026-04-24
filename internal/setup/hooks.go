@@ -2,13 +2,12 @@ package setup
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -16,37 +15,99 @@ import (
 
 // Hook scripts for automatic-capture integration with MCP clients.
 //
-// The canonical hook sources live at repo-root under hooks/, but Go's
-// //go:embed directive can't reference `..` paths. So we carry a copy
-// inside internal/setup/embed_hooks/ that's the embed source, with
-// generate directives below that keep the copy in sync with hooks/.
-// Running `go generate ./internal/setup/` re-copies before a release.
-// The duplication is a known tech-debt item (post-OSS cleanup
-// candidate); for v1 it's the simplest path that lets `go install`
-// ship with working hooks.
+// As of Phase 2 of the Windows platform-support plan these are thin
+// proxy files that forward stdin to `gramaton hook <event>` and exit
+// with the subcommand's status. All real hook logic lives in the
+// hooks/ Go package (hooks/claude_code.go, hooks/kiro.go). This
+// simplification eliminates the embed_hooks/ tree duplication and
+// removes the hidden python3 dependency the old shell scripts
+// carried.
 //
-//go:generate cp -rp ../../hooks/claude-code/. embed_hooks/claude-code/
-//go:generate cp -rp ../../hooks/kiro/. embed_hooks/kiro/
+// Scripts are synthesized at init time from Go templates, so there's
+// no need to check proxy files into the repo. Line endings are
+// explicit (LF for .sh, CRLF for .cmd) so git's core.autocrlf can't
+// corrupt the shebang.
 
-//go:embed embed_hooks
-var hooksFS embed.FS
+// hookEventSpec describes one hook event for a given client.
+// cliEvent is the positional arg passed to `gramaton hook`;
+// fileBase is the proxy filename without extension;
+// claudeEvent is the Claude Code settings.json event key (empty
+// for clients where we don't hand-edit settings.json, e.g. Kiro).
+type hookEventSpec struct {
+	cliEvent    string
+	fileBase    string
+	claudeEvent string
+}
+
+// claudeCodeEvents are the four lifecycle events Gramaton wires
+// into Claude Code. Order is stable for deterministic Materialize
+// output and test assertions.
+var claudeCodeEvents = []hookEventSpec{
+	{cliEvent: "session-start", fileBase: "session-start", claudeEvent: "SessionStart"},
+	{cliEvent: "stop", fileBase: "stop", claudeEvent: "Stop"},
+	{cliEvent: "pre-compact", fileBase: "pre-compact", claudeEvent: "PreCompact"},
+	{cliEvent: "post-compact", fileBase: "post-compact", claudeEvent: "PostCompact"},
+}
+
+// kiroEvents are the three lifecycle events Gramaton wires into
+// Kiro. The cliEvent is prefixed with "kiro-" so `gramaton hook`
+// can disambiguate agent-spawn from a hypothetical future
+// Claude-Code-named event with the same short name.
+var kiroEvents = []hookEventSpec{
+	{cliEvent: "kiro-agent-spawn", fileBase: "agent-spawn"},
+	{cliEvent: "kiro-user-prompt-submit", fileBase: "user-prompt-submit"},
+	{cliEvent: "kiro-stop", fileBase: "stop"},
+}
+
+// eventsForClient returns the spec list for a known client name.
+// Returns nil for unknown clients so Materialize reports a
+// specific error to the wizard caller.
+func eventsForClient(client string) []hookEventSpec {
+	switch client {
+	case "claude-code":
+		return claudeCodeEvents
+	case "kiro":
+		return kiroEvents
+	}
+	return nil
+}
+
+// renderHookProxy synthesizes the proxy script for an event.
+// Returns the filename (including extension) and the file body.
+//
+// Matrix:
+//
+//	claude-code on any OS  → .sh   (Claude Code bundles Git Bash on Windows)
+//	kiro on non-Windows    → .sh
+//	kiro on Windows        → .cmd  (Kiro CLI 2.0 is native Windows, no bash)
+//
+// Line endings are chosen deliberately: LF for .sh so bash can
+// read the shebang intact (CRLF-prefixed `#!/bin/bash\r` makes
+// bash look for a binary named `bash\r` and fail); CRLF for .cmd
+// so cmd.exe treats the file as a native batch script.
+func renderHookProxy(client, cliEvent, fileBase string) (filename, body string) {
+	if client == "kiro" && runtime.GOOS == "windows" {
+		return fileBase + ".cmd", fmt.Sprintf("@gramaton hook %s\r\n", cliEvent)
+	}
+	return fileBase + ".sh", fmt.Sprintf("#!/bin/bash\nexec gramaton hook %s\n", cliEvent)
+}
 
 // HookBackend is the test seam for Step 4. Production uses
 // DefaultHookBackend; tests inject a fake to exercise the wizard
 // orchestration without touching the real filesystem or the user's
 // Claude Code settings.json.
 type HookBackend interface {
-	// Materialize extracts the embedded hook scripts for `client`
-	// into a canonical on-disk location (typically
+	// Materialize generates the proxy scripts for `client` into a
+	// canonical on-disk location (typically
 	// ~/.gramaton/hooks/<client>/) and returns the absolute paths of
 	// the installed scripts. Idempotent: re-running overwrites with
-	// the current embedded version so upgrades propagate when users
+	// the current proxy template so upgrades propagate when users
 	// re-run the wizard.
 	Materialize(client string, configDir string) (scriptPaths []string, err error)
 
 	// RegisterClaudeHooks patches ~/.claude/settings.json to point
 	// the user-scope hooks at the given script paths. Existing
-	// gramaton-owned hook entries (commands starting with
+	// gramaton-owned hook entries (commands under
 	// ~/.gramaton/hooks/) are replaced in place; other hook entries
 	// (user's own, other tools') are left untouched. Returns (true,
 	// nil) when our entries were already present and unchanged,
@@ -57,22 +118,20 @@ type HookBackend interface {
 // DefaultHookBackend is the production implementation.
 type DefaultHookBackend struct{}
 
-// Materialize writes the embedded scripts for `client` into
+// Materialize writes the proxy scripts for `client` into
 // <configDir>/hooks/<client>/. configDir is typically ~/.gramaton.
-// Creates directories with 0700, writes scripts with 0755 (exec bit
-// required for shells to run them directly).
+// Creates directories with 0o700 and scripts with 0o755. The
+// exec bit is ignored on Windows but preserved on Unix.
 //
-// Script content is overwritten on each call so users who upgrade
-// their Gramaton binary + re-run the wizard get the latest hook
-// logic. Local edits the user made to the materialized scripts will
-// be lost on re-run; this is documented in the wizard output so users
-// who want to customize hooks know to do it in their own scripts
-// sourced by ours, not by editing our files directly.
+// Pre-Phase-2 this function extracted real hook logic from
+// embedded .sh files; as of Phase 2 the scripts are one-line
+// proxies generated from Go templates. User customizations of
+// proxy files are overwritten on re-run — documented in the
+// wizard output.
 func (DefaultHookBackend) Materialize(client string, configDir string) ([]string, error) {
-	embedRoot := filepath.Join("embed_hooks", client)
-	entries, err := fs.ReadDir(hooksFS, embedRoot)
-	if err != nil {
-		return nil, fmt.Errorf("no embedded hooks for %q: %w", client, err)
+	events := eventsForClient(client)
+	if events == nil {
+		return nil, fmt.Errorf("no hooks defined for client %q", client)
 	}
 
 	destDir := filepath.Join(configDir, "hooks", client)
@@ -81,53 +140,38 @@ func (DefaultHookBackend) Materialize(client string, configDir string) ([]string
 	}
 
 	var paths []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sh") {
-			continue
-		}
-		srcPath := filepath.Join(embedRoot, e.Name())
-		content, err := fs.ReadFile(hooksFS, srcPath)
-		if err != nil {
-			return nil, fmt.Errorf("read embedded %s: %w", srcPath, err)
-		}
-		destPath := filepath.Join(destDir, e.Name())
-		if err := os.WriteFile(destPath, content, 0o755); err != nil {
+	for _, ev := range events {
+		filename, body := renderHookProxy(client, ev.cliEvent, ev.fileBase)
+		destPath := filepath.Join(destDir, filename)
+		if err := os.WriteFile(destPath, []byte(body), 0o755); err != nil {
 			return nil, fmt.Errorf("write %s: %w", destPath, err)
 		}
 		paths = append(paths, destPath)
 	}
-	// Deterministic order (fs.ReadDir is alphabetical on most
-	// filesystems but not guaranteed); makes test assertions stable.
+	// Deterministic order (os.WriteFile doesn't impose one); makes
+	// test assertions stable.
 	sort.Strings(paths)
 	return paths, nil
 }
 
-// hookEventForClaude maps a claude-code script filename to the
-// Claude Code event name that triggers it. Claude Code's hook config
-// keys hooks by event name; we need to know which event each script
-// handles to write the right JSON.
-//
-// Source of truth: the header comment in each script under
-// hooks/claude-code/ states its event name. This map mirrors that.
-// Unknown script names return "" so the registration step skips
-// them (better than registering against a wrong event).
+// hookEventForClaude maps a proxy filename to the Claude Code event
+// name that triggers it. Accepts both .sh and .cmd extensions so
+// the function is robust to any future cross-platform variations.
+// Unknown filenames return "" — RegisterClaudeHooks skips them.
 func hookEventForClaude(scriptName string) string {
-	switch scriptName {
-	case "session-start.sh":
-		return "SessionStart"
-	case "stop.sh":
-		return "Stop"
-	case "pre-compact.sh":
-		return "PreCompact"
-	case "post-compact.sh":
-		return "PostCompact"
+	base := strings.TrimSuffix(scriptName, ".cmd")
+	base = strings.TrimSuffix(base, ".sh")
+	for _, ev := range claudeCodeEvents {
+		if base == ev.fileBase {
+			return ev.claudeEvent
+		}
 	}
 	return ""
 }
 
 // RegisterClaudeHooks patches the user-scope ~/.claude/settings.json
-// to route hook events at our materialized scripts. The merge is
-// additive and surgical: we preserve every top-level key, every
+// to route hook events at our materialized proxy scripts. The merge
+// is additive and surgical: we preserve every top-level key, every
 // unrelated hook-event entry, and every hook command that isn't
 // pointing at ~/.gramaton/hooks/. Our own entries are replaced in
 // place so re-running the wizard is idempotent.
@@ -295,10 +339,13 @@ func (DefaultHookBackend) RegisterClaudeHooks(_ context.Context, scriptPaths []s
 // prefix; anything under ~/.gramaton/hooks/ is assumed to be ours.
 // This is deliberately generous: it catches the canonical subdir
 // layout, the legacy flat layout, and any tilde/non-tilde variant.
+//
+// Windows-safe: normalizes backslashes to forward slashes before
+// the substring match so a settings.json command like
+// `C:\Users\b\.gramaton\hooks\claude-code\session-start.sh` is
+// recognized as ours.
 func isGramatonHookCommand(cmd string) bool {
-	// Normalize: trim surrounding quotes or whitespace the user might
-	// have added in hand-edited settings. Substring match keeps us
-	// robust to absolute-path expansion variations.
 	cmd = strings.TrimSpace(cmd)
+	cmd = strings.ReplaceAll(cmd, `\`, "/")
 	return strings.Contains(cmd, "/.gramaton/hooks/")
 }

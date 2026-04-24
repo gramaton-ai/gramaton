@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -58,8 +59,13 @@ func (w *Wizard) stepVerify(ctx context.Context) {
 	w.writer.Check(fmt.Sprintf("Config saved: %s", w.cfgPath))
 
 	// Config file perms: should be 0600 because LLM.APIKeyFile paths
-	// live in it.
-	if info, err := os.Stat(w.cfgPath); err == nil {
+	// live in it. Skipped on Windows: os.Stat returns 0o666 or 0o444
+	// for writable/read-only files on NTFS — the Unix mode bits are
+	// a fiction maintained by the Go runtime and don't reflect the
+	// real ACL-based access control.
+	if runtime.GOOS == "windows" {
+		w.writer.Check("Config file permissions: skipped on Windows (NTFS ACL model)")
+	} else if info, err := os.Stat(w.cfgPath); err == nil {
 		if mode := info.Mode().Perm(); mode != 0o600 {
 			w.writer.Warn(fmt.Sprintf("Config file perms are %o, expected 0600. Fix: chmod 600 %s", mode, w.cfgPath))
 		} else {
@@ -141,11 +147,14 @@ func (w *Wizard) verifyLLM() {
 				w.writer.Warn(fmt.Sprintf("LLM: api_key_file missing: %s", w.cfg.LLM.APIKeyFile))
 				return
 			}
-			if mode := info.Mode().Perm(); mode != 0o600 {
+			if runtime.GOOS == "windows" {
+				w.writer.Check(fmt.Sprintf("LLM: %s (key file present; perm check skipped on Windows, NTFS ACL model)", w.cfg.LLM.Provider))
+			} else if mode := info.Mode().Perm(); mode != 0o600 {
 				w.writer.Warn(fmt.Sprintf("LLM: api_key_file perms are %o, expected 0600. Fix: chmod 600 %s", mode, w.cfg.LLM.APIKeyFile))
 				return
+			} else {
+				w.writer.Check(fmt.Sprintf("LLM: %s (key file present, 0600 perms)", w.cfg.LLM.Provider))
 			}
-			w.writer.Check(fmt.Sprintf("LLM: %s (key file present, 0600 perms)", w.cfg.LLM.Provider))
 		} else if w.cfg.LLM.APIKeyEnv != "" {
 			if os.Getenv(w.cfg.LLM.APIKeyEnv) == "" {
 				w.writer.Warn(fmt.Sprintf("LLM: %s configured but env var %s is not set", w.cfg.LLM.Provider, w.cfg.LLM.APIKeyEnv))
@@ -216,7 +225,11 @@ func (w *Wizard) verifyHooks() {
 		count := 0
 		nonExec := 0
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".sh") {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".sh") && !strings.HasSuffix(name, ".cmd") {
 				continue
 			}
 			count++
@@ -224,7 +237,12 @@ func (w *Wizard) verifyHooks() {
 			if err != nil {
 				continue
 			}
-			if info.Mode().Perm()&0o111 == 0 {
+			// Execute-bit check is Unix-only: Windows NTFS ACLs
+			// don't use the Unix mode bits, and os.Stat returns a
+			// synthesized 0o666/0o444 regardless of runnability.
+			// Windows associates .cmd with cmd.exe via PATHEXT,
+			// not via an exec bit on the file.
+			if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 				nonExec++
 			}
 		}

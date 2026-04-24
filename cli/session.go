@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/gramaton-ai/gramaton/hooks"
 )
 
 var sessionClientID string
@@ -151,13 +152,13 @@ func runSessionCommit(cmd *cobra.Command, args []string) error {
 	return printEnvelope(resp)
 }
 
-// cwdSlug mirrors the slug computation in
-// hooks/claude-code/session-start.sh: strip the leading slash and
-// replace remaining slashes with dashes. Both sides MUST agree on this
-// formula or the lookup misses.
+// cwdSlug delegates to hooks.CwdSlug so the session-lookup slug and
+// the hook-write slug stay in lockstep. Single source of truth now
+// that hook logic lives in Go — pre-Phase-2 both sides had their
+// own implementation (shell for the hook, Go here) and drift was
+// possible.
 func cwdSlug(cwd string) string {
-	cwd = strings.TrimPrefix(cwd, "/")
-	return strings.ReplaceAll(cwd, "/", "-")
+	return hooks.CwdSlug(cwd)
 }
 
 // resolveCurrentSession looks up the active session for a given cwd by

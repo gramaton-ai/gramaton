@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Hook installation switches to Go-generated proxies (Phase 2
+  of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** The wizard's
+  `DefaultHookBackend.Materialize` no longer extracts embedded `.sh`
+  files from `internal/setup/embed_hooks/` — it now synthesizes
+  one-line proxy scripts from Go string templates at init time.
+  Each proxy forwards stdin to `gramaton hook <event>` (wired in
+  commit 4); the real hook logic lives in the `hooks/` Go package.
+  The `//go:embed` directive and the `//go:generate cp` duplication
+  scaffolding are gone. Cross-platform proxy matrix: `.sh` (with LF
+  line endings, `#!/bin/bash\nexec gramaton hook <event>`) for
+  Claude Code on all OSes and Kiro on Unix; `.cmd` (with CRLF,
+  `@gramaton hook <event>`) for Kiro on Windows (Kiro CLI 2.0 is
+  native Windows, no bundled bash). `isGramatonHookCommand` now
+  normalizes `\` → `/` before its substring match so settings.json
+  entries containing Windows-style paths are recognized as ours.
+  `cli/session.go:cwdSlug` now delegates to `hooks.CwdSlug`
+  (single source of truth for the Unix/Windows drive-aware slug).
+  Three perm-verification checks in `internal/setup/step_verify.go`
+  (config file perms, LLM api_key_file perms, hook exec-bit check)
+  are now gated on `runtime.GOOS != "windows"` — NTFS ACLs are
+  the real access-control mechanism on Windows and the Unix mode
+  bits `os.Stat` synthesizes there are meaningless. The hook
+  exec-bit check also accepts `.cmd` files as valid regardless of
+  the mode bits (Windows associates `.cmd` via PATHEXT, not exec
+  bit). Net: `internal/setup/hooks.go` is simpler and more
+  portable, and `cli/session.go` becomes a one-line delegate. The
+  old `hooks/*.sh` source tree and `internal/setup/embed_hooks/`
+  will be deleted in commit 6 of this phase.
+
 ### Added
 
 - **`gramaton hook <event>` CLI subcommand — wires the Go hook
