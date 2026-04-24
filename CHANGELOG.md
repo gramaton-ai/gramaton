@@ -107,6 +107,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Cluster 2 Phase 2a follow-up: review-gap cleanup.** gramaton-review
+  on commit `8227dfd` flagged two MEDIUM gaps. (1) The structured-output
+  fallback path in `curation/parallel.go` `runSingleWork` silently
+  reverted to `Complete` on `CompleteStructured` error — a persistent
+  provider regression would never surface. Added a `slog.Warn` on
+  fallback with the record id + task + err so ops can see it.
+  (2) End-to-end integration for the structured path was untested at
+  the `parallelLLM` layer. Added `TestParallelLLMUsesStructuredWhenProviderSupports`,
+  `TestParallelLLMFallsBackOnStructuredError`,
+  `TestParallelLLMSkipsStructuredWhenNoSchema` using a new
+  `structuredCapableMock` — verifies the capability-dispatch
+  actually fires, the fallback fires on structured error, and
+  schema-less work items bypass the structured path. Also added
+  `TestCompleteStructuredAPIError` (anthropic 4xx/5xx surface as
+  errors, not empty responses) and extended `TestMeteredRefusesWhenCapped`
+  to confirm `CompleteStructured` also refuses when capped (regression
+  guard for the "new Provider method silently bypasses the cap"
+  class the classification batch bug was).
+
 - **Cluster 1 follow-up: review-gap cleanup.** Dead defensive
   fallback in `curation/batch.go` (previously: `if model == ""
   { model = longModel }` after a map lookup that's always hit)

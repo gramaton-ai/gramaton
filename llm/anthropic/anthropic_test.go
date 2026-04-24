@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -254,6 +255,32 @@ func TestCompleteStructuredMissingToolUseBlock(t *testing.T) {
 	_, err := client.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "anything")
 	if err == nil {
 		t.Fatal("expected error when response has no tool_use block; got nil")
+	}
+}
+
+// TestCompleteStructuredAPIError mirrors TestCompleteAPIError for the
+// structured path: a 4xx/5xx response with an error body should
+// surface as an error rather than silently return an empty result.
+func TestCompleteStructuredAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"rate_limit_error","message":"too many requests"}}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		baseURL: srv.URL,
+		model:   "claude-sonnet-4-6",
+		apiKey:  "sk-ant-test",
+		client:  srv.Client(),
+	}
+	_, err := client.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "anything")
+	if err == nil {
+		t.Fatal("expected error on 429 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "rate_limit_error") {
+		t.Errorf("error missing rate_limit_error detail: %v", err)
 	}
 }
 

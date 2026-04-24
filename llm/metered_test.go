@@ -71,6 +71,20 @@ func TestMeteredRefusesWhenCapped(t *testing.T) {
 		t.Fatalf("third call: stub.calls = %d (must NOT have called inner)", stub.calls)
 	}
 
+	// CompleteStructured must also refuse when capped. Regression
+	// guard: adding a new Provider method mustn't silently bypass
+	// the cap (classification batch bypass, which this check
+	// pattern originally fixed, is the cautionary tale).
+	structured := &structuredStub{response: `{}`}
+	sm := NewMetered(structured, tracker, nil)
+	_, err = sm.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "ping")
+	if !errors.Is(err, ErrCapped) {
+		t.Fatalf("structured call: err = %v, want ErrCapped", err)
+	}
+	if structured.calls != 0 {
+		t.Errorf("structured path reached inner despite cap; structured.calls = %d, want 0", structured.calls)
+	}
+
 	// Unpause and verify the inner is reachable again.
 	tracker.Unpause()
 	if _, err := m.Complete(context.Background(), "ping"); err != nil {

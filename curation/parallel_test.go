@@ -3,10 +3,14 @@ package curation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 // concurrentMockLLM tracks concurrent calls to verify parallelism.
@@ -22,6 +26,42 @@ func (m *concurrentMockLLM) ProviderName() string           { return "mock" }
 func (m *concurrentMockLLM) SupportsStructuredOutput() bool { return false }
 func (m *concurrentMockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
 	return nil, nil
+}
+
+// structuredCapableMock is a Provider that supports structured
+// output. Used to verify parallelLLM's runSingleWork dispatch
+// selects CompleteStructured when the provider supports it AND
+// the work item has a non-nil schema.
+type structuredCapableMock struct {
+	structuredCalls    int64
+	plainCalls         int64
+	forceStructuredErr error          // when non-nil, CompleteStructured returns this
+	structuredResp     json.RawMessage
+	mu                 sync.Mutex // guard mutable state when parallelLLM runs on one goroutine
+	lastSchema         map[string]any
+}
+
+func (s *structuredCapableMock) Complete(_ context.Context, _ string) (string, error) {
+	atomic.AddInt64(&s.plainCalls, 1)
+	return `{"temporality":"durable","confidence":0.5,"knowledge_type":"semantic","epistemic_status":"probable","keywords":["fallback"],"summary_short":"plain path fallback"}`, nil
+}
+
+func (s *structuredCapableMock) CompleteWithModel(ctx context.Context, _, prompt string) (string, error) {
+	return s.Complete(ctx, prompt)
+}
+
+func (s *structuredCapableMock) ModelID() string                { return "structured-mock" }
+func (s *structuredCapableMock) ProviderName() string           { return "mock" }
+func (s *structuredCapableMock) SupportsStructuredOutput() bool { return true }
+func (s *structuredCapableMock) CompleteStructured(_ context.Context, schema map[string]any, _ string) (json.RawMessage, error) {
+	atomic.AddInt64(&s.structuredCalls, 1)
+	s.mu.Lock()
+	s.lastSchema = schema
+	s.mu.Unlock()
+	if s.forceStructuredErr != nil {
+		return nil, s.forceStructuredErr
+	}
+	return s.structuredResp, nil
 }
 
 func (m *concurrentMockLLM) Complete(_ context.Context, prompt string) (string, error) {
@@ -168,3 +208,108 @@ func TestParallelLLMOrderPreserved(t *testing.T) {
 		}
 	}
 }
+
+// TestParallelLLMUsesStructuredWhenProviderSupports verifies the
+// dispatch in runSingleWork: when the work item carries a schema
+// AND the provider advertises SupportsStructuredOutput, the call
+// routes through CompleteStructured rather than Complete.
+// Regression against a future refactor that accidentally drops the
+// capability check or the schema field.
+func TestParallelLLMUsesStructuredWhenProviderSupports(t *testing.T) {
+	prov := &structuredCapableMock{
+		structuredResp: json.RawMessage(`{"temporality":"durable","confidence":0.9,"knowledge_type":"semantic","epistemic_status":"well_established","keywords":["test"],"summary_short":"structured path worked"}`),
+	}
+	schema := map[string]any{"type": "object"}
+	work := []llmWork{
+		{id: "rec1", prompt: "classify this", task: "classify", schema: schema},
+	}
+
+	results := parallelLLM(context.Background(), prov, work, 1)
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].err != nil {
+		t.Fatalf("result err: %v", results[0].err)
+	}
+	// Structured path should have been hit exactly once; plain path
+	// never touched.
+	if got := atomic.LoadInt64(&prov.structuredCalls); got != 1 {
+		t.Errorf("structuredCalls = %d, want 1 (dispatch to CompleteStructured didn't fire)", got)
+	}
+	if got := atomic.LoadInt64(&prov.plainCalls); got != 0 {
+		t.Errorf("plainCalls = %d, want 0 (structured path should have handled it)", got)
+	}
+	// Response must be the raw JSON (parseable by parseClassification).
+	if !containsKey(results[0].response, "structured path worked") {
+		t.Errorf("response doesn't contain structured mock output: %q", results[0].response)
+	}
+	prov.mu.Lock()
+	forwarded := prov.lastSchema
+	prov.mu.Unlock()
+	if forwarded["type"] != "object" {
+		t.Errorf("schema not forwarded to provider: %+v", forwarded)
+	}
+}
+
+// TestParallelLLMFallsBackOnStructuredError confirms the reliability
+// fallback: when CompleteStructured errors, the code logs a Warn
+// and retries via Complete, so a transient structured-path failure
+// doesn't break classification.
+func TestParallelLLMFallsBackOnStructuredError(t *testing.T) {
+	prov := &structuredCapableMock{
+		forceStructuredErr: errors.New("simulated provider glitch"),
+	}
+	schema := map[string]any{"type": "object"}
+	work := []llmWork{{id: "r", prompt: "p", task: "classify", schema: schema}}
+
+	results := parallelLLM(context.Background(), prov, work, 1)
+	if len(results) != 1 || results[0].err != nil {
+		t.Fatalf("result: len=%d err=%v", len(results), results[0].err)
+	}
+	if got := atomic.LoadInt64(&prov.structuredCalls); got != 1 {
+		t.Errorf("structured tried = %d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&prov.plainCalls); got != 1 {
+		t.Errorf("plain fallback = %d, want 1 (fallback should have fired)", got)
+	}
+}
+
+// TestParallelLLMSkipsStructuredWhenNoSchema verifies: work items
+// with schema=nil bypass CompleteStructured even if the provider
+// supports it. Summarization and other non-schema'd call sites in
+// curation depend on this.
+func TestParallelLLMSkipsStructuredWhenNoSchema(t *testing.T) {
+	prov := &structuredCapableMock{
+		structuredResp: json.RawMessage(`{"should":"not reach"}`),
+	}
+	work := []llmWork{{id: "r", prompt: "p", task: "summarize"}} // no schema
+
+	results := parallelLLM(context.Background(), prov, work, 1)
+	if len(results) != 1 || results[0].err != nil {
+		t.Fatalf("result: len=%d err=%v", len(results), results[0].err)
+	}
+	if got := atomic.LoadInt64(&prov.structuredCalls); got != 0 {
+		t.Errorf("structuredCalls = %d, want 0 (schema was nil)", got)
+	}
+	if got := atomic.LoadInt64(&prov.plainCalls); got != 1 {
+		t.Errorf("plainCalls = %d, want 1", got)
+	}
+}
+
+// containsKey is a loose sanity check that doesn't require full
+// JSON parsing; keeps the test focused on dispatch rather than the
+// classification parser which has its own tests.
+func containsKey(s, key string) bool {
+	// helper used only here; kept local.
+	return len(s) > 0 && func() bool {
+		for i := 0; i+len(key) <= len(s); i++ {
+			if s[i:i+len(key)] == key {
+				return true
+			}
+		}
+		return false
+	}()
+}
+
+// Silence unused import warnings if the file ever gets pared down.
+var _ = llm.ErrCapped

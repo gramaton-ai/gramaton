@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/gramaton-ai/gramaton/llm"
@@ -62,7 +63,14 @@ func runSingleWork(ctx context.Context, p llm.Provider, w llmWork) (string, erro
 		// Structured path error: fall through to Complete. This is a
 		// reliability fallback (provider hiccup, transient failure),
 		// not a correctness concern — the prompt is self-contained
-		// and returns JSON either way.
+		// and returns JSON either way. Warn-log so a persistent
+		// structured-path regression is visible in ops rather than
+		// silently reverting every call.
+		slog.Warn("structured-output call failed, falling back to Complete",
+			"component", "curation",
+			"record", w.id,
+			"task", w.task,
+			"err", err)
 	}
 	if w.model != "" {
 		return p.CompleteWithModel(ctx, w.model, w.prompt)
