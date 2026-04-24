@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Legacy shell hook scripts + embed_hooks duplication (Phase 2
+  of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Deletes
+  `hooks/claude-code/*.sh` (4 files, 265 LOC), `hooks/kiro/*.sh`
+  (3 files, 127 LOC), the entire `internal/setup/embed_hooks/`
+  duplicate tree, and `hooks/hooks_test.go` (bash-invocation
+  harness, 212 LOC — superseded by the in-package Go handler
+  tests added in commits 1-3). Net: 15 files / ~800 LOC removed
+  from the repo; zero behavior change because Phase 2 commits
+  2-5 already replaced every runtime dependency on these files
+  with Go code. Upgrading users should re-run `gramaton init`
+  so the now-stale shell scripts at `~/.gramaton/hooks/**/*.sh`
+  are replaced with the new proxy files — the init wizard
+  materializes them unconditionally. Phase 2 is complete.
+
 ### Changed
 
 - **Hook installation switches to Go-generated proxies (Phase 2
