@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
@@ -75,13 +74,5 @@ func RemoveServerInfo(cfgDir string) {
 	_ = os.Remove(filepath.Join(cfgDir, "server.json"))
 }
 
-// IsProcessAlive checks if a process with the given PID exists.
-func IsProcessAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check.
-	err = p.Signal(syscall.Signal(0))
-	return err == nil
-}
+// IsProcessAlive is defined per-OS in info_unix.go / info_windows.go.
+// Returns true when a process with the given PID exists.

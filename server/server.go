@@ -68,6 +68,15 @@ type Server struct {
 	retrieval    *retrievalTracker
 	usageTracker *llm.UsageTracker
 
+	// shutdownCh carries the reason for a graceful shutdown.
+	// Receivers: Run()'s main select. Senders: idleWatcher (idle
+	// timeout) and RequestShutdown (HTTP admin request). Buffered
+	// 1 so a single reason can land without blocking; additional
+	// concurrent requests drop silently (first-reason-wins). An
+	// in-process channel is cross-platform; earlier versions used
+	// syscall.SIGTERM to self, which Windows does not support.
+	shutdownCh chan string
+
 	// Curation envelope cache: every successful HTTP response embeds
 	// a CurationStatus. Computing it requires an engine RLock plus a
 	// PropIdx lookup ("processing_status" = "captured"), so it cost
@@ -233,6 +242,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		lastRequest:  time.Now(),
 		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
+		shutdownCh:       make(chan string, 1),
 		curationCacheTTL: 5 * time.Second,
 	}
 	// Construct the canonical API surface. As operations migrate into
@@ -308,9 +318,9 @@ func (s *Server) Run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
-	// Idle timeout checker.
-	shutdownCh := make(chan string, 1)
-	go s.idleWatcher(shutdownCh)
+	// Idle timeout checker. Shares s.shutdownCh with RequestShutdown;
+	// whichever path fires first wins (buffered cap 1).
+	go s.idleWatcher(s.shutdownCh)
 
 	// Start access flusher.
 	s.startAccessFlusher()
@@ -373,7 +383,7 @@ func (s *Server) Run() error {
 	select {
 	case sig := <-sigCh:
 		s.log.Info("received signal, shutting down", "signal", sig.String())
-	case reason := <-shutdownCh:
+	case reason := <-s.shutdownCh:
 		s.log.Info("shutting down", "reason", reason)
 	case err := <-errCh:
 		if err != nil {
@@ -518,16 +528,18 @@ func (s *Server) Shutdown() {
 
 // RequestShutdown triggers a graceful shutdown from an API call.
 // Caller is responsible for any response flushing -- this function
-// only signals SIGTERM. (The 100ms sleep + recover() that used to
-// be here was a magic number; handleShutdown now flushes explicitly
-// before calling here.)
+// only queues a shutdown reason on s.shutdownCh, which the main
+// loop selects on. Portable across Unix and Windows (the earlier
+// syscall.SIGTERM-to-self approach didn't work on Windows because
+// Go only implements os.Kill for self-signaling there).
+//
+// Non-blocking: if a shutdown is already pending, this request is
+// dropped. First-reason-wins.
 func (s *Server) RequestShutdown() {
-	go func() {
-		p, err := os.FindProcess(os.Getpid())
-		if err == nil && p != nil {
-			p.Signal(syscall.SIGTERM)
-		}
-	}()
+	select {
+	case s.shutdownCh <- "api-request":
+	default:
+	}
 }
 
 // Handler returns the HTTP handler for use with httptest.NewServer

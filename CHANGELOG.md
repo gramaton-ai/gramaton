@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`server/info.go` split + `RequestShutdown` refactored for
+  cross-platform shutdown (Phase 1 of Windows support,
+  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** `IsProcessAlive` moves into
+  per-OS files: `server/info_unix.go` uses `syscall.Signal(0)`,
+  `server/info_windows.go` uses `windows.OpenProcess` with
+  `PROCESS_QUERY_LIMITED_INFORMATION`. `Server.RequestShutdown`
+  now non-blocking-sends on a new `s.shutdownCh` field rather
+  than `os.FindProcess(os.Getpid()).Signal(syscall.SIGTERM)` —
+  the old approach worked on Unix but Windows only supports
+  `os.Kill` for self-signaling, which is ungraceful. The channel
+  approach is cross-platform and cleaner: no OS signal round-trip,
+  main loop already selected on the channel for idle shutdown.
+  New `TestRequestShutdownNonBlocking` pins the invariant that
+  50 concurrent calls return quickly with first-reason-wins.
+  Together with commits 2-4, Phase 1 is complete: the full
+  Gramaton tree cross-compiles for `GOOS=windows GOARCH=amd64`
+  and passes race tests on macOS.
+
 - **`index/flat_mmap.go` migrated to `internal/mmap` (Phase 1 of
   Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Four direct
   `syscall.Mmap`/`Munmap` callsites (remap + rewrite-path unmap +

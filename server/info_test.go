@@ -91,6 +91,42 @@ func TestIsProcessAlive(t *testing.T) {
 	}
 }
 
+func TestRequestShutdownNonBlocking(t *testing.T) {
+	// RequestShutdown must queue a reason on s.shutdownCh without
+	// blocking, even under heavy concurrent pressure. Before the
+	// channel-based refactor this went through os.FindProcess +
+	// p.Signal(SIGTERM), which was non-blocking but unsupported on
+	// Windows. The new implementation uses a buffered channel with
+	// a non-blocking select-send so excess requests drop instead of
+	// deadlocking.
+	srv, _ := setupTestServer(t)
+
+	for i := 0; i < 50; i++ {
+		srv.RequestShutdown()
+	}
+
+	select {
+	case reason := <-srv.shutdownCh:
+		if reason != "api-request" {
+			t.Errorf("shutdown reason = %q, want api-request", reason)
+		}
+	default:
+		t.Fatal("expected at least one shutdown reason queued")
+	}
+
+	// After draining, subsequent RequestShutdown should still queue
+	// one reason — the channel is ready to accept again.
+	srv.RequestShutdown()
+	select {
+	case reason := <-srv.shutdownCh:
+		if reason != "api-request" {
+			t.Errorf("second shutdown reason = %q, want api-request", reason)
+		}
+	default:
+		t.Fatal("expected second RequestShutdown to queue")
+	}
+}
+
 func TestServerInfoPath(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	path := srv.serverInfoPath()
