@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **CONTRIBUTING + architecture.md polish to close Phase 3 of
+  Windows support (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** CONTRIBUTING
+  line 118 no longer says "A Unix-like filesystem (macOS or
+  Linux). Windows isn't tested." — the three-OS CI matrix now
+  covers Linux, macOS, and Windows. A new "Platform-guarded
+  code" subsection under "Patterns to reuse" documents the
+  decision rule: two-file build-tag split for compile-gated
+  APIs (e.g., `syscall.Setsid`, `syscall.Mmap`), inline
+  `runtime.GOOS` guard for <10 LOC of semantic divergence
+  (perm-check skips, proxy-file-format selection). Both
+  patterns are cited with concrete examples from the tree.
+  `docs/architecture.md` gains one-line descriptions of
+  `hooks/` (post-Phase-2 shape: Go subcommands + proxy
+  scripts) and the new `internal/mmap/` package. Windows
+  support is now complete across all three phases.
+
 ### Added
 
 - **`docs/windows.md` — Windows-user documentation (Phase 3 of

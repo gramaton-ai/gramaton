@@ -115,7 +115,9 @@ in doubt, those are the source of truth for "why is it like this?"
 **Required:**
 
 - Go 1.26 or newer (`go version`)
-- A Unix-like filesystem (macOS or Linux). Windows isn't tested.
+- Linux, macOS, or Windows. All three are covered by the CI matrix
+  (see `.github/workflows/ci.yml`). Windows-specific notes live in
+  [docs/windows.md](docs/windows.md).
 
 **Optional, depending on what you're working on:**
 
@@ -573,6 +575,37 @@ that.
 - `doRequest(t, srv, method, path, body)` for HTTP-level tests.
 - `doRequestFrom(t, srv, method, path, body, remote)` when you need
   a non-loopback origin (for testing loopback gates).
+
+### Platform-guarded code
+
+Gramaton runs on Linux, macOS, and Windows. When a code path
+needs per-OS logic, pick between two patterns based on the shape
+of the divergence:
+
+**Two-file build-tag split** — use when the divergent API is
+**compile-gated** (referencing `syscall.Setsid` or
+`syscall.Mmap` on Windows would fail at compile time). Create
+sibling files with `//go:build !windows` and `//go:build windows`
+tags, each defining the same identifier for its platform. The
+selector happens at build time; no runtime branch. Examples in
+the tree:
+
+- `internal/mmap/mmap_unix.go` + `internal/mmap/mmap_windows.go`
+- `server/info_unix.go` + `server/info_windows.go`
+- `cli/serve_unix.go` + `cli/serve_windows.go`
+- `embed/ollama/lifecycle_unix.go` + `lifecycle_windows.go`
+
+**Inline `runtime.GOOS` guard** — use when the divergence is
+**semantic** (< 10 LOC difference, both branches compile on both
+platforms, behavior or presentation differs). Examples:
+
+- `internal/setup/step_verify.go` — the perm-bit checks skip with
+  a "NTFS ACL model" note under `runtime.GOOS == "windows"`.
+- `internal/setup/hooks.go` — `renderHookProxy` picks `.cmd` vs
+  `.sh` based on `runtime.GOOS` and the target client.
+
+Don't combine them. If a divergence grows past ~10 LOC or picks
+up a compile-gated API, promote to a two-file split.
 
 ---
 

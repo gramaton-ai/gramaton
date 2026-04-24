@@ -146,8 +146,9 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
 | `backup/` | Tar archive backup/restore, export/import. |
-| `hooks/` | Shipped agent integration hooks (`hooks/claude-code/`, `hooks/kiro/`): session start, pre-compact archive, post-compact, stop. |
+| `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop). Exposed as `gramaton hook <event>` subcommands; one-line proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them. `.cmd` on Windows for Kiro, `.sh` everywhere else. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
+| `internal/mmap/` | Cross-platform read-only file mmap: `syscall.Mmap` on Unix, `CreateFileMapping` + `MapViewOfFile` on Windows via `golang.org/x/sys/windows`. Consumed by `embed/bert/safetensors.go` (model weights) and `index/flat_mmap.go` (vector index). In-house to preserve Gramaton's frugal-deps posture — `edsrzf/mmap-go` carries 500+ LOC of features we don't use. |
 | `internal/version/` | Build-time version injection. |
 
 ## Dependency direction
