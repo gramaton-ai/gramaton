@@ -7,7 +7,8 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"syscall"
+
+	"github.com/gramaton-ai/gramaton/internal/mmap"
 )
 
 // MmapFlatIndex is a disk-backed flat vector index using mmap (D1 revised).
@@ -30,11 +31,12 @@ import (
 // Search computes uint8 cosine similarity via dot product divided by norms (full cosine).
 // The file supports O(1) append (extend + write entry + update count).
 type MmapFlatIndex struct {
-	mu    sync.RWMutex
-	path  string
-	file  *os.File
-	data  []byte // mmap'd region (nil if empty file)
-	dim   int
+	mu     sync.RWMutex
+	path   string
+	file   *os.File
+	region *mmap.Region // platform-abstracted mmap handle
+	data   []byte       // alias of region.Bytes() cached for hot-path access
+	dim    int
 	qscale float32 // quantization scale for this dimension
 
 	// In-memory ID-to-offset map for filtered scans and Remove.
@@ -136,9 +138,13 @@ func (idx *MmapFlatIndex) writeHeader(count int) error {
 }
 
 func (idx *MmapFlatIndex) remap() error {
-	// Unmap existing.
-	if idx.data != nil {
-		syscall.Munmap(idx.data)
+	// Release any existing mapping before establishing the new one.
+	// Close errors here are non-fatal: the new mapping supersedes the
+	// old regardless, and propagating them would mask the real error
+	// we care about (the new mmap.Open failure, if any).
+	if idx.region != nil {
+		_ = idx.region.Close()
+		idx.region = nil
 		idx.data = nil
 	}
 
@@ -151,12 +157,12 @@ func (idx *MmapFlatIndex) remap() error {
 		return fmt.Errorf("flat index: file too small (%d bytes)", size)
 	}
 
-	data, err := syscall.Mmap(int(idx.file.Fd()), 0, int(size),
-		syscall.PROT_READ, syscall.MAP_SHARED)
+	region, err := mmap.Open(idx.file, int(size))
 	if err != nil {
 		return fmt.Errorf("flat index: mmap: %w", err)
 	}
-	idx.data = data
+	idx.region = region
+	idx.data = region.Bytes()
 	return nil
 }
 
@@ -362,9 +368,10 @@ func (idx *MmapFlatIndex) rewriteFromOffsetsLocked(liveBuffered []bufferedEntry)
 	}
 
 	// Truncate file back to header-only, then write fresh entries.
-	// Munmap first so we can resize.
-	if idx.data != nil {
-		syscall.Munmap(idx.data)
+	// Unmap first so we can resize.
+	if idx.region != nil {
+		_ = idx.region.Close()
+		idx.region = nil
 		idx.data = nil
 	}
 	if err := idx.file.Truncate(flatHeaderSize); err != nil {
@@ -481,8 +488,9 @@ func (idx *MmapFlatIndex) Close() error {
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if idx.data != nil {
-		syscall.Munmap(idx.data)
+	if idx.region != nil {
+		_ = idx.region.Close()
+		idx.region = nil
 		idx.data = nil
 	}
 	if idx.file != nil {

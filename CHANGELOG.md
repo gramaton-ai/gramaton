@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`index/flat_mmap.go` migrated to `internal/mmap` (Phase 1 of
+  Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Four direct
+  `syscall.Mmap`/`Munmap` callsites (remap + rewrite-path unmap +
+  Close-path unmap + initial Mmap) replaced with `mmap.Region`.
+  The remap-after-Flush flow is preserved exactly: unmap the old
+  region, truncate + rewrite, open a new region. No behavior
+  change on Unix. Combined with the safetensors migration, the
+  full Gramaton tree now cross-compiles for `GOOS=windows
+  GOARCH=amd64` — Phase 1's load-bearing blocker is clear.
+
 - **`embed/bert/safetensors.go` migrated to `internal/mmap`
   (Phase 1 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
   Six direct `syscall.Mmap`/`Munmap` callsites replaced with
