@@ -9,6 +9,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`hooks/claude_code.go` — Go port of the four Claude Code hook
+  scripts (Phase 2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  `ClaudeCodeSessionStart`, `ClaudeCodeStop`, `ClaudeCodePreCompact`,
+  `ClaudeCodePostCompact` replicate the behavior of the legacy
+  `hooks/claude-code/*.sh` scripts: decode stdin JSON, validate the
+  session_id against `^[A-Za-z0-9_-]+$`, shell out to `gramaton
+  session start/get/archive` via `RunGramaton` (now an overridable
+  package-level var for tests), write the `current-session.json`
+  shared pointer and the per-cwd session file, count uncaptured
+  segments pre-compaction, write the `.precompact-uncaptured` /
+  `.compacted` flag files. Handlers are fail-open — every error
+  logs to `~/.gramaton/hooks.log` and returns cleanly so Claude
+  Code is never blocked. 11 unit tests cover each handler's happy
+  path + its security guards (unsafe session_id rejected before
+  any CLI shellout), state-file writes, counter resets, and both
+  branches of the pre-compact count logic. Not yet wired into the
+  binary — commit 4 introduces the `gramaton hook <event>` cobra
+  subcommand that dispatches to these.
+
 - **`hooks` Go package — shared state helpers for the upcoming
   `gramaton hook <event>` subcommand (Phase 2 of Windows support,
   `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Introduces `hooks/state.go`

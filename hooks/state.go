@@ -301,10 +301,14 @@ func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
 
 // RunGramaton execs the gramaton binary with the given args and
-// returns its combined stdout+stderr. The binary is resolved from
-// $GRAMATON_BIN (for dev / non-PATH installs) or the default
-// "gramaton" lookup via exec.LookPath.
-func RunGramaton(args ...string) (string, error) {
+// returns its combined stdout+stderr. Overridable for tests —
+// assign a different function to exercise handlers without a
+// real gramaton binary on PATH.
+var RunGramaton = realRunGramaton
+
+// realRunGramaton resolves the binary via $GRAMATON_BIN or exec.LookPath
+// ("gramaton") and execs it. Default value of RunGramaton.
+func realRunGramaton(args ...string) (string, error) {
 	bin := os.Getenv("GRAMATON_BIN")
 	if bin == "" {
 		bin = "gramaton"
