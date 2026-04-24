@@ -1,0 +1,239 @@
+package curation
+
+import (
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
+)
+
+// setupSelfHealTest builds a minimal engine suitable for exercising
+// self-heal logic. No LLM, no embedder — self-heal is pure
+// deterministic work.
+func setupSelfHealTest(t *testing.T) *core.Engine {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = ""
+	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithVectorIndex(index.NewFlatIndex()),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	return eng
+}
+
+// seedContaminated adds a record with the exact observed pattern
+// from the 3 real contaminated records (01KPVD7NW3YWB6ZZJ1JSN5J89Z
+// and siblings). Returns the new node ID.
+func seedContaminated(t *testing.T, eng *core.Engine, cleanPrefix, contentFull string) string {
+	t.Helper()
+	eng.Lock()
+	defer eng.Unlock()
+	tail := `</summary_short>
+<parameter name="keywords">["leaked", "fragments"]`
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty(contentFull),
+		"content_short":     graph.StringProperty(cleanPrefix + tail),
+		"embedding_model":   graph.StringProperty("bge-small-en-v1.5"),
+		"processing_status": graph.StringProperty("processed"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	return n.ID
+}
+
+// --- DetectAndRepairSummary happy path ---
+
+func TestDetectAndRepairSummaryStripTier(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	longClean := "Setup-wizard language principles for Gramaton: lead with user benefit; one-sentence concept explanations; skip-for-now option on every step."
+	id := seedContaminated(t, eng, longClean, "Full content here unused by this test.")
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, id, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeStripped {
+		t.Errorf("outcome = %v, want %v", outcome, outcomeStripped)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	stored, _ := n.Properties.GetString("content_short")
+	if strings.Contains(stored, "</summary_short>") || strings.Contains(stored, "<parameter name=") {
+		t.Errorf("stored content retained contamination: %q", stored)
+	}
+	if stored != longClean {
+		t.Errorf("stored = %q, want %q", stored, longClean)
+	}
+	// Embedding-model should be cleared so reembed picks it up.
+	if em, _ := n.Properties.GetString("embedding_model"); em != "" {
+		t.Errorf("embedding_model = %q after repair, want cleared for reembed", em)
+	}
+	// Audit metadata written.
+	if _, ok := n.Properties.GetTimestamp("repaired_at"); !ok {
+		t.Error("repaired_at not set")
+	}
+	if m, _ := n.Properties.GetString("repair_method"); m != "stripped" {
+		t.Errorf("repair_method = %q, want 'stripped'", m)
+	}
+}
+
+func TestDetectAndRepairSummaryFallbackTier(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	// cleanPrefix below minSummaryAfterStrip → strip tier skipped.
+	shortClean := "Tiny."
+	contentFull := "The full record content has several sentences. It explains the topic thoroughly. Extra context follows the initial claim."
+	id := seedContaminated(t, eng, shortClean, contentFull)
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, id, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeFallback {
+		t.Errorf("outcome = %v, want %v", outcome, outcomeFallback)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	stored, _ := n.Properties.GetString("content_short")
+	if strings.Contains(stored, "<parameter name=") {
+		t.Errorf("stored content retained contamination: %q", stored)
+	}
+	if !strings.HasPrefix(stored, "The full record content") {
+		t.Errorf("stored = %q, want content_full prefix", stored)
+	}
+	if m, _ := n.Properties.GetString("repair_method"); m != "fallback" {
+		t.Errorf("repair_method = %q, want 'fallback'", m)
+	}
+}
+
+func TestDetectAndRepairSummaryFlagForLLM(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	// cleanPrefix below minSummaryAfterStrip AND content_full has no
+	// sentence punctuation — both salvage paths fail.
+	id := seedContaminated(t, eng, "Tiny.", "no punctuation here just words")
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, id, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeFlagged {
+		t.Errorf("outcome = %v, want %v", outcome, outcomeFlagged)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	if flag, _ := n.Properties.GetBool("repair_needed_llm"); !flag {
+		t.Error("repair_needed_llm not set")
+	}
+	if m, _ := n.Properties.GetString("repair_method"); m != "flagged" {
+		t.Errorf("repair_method = %q, want 'flagged'", m)
+	}
+}
+
+func TestDetectAndRepairSummaryCleanIsNoop(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("Body."),
+		"content_short": graph.StringProperty("Already-clean summary with no contamination."),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeClean {
+		t.Errorf("outcome = %v, want %v (clean records must be left alone)", outcome, outcomeClean)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	node, _ := eng.Graph().GetNode(n.ID)
+	if _, ok := node.Properties.GetTimestamp("repaired_at"); ok {
+		t.Error("repaired_at written on a clean record (should have been no-op)")
+	}
+}
+
+// --- RunSelfHeal integration ---
+
+func TestRunSelfHealScansAndRepairs(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	// Three contaminated, one clean.
+	seedContaminated(t, eng, strings.Repeat("Good prefix sentence with enough characters. ", 3), "Body full a. Body full b.")
+	seedContaminated(t, eng, strings.Repeat("Another good prefix with enough characters. ", 3), "Body c. Body d.")
+	seedContaminated(t, eng, "Tiny.", "Body of the record has enough prose to produce a real summary via the fallback tier. A second sentence adds additional substance.") // fallback tier
+
+	eng.Lock()
+	cleanNode := eng.Graph().AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("Clean body."),
+		"content_short": graph.StringProperty("Clean summary, no contamination here."),
+	})
+	if _, err := eng.Save("clean"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save clean: %v", err)
+	}
+	eng.Unlock()
+
+	result := RunSelfHeal(eng, slog.Default())
+
+	if result.Scanned < 4 {
+		t.Errorf("Scanned = %d, want >= 4", result.Scanned)
+	}
+	if result.Repaired != 3 {
+		t.Errorf("Repaired = %d, want 3", result.Repaired)
+	}
+	if result.FlaggedForLLM != 0 {
+		t.Errorf("FlaggedForLLM = %d, want 0", result.FlaggedForLLM)
+	}
+	// Clean record must be untouched.
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(cleanNode.ID)
+	if _, ok := n.Properties.GetTimestamp("repaired_at"); ok {
+		t.Error("clean record got repaired_at property")
+	}
+}
+
+// --- firstSentences helper ---
+
+func TestFirstSentencesBasic(t *testing.T) {
+	got := firstSentences("First sentence. Second sentence. Third sentence.", 2, 500)
+	want := "First sentence. Second sentence."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFirstSentencesNoPunctuation(t *testing.T) {
+	got := firstSentences("this is not a sentence", 2, 500)
+	if got != "" {
+		t.Errorf("got %q, want empty (no sentence terminator → no salvage)", got)
+	}
+}
+
+func TestFirstSentencesCapsAtMaxChars(t *testing.T) {
+	long := strings.Repeat("Sentence. ", 100) // 1000+ chars
+	got := firstSentences(long, 10, 50)
+	if len(got) > 50 {
+		t.Errorf("got len %d, want <= 50", len(got))
+	}
+}

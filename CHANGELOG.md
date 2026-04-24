@@ -9,6 +9,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Content-quality self-heal pass (Cluster 2 Phase 3,
+  `01KPZZNG45PC7D6HC8SQH3P9N1`).** New `curation.RunSelfHeal` walks
+  every Memory + Session record, detects LLM tool-use-format
+  contamination in `content_short` via the same `internal/sanitize`
+  helper used at Phase 1 write sites, and applies a deterministic
+  repair cascade:
+    1. **Strip**: if sanitization yields ≥ 50 characters of clean
+       prose, write that and clear `embedding_model` so the next
+       reembed cycle refreshes against the corrected summary.
+    2. **Fallback**: if strip yields too little, extract the first
+       1-2 sentences of `content_full` (deterministic, no LLM) and
+       use that as the repaired summary.
+    3. **Flag**: if neither tier salvages anything, set
+       `repair_needed_llm=true` on the record for a future
+       LLM-escalation pass (not implemented in this landing).
+  Each repaired record gets `repaired_at` + `repair_method`
+  (`stripped` / `fallback` / `flagged`) audit properties so the
+  method mix is observable without parsing logs.
+  Exposed via CLI as `gramaton repair --content-quality` alongside
+  the existing structural-integrity `gramaton repair`. Same
+  server-must-be-stopped guard; `--dry-run` still covers structural
+  checks only (self-heal only runs on a live repair today —
+  dry-run support is a cheap follow-up if needed).
+  10 regression tests in `curation/self_heal_test.go` cover each
+  tier of the cascade, the no-op path for clean records, and
+  `firstSentences` helper edge cases (no-punctuation input,
+  maxChars truncation at sentence boundaries).
+
 - **`internal/sanitize` package (Cluster 2 Phase 1,
   `01KPZZNG45PC7D6HC8SQH3P9N1`).** New helper `sanitize.Field(s)` and
   `sanitize.Validate(orig, cleaned, name, max)` strip LLM tool-use-

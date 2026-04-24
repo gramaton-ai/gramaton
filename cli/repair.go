@@ -2,13 +2,18 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
 )
 
-var repairDryRun bool
+var (
+	repairDryRun         bool
+	repairContentQuality bool
+)
 
 var repairCmd = &cobra.Command{
 	Use:   "repair",
@@ -17,6 +22,13 @@ var repairCmd = &cobra.Command{
 edges and orphaned chunk nodes. Reports stale embeddings (fix with
 'gramaton reembed').
 
+With --content-quality, also scans every record for LLM tool-use-
+format contamination (e.g. summary_short containing stray
+</summary_short> or <parameter name=> tags from agent output drift)
+and applies a deterministic repair cascade: strip the bad tail,
+fall back to extracting the first sentences of content_full, or
+flag the record for a future LLM-escalation pass.
+
 Run 'gramaton validate' first to see what will be fixed.
 Use --dry-run to preview changes without applying them.`,
 	RunE: runRepair,
@@ -24,6 +36,8 @@ Use --dry-run to preview changes without applying them.`,
 
 func init() {
 	repairCmd.Flags().BoolVar(&repairDryRun, "dry-run", false, "preview changes without applying")
+	repairCmd.Flags().BoolVar(&repairContentQuality, "content-quality", false,
+		"also run the content-quality self-heal pass (detects and repairs LLM tool-use-format contamination in summary_short)")
 	rootCmd.AddCommand(repairCmd)
 }
 
@@ -85,6 +99,20 @@ func runRepair(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nNo structural repairs needed.")
 	} else {
 		fmt.Println("\nRepairs applied and saved.")
+	}
+
+	if repairContentQuality {
+		fmt.Println()
+		fmt.Println("Running content-quality self-heal...")
+		healResult := curation.RunSelfHeal(eng, slog.Default())
+		fmt.Printf("  Scanned: %d\n", healResult.Scanned)
+		fmt.Printf("  Repaired: %d\n", healResult.Repaired)
+		if healResult.FlaggedForLLM > 0 {
+			fmt.Printf("  Flagged for LLM-escalation repair: %d\n", healResult.FlaggedForLLM)
+			fmt.Println("  (Records whose summaries couldn't be salvaged by strip or content_full fallback.")
+			fmt.Println("  Query them later with gramaton_search meta.repair_needed_llm=true once an")
+			fmt.Println("  LLM-escalation pass is available.)")
+		}
 	}
 
 	return nil
