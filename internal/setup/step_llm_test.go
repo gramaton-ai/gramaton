@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,6 +147,45 @@ func TestStepLLMHelpThenSkip(t *testing.T) {
 	}
 	if wiz.cfg.LLM.Provider != "" {
 		t.Errorf("LLM.Provider: got %q, want empty after help→skip", wiz.cfg.LLM.Provider)
+	}
+}
+
+// TestStepLLMAnthropicDetectsExistingKeyAndKeeps covers the re-run
+// path: when ~/.gramaton/anthropic.key already exists, the wizard
+// offers to keep it instead of forcing the user to re-paste. Answers:
+// "1" picks Anthropic, "y" keeps the existing key. No Secret() call
+// consumed — the test would hang or fail if the keep-branch were
+// skipped (ScriptedPrompter has no more answers to give).
+func TestStepLLMAnthropicDetectsExistingKeyAndKeeps(t *testing.T) {
+	wiz, buf, tmpDir := newWizardForLLMTest(t, "1", "y")
+
+	// Pre-seed an existing Anthropic key file. Validation will
+	// fail (fake key, no network), but that's non-fatal — the
+	// wizard warns and continues. What we assert is:
+	//   - provider got set to "anthropic"
+	//   - APIKeyFile points at the existing file
+	//   - the wizard printed the "key detected" notice
+	keyPath := filepath.Join(tmpDir, "anthropic.key")
+	if err := os.WriteFile(keyPath, []byte("sk-ant-fake-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if wiz.cfg.LLM.Provider != "anthropic" {
+		t.Errorf("LLM.Provider = %q, want anthropic", wiz.cfg.LLM.Provider)
+	}
+	if wiz.cfg.LLM.APIKeyFile != keyPath {
+		t.Errorf("APIKeyFile = %q, want %q", wiz.cfg.LLM.APIKeyFile, keyPath)
+	}
+	if !strings.Contains(out, "Anthropic key detected") {
+		t.Errorf("output missing key-detected notice:\n%s", out)
+	}
+	if !strings.Contains(out, "Using existing key") {
+		t.Errorf("output missing keep-existing confirmation:\n%s", out)
 	}
 }
 

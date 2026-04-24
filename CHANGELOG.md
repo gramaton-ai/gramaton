@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Step 2 detects existing LLM API keys on re-run and offers to keep
+  them (`01KQ0DNH8S97F13R4ZS2EDDWH4` follow-up).** Previously
+  `gramaton init --force` forced users to re-paste their API key on
+  every re-run even when the key file already existed at
+  `~/.gramaton/anthropic.key` or `~/.gramaton/openai.key`. Now the
+  wizard notices the existing file and asks `[Y] Keep / [n] Replace`.
+  Keeping skips to validation (Anthropic) or config-caps prompt
+  (OpenAI). Replacing falls through to the existing paste-new-key
+  path. Bedrock unchanged — it uses AWS profile + region, not a
+  local key file. New test `TestStepLLMAnthropicDetectsExistingKeyAndKeeps`
+  covers the keep path; the wizard output must show "Anthropic key
+  detected" and "Using existing key" before the test call fires.
+
 ### Changed
 
 - **Step 4 asks once per detected client instead of one omnibus Y/n

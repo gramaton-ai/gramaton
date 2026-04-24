@@ -151,7 +151,44 @@ func (w *Wizard) printGettingAKey() {
 // llmAnthropic handles the Anthropic direct-API branch. Reads the key
 // (hidden), writes it to ~/.gramaton/anthropic.key at 0600, tests it
 // with a minimal completion, and wires config.LLM accordingly.
+//
+// On re-run (`gramaton init --force`) where the key file already
+// exists, offers a keep-existing shortcut so users don't have to
+// re-paste.
 func (w *Wizard) llmAnthropic(ctx context.Context) error {
+	keyPath := filepath.Join(w.configDir, "anthropic.key")
+
+	// If a key was saved on a prior run, offer to reuse it rather
+	// than force the user to fish it out of 1Password again. Still
+	// runs the test call so a rotated/revoked key surfaces cleanly.
+	if _, err := os.Stat(keyPath); err == nil {
+		w.writer.Blank()
+		w.writer.Paragraph(
+			fmt.Sprintf("Anthropic key detected at %s.", keyPath),
+		)
+		w.writer.Raw("    [Y] Keep existing key")
+		w.writer.Raw("    [n] Replace with a new key")
+		w.writer.Prompt(">")
+
+		keep, err := w.prompter.YesNo(true)
+		if err != nil {
+			if errors.Is(err, ErrAborted) {
+				return err
+			}
+			w.writer.ErrorLine(err.Error())
+			return nil
+		}
+		if keep {
+			w.cfg.LLM.Provider = "anthropic"
+			w.cfg.LLM.APIKeyFile = keyPath
+			w.writer.Check(fmt.Sprintf("Using existing key: %s", keyPath))
+			return w.validateAnthropicKey(ctx, keyPath)
+		}
+		// Fall through to paste-new-key path. Intentionally don't
+		// delete the old key first — if the user Ctrl+Cs before
+		// the new write, the old one stays usable.
+	}
+
 	w.writer.Blank()
 	w.writer.Paragraph(
 		"Paste your Anthropic API key (it will be hidden as you type).",
@@ -177,7 +214,7 @@ func (w *Wizard) llmAnthropic(ctx context.Context) error {
 		w.writer.Warn("Key doesn't start with 'sk-ant-'. Continuing anyway; the test call will catch it if invalid.")
 	}
 
-	keyPath := filepath.Join(w.configDir, "anthropic.key")
+	// keyPath already resolved at top of function.
 	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
@@ -265,7 +302,39 @@ func (w *Wizard) validateAnthropicKey(ctx context.Context, keyPath string) error
 // directly; doing the same for OpenAI would couple the wizard to the
 // openai package. Worth the symmetry for v2; for v1 we trust the key
 // format and let first use fail loudly if invalid.
+//
+// On re-run where the key file already exists, offers the same
+// keep-existing shortcut as llmAnthropic.
 func (w *Wizard) llmOpenAI(ctx context.Context) error {
+	keyPath := filepath.Join(w.configDir, "openai.key")
+
+	if _, err := os.Stat(keyPath); err == nil {
+		w.writer.Blank()
+		w.writer.Paragraph(
+			fmt.Sprintf("OpenAI key detected at %s.", keyPath),
+		)
+		w.writer.Raw("    [Y] Keep existing key")
+		w.writer.Raw("    [n] Replace with a new key")
+		w.writer.Prompt(">")
+
+		keep, err := w.prompter.YesNo(true)
+		if err != nil {
+			if errors.Is(err, ErrAborted) {
+				return err
+			}
+			w.writer.ErrorLine(err.Error())
+			return nil
+		}
+		if keep {
+			w.cfg.LLM.Provider = "openai"
+			w.cfg.LLM.APIKeyFile = keyPath
+			w.cfg.LLM.Model = "gpt-4o-mini"
+			w.writer.Check(fmt.Sprintf("Using existing key: %s", keyPath))
+			w.writer.Warn("Note: curation tier models still point at Anthropic names. Edit config.yaml's llm.models map to use OpenAI model names (e.g., gpt-4o-mini, gpt-4o).")
+			return w.cfgCapsPrompt(ctx)
+		}
+	}
+
 	w.writer.Blank()
 	w.writer.Paragraph("Paste your OpenAI API key (hidden):")
 	w.writer.Prompt(">")
@@ -278,7 +347,7 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 		return w.llmSkip(ctx)
 	}
 
-	keyPath := filepath.Join(w.configDir, "openai.key")
+	// keyPath already resolved at top of function.
 	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
