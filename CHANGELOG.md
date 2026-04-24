@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`hooks` Go package — shared state helpers for the upcoming
+  `gramaton hook <event>` subcommand (Phase 2 of Windows support,
+  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Introduces `hooks/state.go`
+  with the primitives that every Claude Code / Kiro hook handler
+  needs: `HookInput` stdin decoder (session_id with agent_id
+  fallback for Kiro), `ValidSessionID` regex guard against path-
+  traversal shapes, atomic counter R/W (`ReadCounter`,
+  `WriteCounter`, `IncrementCounter`, `ResetCounter`), `Logger`
+  for tagged append-only writes to `~/.gramaton/hooks.log`,
+  `RunGramaton` for CLI shellout (respects `GRAMATON_BIN` env),
+  cross-platform `CwdSlug` that handles Windows drive-letter
+  colons (`C:\Users\b\foo` → `C-Users-b-foo`), `ExtractThreshold`
+  env-override reader, and `atomicWriteFile` helper (tmp + rename).
+  The R-M-W race in `IncrementCounter` against simultaneous hook
+  fires from different processes is documented and accepted — same
+  as the legacy shell script, costs at most one lost turn which
+  just nudges extraction one turn later. 17 tests cover the edge
+  cases (valid/invalid session IDs, corrupt counter files, empty
+  and malformed stdin, Windows/Unix slug parity, logger append,
+  env overrides), all green under -race.
+
 ### Changed
 
 - **D34 + BERT matmul benchmark comments reality-calibrated from
