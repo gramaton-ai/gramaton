@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton hook <event>` CLI subcommand — wires the Go hook
+  handlers to the binary (Phase 2 of Windows support,
+  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New `cli/hook.go` registers
+  a hidden cobra subcommand that dispatches one of seven
+  positional-arg events (session-start, stop, pre-compact,
+  post-compact, kiro-agent-spawn, kiro-user-prompt-submit,
+  kiro-stop) to the matching `hooks.ClaudeCode*` or `hooks.Kiro*`
+  handler. Hidden from `--help` because users never invoke it
+  directly — Claude Code and Kiro do, via the proxy scripts that
+  `gramaton init` will install in commit 5. Unknown event names
+  surface as errors; handler errors are always swallowed (fail-
+  open). Two tests: `TestHookDispatchCoversAllEvents` keeps the
+  dispatch table in sync with the documented event list;
+  `TestHookUnknownEventReturnsError` pins the surface-the-error
+  contract for unknown event names.
+
 - **`hooks/kiro.go` — Go port of the three Kiro hook scripts (Phase
   2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
   `KiroAgentSpawn`, `KiroUserPromptSubmit`, `KiroStop` replicate
