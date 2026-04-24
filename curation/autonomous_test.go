@@ -1753,6 +1753,47 @@ func TestParseClassificationKeywordLengthTruncation(t *testing.T) {
 	}
 }
 
+// TestParseClassificationStripsTailContamination verifies that when
+// the classification LLM emits JSON where summary_short contains
+// tool-use-format tail fragments, the parser strips them before
+// returning. Regression against the Cluster 2 bug class observed on
+// 2026-04-24 (01KPZZNG45PC7D6HC8SQH3P9N1): corruption inside the
+// JSON string value for summary_short was being stored verbatim.
+func TestParseClassificationStripsTailContamination(t *testing.T) {
+	// Embed the tail pattern inside the JSON string value.
+	input := `{"temporality":"durable","confidence":0.9,"summary_short":"Good summary here.</summary_short>\n<parameter name=\"keywords\">[\"a\"]"}`
+	r, err := parseClassification(input)
+	if err != nil {
+		t.Fatalf("parseClassification: %v", err)
+	}
+	if strings.Contains(r.SummaryShort, "</summary_short>") {
+		t.Errorf("summary retained </summary_short>: %q", r.SummaryShort)
+	}
+	if strings.Contains(r.SummaryShort, "<parameter name=") {
+		t.Errorf("summary retained <parameter name=: %q", r.SummaryShort)
+	}
+	if r.SummaryShort != "Good summary here." {
+		t.Errorf("summary = %q, want %q", r.SummaryShort, "Good summary here.")
+	}
+}
+
+// TestParseClassificationDropsPureContamination covers the
+// silently-drop-and-warn path: when the LLM emits a summary that is
+// entirely tool-use-format garbage, parseClassification must NOT
+// return the corrupted value. Returning it would overwrite any
+// existing clean summary_short on the record. Empty is the safe
+// sentinel for "no improvement this cycle."
+func TestParseClassificationDropsPureContamination(t *testing.T) {
+	input := `{"temporality":"durable","summary_short":"</summary_short>\n<parameter name=\"keywords\">[\"x\"]"}`
+	r, err := parseClassification(input)
+	if err != nil {
+		t.Fatalf("parseClassification: %v", err)
+	}
+	if r.SummaryShort != "" {
+		t.Errorf("summary = %q, want empty (pure-contamination input must be dropped)", r.SummaryShort)
+	}
+}
+
 func TestParseClassificationJSONWithSurroundingText(t *testing.T) {
 	input := `Here is the classification:
 {"temporality":"ephemeral","confidence":0.6}

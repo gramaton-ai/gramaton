@@ -37,7 +37,7 @@ func (a *API) Classify(ctx context.Context, req ClassifyRequest) (ClassifyRespon
 	if req.ID == "" {
 		return ClassifyResponse{}, ErrMissing("id is required")
 	}
-	if err := validateClassifyRequest(req); err != nil {
+	if err := validateClassifyRequest(&req); err != nil {
 		return ClassifyResponse{}, ErrInvalid(err.Error())
 	}
 
@@ -81,7 +81,7 @@ func (a *API) Classify(ctx context.Context, req ClassifyRequest) (ClassifyRespon
 	return ClassifyResponse{ID: req.ID, Updated: true}, nil
 }
 
-func validateClassifyRequest(r ClassifyRequest) error {
+func validateClassifyRequest(r *ClassifyRequest) error {
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}

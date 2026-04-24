@@ -89,7 +89,7 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 	if len(req.Content) > a.engine.Config().Limits.MaxContentLength {
 		return CaptureResponse{}, ErrInvalid("content exceeds maximum length")
 	}
-	if err := validateCaptureRequest(req); err != nil {
+	if err := validateCaptureRequest(&req); err != nil {
 		return CaptureResponse{}, ErrInvalid(err.Error())
 	}
 	if err := validateMeta(req.Meta); err != nil {
@@ -202,7 +202,7 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 
 // validateCaptureRequest checks per-field invariants: numeric ranges,
 // enum values, string lengths. Returns the first problem found.
-func validateCaptureRequest(r CaptureRequest) error {
+func validateCaptureRequest(r *CaptureRequest) error {
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}

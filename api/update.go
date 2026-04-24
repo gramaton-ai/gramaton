@@ -48,7 +48,7 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 	if req.ID == "" {
 		return UpdateResponse{}, ErrMissing("id is required")
 	}
-	if err := validateUpdateRequest(req); err != nil {
+	if err := validateUpdateRequest(&req); err != nil {
 		return UpdateResponse{}, ErrInvalid(err.Error())
 	}
 
@@ -144,7 +144,7 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 	return resp, nil
 }
 
-func validateUpdateRequest(r UpdateRequest) error {
+func validateUpdateRequest(r *UpdateRequest) error {
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}
