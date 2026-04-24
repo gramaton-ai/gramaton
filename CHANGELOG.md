@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`hooks/kiro.go` — Go port of the three Kiro hook scripts (Phase
+  2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  `KiroAgentSpawn`, `KiroUserPromptSubmit`, `KiroStop` replicate
+  `hooks/kiro/*.sh`. Two Kiro-specific quirks preserved exactly:
+  (1) `session_id` falls back to `agent_id` when absent (Kiro
+  payloads prefer agent_id while Claude Code uses session_id);
+  (2) `KiroUserPromptSubmit`'s stdout contract — whatever the hook
+  writes there is injected into Kiro's next-prompt context, so
+  when the turn counter hits `GRAMATON_EXTRACT_INTERVAL` (default
+  10) the handler emits the extraction reminder to stdout and
+  resets the counter. Text of the reminder is preserved verbatim
+  from the legacy shell script so agents see the same nudge. 10
+  unit tests cover: agent-spawn happy path, session_id-preferred-
+  over-agent_id, agent_id fallback, unsafe-id rejection, threshold
+  logic below/at/env-overridden values, counter reset after
+  reminder, stop increments, silent-on-missing-id. All green under
+  -race on macOS; cross-compiles for windows/amd64.
+
 - **`hooks/claude_code.go` — Go port of the four Claude Code hook
   scripts (Phase 2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
   `ClaudeCodeSessionStart`, `ClaudeCodeStop`, `ClaudeCodePreCompact`,
