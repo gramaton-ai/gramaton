@@ -283,6 +283,26 @@ func (e *Engine) Embedder() embed.Provider { return e.prov.embedder }
 // LLM returns the LLM provider (may be nil if not configured).
 func (e *Engine) LLM() llm.Provider { return e.prov.llm }
 
+// WrapLLM replaces the engine's LLM provider with the value returned
+// by fn (passed the current provider), then rebuilds the searcher
+// subsystem so search-time consumers (reranker, decompose) pick up
+// the new reference. No-op when the engine has no LLM configured.
+//
+// Intended for one-time setup of middleware wrappers — e.g. wrapping
+// with llm.Metered so every consumer records into the UsageTracker
+// instead of bypassing it. Call once before the server starts
+// accepting requests; not safe for runtime re-wrapping (no callers
+// yet hold the write lock). Takes the write lock internally.
+func (e *Engine) WrapLLM(fn func(llm.Provider) llm.Provider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.prov.llm == nil {
+		return
+	}
+	e.prov.llm = fn(e.prov.llm)
+	e.searcher.rebuild(e.graph, e.indexes.propIdx, e.indexes.vecIdx, e.indexes.bm25Full, e.indexes.secIdx, e.prov.embedder, e.prov.llm, e.cfg)
+}
+
 // Searcher returns the search tool.
 func (e *Engine) Searcher() *search.Tool { return e.searcher.tool }
 

@@ -135,6 +135,20 @@ func (m *Metered) ensureRecorder(ctx context.Context) (context.Context, func() t
 	}
 }
 
+// RecordCall accounts for an LLM call that bypassed the normal
+// Complete / CompleteWithModel path -- most notably the Anthropic
+// Message Batches API, which submits via SubmitBatch and gets
+// results back out-of-band. Callers translate the provider-native
+// response into a telemetry.CallUsage and pass it here so the
+// bypassed call is counted identically: per-call log, tracker
+// record, cap enforcement next call.
+//
+// latency may be zero when the batch API doesn't report per-sub-
+// request timing; the tracker tolerates it.
+func (m *Metered) RecordCall(model, task string, usage telemetry.CallUsage, latency time.Duration, err error) {
+	m.record(model, task, usage, latency, err)
+}
+
 func (m *Metered) record(model, task string, usage telemetry.CallUsage, latency time.Duration, err error) {
 	if task == "" {
 		task = "unknown"

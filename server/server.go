@@ -212,6 +212,20 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		engineCfg.LLM.MaxCallsPerSession,
 		engineCfg.LLM.MaxCostUSDPerDay,
 	)
+
+	// Wrap the engine's LLM with Metered so EVERY consumer (search
+	// rerank, query decompose, curation, classification batch)
+	// records into the usage tracker and respects cap enforcement.
+	// Previously only the curation runner got a wrapped reference,
+	// so rerank/decompose calls were invisible to llm_usage.json and
+	// bypassed max_calls_per_day. Done here, once, before the engine
+	// hands out LLM references to any consumer.
+	if engine.LLM() != nil {
+		engine.WrapLLM(func(inner llm.Provider) llm.Provider {
+			return llm.NewMetered(inner, usageTracker, logger)
+		})
+	}
+
 	s := &Server{
 		engine:       engine,
 		cfg:          cfg,
@@ -304,14 +318,12 @@ func (s *Server) Run() error {
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
-	// Start curation runner. Wrap LLM with metered provider for usage tracking.
+	// Start curation runner. engine.LLM() already returns the Metered
+	// wrapper from server construction (see server.New), so no per-call
+	// wrapping is needed here.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
-		curationLLM := s.engine.LLM()
-		if curationLLM != nil && s.usageTracker != nil {
-			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
-		}
-		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
+		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
 		s.api.SetRunner(s.runner)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		defer curationCancel()
@@ -405,14 +417,12 @@ func (s *Server) StartHTTP() error {
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
-	// Start curation runner. Wrap LLM with metered provider for usage tracking.
+	// Start curation runner. engine.LLM() already returns the Metered
+	// wrapper from server construction (see server.New), so no per-call
+	// wrapping is needed here.
 	engineCfg := s.engine.Config()
 	if engineCfg.Curation.Enabled {
-		curationLLM := s.engine.LLM()
-		if curationLLM != nil && s.usageTracker != nil {
-			curationLLM = llm.NewMetered(curationLLM, s.usageTracker, s.log)
-		}
-		s.runner = curation.NewRunner(s.engine, curationLLM, engineCfg, s.log)
+		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
 		s.api.SetRunner(s.runner)
 		curationCtx, curationCancel := context.WithCancel(context.Background())
 		go s.runner.Start(curationCtx)

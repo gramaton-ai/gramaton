@@ -7,6 +7,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **All LLM paths now flow through the `Metered` wrapper, not just
+  curation (`01KPZYSJFRW8P41SWQC750FK4B`, `01KPZZAS2580FBEPPVQHVER64C`).**
+  Previously only `curationLLM` was wrapped with `llm.NewMetered`
+  (`server/server.go:312`, `:413`), so rerank, query decompose, and
+  the classification Message Batches API made LLM calls that were
+  invisible to `llm_usage.json`, bypassed `max_calls_per_day` /
+  `max_cost_usd_per_day` cap enforcement, and landed in the lifetime
+  `by_task: "unknown"` bucket. Reconciling local tracker numbers
+  against the Anthropic usage CSV showed a several-thousand-call
+  gap — large enough to matter for cost visibility.
+  Fix: wrap once at server construction via a new
+  `core.Engine.WrapLLM(fn)` method that replaces `e.prov.llm` and
+  rebuilds the searcher subsystem so rerank picks up the wrapped
+  reference. Every consumer (search rerank, decompose, curation,
+  classification batch) now sees the `Metered` wrapper. Removed
+  duplicate `NewMetered` calls at `server/server.go:312,413`.
+  Classification batch bypass specifically fixed via new
+  `llm.Metered.RecordCall(model, task, usage, latency, err)` method
+  that lets out-of-band call paths (Anthropic Message Batches API)
+  self-report; `curation/batch.go` now walks the provider chain via
+  `findMetered(p)` and records per-result usage after
+  `FetchResults`, tagged as `classification_short` or
+  `classification_long` based on which tier was submitted. New
+  regression test `TestMeteredRecordCallAccountsForBypassPath`
+  verifies RecordCall feeds the tracker identically to the Complete
+  path without touching the inner provider.
+
 ### Added
 
 - **`SECURITY.md`** (`01KPV62W41C44YKMX9K782AEE9`): responsible-

@@ -11,6 +11,7 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/llm/anthropic"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // BatchResult summarizes a batch classification run.
@@ -91,6 +92,11 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		CacheControl: &anthropic.BatchCacheControl{Type: "ephemeral"},
 	}}
 
+	// Remember which model each record was sent to so we can attribute
+	// usage correctly on the way back (short-tier vs long-tier map to
+	// different models under the effort configuration).
+	reqModels := make(map[string]string, len(records))
+
 	requests := make([]anthropic.BatchRequest, len(records))
 	for i, rec := range records {
 		model := longModel
@@ -105,6 +111,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 				model = longModel
 			}
 		}
+		reqModels[rec.id] = model
 		requests[i] = anthropic.BatchRequest{
 			CustomID: rec.id,
 			Params: anthropic.BatchParams{
@@ -179,6 +186,39 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	batchResults, err := anthClient.FetchResults(ctx, batchID)
 	if err != nil {
 		return result, fmt.Errorf("batch fetch results: %w", err)
+	}
+
+	// Account for per-record token usage. The Message Batches API
+	// bypasses the Metered wrapper's Complete path, so without this
+	// loop classification calls are invisible to llm_usage.json and
+	// evade max_calls_per_day / max_cost_usd_per_day caps. If the
+	// passed provider isn't wrapped in Metered (tests, non-server
+	// callers), metered == nil and recording is a silent no-op.
+	metered := findMetered(llmProv)
+	if metered != nil {
+		for _, br := range batchResults {
+			if br.Result.Type != "succeeded" || br.Result.Message == nil {
+				// Errored/expired/canceled sub-requests carry no Usage;
+				// the batch result counters already capture them for
+				// the cycle log.
+				continue
+			}
+			model := reqModels[br.CustomID]
+			if model == "" {
+				model = longModel // defensive fallback
+			}
+			task := "classification_long"
+			if model == shortModel {
+				task = "classification_short"
+			}
+			usage := telemetry.CallUsage{
+				InputTokens:      br.Result.Message.Usage.InputTokens,
+				OutputTokens:     br.Result.Message.Usage.OutputTokens,
+				CacheReadTokens:  br.Result.Message.Usage.CacheReadInputTokens,
+				CacheWriteTokens: br.Result.Message.Usage.CacheCreationInputTokens,
+			}
+			metered.RecordCall(model, task, usage, 0, nil)
+		}
 	}
 
 	e.Lock()
@@ -330,5 +370,20 @@ func extractAnthropicClient(p llm.Provider) (*anthropic.Client, bool) {
 		return extractAnthropicClient(rl.Inner())
 	}
 	return nil, false
+}
+
+// findMetered walks the provider wrapper chain to locate the Metered
+// wrapper so bypass paths (batch API, future streaming) can self-
+// report usage. Returns nil when no Metered wrapper is in the chain
+// (tests passing raw providers, or server constructed without a
+// tracker) -- callers treat nil as "metering not available, skip".
+func findMetered(p llm.Provider) *llm.Metered {
+	if m, ok := p.(*llm.Metered); ok {
+		return m
+	}
+	if rl, ok := p.(*llm.RateLimited); ok {
+		return findMetered(rl.Inner())
+	}
+	return nil
 }
 

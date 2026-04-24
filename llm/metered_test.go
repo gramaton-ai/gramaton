@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // stubProvider implements Provider with deterministic responses and a
@@ -95,6 +97,40 @@ func TestMeteredPropagatesProviderName(t *testing.T) {
 	// But ProviderName() is the contract we expose -- check it directly.
 	if got := m.ProviderName(); got != "stub" {
 		t.Errorf("Metered.ProviderName() = %q, want %q (inner's name, not 'metered')", got, "stub")
+	}
+}
+
+// TestMeteredRecordCallAccountsForBypassPath verifies RecordCall
+// feeds the tracker identically to the Complete path. Regression
+// test for the classification Message Batches API which goes
+// around Complete entirely -- without RecordCall its token usage
+// was invisible to llm_usage.json and evaded max_calls_per_day.
+func TestMeteredRecordCallAccountsForBypassPath(t *testing.T) {
+	tracker := NewUsageTracker(t.TempDir(), 0, 0, 0)
+	stub := &stubProvider{response: "ok"}
+	m := NewMetered(stub, tracker, nil)
+
+	m.RecordCall("claude-sonnet-4-6", "classification_long",
+		telemetry.CallUsage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 0, CacheWriteTokens: 0},
+		0, nil)
+
+	summary := tracker.Summary()
+	if got := summary.Session.Calls; got != 1 {
+		t.Fatalf("Session.Calls = %d, want 1", got)
+	}
+	if got := summary.Session.InputTokens; got != 100 {
+		t.Errorf("Session.InputTokens = %d, want 100", got)
+	}
+	if got := summary.Session.OutputTokens; got != 50 {
+		t.Errorf("Session.OutputTokens = %d, want 50", got)
+	}
+	if got, want := summary.Session.ByTask["classification_long"], 1; got != want {
+		t.Errorf("ByTask[classification_long] = %d, want %d", got, want)
+	}
+	// Inner provider MUST NOT have been touched -- RecordCall is for
+	// paths that already made the call through another channel.
+	if stub.calls != 0 {
+		t.Errorf("stub.calls = %d, want 0 (RecordCall should not invoke inner)", stub.calls)
 	}
 }
 
