@@ -203,9 +203,14 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 				// the cycle log.
 				continue
 			}
-			model := reqModels[br.CustomID]
-			if model == "" {
-				model = longModel // defensive fallback
+			model, ok := reqModels[br.CustomID]
+			if !ok {
+				// Anthropic echoed a CustomID we didn't submit. Should
+				// not happen; log loudly rather than fabricate an
+				// attribution that would silently skew per-task totals.
+				logger.Warn("batch: result custom_id not in submitted set, skipping metering",
+					"component", "curation", "custom_id", br.CustomID)
+				continue
 			}
 			task := "classification_long"
 			if model == shortModel {

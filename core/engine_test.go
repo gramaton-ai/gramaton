@@ -10,6 +10,7 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/llm"
 )
 
 func setupTestEngine(t *testing.T) *Engine {
@@ -51,6 +52,79 @@ func TestLoadEngine(t *testing.T) {
 	}
 	if eng.LLM() != nil {
 		t.Fatal("llm should be nil (no provider configured)")
+	}
+}
+
+// stubLLM is a minimal llm.Provider used to test WrapLLM without
+// configuring a real provider.
+type stubLLM struct{ id string }
+
+func (s *stubLLM) Complete(context.Context, string) (string, error)         { return "", nil }
+func (s *stubLLM) CompleteWithModel(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (s *stubLLM) ModelID() string      { return s.id }
+func (s *stubLLM) ProviderName() string { return "stub" }
+
+// TestWrapLLMReplacesProvider covers the happy path: a non-nil LLM
+// is replaced with the wrapper returned by fn. Also verifies the
+// searcher subsystem rebuilt (Searcher() still returns a usable
+// tool — would panic if rebuild was skipped).
+func TestWrapLLMReplacesProvider(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = ""
+	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	inner := &stubLLM{id: "inner"}
+	eng, err := LoadEngineWithOptions(dir, nil, []EngineOption{
+		WithVectorIndex(index.NewFlatIndex()),
+		WithLLM(inner),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+
+	if eng.LLM() != inner {
+		t.Fatalf("pre-wrap: engine.LLM() = %v, want inner stub", eng.LLM())
+	}
+
+	outer := &stubLLM{id: "outer"}
+	eng.WrapLLM(func(p llm.Provider) llm.Provider {
+		if p != inner {
+			t.Errorf("WrapLLM fn received %v, want inner stub", p)
+		}
+		return outer
+	})
+
+	if eng.LLM() != outer {
+		t.Errorf("post-wrap: engine.LLM() = %v, want outer stub", eng.LLM())
+	}
+	if eng.Searcher() == nil {
+		t.Error("Searcher() = nil after WrapLLM; rebuild skipped?")
+	}
+}
+
+// TestWrapLLMNilIsNoOp verifies the defensive branch: an engine
+// with no LLM should not panic or wrap a nil provider (fn would
+// receive nil, which most wrappers refuse to accept).
+func TestWrapLLMNilIsNoOp(t *testing.T) {
+	eng := setupTestEngine(t) // no LLM configured
+
+	called := false
+	eng.WrapLLM(func(p llm.Provider) llm.Provider {
+		called = true
+		return p
+	})
+
+	if called {
+		t.Error("WrapLLM fn was invoked despite engine.LLM() == nil")
+	}
+	if eng.LLM() != nil {
+		t.Errorf("engine.LLM() = %v after WrapLLM no-op, want nil", eng.LLM())
 	}
 }
 

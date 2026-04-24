@@ -290,9 +290,15 @@ func (e *Engine) LLM() llm.Provider { return e.prov.llm }
 //
 // Intended for one-time setup of middleware wrappers — e.g. wrapping
 // with llm.Metered so every consumer records into the UsageTracker
-// instead of bypassing it. Call once before the server starts
-// accepting requests; not safe for runtime re-wrapping (no callers
-// yet hold the write lock). Takes the write lock internally.
+// instead of bypassing it. Takes the write lock internally; safe at
+// construction because no other callers hold it yet. Do NOT use at
+// runtime with RPCs in flight — the wrap would block until every
+// reader released, then the rebuild would invalidate their
+// searcher references.
+//
+// fn is invoked under the write lock. It MUST be fast and MUST NOT
+// perform I/O (network calls, disk writes). Stick to struct
+// composition / wrapper construction.
 func (e *Engine) WrapLLM(fn func(llm.Provider) llm.Provider) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

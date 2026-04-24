@@ -134,6 +134,29 @@ func TestMeteredRecordCallAccountsForBypassPath(t *testing.T) {
 	}
 }
 
+// TestMeteredRecordCallErrorPath verifies RecordCall flagged with
+// a non-nil error still records usage + counts toward caps (the
+// tokens were burned whether or not the caller marked the outcome
+// as successful). Regression against a future change that tries
+// to skip recording on error.
+func TestMeteredRecordCallErrorPath(t *testing.T) {
+	tracker := NewUsageTracker(t.TempDir(), 0, 0, 0)
+	stub := &stubProvider{response: "ok"}
+	m := NewMetered(stub, tracker, nil)
+
+	m.RecordCall("claude-haiku-4-5", "classification_short",
+		telemetry.CallUsage{InputTokens: 42, OutputTokens: 7},
+		0, errors.New("timeout"))
+
+	summary := tracker.Summary()
+	if got := summary.Session.Calls; got != 1 {
+		t.Errorf("Session.Calls = %d, want 1 (error path must still count)", got)
+	}
+	if got := summary.Session.InputTokens; got != 42 {
+		t.Errorf("Session.InputTokens = %d, want 42", got)
+	}
+}
+
 // TestMeteredAllowsWithoutTracker confirms a nil tracker disables
 // cap enforcement entirely (used in tests and benchmarks).
 func TestMeteredAllowsWithoutTracker(t *testing.T) {

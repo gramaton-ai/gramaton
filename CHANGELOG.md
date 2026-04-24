@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Cluster 1 follow-up: review-gap cleanup.** Dead defensive
+  fallback in `curation/batch.go` (previously: `if model == ""
+  { model = longModel }` after a map lookup that's always hit)
+  replaced with an explicit-skip-and-warn path so unexpected
+  `CustomID` echoes from Anthropic surface rather than silently
+  mis-attribute. `core.Engine.WrapLLM` docstring tightened to
+  spell out that `fn` runs under the write lock and must not do
+  I/O, and that runtime use is unsafe. New tests:
+  `TestFindMeteredDirect` / `TestFindMeteredThroughRateLimited` /
+  `TestFindMeteredRawProviderReturnsNil` cover the provider-chain
+  walk; `TestWrapLLMReplacesProvider` / `TestWrapLLMNilIsNoOp`
+  cover the engine hook; `TestMeteredRecordCallErrorPath` covers
+  the non-nil-error branch of `RecordCall`.
+
 - **All LLM paths now flow through the `Metered` wrapper, not just
   curation (`01KPZYSJFRW8P41SWQC750FK4B`, `01KPZZAS2580FBEPPVQHVER64C`).**
   Previously only `curationLLM` was wrapped with `llm.NewMetered`
