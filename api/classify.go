@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
 // ClassifyRequest carries the metadata fields to apply when promoting
@@ -100,8 +100,10 @@ func validateClassifyRequest(r ClassifyRequest) error {
 	if err := validateKeywords(r.Keywords); err != nil {
 		return err
 	}
-	if len(r.SummaryShort) > MaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", MaxSummaryShort())
+	origSummary := r.SummaryShort
+	r.SummaryShort = sanitize.Field(r.SummaryShort)
+	if err := sanitize.Validate(origSummary, r.SummaryShort, "summary_short", MaxSummaryShort()); err != nil {
+		return err
 	}
 	return nil
 }

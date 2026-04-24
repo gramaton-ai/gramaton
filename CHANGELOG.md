@@ -7,6 +7,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`internal/sanitize` package (Cluster 2 Phase 1,
+  `01KPZZNG45PC7D6HC8SQH3P9N1`).** New helper `sanitize.Field(s)` and
+  `sanitize.Validate(orig, cleaned, name, max)` strip LLM tool-use-
+  format tail leakage (`</summary_short>`, `<parameter name=`, model
+  stop tokens) from short metadata fields without mangling legitimate
+  angle-bracket content (e.g. `"React's <Button> component"`).
+  Applied at every write site that accepts an LLM-generated summary
+  string: `api/capture.go`, `api/classify.go`, `api/update.go`,
+  `api/sessions.go` segment path, and `curation.parseClassification`.
+  User-input paths reject pure-contamination inputs with `ErrInvalid`
+  via `sanitize.Validate`; the LLM-output path in curation silently
+  drops contamination-only output with a warn log rather than
+  overwriting clean existing values. Covers `summary_short` +
+  `context_about` + `context_who` + `context_findable_by` +
+  `context_prompted` + `context_related` + `context_source_type` +
+  `context_time_sensitivity` + `context_reliability` +
+  `context_capture_reason`. Deliberately does NOT apply to
+  `content_full`: empirical scan 2026-04-24 found 3 contaminated
+  records, all in summary fields only; aggressive strip on
+  `content_full` would mangle records that legitimately discuss
+  code / XML / tool-use format. Package lives in `internal/` to
+  break the circular import (api/ already imports curation/).
+  10 regression tests in `internal/sanitize/sanitize_test.go`
+  including the exact observed pattern from the 3 contaminated
+  records.
+
 ### Fixed
 
 - **Cluster 1 follow-up: review-gap cleanup.** Dead defensive

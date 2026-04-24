@@ -14,6 +14,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
 //go:embed prompts/extraction.md
@@ -706,8 +707,14 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		if len(seg.TopicName) > MaxTopicLength {
 			return nil, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
 		}
-		if len(seg.SummaryShort) > maxSummary {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: summary_short exceeds maximum length of %d", i, maxSummary))
+		// Sanitize summary_short to strip LLM tool-use-format
+		// leakage before length-checking. Mutate via the slice
+		// index so the sanitized value is what downstream loops
+		// (segment persistence, promote-to-memory) will see.
+		origSeg := segments[i].SummaryShort
+		segments[i].SummaryShort = sanitize.Field(origSeg)
+		if err := sanitize.Validate(origSeg, segments[i].SummaryShort, fmt.Sprintf("segment %d: summary_short", i), maxSummary); err != nil {
+			return nil, ErrInvalid(err.Error())
 		}
 		if err := validateFloat64Range("confidence", seg.Confidence, 0.0, 1.0); err != nil {
 			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))

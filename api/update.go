@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
 // UpdateRequest is the input to the update operation. ID is set by
@@ -162,8 +163,10 @@ func validateUpdateRequest(r UpdateRequest) error {
 	if err := validateKeywords(r.Keywords); err != nil {
 		return err
 	}
-	if len(r.SummaryShort) > MaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", MaxSummaryShort())
+	origSummary := r.SummaryShort
+	r.SummaryShort = sanitize.Field(r.SummaryShort)
+	if err := sanitize.Validate(origSummary, r.SummaryShort, "summary_short", MaxSummaryShort()); err != nil {
+		return err
 	}
 	return nil
 }

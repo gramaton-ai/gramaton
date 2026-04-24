@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
 // CaptureRequest is the canonical input to the capture operation.
@@ -223,25 +224,38 @@ func validateCaptureRequest(r CaptureRequest) error {
 	if err := validateKeywords(r.Keywords); err != nil {
 		return err
 	}
-	if len(r.SummaryShort) > MaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", MaxSummaryShort())
+	// Sanitize LLM-generated short fields for tool-use-format
+	// leakage (`</summary_short>`, `<parameter name=`, etc.)
+	// observed 2026-04-24. Mutates in place so downstream storage
+	// uses the cleaned values. Rejects pure-contamination inputs
+	// via sanitize.Validate.
+	origSummary := r.SummaryShort
+	r.SummaryShort = sanitize.Field(r.SummaryShort)
+	if err := sanitize.Validate(origSummary, r.SummaryShort, "summary_short", MaxSummaryShort()); err != nil {
+		return err
 	}
 	if len(r.SourceRef) > MaxSourceRefLen {
 		return fmt.Errorf("source_ref exceeds maximum length of %d", MaxSourceRefLen)
 	}
-	for _, pair := range []struct{ name, val string }{
-		{"context_about", r.ContextAbout},
-		{"context_who", r.ContextWho},
-		{"context_prompted", r.ContextPrompted},
-		{"context_findable_by", r.ContextFindable},
-		{"context_related", r.ContextRelated},
-		{"context_source_type", r.ContextSourceType},
-		{"context_time_sensitivity", r.ContextTimeSensitivity},
-		{"context_reliability", r.ContextReliability},
-		{"context_capture_reason", r.ContextCaptureReason},
-	} {
-		if len(pair.val) > MaxContextFieldLen {
-			return fmt.Errorf("%s exceeds maximum length of %d", pair.name, MaxContextFieldLen)
+	contextFields := []struct {
+		name string
+		val  *string
+	}{
+		{"context_about", &r.ContextAbout},
+		{"context_who", &r.ContextWho},
+		{"context_prompted", &r.ContextPrompted},
+		{"context_findable_by", &r.ContextFindable},
+		{"context_related", &r.ContextRelated},
+		{"context_source_type", &r.ContextSourceType},
+		{"context_time_sensitivity", &r.ContextTimeSensitivity},
+		{"context_reliability", &r.ContextReliability},
+		{"context_capture_reason", &r.ContextCaptureReason},
+	}
+	for _, pair := range contextFields {
+		orig := *pair.val
+		*pair.val = sanitize.Field(*pair.val)
+		if err := sanitize.Validate(orig, *pair.val, pair.name, MaxContextFieldLen); err != nil {
+			return err
 		}
 	}
 	for _, pair := range []struct{ name, val string }{

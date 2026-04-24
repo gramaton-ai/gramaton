@@ -17,6 +17,7 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
@@ -1853,6 +1854,24 @@ func parseClassification(resp string) (*classificationResult, error) {
 	for i, kw := range result.Keywords {
 		if len(kw) > 100 {
 			result.Keywords[i] = kw[:100]
+		}
+	}
+
+	// Strip LLM tool-use-format leakage from summary_short. The
+	// model occasionally emits `</summary_short>` / `<parameter>`
+	// fragments inside the JSON string value; see api.SanitizeSummary
+	// for the full pattern list. Applied before length truncation so
+	// we don't waste budget on garbage bytes. If sanitization empties
+	// the field (pure-contamination output), drop it rather than
+	// overwrite a potentially-good existing value downstream.
+	if result.SummaryShort != "" {
+		sanitized := sanitize.Field(result.SummaryShort)
+		if sanitized == "" {
+			slog.Warn("classify: summary_short was pure structured-output tokens, dropping",
+				"component", "curation")
+			result.SummaryShort = ""
+		} else {
+			result.SummaryShort = sanitized
 		}
 	}
 
