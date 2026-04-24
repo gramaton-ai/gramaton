@@ -19,6 +19,12 @@ var (
 	// when stdin is a TTY. Useful for scripts that explicitly want the
 	// old behavior, or for debugging the non-interactive code path.
 	nonInteractive bool
+
+	// force bypasses the "already initialized" guard so users can
+	// re-run the wizard to pick up new proxy-script templates, new
+	// MCP registration logic, or other wizard-touched state without
+	// manually deleting config.yaml.
+	force bool
 )
 
 var initCmd = &cobra.Command{
@@ -37,6 +43,8 @@ defaults only and prints instructions for completing setup manually.`,
 func init() {
 	initCmd.Flags().BoolVar(&nonInteractive, "non-interactive", false,
 		"skip the interactive wizard and bootstrap with defaults only")
+	initCmd.Flags().BoolVar(&force, "force", false,
+		"re-run the wizard even when config.yaml already exists (re-materializes hooks, re-registers MCP)")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -58,13 +66,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	dir := configDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 
-	// Guard against re-init. The wizard has an "existing install" menu
-	// planned (reconfigure MCP, reset everything, abort), but it's
-	// not implemented in the first pass -- just print the current
-	// friendly message and bail.
-	if _, err := os.Stat(cfgPath); err == nil {
+	// Guard against re-init unless --force. The wizard has an
+	// "existing install" menu planned (reconfigure MCP, reset
+	// everything, abort), but it's not implemented in the first
+	// pass — --force is the escape hatch that lets users re-run
+	// the full wizard to pick up bug fixes, new proxy-script
+	// templates, or updated MCP registration logic.
+	if _, err := os.Stat(cfgPath); err == nil && !force {
 		fmt.Fprintf(os.Stderr, "Already initialized: %s\n", cfgPath)
-		fmt.Fprintln(os.Stderr, "Edit the config file directly, or delete it and re-run init.")
+		fmt.Fprintln(os.Stderr, "Edit the config file directly, delete it and re-run init, or pass --force to re-run without deleting.")
 		return nil
 	}
 

@@ -7,6 +7,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gramaton init --force` re-runs the wizard on an already-
+  initialized install (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** Previously
+  the init command bailed unconditionally when
+  `~/.gramaton/config.yaml` existed, requiring users to delete the
+  config file (losing their provider + API-key setup) to pick up
+  wizard-touched state like the proxy-script templates or MCP
+  registration logic. The new flag bypasses the guard so fix-ups
+  can be rolled out without a full reset. The wizard remains
+  idempotent internally (re-registering an MCP entry that already
+  exists is a no-op, etc.), so `--force` is safe to re-run
+  repeatedly.
+
 ### Fixed
 
 - **Claude Code hooks failed to fire on Windows: path backslashes
