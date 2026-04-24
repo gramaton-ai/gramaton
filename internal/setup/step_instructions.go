@@ -65,40 +65,15 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 		"Gramaton gives your agent the right tools, but your agent",
 		"won't use them unless its instruction file tells it when.",
 		"",
-		"This step appends a managed `<!-- gramaton-managed -->` block",
-		"to each client's user-scope instruction file (Claude Code:",
-		"~/.claude/CLAUDE.md). Content outside the block is preserved",
-		"on every re-run.",
+		"This step updates each detected client's user-scope",
+		"instruction file. Claude Code's ~/.claude/CLAUDE.md gets a",
+		"managed `<!-- gramaton-managed -->` block (content outside",
+		"it is preserved); Kiro's ~/.kiro/steering/gramaton.md is a",
+		"dedicated file alongside your other steering topics.",
 		"",
-		"Install Gramaton agent-usage instructions?",
+		"You'll be asked once per detected client so you can install",
+		"for one and skip the other.",
 	)
-	w.writer.Blank()
-	w.writer.Raw("    [Y] Yes, install")
-	w.writer.Raw("    [n] Not now (you can add instructions by hand later)")
-	w.writer.Blank()
-	w.writer.Prompt(">")
-
-	confirm, err := w.prompter.YesNo(true)
-	if err != nil {
-		w.writer.ErrorLine(err.Error())
-		w.writer.Prompt(">")
-		confirm, err = w.prompter.YesNo(true)
-		if err != nil {
-			w.writer.Warn("Couldn't parse answer twice; skipping instructions install.")
-			return nil
-		}
-	}
-	if !confirm {
-		w.writer.Warn("Skipping agent-usage instructions.")
-		w.writer.Paragraph(
-			"",
-			"Your agent won't auto-call Gramaton until its instruction",
-			"file has the usage guidance. Re-run `gramaton init --force`",
-			"when you're ready, or paste the guidance manually from",
-			"docs/agent-instructions.md (shipped with the binary).",
-		)
-		return nil
-	}
 
 	installed := 0
 	for _, c := range clients {
@@ -107,6 +82,28 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 			w.writer.Warn(fmt.Sprintf("%s: %v", c.Name, err))
 			continue
 		}
+
+		w.writer.Blank()
+		w.writer.Raw(fmt.Sprintf("    %s: %s", c.Name, path))
+		w.writer.Raw("    [Y] Yes, install")
+		w.writer.Raw("    [n] Skip for this client")
+		w.writer.Prompt(">")
+
+		confirm, err := w.prompter.YesNo(true)
+		if err != nil {
+			w.writer.ErrorLine(err.Error())
+			w.writer.Prompt(">")
+			confirm, err = w.prompter.YesNo(true)
+			if err != nil {
+				w.writer.Warn(fmt.Sprintf("%s: couldn't parse answer twice; skipping.", c.Name))
+				continue
+			}
+		}
+		if !confirm {
+			w.writer.Warn(fmt.Sprintf("%s: skipped.", c.Name))
+			continue
+		}
+
 		action, err := installInstructions(path, instructionsTemplate, layout)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: write failed: %v", c.Name, err))

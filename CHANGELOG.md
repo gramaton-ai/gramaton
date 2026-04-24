@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Step 4 asks once per detected client instead of one omnibus Y/n
+  (`01KQ0RWSSSBD18CD83776G6XXH` follow-up).** Previously a single
+  "install for all?" prompt installed to every detected MCP client.
+  Now each detected client (Claude Code, Kiro) gets its own Y/n so
+  users can install for one and skip the other — useful when a user
+  has heavy custom steering in Kiro but wants Gramaton to take care
+  of the CLAUDE.md, or is testing Gramaton in Claude Code first
+  before wiring Kiro. All prompts stay under the same Step 4 header;
+  user sees a single logical step with branching inside. The step
+  header text now also calls out Kiro's whole-file layout alongside
+  Claude Code's fenced-block layout so users know what's about to
+  land.
+
 ### Added
 
 - **Kiro CLI support added to the agent-usage instructions install
