@@ -18,7 +18,7 @@ func TestInstallInstructionsFreshFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 
-	action, err := installInstructions(path, "## Gramaton test instructions\nbody.")
+	action, err := installInstructions(path, "## Gramaton test instructions\nbody.", fencedBlockInSharedFile)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestInstallInstructionsAppendsToExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	action, err := installInstructions(path, "## Gramaton\nhi")
+	action, err := installInstructions(path, "## Gramaton\nhi", fencedBlockInSharedFile)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestInstallInstructionsReplacesFencedBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	action, err := installInstructions(path, "## New gramaton\nnew body")
+	action, err := installInstructions(path, "## New gramaton\nnew body", fencedBlockInSharedFile)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -113,13 +113,13 @@ func TestInstallInstructionsUnchangedWhenIdentical(t *testing.T) {
 	template := "## Gramaton\nsame body"
 
 	// First install.
-	if _, err := installInstructions(path, template); err != nil {
+	if _, err := installInstructions(path, template, fencedBlockInSharedFile); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 	before, _ := os.ReadFile(path)
 
 	// Second install with identical template.
-	action, err := installInstructions(path, template)
+	action, err := installInstructions(path, template, fencedBlockInSharedFile)
 	if err != nil {
 		t.Fatalf("second install: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestInstallInstructionsUnbalancedFenceErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := installInstructions(path, "## Gramaton")
+	_, err := installInstructions(path, "## Gramaton", fencedBlockInSharedFile)
 	if err == nil {
 		t.Error("expected error on unbalanced fence markers")
 	}
@@ -153,15 +153,16 @@ func TestInstructionsPathForClient(t *testing.T) {
 	cases := []struct {
 		name, client string
 		wantSuffix   string
+		wantLayout   instructionsLayout
 		wantErr      bool
 	}{
-		{"claude code", "Claude Code", filepath.Join(".claude", "CLAUDE.md"), false},
-		{"kiro-cli not supported", "kiro-cli", "", true},
-		{"unknown", "SomeUnknownClient", "", true},
+		{"claude code", "Claude Code", filepath.Join(".claude", "CLAUDE.md"), fencedBlockInSharedFile, false},
+		{"kiro-cli", "kiro-cli", filepath.Join(".kiro", "steering", "gramaton.md"), wholeFileOwned, false},
+		{"unknown", "SomeUnknownClient", "", 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := instructionsPathForClient(tc.client)
+			got, layout, err := instructionsPathForClient(tc.client)
 			if tc.wantErr {
 				if err == nil {
 					t.Error("expected error, got none")
@@ -174,7 +175,75 @@ func TestInstructionsPathForClient(t *testing.T) {
 			if !strings.HasSuffix(got, tc.wantSuffix) {
 				t.Errorf("path = %q, want suffix %q", got, tc.wantSuffix)
 			}
+			if layout != tc.wantLayout {
+				t.Errorf("layout = %v, want %v", layout, tc.wantLayout)
+			}
 		})
+	}
+}
+
+func TestInstallInstructionsWholeFileCreatedWithoutFenceMarkers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gramaton.md")
+
+	body := "## Gramaton\nwhole file"
+	action, err := installInstructions(path, body, wholeFileOwned)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if action != "created" {
+		t.Errorf("action = %q, want created", action)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Kiro layout: no fence markers — file is ours end-to-end.
+	if strings.Contains(string(got), instructionsFenceBegin) {
+		t.Errorf("whole-file layout should NOT contain fence markers:\n%s", string(got))
+	}
+	if !strings.Contains(string(got), "Gramaton") {
+		t.Errorf("whole-file content missing:\n%s", string(got))
+	}
+}
+
+func TestInstallInstructionsWholeFileOverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gramaton.md")
+	if err := os.WriteFile(path, []byte("## Old gramaton\nold body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	action, err := installInstructions(path, "## New gramaton\nnew body", wholeFileOwned)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if action != "updated" {
+		t.Errorf("action = %q, want updated", action)
+	}
+	got, _ := os.ReadFile(path)
+	if strings.Contains(string(got), "Old gramaton") {
+		t.Errorf("old content still present:\n%s", string(got))
+	}
+	if !strings.Contains(string(got), "New gramaton") {
+		t.Errorf("new content missing:\n%s", string(got))
+	}
+}
+
+func TestInstallInstructionsWholeFileUnchangedWhenIdentical(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gramaton.md")
+
+	body := "## Gramaton\nsame body"
+	if _, err := installInstructions(path, body, wholeFileOwned); err != nil {
+		t.Fatal(err)
+	}
+	action, err := installInstructions(path, body, wholeFileOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "unchanged" {
+		t.Errorf("action = %q, want unchanged", action)
 	}
 }
 

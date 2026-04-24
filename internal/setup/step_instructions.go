@@ -102,12 +102,12 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 
 	installed := 0
 	for _, c := range clients {
-		path, err := instructionsPathForClient(c.Name)
+		path, layout, err := instructionsPathForClient(c.Name)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: %v", c.Name, err))
 			continue
 		}
-		action, err := installInstructions(path, instructionsTemplate)
+		action, err := installInstructions(path, instructionsTemplate, layout)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: write failed: %v", c.Name, err))
 			continue
@@ -123,55 +123,114 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 	return nil
 }
 
-// instructionsPathForClient returns the path to a client's user-scope
-// instruction file. Returns an error for unknown clients rather than
-// guessing — the wizard prefers to surface gaps so we can add support
-// deliberately.
-func instructionsPathForClient(clientName string) (string, error) {
+// instructionsLayout describes how the client's instruction file is
+// structured — whether we share it with user-written content (Claude
+// Code) or own it entirely (Kiro). The install logic branches on
+// this to pick between fence-marker-bounded merges and
+// atomic-overwrite.
+type instructionsLayout int
+
+const (
+	// fencedBlockInSharedFile: the target file is shared with user
+	// content; we fence our managed region with BEGIN/END markers
+	// and leave everything outside them alone. Claude Code's
+	// ~/.claude/CLAUDE.md works this way.
+	fencedBlockInSharedFile instructionsLayout = iota
+
+	// wholeFileOwned: the target file is a dedicated file in a
+	// multi-file directory where each file is typically one topic;
+	// we own the full content. Kiro's ~/.kiro/steering/gramaton.md
+	// works this way — users add their own steering topics as
+	// sibling .md files rather than mixing them into ours.
+	wholeFileOwned
+)
+
+// instructionsPathForClient returns the path + layout for a client's
+// user-scope instruction file. Returns an error for unknown clients
+// rather than guessing — the wizard prefers to surface gaps so we
+// can add support deliberately.
+func instructionsPathForClient(clientName string) (string, instructionsLayout, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", 0, fmt.Errorf("resolve home dir: %w", err)
 	}
 	switch clientName {
 	case "Claude Code":
-		return filepath.Join(home, ".claude", "CLAUDE.md"), nil
+		// Claude Code loads ~/.claude/CLAUDE.md as one merged
+		// system-prompt piece; users routinely add their own
+		// content alongside. Fence the managed region.
+		return filepath.Join(home, ".claude", "CLAUDE.md"), fencedBlockInSharedFile, nil
 	case "kiro-cli":
-		// kiro-cli's user-scope instruction file location is not
-		// verified in Gramaton's corpus. Surface as unsupported so
-		// the user sees a specific skip message rather than a
-		// guess-written file in the wrong place.
-		return "", errors.New("kiro-cli instruction-file location not yet supported; install manually if needed")
+		// Kiro loads every .md in ~/.kiro/steering/ on session
+		// start, so single-purpose files are the idiomatic shape.
+		// Own gramaton.md entirely; users add siblings for their
+		// own topics.
+		// Verified: https://kiro.dev/docs/cli/steering/
+		return filepath.Join(home, ".kiro", "steering", "gramaton.md"), wholeFileOwned, nil
 	}
-	return "", fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
 }
 
-// installInstructions writes the gramaton-managed block into the
+// installInstructions writes the gramaton-managed content into the
 // client's instruction file. Returns a short human-readable action
-// word ("created", "updated", "unchanged") that the wizard prints so
-// the user sees what actually happened.
+// word ("created", "updated", "unchanged", "appended") that the
+// wizard prints so the user sees what actually happened.
 //
-// Semantics:
-//   - File doesn't exist → create it containing just the fenced block.
-//   - File exists but has no fenced block → append the fenced block
-//     after a blank line, preserving all existing content.
-//   - File exists and has a fenced block → replace only the fenced
-//     region; preserve every byte outside.
-//   - Fenced content already matches the template → return "unchanged"
-//     without rewriting the file (idempotent re-run).
+// Semantics depend on layout:
 //
-// Always uses tmp + rename for durability. The backup file (written
-// before replacement) lives alongside with a `.bak-<timestamp>`
-// suffix so users can recover if we mis-identify the fenced region.
-func installInstructions(path, template string) (string, error) {
-	fenced := instructionsFenceBegin + "\n" + strings.TrimSpace(template) + "\n" + instructionsFenceEnd + "\n"
-
+//   fencedBlockInSharedFile (Claude Code's ~/.claude/CLAUDE.md):
+//     - File doesn't exist → create with just the fenced block.
+//     - Exists, no fenced block → append the fenced block after a
+//       blank-line separator; existing content preserved.
+//     - Exists with fenced block → replace only the fenced region.
+//     - Fenced content matches → "unchanged"; no rewrite.
+//
+//   wholeFileOwned (Kiro's ~/.kiro/steering/gramaton.md):
+//     - File doesn't exist → create with the full template.
+//     - File exists, content matches → "unchanged"; no rewrite.
+//     - File exists, content differs → overwrite.
+//     No merging; we own the full file.
+//
+// Always uses tmp + rename for durability. For the shared-file path
+// a sibling `.bak` file is written before replacement in case the
+// fence markers were misidentified and the user needs to roll back.
+func installInstructions(path, template string, layout instructionsLayout) (string, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 
-	if err != nil {
-		// File doesn't exist; create it with just the fenced block.
+	if layout == wholeFileOwned {
+		return installWholeFile(path, existing, err == nil, strings.TrimSpace(template)+"\n")
+	}
+	return installFencedBlock(path, existing, err == nil, template)
+}
+
+// installWholeFile writes the template verbatim. No merging, no
+// fencing — the file is ours end-to-end.
+func installWholeFile(path string, existing []byte, exists bool, body string) (string, error) {
+	if exists && string(existing) == body {
+		return "unchanged", nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+	if err := writeAtomic(path, []byte(body), 0o600); err != nil {
+		return "", err
+	}
+	if exists {
+		return "updated", nil
+	}
+	return "created", nil
+}
+
+// installFencedBlock handles the Claude Code layout: user-owned
+// content outside the BEGIN/END markers, gramaton-managed content
+// inside.
+func installFencedBlock(path string, existing []byte, exists bool, template string) (string, error) {
+	fenced := instructionsFenceBegin + "\n" + strings.TrimSpace(template) + "\n" + instructionsFenceEnd + "\n"
+
+	if !exists {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return "", fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 		}
@@ -181,7 +240,6 @@ func installInstructions(path, template string) (string, error) {
 		return "created", nil
 	}
 
-	// File exists; replace the existing fenced block or append a new one.
 	newContent, action, err := replaceOrAppendFence(existing, fenced)
 	if err != nil {
 		return "", err
@@ -192,11 +250,7 @@ func installInstructions(path, template string) (string, error) {
 
 	// Back up the existing file before rewriting.
 	backupPath := fmt.Sprintf("%s.bak", path)
-	if err := os.WriteFile(backupPath, existing, 0o600); err != nil {
-		// Non-fatal: if backup fails the update still proceeds.
-		// Users can recover from their own shell history or a
-		// prior init run.
-	}
+	_ = os.WriteFile(backupPath, existing, 0o600)
 	if err := writeAtomic(path, newContent, 0o600); err != nil {
 		return "", err
 	}

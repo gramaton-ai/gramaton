@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Kiro CLI support added to the agent-usage instructions install
+  step (`01KQ0RWSSSBD18CD83776G6XXH` follow-up).** Now when the
+  wizard detects both Claude Code and kiro-cli, both get their
+  user-scope instruction files installed. Kiro's model is different
+  enough to deserve its own layout discriminator:
+    - Claude Code (`~/.claude/CLAUDE.md`): shared file, merged with
+      user content via BEGIN/END fence markers.
+    - Kiro (`~/.kiro/steering/gramaton.md`): per-topic file in a
+      multi-file directory. We own the file end-to-end; no fence
+      markers needed. Users add their own steering topics as sibling
+      files (e.g. `~/.kiro/steering/my-code-style.md`).
+  Verified against Kiro's official docs (https://kiro.dev/docs/cli/steering/).
+  New `instructionsLayout` type + `installWholeFile` /
+  `installFencedBlock` branch. Three additional tests cover the
+  whole-file-owned path (created / updated / unchanged). The
+  previous "kiro-cli not yet supported" skip message is gone;
+  both clients now install cleanly.
+
 - **New wizard Step 4: install agent-usage instructions into
   ~/.claude/CLAUDE.md (`01KQ0RWSSSBD18CD83776G6XXH`).** Surfaces the
   onboarding gap discovered on the Windows end-to-end test: Gramaton
