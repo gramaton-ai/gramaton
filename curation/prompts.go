@@ -306,12 +306,22 @@ Only use "contradicts" or "supersedes" when confident. When in doubt, use "relat
 
 // classificationSchema is the JSON Schema passed to CompleteStructured
 // for the classification call. Providers that support wire-layer
-// schema enforcement (currently Anthropic tool-use) guarantee the
+// schema enforcement (anthropic tool-use, openai response_format
+// strict=true, bedrock Converse tool-use for Claude) guarantee the
 // response matches this shape before we see it, which eliminates
 // the "chatty preamble around JSON" and "tool-use tag leakage"
 // failure modes that parseClassification had to defend against.
 // Mirrors classificationResult (curation/autonomous.go:1763) — keep
 // them in sync.
+//
+// Schema constraints tuned for OpenAI strict mode compatibility:
+//   - `additionalProperties: false` is REQUIRED by strict mode.
+//   - `required` MUST list every property.
+//   - `minimum`/`maximum` on numerics are REJECTED by strict mode
+//     (not in its supported subset). Confidence bound-checking is
+//     done post-parse in parseClassification (clamps to 0.5 on
+//     out-of-range) instead. Anthropic and Bedrock-via-Claude both
+//     accept this more permissive schema without complaint.
 var classificationSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
@@ -320,9 +330,7 @@ var classificationSchema = map[string]any{
 			"enum": []string{"immutable", "durable", "temporal", "ephemeral"},
 		},
 		"confidence": map[string]any{
-			"type":    "number",
-			"minimum": 0.0,
-			"maximum": 1.0,
+			"type": "number",
 		},
 		"knowledge_type": map[string]any{
 			"type": "string",
@@ -340,7 +348,8 @@ var classificationSchema = map[string]any{
 			"type": "string",
 		},
 	},
-	"required": []string{"temporality", "confidence", "knowledge_type", "epistemic_status", "keywords", "summary_short"},
+	"required":             []string{"temporality", "confidence", "knowledge_type", "epistemic_status", "keywords", "summary_short"},
+	"additionalProperties": false,
 }
 
 // ConceptSynthesisSystemPrompt is the stable instructions for concept

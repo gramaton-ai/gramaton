@@ -132,6 +132,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Cluster 2 Phase 2b+2c follow-up: OpenAI strict-mode schema
+  compatibility.** gramaton-review flagged classificationSchema as
+  incompatible with OpenAI's `response_format: json_schema` strict
+  mode: strict requires `additionalProperties: false` on every
+  object and forbids `minimum`/`maximum` on numerics. Without the
+  fix, every classification call on an OpenAI-configured user
+  would error at the strict-schema validation step, fall back
+  silently to Complete, and emit a WARN log — doubling API cost
+  and spamming telemetry.
+  Fix: dropped `minimum: 0.0, maximum: 1.0` from confidence (the
+  post-parse clamp in parseClassification at autonomous.go:1846
+  already handles out-of-range) and added `additionalProperties:
+  false`. Anthropic and Bedrock-via-Claude both accept the tighter
+  schema without complaint. Added 2 tests missed in the earlier
+  pass: openai `TestCompleteStructuredNoChoices` + bedrock
+  `TestCompleteStructuredMissingToolUseBlock` (both mirror the
+  existing equivalents for the text path).
+
 - **Cluster 2 Phase 2a follow-up: review-gap cleanup.** gramaton-review
   on commit `8227dfd` flagged two MEDIUM gaps. (1) The structured-output
   fallback path in `curation/parallel.go` `runSingleWork` silently

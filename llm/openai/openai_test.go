@@ -160,6 +160,22 @@ func TestCompleteStructuredAPIError(t *testing.T) {
 	}
 }
 
+// TestCompleteStructuredNoChoices mirrors TestCompleteNoChoices for
+// the structured path: an empty choices array must surface as an
+// error, not a silent nil RawMessage.
+func TestCompleteStructuredNoChoices(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(chatResponse{})
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", client: srv.Client()}
+	_, err := c.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "hello")
+	if err == nil {
+		t.Fatal("expected error on empty choices")
+	}
+}
+
 func TestCompleteNoChoices(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(chatResponse{})

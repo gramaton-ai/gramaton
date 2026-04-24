@@ -200,6 +200,48 @@ func TestCompleteStructured(t *testing.T) {
 	}
 }
 
+// TestCompleteStructuredMissingToolUseBlock mirrors the anthropic
+// test of the same name: a response with no tool_use block for our
+// tool should error, not return empty. Skipped when Smithy
+// deserialization rejects the mock (same guard existing tests use).
+func TestCompleteStructuredMissingToolUseBlock(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		// Valid Converse response shape but no toolUse block —
+		// model emitted text instead.
+		resp := map[string]any{
+			"output": map[string]any{
+				"message": map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{
+						{"text": "oops, text instead of tool use"},
+					},
+				},
+			},
+			"stopReason": "end_turn",
+			"usage": map[string]any{
+				"inputTokens":  5,
+				"outputTokens": 3,
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}
+
+	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	_, err := c.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "prompt")
+	if err == nil {
+		t.Fatal("expected error when response has no tool_use block")
+	}
+	// Either the expected error or a Smithy protocol mismatch — both
+	// fine for this unit test. The point is we didn't silently
+	// return empty RawMessage.
+	if strings.Contains(err.Error(), "converse") || strings.Contains(err.Error(), "deserialize") {
+		t.Skipf("Smithy protocol mismatch expected in unit test: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no tool_use block") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestNewWithEnvCreds(t *testing.T) {
 	t.Setenv("TEST_BEDROCK_AKID", "TESTACCESSKEY")
 	t.Setenv("TEST_BEDROCK_SECRET", "TESTSECRETKEY")
