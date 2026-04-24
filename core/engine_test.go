@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -64,7 +65,11 @@ func (s *stubLLM) CompleteWithModel(context.Context, string, string) (string, er
 	return "", nil
 }
 func (s *stubLLM) ModelID() string      { return s.id }
-func (s *stubLLM) ProviderName() string { return "stub" }
+func (s *stubLLM) ProviderName() string           { return "stub" }
+func (s *stubLLM) SupportsStructuredOutput() bool { return false }
+func (s *stubLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 // TestWrapLLMReplacesProvider covers the happy path: a non-nil LLM
 // is replaced with the wrapper returned by fn. Also verifies the

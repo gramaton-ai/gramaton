@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -18,6 +19,10 @@ func (stubLLM) Complete(ctx context.Context, prompt string) (string, error)     
 func (stubLLM) CompleteWithModel(ctx context.Context, m, p string) (string, error) { return "", nil }
 func (stubLLM) ModelID() string                                                    { return "stub-model" }
 func (stubLLM) ProviderName() string                                               { return "stub" }
+func (stubLLM) SupportsStructuredOutput() bool                                     { return false }
+func (stubLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 func TestFindMeteredDirect(t *testing.T) {
 	tracker := llm.NewUsageTracker(t.TempDir(), 0, 0, 0)

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -147,6 +148,34 @@ func (m *Metered) ensureRecorder(ctx context.Context) (context.Context, func() t
 // request timing; the tracker tolerates it.
 func (m *Metered) RecordCall(model, task string, usage telemetry.CallUsage, latency time.Duration, err error) {
 	m.record(model, task, usage, latency, err)
+}
+
+// SupportsStructuredOutput delegates to the inner provider's
+// capability so callers can route structured-output calls correctly
+// through the Metered wrapper without knowing about it.
+func (m *Metered) SupportsStructuredOutput() bool {
+	return m.inner.SupportsStructuredOutput()
+}
+
+// CompleteStructured is the schema-enforced counterpart to Complete.
+// Wraps the inner provider's structured call with the same tracking
+// envelope (cap check, task label, recorder attach, tracker record)
+// so structured calls reconcile alongside plain calls in
+// llm_usage.json.
+func (m *Metered) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
+	if err := m.checkCap(); err != nil {
+		return nil, err
+	}
+	ctx, capture := m.ensureRecorder(ctx)
+	task := telemetry.TaskFromContext(ctx)
+
+	start := time.Now()
+	raw, err := m.inner.CompleteStructured(ctx, schema, prompt)
+	latency := time.Since(start)
+
+	delta := capture()
+	m.record(m.inner.ModelID(), task, delta, latency, err)
+	return raw, err
 }
 
 func (m *Metered) record(model, task string, usage telemetry.CallUsage, latency time.Duration, err error) {

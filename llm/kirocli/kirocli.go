@@ -4,6 +4,7 @@
 package kirocli
 
 import (
+	"encoding/json"
 	"bytes"
 	"context"
 	"fmt"
@@ -97,6 +98,15 @@ func (c *Client) ModelID() string { return "kiro-cli:" + c.model }
 
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "kiro-cli" }
+
+// SupportsStructuredOutput reports false — subprocess wrapper can't
+// enforce a schema at the wire layer. See claudecli for rationale.
+func (c *Client) SupportsStructuredOutput() bool { return false }
+
+// CompleteStructured always errors for kiro-cli.
+func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, fmt.Errorf("kiro-cli: structured output not supported (subprocess wrapper)")
+}
 
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
 	if !modelPattern.MatchString(model) {

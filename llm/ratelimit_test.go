@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -20,8 +21,12 @@ func (d *dummyProvider) CompleteWithModel(_ context.Context, _, _ string) (strin
 	return "ok", nil
 }
 
-func (d *dummyProvider) ModelID() string      { return "dummy" }
-func (d *dummyProvider) ProviderName() string { return "dummy" }
+func (d *dummyProvider) ModelID() string                { return "dummy" }
+func (d *dummyProvider) ProviderName() string           { return "dummy" }
+func (d *dummyProvider) SupportsStructuredOutput() bool { return false }
+func (d *dummyProvider) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 func TestRateLimitedEnforcesInterval(t *testing.T) {
 	inner := &dummyProvider{}

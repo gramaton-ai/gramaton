@@ -71,10 +71,29 @@ func New(cfg config.LLMConfig) (*Client, error) {
 
 // messagesRequest is the Anthropic Messages API request body.
 type messagesRequest struct {
-	Model     string         `json:"model"`
-	MaxTokens int            `json:"max_tokens"`
-	System    []systemBlock  `json:"system,omitempty"`
-	Messages  []message      `json:"messages"`
+	Model      string        `json:"model"`
+	MaxTokens  int           `json:"max_tokens"`
+	System     []systemBlock `json:"system,omitempty"`
+	Messages   []message     `json:"messages"`
+	Tools      []tool        `json:"tools,omitempty"`
+	ToolChoice *toolChoice   `json:"tool_choice,omitempty"`
+}
+
+// tool is an Anthropic tool-use definition. Used for structured
+// output — the API guarantees tool_use.input conforms to InputSchema.
+type tool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+// toolChoice forces the model to use a specific tool. When set to
+// {Type: "tool", Name: "<toolname>"}, the model must respond with a
+// tool_use block for that tool — ideal for structured output where
+// text-format responses are never wanted.
+type toolChoice struct {
+	Type string `json:"type"` // "tool" | "any" | "auto"
+	Name string `json:"name,omitempty"`
 }
 
 // systemBlock is a content block in the system message array.
@@ -236,6 +255,105 @@ func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string
 	}
 
 	return text, nil
+}
+
+// SupportsStructuredOutput reports that Anthropic can enforce a
+// JSON Schema via the tool-use API at the wire layer.
+func (c *Client) SupportsStructuredOutput() bool { return true }
+
+// CompleteStructured sends the prompt with a forced tool-use call
+// whose InputSchema is the supplied JSON Schema. The returned raw
+// message is the tool_use.input block — guaranteed schema-valid by
+// Anthropic's API.
+//
+// Records usage via telemetry.Record like the other completion paths.
+func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
+	req := messagesRequest{
+		Model:     c.model,
+		MaxTokens: 4096,
+		Messages: []message{
+			{Role: "user", Content: prompt},
+		},
+		Tools: []tool{{
+			Name:        "emit_output",
+			Description: "Emit the structured output.",
+			InputSchema: schema,
+		}},
+		ToolChoice: &toolChoice{Type: "tool", Name: "emit_output"},
+	}
+	if sys := c.snapshotSystemCache(); len(sys) > 0 {
+		req.System = sys
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic structured: marshal request: %w", err)
+	}
+
+	url := c.baseURL + "/v1/messages"
+	buildReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("anthropic structured: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", apiVersion)
+		return req, nil
+	}
+
+	resp, err := httpretry.DoWithRetry(ctx, c.client, httpretry.DefaultRetryConfig(), buildReq)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic structured: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	const maxResponseSize = 10 * 1024 * 1024
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return nil, fmt.Errorf("anthropic structured: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error apiError `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("anthropic structured: %s: %s", errResp.Error.Type, errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("anthropic structured: HTTP %d", resp.StatusCode)
+	}
+
+	// Response parsing uses a wider contentBlock shape because
+	// structured output comes back as tool_use blocks, not text blocks.
+	var result struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Input json.RawMessage `json:"input"`
+			Name  string          `json:"name"`
+		} `json:"content"`
+		Usage usage     `json:"usage"`
+		Error *apiError `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("anthropic structured: unmarshal response: %w", err)
+	}
+
+	telemetry.Record(ctx, telemetry.CallUsage{
+		InputTokens:      result.Usage.InputTokens,
+		OutputTokens:     result.Usage.OutputTokens,
+		CacheReadTokens:  result.Usage.CacheReadInputTokens,
+		CacheWriteTokens: result.Usage.CacheCreationInputTokens,
+	})
+
+	for _, block := range result.Content {
+		if block.Type == "tool_use" && block.Name == "emit_output" {
+			if len(block.Input) == 0 {
+				return nil, fmt.Errorf("anthropic structured: tool_use block had empty input")
+			}
+			return block.Input, nil
+		}
+	}
+	return nil, fmt.Errorf("anthropic structured: response had no tool_use block for emit_output")
 }
 
 // ModelID returns the model identifier.

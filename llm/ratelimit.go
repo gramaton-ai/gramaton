@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -71,4 +72,17 @@ func (r *RateLimited) ProviderName() string {
 // Inner returns the wrapped provider for type assertion.
 func (r *RateLimited) Inner() Provider {
 	return r.inner
+}
+
+// SupportsStructuredOutput delegates to the wrapped provider.
+func (r *RateLimited) SupportsStructuredOutput() bool {
+	return r.inner.SupportsStructuredOutput()
+}
+
+// CompleteStructured waits for the rate-limit slot, then delegates.
+func (r *RateLimited) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
+	if err := r.wait(ctx); err != nil {
+		return nil, err
+	}
+	return r.inner.CompleteStructured(ctx, schema, prompt)
 }

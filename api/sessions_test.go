@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -22,6 +23,10 @@ func (noopLLM) Complete(_ context.Context, _ string) (string, error)            
 func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (noopLLM) ModelID() string                                                  { return "test-noop" }
 func (noopLLM) ProviderName() string                                             { return "noop" }
+func (noopLLM) SupportsStructuredOutput() bool                                   { return false }
+func (noopLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 // setupTestAPI constructs an API + engine backed by a temp data dir.
 // Mirrors server.setupTestServer; kept in this package so tests can

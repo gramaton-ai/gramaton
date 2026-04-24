@@ -9,11 +9,19 @@ import (
 )
 
 // llmWork represents a single LLM call to be executed in a worker pool.
+// When schema is non-nil AND the provider supports structured output,
+// parallelLLM routes the call through CompleteStructured instead of
+// Complete — the response still comes back as a string in llmResult
+// (the raw JSON text) so existing parsers like parseClassification
+// handle both paths with no branching. Providers without structured-
+// output support fall through to the regular Complete path for this
+// work item, ignoring schema.
 type llmWork struct {
 	id     string // record ID or identifier for logging
 	prompt string
 	model  string // model override; empty = use provider default
 	task   string // task label attached to ctx for usage metering
+	schema map[string]any // optional JSON Schema for structured output
 }
 
 // completeWithModelOrDefault calls CompleteWithModel when model is
@@ -39,6 +47,29 @@ type llmResult struct {
 	err      error
 }
 
+// runSingleWork executes one llmWork item, dispatching to the
+// structured-output path when the provider supports it and the work
+// item carries a schema. Returns the response text (or raw JSON from
+// the structured path, which parses identically with the same
+// parser) so the caller's existing llmResult.response string field
+// stays the uniform interface.
+func runSingleWork(ctx context.Context, p llm.Provider, w llmWork) (string, error) {
+	if w.schema != nil && p.SupportsStructuredOutput() {
+		raw, err := p.CompleteStructured(ctx, w.schema, w.prompt)
+		if err == nil {
+			return string(raw), nil
+		}
+		// Structured path error: fall through to Complete. This is a
+		// reliability fallback (provider hiccup, transient failure),
+		// not a correctness concern — the prompt is self-contained
+		// and returns JSON either way.
+	}
+	if w.model != "" {
+		return p.CompleteWithModel(ctx, w.model, w.prompt)
+	}
+	return p.Complete(ctx, w.prompt)
+}
+
 // parallelLLM executes LLM calls concurrently with bounded parallelism.
 // Returns results in the same order as the input work items.
 // Respects context cancellation -- in-flight calls will be cancelled.
@@ -59,13 +90,7 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 		if work[0].task != "" {
 			callCtx = telemetry.WithTask(ctx, work[0].task)
 		}
-		var resp string
-		var err error
-		if work[0].model != "" {
-			resp, err = llmProv.CompleteWithModel(callCtx, work[0].model, work[0].prompt)
-		} else {
-			resp, err = llmProv.Complete(callCtx, work[0].prompt)
-		}
+		resp, err := runSingleWork(callCtx, llmProv, work[0])
 		return []llmResult{{id: work[0].id, response: resp, err: err}}
 	}
 
@@ -91,13 +116,7 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 				if work[idx].task != "" {
 					callCtx = telemetry.WithTask(ctx, work[idx].task)
 				}
-				var resp string
-				var err error
-				if work[idx].model != "" {
-					resp, err = llmProv.CompleteWithModel(callCtx, work[idx].model, work[idx].prompt)
-				} else {
-					resp, err = llmProv.Complete(callCtx, work[idx].prompt)
-				}
+				resp, err := runSingleWork(callCtx, llmProv, work[idx])
 				results[idx] = llmResult{
 					id:       work[idx].id,
 					response: resp,

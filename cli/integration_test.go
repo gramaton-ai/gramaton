@@ -32,6 +32,10 @@ func (noopTestLLM) Complete(_ context.Context, _ string) (string, error)        
 func (noopTestLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (noopTestLLM) ModelID() string                                                    { return "test-noop" }
 func (noopTestLLM) ProviderName() string                                               { return "noop" }
+func (noopTestLLM) SupportsStructuredOutput() bool                                     { return false }
+func (noopTestLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 func TestMain(m *testing.M) {
 	// Create engine without testutil.NewEngine (needs *testing.T).

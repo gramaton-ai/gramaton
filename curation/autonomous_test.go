@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -56,7 +57,11 @@ func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string,
 }
 
 func (m *mockLLM) ModelID() string      { return "mock-llm" }
-func (m *mockLLM) ProviderName() string { return "mock" }
+func (m *mockLLM) ProviderName() string           { return "mock" }
+func (m *mockLLM) SupportsStructuredOutput() bool { return false }
+func (m *mockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 // mockLLMWithSystem extends mockLLM with SystemPromptSetter support.
 type mockLLMWithSystem struct {

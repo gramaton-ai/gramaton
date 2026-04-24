@@ -23,6 +23,10 @@ func (noopLLM) Complete(_ context.Context, _ string) (string, error)            
 func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
 func (noopLLM) ModelID() string                                                    { return "test-noop" }
 func (noopLLM) ProviderName() string                                               { return "noop" }
+func (noopLLM) SupportsStructuredOutput() bool                                     { return false }
+func (noopLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 // TestServerNewAcceptsNilLLM is the regression guard for backlog
 // item 01KPVP9HDJM9YZ37QB4315KGAF: a server that would have refused

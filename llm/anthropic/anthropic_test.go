@@ -156,6 +156,107 @@ func TestCompleteSuccess(t *testing.T) {
 	}
 }
 
+// TestSupportsStructuredOutput confirms Anthropic advertises
+// structured-output capability via the tool-use API.
+func TestSupportsStructuredOutput(t *testing.T) {
+	client := &Client{}
+	if !client.SupportsStructuredOutput() {
+		t.Error("Anthropic.SupportsStructuredOutput() = false; want true (tool-use API)")
+	}
+}
+
+// TestCompleteStructuredSuccess verifies the tool-use request is
+// built correctly, the response's tool_use.input is returned as-is,
+// and usage telemetry is recorded.
+func TestCompleteStructuredSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req messagesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(req.Tools) != 1 {
+			t.Fatalf("expected 1 tool, got %d", len(req.Tools))
+		}
+		if req.Tools[0].Name != "emit_output" {
+			t.Errorf("tool name = %q, want emit_output", req.Tools[0].Name)
+		}
+		if req.ToolChoice == nil || req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "emit_output" {
+			t.Errorf("tool_choice = %+v, want {type: tool, name: emit_output}", req.ToolChoice)
+		}
+		// Verify the schema was forwarded verbatim.
+		if req.Tools[0].InputSchema["type"] != "object" {
+			t.Errorf("schema type = %v, want object", req.Tools[0].InputSchema["type"])
+		}
+
+		// Respond with a tool_use block.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"content": [
+				{"type": "tool_use", "name": "emit_output", "input": {"field": "value", "n": 42}}
+			],
+			"usage": {"input_tokens": 100, "output_tokens": 20}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		baseURL: srv.URL,
+		model:   "claude-sonnet-4-6",
+		apiKey:  "sk-ant-test",
+		client:  srv.Client(),
+	}
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"field": map[string]any{"type": "string"},
+			"n":     map[string]any{"type": "integer"},
+		},
+		"required": []string{"field", "n"},
+	}
+	raw, err := client.CompleteStructured(context.Background(), schema, "give me a structured thing")
+	if err != nil {
+		t.Fatalf("CompleteStructured: %v", err)
+	}
+	// Unmarshal and verify.
+	var parsed struct {
+		Field string `json:"field"`
+		N     int    `json:"n"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v (raw=%s)", err, raw)
+	}
+	if parsed.Field != "value" || parsed.N != 42 {
+		t.Errorf("parsed = %+v, want {value, 42}", parsed)
+	}
+}
+
+// TestCompleteStructuredMissingToolUseBlock covers the case where
+// the response doesn't contain a tool_use block with our tool name
+// (degenerate / misbehaving provider). Expected to return an error
+// rather than silently producing empty/nil data.
+func TestCompleteStructuredMissingToolUseBlock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"content": [{"type": "text", "text": "oops, text instead of tool use"}],
+			"usage": {"input_tokens": 5, "output_tokens": 3}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := &Client{
+		baseURL: srv.URL,
+		model:   "claude-sonnet-4-6",
+		apiKey:  "sk-ant-test",
+		client:  srv.Client(),
+	}
+	_, err := client.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "anything")
+	if err == nil {
+		t.Fatal("expected error when response has no tool_use block; got nil")
+	}
+}
+
 // TestSetSystemPromptConcurrentWithComplete is a regression test:
 // SetSystemPrompt and Complete share systemCache; before
 // the mutex was added, concurrent SetSystemPrompt + Complete races

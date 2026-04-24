@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -101,3 +102,14 @@ func (c *Client) ModelID() string {
 
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "bedrock" }
+
+// SupportsStructuredOutput reports false for now. Bedrock via
+// Converse API tool-use would enable this for Claude-family models;
+// implementation is deferred to a follow-up commit. Non-Claude
+// models under Bedrock have no structured-output equivalent.
+func (c *Client) SupportsStructuredOutput() bool { return false }
+
+// CompleteStructured is not yet implemented for Bedrock.
+func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, fmt.Errorf("bedrock: structured output not yet implemented")
+}

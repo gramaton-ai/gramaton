@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,6 +13,14 @@ import (
 	"github.com/gramaton-ai/gramaton/llm/kirocli"
 	"github.com/gramaton-ai/gramaton/llm/openai"
 )
+
+// Structured-output capability is advertised via
+// SupportsStructuredOutput on the Provider interface. Callers MUST
+// check that before invoking CompleteStructured — providers that
+// can't enforce a schema at the wire layer (claude-cli, kiro-cli,
+// unimplemented providers) return a generic error from
+// CompleteStructured and the caller is expected to have already
+// routed around them via the capability check.
 
 // Provider generates text completions from prompts.
 type Provider interface {
@@ -30,6 +39,30 @@ type Provider interface {
 	// Used for per-provider accounting so CallMetrics can attribute
 	// usage to the actual backend instead of the Metered wrapper.
 	ProviderName() string
+
+	// SupportsStructuredOutput reports whether the provider can
+	// enforce a JSON Schema on its response at the wire layer. When
+	// true, CompleteStructured should be preferred for outputs that
+	// need to unmarshal reliably — the provider refuses to emit
+	// output that doesn't conform to the schema, eliminating the
+	// "chatty preamble around JSON" class of parser failures.
+	//
+	// CLI providers (claude-cli, kiro-cli) return false — they
+	// exchange free text with a subprocess and can't enforce schema.
+	// Callers that want uniform behavior across all providers should
+	// route claude-cli / kiro-cli through Complete + a text parser
+	// (e.g. internal/sanitize) as a fallback.
+	SupportsStructuredOutput() bool
+
+	// CompleteStructured sends a prompt asking the provider to
+	// produce JSON conforming to the supplied JSON Schema. Returns
+	// the raw JSON response as-is so the caller can Unmarshal into
+	// its typed struct.
+	//
+	// Providers that return false from SupportsStructuredOutput
+	// return a plain error here; callers must check the capability
+	// first and fall back to Complete for providers that lack it.
+	CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error)
 }
 
 // SystemPromptSetter is an optional interface that providers can

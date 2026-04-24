@@ -169,3 +169,14 @@ func (c *Client) ModelID() string {
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "openai" }
 
+// SupportsStructuredOutput reports false for now. OpenAI's
+// response_format: json_schema with strict=true would enable this
+// (supported on gpt-4o and later); implementation is deferred to
+// a follow-up commit. Until then, callers fall back to Complete.
+func (c *Client) SupportsStructuredOutput() bool { return false }
+
+// CompleteStructured is not yet implemented for OpenAI.
+func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, fmt.Errorf("openai: structured output not yet implemented")
+}
+

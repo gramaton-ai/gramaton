@@ -2,6 +2,7 @@ package curation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -16,8 +17,12 @@ type concurrentMockLLM struct {
 	totalCalls  int64
 }
 
-func (m *concurrentMockLLM) ModelID() string      { return "test-mock" }
-func (m *concurrentMockLLM) ProviderName() string { return "mock" }
+func (m *concurrentMockLLM) ModelID() string                { return "test-mock" }
+func (m *concurrentMockLLM) ProviderName() string           { return "mock" }
+func (m *concurrentMockLLM) SupportsStructuredOutput() bool { return false }
+func (m *concurrentMockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 func (m *concurrentMockLLM) Complete(_ context.Context, prompt string) (string, error) {
 	cur := atomic.AddInt64(&m.curConcur, 1)

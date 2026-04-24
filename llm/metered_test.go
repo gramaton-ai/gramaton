@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -27,7 +28,11 @@ func (s *stubProvider) CompleteWithModel(_ context.Context, _, _ string) (string
 }
 
 func (s *stubProvider) ModelID() string      { return "stub-model" }
-func (s *stubProvider) ProviderName() string { return "stub" }
+func (s *stubProvider) ProviderName() string                                             { return "stub" }
+func (s *stubProvider) SupportsStructuredOutput() bool                                   { return false }
+func (s *stubProvider) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
 
 // TestMeteredRefusesWhenCapped is a regression test: once a
 // UsageTracker reports paused=true, Metered must short-circuit
@@ -154,6 +159,60 @@ func TestMeteredRecordCallErrorPath(t *testing.T) {
 	}
 	if got := summary.Session.InputTokens; got != 42 {
 		t.Errorf("Session.InputTokens = %d, want 42", got)
+	}
+}
+
+// structuredStub is a Provider that supports structured output, for
+// testing the Metered wrapper's delegation of the structured path.
+type structuredStub struct {
+	gotSchema map[string]any
+	response  string
+	calls     int
+}
+
+func (s *structuredStub) Complete(_ context.Context, _ string) (string, error) { return "", nil }
+func (s *structuredStub) CompleteWithModel(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+func (s *structuredStub) ModelID() string             { return "structured-stub" }
+func (s *structuredStub) ProviderName() string        { return "stub" }
+func (s *structuredStub) SupportsStructuredOutput() bool { return true }
+func (s *structuredStub) CompleteStructured(_ context.Context, schema map[string]any, _ string) (json.RawMessage, error) {
+	s.calls++
+	s.gotSchema = schema
+	return json.RawMessage(s.response), nil
+}
+
+// TestMeteredDelegatesStructuredOutput verifies Metered.CompleteStructured
+// records usage via the same tracker path as Complete, and forwards
+// the schema unchanged to the inner provider.
+func TestMeteredDelegatesStructuredOutput(t *testing.T) {
+	tracker := NewUsageTracker(t.TempDir(), 0, 0, 0)
+	inner := &structuredStub{response: `{"ok":true}`}
+	m := NewMetered(inner, tracker, nil)
+
+	if !m.SupportsStructuredOutput() {
+		t.Fatal("Metered.SupportsStructuredOutput did not delegate to inner")
+	}
+
+	schema := map[string]any{"type": "object"}
+	raw, err := m.CompleteStructured(context.Background(), schema, "prompt")
+	if err != nil {
+		t.Fatalf("CompleteStructured: %v", err)
+	}
+	if string(raw) != `{"ok":true}` {
+		t.Errorf("raw = %q, want %q", raw, `{"ok":true}`)
+	}
+	if inner.calls != 1 {
+		t.Errorf("inner.calls = %d, want 1", inner.calls)
+	}
+	if inner.gotSchema["type"] != "object" {
+		t.Errorf("schema not forwarded; inner got %+v", inner.gotSchema)
+	}
+	// Tracker got one call.
+	summary := tracker.Summary()
+	if summary.Session.Calls != 1 {
+		t.Errorf("Session.Calls = %d, want 1", summary.Session.Calls)
 	}
 }
 

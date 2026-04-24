@@ -90,6 +90,19 @@ func (c *Client) ModelID() string { return "claude-cli:" + c.model }
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "claude-cli" }
 
+// SupportsStructuredOutput reports false. CLI providers exchange
+// free text with a subprocess; the binary has no way to accept a
+// JSON Schema and enforce it on output. Callers that need schema-
+// validated output must fall back to Complete + a text parser
+// (e.g. internal/sanitize + curation.parseClassification).
+func (c *Client) SupportsStructuredOutput() bool { return false }
+
+// CompleteStructured always errors for claude-cli; the subprocess
+// has no structured-output mode.
+func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, fmt.Errorf("claude-cli: structured output not supported (subprocess wrapper)")
+}
+
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
 	if !modelPattern.MatchString(model) {
 		return "", fmt.Errorf("claudecli: rejected model %q (must match [A-Za-z0-9._:/-]+)", model)

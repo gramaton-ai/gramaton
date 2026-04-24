@@ -304,6 +304,45 @@ Relationships:
 
 Only use "contradicts" or "supersedes" when confident. When in doubt, use "related" or "none". Return JSON only, no prose, no code fences.`
 
+// classificationSchema is the JSON Schema passed to CompleteStructured
+// for the classification call. Providers that support wire-layer
+// schema enforcement (currently Anthropic tool-use) guarantee the
+// response matches this shape before we see it, which eliminates
+// the "chatty preamble around JSON" and "tool-use tag leakage"
+// failure modes that parseClassification had to defend against.
+// Mirrors classificationResult (curation/autonomous.go:1763) — keep
+// them in sync.
+var classificationSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"temporality": map[string]any{
+			"type": "string",
+			"enum": []string{"immutable", "durable", "temporal", "ephemeral"},
+		},
+		"confidence": map[string]any{
+			"type":    "number",
+			"minimum": 0.0,
+			"maximum": 1.0,
+		},
+		"knowledge_type": map[string]any{
+			"type": "string",
+			"enum": []string{"episodic", "semantic", "procedural", "conceptual", "reference"},
+		},
+		"epistemic_status": map[string]any{
+			"type": "string",
+			"enum": []string{"well_established", "probable", "speculative", "contested", "refuted"},
+		},
+		"keywords": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+		"summary_short": map[string]any{
+			"type": "string",
+		},
+	},
+	"required": []string{"temporality", "confidence", "knowledge_type", "epistemic_status", "keywords", "summary_short"},
+}
+
 // ConceptSynthesisSystemPrompt is the stable instructions for concept
 // synthesis. Variable content is one or more concept sections with
 // members. Cached by providers that support it.

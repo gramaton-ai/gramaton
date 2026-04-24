@@ -418,6 +418,11 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 				prompt: fmt.Sprintf(userTemplate, rec.content, rec.contextSignals),
 				model:  model,
 				task:   "classify",
+				// Schema-enforced output when the provider supports
+				// it (Anthropic via tool-use today). Providers without
+				// structured-output capability ignore schema and route
+				// through Complete + parseClassification as before.
+				schema: classificationSchema,
 			}
 		}
 

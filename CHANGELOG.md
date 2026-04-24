@@ -9,6 +9,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Structured-output shortcut for classification — Anthropic path
+  live (Cluster 2 Phase 2a, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** New
+  `SupportsStructuredOutput()` + `CompleteStructured(ctx, schema,
+  prompt)` methods on `llm.Provider`. Anthropic implementation uses
+  the tool-use API with `ToolChoice: {type: tool, name: emit_output}`
+  — the model is forced to respond via a schema-enforced `tool_use`
+  block, so output is guaranteed to conform before it reaches our
+  code. Eliminates the "chatty preamble around JSON" and "tool-use
+  tag leakage" failure modes that `parseClassification` and Phase 1
+  sanitizer had to defend against. OpenAI and Bedrock stubs return
+  `SupportsStructuredOutput()=false` + error (follow-up commits
+  will add `response_format: json_schema` / Converse tool-use);
+  claudecli and kirocli permanently return false (subprocess
+  wrappers can't enforce schema). `Metered` and `RateLimited`
+  wrappers delegate.
+  Classification call site in `curation.autonomous.go` now passes
+  `classificationSchema` on the `llmWork` struct; `parallelLLM`
+  routes through `CompleteStructured` when `schema != nil &&
+  provider.SupportsStructuredOutput()`, with transparent fallback
+  to `Complete` on structured-path error. Same `llmResult.response`
+  string-typed interface, same `parseClassification` consumer on
+  the other end — `parseClassification` receives clean JSON text
+  either way. Summarization / contradiction / concept call sites
+  unchanged for now; add schemas there if the classification path
+  proves out.
+  6 new tests: anthropic `TestSupportsStructuredOutput`,
+  `TestCompleteStructuredSuccess`, `TestCompleteStructuredMissingToolUseBlock`;
+  llm `TestMeteredDelegatesStructuredOutput`; plus 2 test-double
+  conformance updates across 8 test files.
+
 - **Server-start content-quality self-heal hook.** Server's `Run`
   and `StartHTTP` now spawn a one-shot async `curation.RunSelfHeal`
   pass at startup (non-blocking — fires after the HTTP listener is
