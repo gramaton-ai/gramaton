@@ -318,6 +318,26 @@ func (s *Server) Run() error {
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
+	// One-shot content-quality self-heal on boot (Cluster 2 Phase 3).
+	// Async, non-blocking — the pass is cheap on a clean store
+	// (microseconds per record for sanitize.Field comparisons) and
+	// we never want it to delay the server's listen-ready state.
+	// Running on every cycle would be wasteful (Phase 1 prevents new
+	// contamination at write time); running at boot catches legacy
+	// drift and any slippage from bulk imports / future write paths.
+	// Manual on-demand sweeps remain available via
+	// `gramaton repair --content-quality`.
+	go func() {
+		result := curation.RunSelfHeal(s.engine, s.log)
+		if result.Repaired+result.FlaggedForLLM > 0 {
+			s.log.Info("startup self-heal: repairs applied",
+				"component", "server",
+				"scanned", result.Scanned,
+				"repaired", result.Repaired,
+				"flagged_for_llm", result.FlaggedForLLM)
+		}
+	}()
+
 	// Start curation runner. engine.LLM() already returns the Metered
 	// wrapper from server construction (see server.New), so no per-call
 	// wrapping is needed here.
@@ -416,6 +436,20 @@ func (s *Server) StartHTTP() error {
 
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
+
+	// One-shot content-quality self-heal on boot. See Run() for
+	// rationale; this branch handles the StartHTTP (MCP companion)
+	// startup path. Async, non-blocking.
+	go func() {
+		result := curation.RunSelfHeal(s.engine, s.log)
+		if result.Repaired+result.FlaggedForLLM > 0 {
+			s.log.Info("startup self-heal: repairs applied",
+				"component", "server",
+				"scanned", result.Scanned,
+				"repaired", result.Repaired,
+				"flagged_for_llm", result.FlaggedForLLM)
+		}
+	}()
 
 	// Start curation runner. engine.LLM() already returns the Metered
 	// wrapper from server construction (see server.New), so no per-call

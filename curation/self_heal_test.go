@@ -173,6 +173,47 @@ func TestDetectAndRepairSummaryCleanIsNoop(t *testing.T) {
 	}
 }
 
+// --- Defensive paths ---
+
+// TestDetectAndRepairSummaryMissingNode covers the defensive
+// early-return when the node has been deleted between scan and
+// repair (a theoretical race today since we scan + repair under the
+// same engine, but the guard exists and should stay covered).
+func TestDetectAndRepairSummaryMissingNode(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, "01NONEXISTENTXXXXXXXXXXXXX", slog.Default())
+	eng.Unlock()
+	if outcome != outcomeClean {
+		t.Errorf("outcome = %v, want %v (missing node must be treated as no-op clean)", outcome, outcomeClean)
+	}
+}
+
+// TestDetectAndRepairSummaryEmptyField covers the defensive early-
+// return when a node exists but has no content_short property.
+// Common case: capture-only records that haven't been classified
+// yet and won't have a summary until curation summarizes them.
+func TestDetectAndRepairSummaryEmptyField(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("Body only, no summary yet."),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeClean {
+		t.Errorf("outcome = %v, want %v (empty content_short must be no-op)", outcome, outcomeClean)
+	}
+}
+
 // --- RunSelfHeal integration ---
 
 func TestRunSelfHealScansAndRepairs(t *testing.T) {

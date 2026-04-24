@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Server-start content-quality self-heal hook.** Server's `Run`
+  and `StartHTTP` now spawn a one-shot async `curation.RunSelfHeal`
+  pass at startup (non-blocking — fires after the HTTP listener is
+  ready, cost is microseconds per record for sanitize.Field
+  comparisons on a clean store). Catches any legacy drift between
+  server restarts and any slippage from future bulk-import paths
+  that might bypass api/ write-site sanitization. Running in the
+  1-minute curation cycle was rejected as wasteful (Phase 1
+  prevents new contamination at write time; most cycles would no-
+  op). Manual on-demand sweeps remain available via
+  `gramaton repair --content-quality`.
+
 - **Content-quality self-heal pass (Cluster 2 Phase 3,
   `01KPZZNG45PC7D6HC8SQH3P9N1`).** New `curation.RunSelfHeal` walks
   every Memory + Session record, detects LLM tool-use-format

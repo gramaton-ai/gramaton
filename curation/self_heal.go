@@ -181,11 +181,17 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 		}
 	}
 
-	// Persist once at the end rather than per-record. The curation
-	// cycle's outer Save captures this; CLI callers invoke Save via
-	// a wrapper.
+	// Persist once at the end rather than per-record. Engine.Save
+	// expects the caller to hold the write lock (see callers like
+	// curation/batch.go:212 and api/capture.go — Save flushes bbolt
+	// indexes + writes the HEAD ref, none of which it synchronizes
+	// internally). Concurrent readers during that window would
+	// observe torn state. Take the Lock explicitly.
 	if result.Repaired+result.FlaggedForLLM > 0 {
-		if _, err := e.Save("curation: self-heal summary repairs"); err != nil {
+		e.Lock()
+		_, err := e.Save("curation: self-heal summary repairs")
+		e.Unlock()
+		if err != nil {
 			logger.Warn("self-heal: save failed", "component", "curation", "err", err)
 		}
 	}
