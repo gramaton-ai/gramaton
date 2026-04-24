@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -70,6 +71,92 @@ func TestComplete(t *testing.T) {
 	}
 	if got != "Hello!" {
 		t.Errorf("Complete() = %q, want %q", got, "Hello!")
+	}
+}
+
+// TestSupportsStructuredOutput confirms OpenAI advertises structured
+// output via response_format: json_schema + strict=true.
+func TestSupportsStructuredOutput(t *testing.T) {
+	c := &Client{model: "gpt-4o"}
+	if !c.SupportsStructuredOutput() {
+		t.Error("OpenAI.SupportsStructuredOutput() = false; want true")
+	}
+}
+
+// TestCompleteStructuredSuccess verifies the response_format payload
+// carries type=json_schema + strict=true + the supplied schema,
+// and the response content is returned as raw JSON.
+func TestCompleteStructuredSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if req.ResponseFormat == nil {
+			t.Fatal("request missing response_format")
+		}
+		if req.ResponseFormat.Type != "json_schema" {
+			t.Errorf("response_format.type = %q, want json_schema", req.ResponseFormat.Type)
+		}
+		if req.ResponseFormat.JSONSchema == nil || !req.ResponseFormat.JSONSchema.Strict {
+			t.Error("response_format.json_schema.strict must be true for wire-layer enforcement")
+		}
+		if req.ResponseFormat.JSONSchema.Schema["type"] != "object" {
+			t.Errorf("schema not forwarded verbatim: %+v", req.ResponseFormat.JSONSchema.Schema)
+		}
+
+		// Respond with the schema-valid JSON embedded in content.
+		resp := chatResponse{
+			Choices: []chatChoice{
+				{Message: chatMessage{Role: "assistant", Content: `{"field":"value","n":42}`}},
+			},
+			Usage: chatUsage{PromptTokens: 80, CompletionTokens: 12},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", apiKey: "sk-test", client: srv.Client()}
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"field": map[string]any{"type": "string"},
+			"n":     map[string]any{"type": "integer"},
+		},
+	}
+	raw, err := c.CompleteStructured(context.Background(), schema, "give me structured")
+	if err != nil {
+		t.Fatalf("CompleteStructured: %v", err)
+	}
+	var parsed struct {
+		Field string `json:"field"`
+		N     int    `json:"n"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal raw=%q: %v", raw, err)
+	}
+	if parsed.Field != "value" || parsed.N != 42 {
+		t.Errorf("parsed = %+v, want {value, 42}", parsed)
+	}
+}
+
+// TestCompleteStructuredAPIError surfaces a 4xx error from OpenAI
+// rather than silently returning empty. Mirrors TestCompleteAPIError
+// for the structured path.
+func TestCompleteStructuredAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"schema rejected"}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", apiKey: "sk-test", client: srv.Client()}
+	_, err := c.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "prompt")
+	if err == nil {
+		t.Fatal("expected error on 400 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_request_error") {
+		t.Errorf("error missing type: %v", err)
 	}
 }
 

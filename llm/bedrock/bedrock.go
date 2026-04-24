@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -103,13 +104,94 @@ func (c *Client) ModelID() string {
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "bedrock" }
 
-// SupportsStructuredOutput reports false for now. Bedrock via
-// Converse API tool-use would enable this for Claude-family models;
-// implementation is deferred to a follow-up commit. Non-Claude
-// models under Bedrock have no structured-output equivalent.
-func (c *Client) SupportsStructuredOutput() bool { return false }
+// SupportsStructuredOutput reports true. The Converse API accepts a
+// toolConfig regardless of model; Claude models enforce the schema
+// at the API edge the same way the direct Anthropic API does. Other
+// models (Titan, Llama, Mistral) also accept toolConfig via Converse
+// but may not enforce strictly — if a non-supporting model is
+// configured, CompleteStructured will return an error and the
+// caller's fallback to Complete kicks in.
+func (c *Client) SupportsStructuredOutput() bool { return true }
 
-// CompleteStructured is not yet implemented for Bedrock.
-func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
-	return nil, fmt.Errorf("bedrock: structured output not yet implemented")
+// CompleteStructured sends the prompt with a toolConfig that forces
+// a single "emit_output" tool whose InputSchema is the caller's
+// JSON Schema. The response contains a toolUse block whose Input is
+// the schema-valid JSON (for models that honor tool-use, Claude on
+// Bedrock being the primary supported case). Returns the raw JSON
+// bytes so the caller can Unmarshal into a typed struct.
+func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
+	// Bedrock's aws-sdk-go-v2 Converse types use types.ToolInputSchema
+	// with a document-typed Json field. document.NewLazyDocument
+	// converts the Go map into the opaque Document type the SDK
+	// passes to Bedrock.
+	toolName := "emit_output"
+	out, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
+		ModelId: aws.String(c.model),
+		Messages: []types.Message{{
+			Role: types.ConversationRoleUser,
+			Content: []types.ContentBlock{
+				&types.ContentBlockMemberText{Value: prompt},
+			},
+		}},
+		ToolConfig: &types.ToolConfiguration{
+			Tools: []types.Tool{
+				&types.ToolMemberToolSpec{
+					Value: types.ToolSpecification{
+						Name:        aws.String(toolName),
+						Description: aws.String("Emit the structured output."),
+						InputSchema: &types.ToolInputSchemaMemberJson{
+							Value: document.NewLazyDocument(schema),
+						},
+					},
+				},
+			},
+			ToolChoice: &types.ToolChoiceMemberTool{
+				Value: types.SpecificToolChoice{
+					Name: aws.String(toolName),
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bedrock structured: converse %s: %w", c.model, err)
+	}
+
+	// Record usage identically to Complete.
+	if out.Usage != nil {
+		var input, output int32
+		if out.Usage.InputTokens != nil {
+			input = *out.Usage.InputTokens
+		}
+		if out.Usage.OutputTokens != nil {
+			output = *out.Usage.OutputTokens
+		}
+		telemetry.Record(ctx, telemetry.CallUsage{
+			InputTokens:  int(input),
+			OutputTokens: int(output),
+		})
+	}
+
+	msg, ok := out.Output.(*types.ConverseOutputMemberMessage)
+	if !ok {
+		return nil, fmt.Errorf("bedrock structured: unexpected output type")
+	}
+
+	// Find the tool_use block for our tool and unmarshal its Input
+	// (a document.Interface holding the schema-valid JSON) back to
+	// raw JSON bytes.
+	for _, block := range msg.Value.Content {
+		tu, ok := block.(*types.ContentBlockMemberToolUse)
+		if !ok {
+			continue
+		}
+		if aws.ToString(tu.Value.Name) != toolName {
+			continue
+		}
+		raw, err := tu.Value.Input.MarshalSmithyDocument()
+		if err != nil {
+			return nil, fmt.Errorf("bedrock structured: marshal tool input: %w", err)
+		}
+		return raw, nil
+	}
+	return nil, fmt.Errorf("bedrock structured: response had no tool_use block for %s", toolName)
 }

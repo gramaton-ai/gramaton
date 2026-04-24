@@ -9,6 +9,31 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Structured-output implementation for OpenAI and Bedrock
+  (Cluster 2 Phases 2b + 2c, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** Both
+  providers now return `SupportsStructuredOutput()=true` and have
+  real `CompleteStructured` implementations.
+  OpenAI uses `response_format: {type: "json_schema", json_schema:
+  {strict: true, schema: ...}}` on `/v1/chat/completions`. Strict
+  mode is the enforcement knob — without it, OpenAI treats the
+  schema as a hint rather than a contract. Supported on gpt-4o
+  and later; older models return an API error, which the caller's
+  structured-path-error fallback catches transparently.
+  Bedrock uses the Converse API's `toolConfig` with a forced
+  single-tool choice (`ToolChoiceMemberTool` pinning the
+  `emit_output` tool). Schema passes through `document.NewLazyDocument`
+  from `github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document`.
+  Response's `toolUse.input` is marshaled back to `json.RawMessage`
+  via `MarshalSmithyDocument`. Works cleanly for Claude-family
+  models on Bedrock; non-Claude models that don't support tool-use
+  return an API error and the caller falls back to Complete.
+  Both paths record usage via `telemetry.Record` identically to
+  the text path, so `llm_usage.json` reconciliation stays correct.
+  5 new tests (openai `TestSupportsStructuredOutput`,
+  `TestCompleteStructuredSuccess`, `TestCompleteStructuredAPIError`;
+  bedrock `TestSupportsStructuredOutput`, `TestCompleteStructured`
+  using the same Smithy-skip guard the existing `TestComplete` uses).
+
 - **Structured-output shortcut for classification — Anthropic path
   live (Cluster 2 Phase 2a, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** New
   `SupportsStructuredOutput()` + `CompleteStructured(ctx, schema,

@@ -135,6 +135,71 @@ func TestCompleteRecordsUsage(t *testing.T) {
 	}
 }
 
+// TestSupportsStructuredOutput confirms Bedrock advertises
+// structured output via Converse tool-use.
+func TestSupportsStructuredOutput(t *testing.T) {
+	c := &Client{model: "anthropic.claude-sonnet-4-6-20250514-v1:0"}
+	if !c.SupportsStructuredOutput() {
+		t.Error("Bedrock.SupportsStructuredOutput() = false; want true")
+	}
+}
+
+// TestCompleteStructured mirrors TestComplete: exercises the full
+// tool-use construction path. Smithy serialization edge cases may
+// cause the unit-test mock to reject the request — we skip on the
+// same protocol-mismatch marker existing tests use.
+func TestCompleteStructured(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		// Respond with a tool_use block carrying schema-valid JSON.
+		resp := map[string]any{
+			"output": map[string]any{
+				"message": map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{
+						{
+							"toolUse": map[string]any{
+								"toolUseId": "tu_1",
+								"name":      "emit_output",
+								"input":     map[string]any{"field": "ok"},
+							},
+						},
+					},
+				},
+			},
+			"stopReason": "tool_use",
+			"usage": map[string]any{
+				"inputTokens":  50,
+				"outputTokens": 8,
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}
+
+	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"field": map[string]any{"type": "string"},
+		},
+	}
+	raw, err := c.CompleteStructured(context.Background(), schema, "emit ok")
+	if err != nil {
+		if strings.Contains(err.Error(), "converse") || strings.Contains(err.Error(), "deserialize") {
+			t.Skipf("Smithy protocol mismatch expected in unit test: %v", err)
+		}
+		t.Fatalf("CompleteStructured: %v", err)
+	}
+	var parsed struct {
+		Field string `json:"field"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal %q: %v", raw, err)
+	}
+	if parsed.Field != "ok" {
+		t.Errorf("parsed.field = %q, want ok", parsed.Field)
+	}
+}
+
 func TestNewWithEnvCreds(t *testing.T) {
 	t.Setenv("TEST_BEDROCK_AKID", "TESTACCESSKEY")
 	t.Setenv("TEST_BEDROCK_SECRET", "TESTSECRETKEY")

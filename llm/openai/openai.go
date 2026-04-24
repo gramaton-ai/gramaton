@@ -55,8 +55,26 @@ func New(cfg config.LLMConfig) (*Client, error) {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+}
+
+// responseFormat is the OpenAI structured-output parameter. When Type
+// is "json_schema" and JSONSchema.Strict is true, OpenAI guarantees
+// the response body is valid JSON matching JSONSchema.Schema before
+// returning (supported on gpt-4o and later; strict-mode is the
+// enforcement knob — without strict:true, OpenAI treats the schema
+// as a hint rather than a contract).
+type responseFormat struct {
+	Type       string      `json:"type"`
+	JSONSchema *jsonSchema `json:"json_schema,omitempty"`
+}
+
+type jsonSchema struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict"`
+	Schema map[string]any `json:"schema"`
 }
 
 type chatMessage struct {
@@ -169,14 +187,92 @@ func (c *Client) ModelID() string {
 // ProviderName returns the identifier used in per-provider metrics.
 func (c *Client) ProviderName() string { return "openai" }
 
-// SupportsStructuredOutput reports false for now. OpenAI's
-// response_format: json_schema with strict=true would enable this
-// (supported on gpt-4o and later); implementation is deferred to
-// a follow-up commit. Until then, callers fall back to Complete.
-func (c *Client) SupportsStructuredOutput() bool { return false }
+// SupportsStructuredOutput reports that OpenAI can enforce a JSON
+// Schema at the wire layer via response_format: json_schema with
+// strict=true. Only supported on gpt-4o and later models; older
+// models advertised false here would be safer, but we don't know
+// the model's capability string-matching on name alone (Azure
+// deployments rename models, compatible servers may also support
+// it). If the model doesn't support strict schema, the API returns
+// an error and the caller's structured-path-error fallback kicks
+// in transparently.
+func (c *Client) SupportsStructuredOutput() bool { return true }
 
-// CompleteStructured is not yet implemented for OpenAI.
-func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
-	return nil, fmt.Errorf("openai: structured output not yet implemented")
+// CompleteStructured sends the prompt with response_format set to
+// json_schema + strict:true. The response content is guaranteed by
+// OpenAI to be valid JSON matching the schema — callers can
+// Unmarshal directly without the "find first { and last }" dance.
+func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
+	body, err := json.Marshal(chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{Role: "user", Content: prompt},
+		},
+		ResponseFormat: &responseFormat{
+			Type: "json_schema",
+			JSONSchema: &jsonSchema{
+				Name:   "emit_output",
+				Strict: true,
+				Schema: schema,
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("openai structured: marshal request: %w", err)
+	}
+
+	url := c.baseURL + "/v1/chat/completions"
+	buildReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("openai structured: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		return req, nil
+	}
+
+	resp, err := httpretry.DoWithRetry(ctx, c.client, httpretry.DefaultRetryConfig(), buildReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai structured: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	if err != nil {
+		return nil, fmt.Errorf("openai structured: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error apiError `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			return nil, fmt.Errorf("openai structured: %s: %s", errResp.Error.Type, errResp.Error.Message)
+		}
+		return nil, fmt.Errorf("openai structured: HTTP %d", resp.StatusCode)
+	}
+
+	var result chatResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("openai structured: unmarshal response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("openai structured: no choices in response")
+	}
+
+	telemetry.Record(ctx, telemetry.CallUsage{
+		InputTokens:     result.Usage.PromptTokens,
+		OutputTokens:    result.Usage.CompletionTokens,
+		CacheReadTokens: result.Usage.PromptTokensDetails.CachedTokens,
+	})
+
+	// The content is the schema-valid JSON as a string. Cast to
+	// RawMessage without re-validation — strict mode means OpenAI
+	// already checked.
+	return json.RawMessage(result.Choices[0].Message.Content), nil
 }
 
