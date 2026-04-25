@@ -70,7 +70,7 @@ func metaBM25Text(meta map[string]any) string {
 
 // serviceCapture creates a new knowledge record. Handles pre-embedding,
 // deduplication, supersession, and chunking.
-func (s *Server) serviceCapture(_ context.Context, req *captureRequest) (map[string]any, *serviceError) {
+func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[string]any, *serviceError) {
 	captureStart := time.Now()
 
 	if req.Content == "" {
@@ -89,7 +89,7 @@ func (s *Server) serviceCapture(_ context.Context, req *captureRequest) (map[str
 	// Pre-embed outside the lock. Observation extraction (D18/D23)
 	// happens asynchronously in the curation cycle, not during capture.
 	embedStart := time.Now()
-	preEmbedded := s.preEmbedContent(req)
+	preEmbedded := s.preEmbedContent(ctx, req)
 	embedDur := time.Since(embedStart)
 
 	s.engine.Lock()

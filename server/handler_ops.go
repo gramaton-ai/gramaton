@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -95,7 +96,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.handleIngestFiles(w, req.Files)
+	s.handleIngestFiles(r.Context(), w, req.Files)
 }
 
 func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest) {
@@ -105,7 +106,7 @@ func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest)
 		"local path ingestion via API is not yet implemented", false)
 }
 
-func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
+func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, files []ingestFile) {
 	// Pre-embed all files outside the lock. Observation extraction
 	// happens asynchronously in the curation cycle (D18/D23).
 	type precomputed struct {
@@ -131,7 +132,7 @@ func (s *Server) handleIngestFiles(w http.ResponseWriter, files []ingestFile) {
 		capReq := &captureRequest{Content: f.Content}
 		prepared = append(prepared, precomputed{
 			file:     f,
-			embedded: s.preEmbedContent(capReq),
+			embedded: s.preEmbedContent(ctx, capReq),
 		})
 	}
 

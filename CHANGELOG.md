@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Server preEmbedContent + ingest now thread request context.**
+  P2-11 was filed in the pre-T-02 era when most service methods
+  didn't take ctx. The T-02 review (commit f874cab) already wired
+  ctx through every Session/Collection method and api/sessions.go,
+  but a residual gap remained in `server/handler_records.go`:
+  `preEmbedContent` called `Embed(context.Background(), ...)` on the
+  capture path. `serviceCapture` had a `_ context.Context` parameter
+  it ignored. `handleIngestFiles` didn't take ctx at all and was
+  invoked without `r.Context()`. Fixed by threading ctx through:
+  preEmbedContent now takes ctx and passes it to the embedder;
+  serviceCapture uses its ctx instead of dropping it; handleIngestFiles
+  takes ctx and its caller passes `r.Context()`. Client cancellation
+  now propagates end-to-end on capture and ingest paths. Other
+  remaining `context.Background()` callsites in server/ are
+  long-running background tasks (curation, sweepers, auto-backup)
+  whose lifetime is bound to their own cancel function -- those are
+  correct uses. (P2-11.)
+
 - **Log-level discipline pass demotes 11 INFO sites to DEBUG.** The
   default INFO level was too chatty on hot paths and engine
   startup. Demoted: per-search step timings (filter / similarity /

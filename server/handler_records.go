@@ -45,7 +45,9 @@ type preEmbeddedVectors struct {
 }
 
 // preEmbedContent generates embeddings before acquiring the lock.
-func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
+// Threads ctx so client cancellation aborts the embedder call instead
+// of waiting it out.
+func (s *Server) preEmbedContent(ctx context.Context, req *captureRequest) *preEmbeddedVectors {
 	if s.engine.Embedder() == nil {
 		return nil
 	}
@@ -100,7 +102,7 @@ func (s *Server) preEmbedContent(req *captureRequest) *preEmbeddedVectors {
 		return nil
 	}
 
-	vecs, err := s.engine.Embedder().Embed(context.Background(), embedTexts)
+	vecs, err := s.engine.Embedder().Embed(ctx, embedTexts)
 	if err != nil {
 		return &preEmbeddedVectors{err: err}
 	}
