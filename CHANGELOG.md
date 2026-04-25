@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Review skills (`gramaton-review`, `gramaton-security-review`,
+  `pre-merge-check`) hardened against the bug shapes the post-P2-07
+  review caught.** Two HIGH regressions of stated intent shipped past
+  the original skill walks because the mechanical 12-check list and
+  pre-merge gates didn't have framing for behavior preservation in
+  refactors or for vacuous tests. Specific changes:
+  (1) `gramaton-review` gains an intro paragraph reminding reviewers
+  that the 12 checks are necessary but not sufficient, with explicit
+  recommendation to spawn 2-3 independent review agents in parallel
+  for diffs >200 lines or that touch multiple subsystems.
+  (2) `gramaton-review` Check 10 (test coverage) gains two bullets:
+  the bug-pin test must FAIL on the pre-fix code (regression-pin
+  question), and the test FIXTURE must actually exercise the fixed
+  path (vacuous-test guard).
+  (3) `gramaton-review` gets a new Section 13 "Refactor preservation"
+  describing how to walk pre-image branches against the new structure
+  for diffs with refactor signature, with a real example from the
+  P2-07 concept Rule 2/3 fall-through bug.
+  (4) `gramaton-security-review` Section 4 (input validation) gains
+  a bullet requiring DIRTY-input fixtures for any added validator —
+  same vacuous-test guard, security-flavored.
+  (5) `pre-merge-check` gets a "Before running the mechanical gate"
+  section recommending always-run gramaton-review +
+  gramaton-security-review on substantive diffs, since bugs surface
+  in unexpected places.
+  (6) `pre-merge-check` Step 9 (commit shape) gains a refactor-
+  specific bullet: commit body must articulate what behavior the
+  refactor preserves, not just what changed.
+
 ### Fixed
 
 - **Curation review-pass cleanups (post-P2-07 / P2-08 / P2-09 review).**

@@ -7,6 +7,12 @@ description: Use before opening a PR, committing a substantive change, or declar
 
 Mechanical gate. If any step fails, do not tell the user the work is done — fix the failure first.
 
+## Before running the mechanical gate
+
+Always run `gramaton-review` AND `gramaton-security-review` first on any substantive diff. They catch different bug classes — the mechanical gate (build/test/race/vet) confirms the code compiles and pre-existing tests pass; the reviews catch behavior-preservation regressions, vacuous tests, and security-class issues that no mechanical check reaches. Bugs surface in unexpected places — running security review on a pure-curation diff occasionally still surfaces things, and the cost is low.
+
+Skip both only for trivial diffs (typo, single-line doc change, CHANGELOG-only).
+
 ## Run in order
 
 ### 1. Build
@@ -76,6 +82,8 @@ Scan the diff for:
 ### 9. Commit shape (only if about to commit)
 
 Multi-paragraph commit message. Subject = imperative, ≤70 chars. Body explains *why*, not just *what*. Headers (`Critical:`, `High:`, etc.) for multi-issue commits. Model: commits `16f7693` and `df5ef52`.
+
+For refactors (commits that merge/split/restructure existing code): the body must articulate what behavior the change preserves and how. "Combined three iterators into one" describes the change; it doesn't guarantee preservation. State which input shapes go where in the new structure so a future reader can verify the merge was lossless.
 
 ## Output
 

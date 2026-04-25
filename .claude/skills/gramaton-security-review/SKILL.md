@@ -80,6 +80,7 @@ For every MCP tool added or modified:
 - [ ] Collection names validated.
 - [ ] Record ids, edge ids validated.
 - [ ] Validation is done at **every** entry point — if five sibling methods take the same kind of identifier, all five validate. "The caller will validate" is how bugs land.
+- [ ] If the change adds or modifies a validator, the regression test feeds DIRTY input and asserts CLEAN output (or rejection). A test that asserts validation behavior but seeds already-clean input proves nothing — and won't fail when the validator silently degrades.
 
 **Past incident pattern:** skipped validation on one of N sibling methods → attacker uses that method as the entry point.
 

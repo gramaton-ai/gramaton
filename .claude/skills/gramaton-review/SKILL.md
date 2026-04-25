@@ -7,6 +7,8 @@ description: Use for code review of Gramaton changes — PR review, branch revie
 
 Every check below came from a real bug. Don't skip any without an explicit reason.
 
+The 12 checks below are necessary but not sufficient. After walking them, do a second pass with the framing: "what could go wrong here that's not on this list?" Most regressions in this codebase have come from refactor behavior-preservation gaps and vacuous tests — neither of which a mechanical checklist reliably catches. For diffs >200 lines or those that touch multiple subsystems, consider spawning 2-3 independent review agents in parallel with focused prompts (correctness / security / test coverage) and synthesizing findings.
+
 ## Setup
 
 ```bash
@@ -116,6 +118,10 @@ For each new or changed api method:
 - [ ] At least one error-path test per distinct `ErrXxx` return
 - [ ] If three-phase: `TestXDoesNotBlockWrites` + `TestXSnapshotConsistency` using snapshot hook
 - [ ] If the change fixes a bug: a regression test with a name that describes the bug
+- [ ] **The bug-pin test FAILS when you mentally apply the pre-fix code.** A test that passes both pre-fix and post-fix proves nothing about the fix.
+- [ ] **The test FIXTURE actually exercises the fixed path.** Easy mistake: a test asserts behavior X but seeds inputs that go through behavior Y. Walk the test inputs through the new code branch-by-branch and confirm they reach the fix.
+
+Vacuous tests are worse than missing tests because they create a false sense of coverage. Common shapes: assertions on absence ("no record leaked") with no positive complement; test setup that doesn't exercise the fixed path (e.g., asserts a keyword filter when the fixture has no matching keyword).
 
 **Severity: varies.** Missing tests ≠ broken code, but no-tests merges cost future bugs.
 
@@ -133,6 +139,19 @@ Two drift surfaces to check:
 `CHANGELOG.md` has an entry under `[Unreleased]` describing the change. Correct category.
 
 **Severity: LOW**, but required for every PR.
+
+### 13. Refactor preservation (when the diff merges/splits/restructures existing code)
+
+Refactor signature: roughly equal `-N/+M` counts in the same file, or one function deleted while another was added/expanded. Refactors silently regress when a behavior path in the original code has no equivalent in the new structure.
+
+For each substantially-modified function:
+1. Read the pre-image (`git show main:<path>` or `git diff main...HEAD <path>`'s `-` lines) and list every distinct branch / output the original took — filter conditions, `continue` placements, conditional appends to result slices, side effects on shared state.
+2. For each branch, find where in the new code that input shape is handled. Confirm the output is equivalent — same branch taken, same fields written, same side effects.
+3. Flag any branch the new code drops or re-routes. If you can't trace it to an equivalent path, that's a regression.
+
+Real example: a curation commit merged three for-loops into one. The original `it2` had Rule 1's `continue` INSIDE its inner `if contentShort == kw && hasFullContent` block, so concept nodes where Rule 1 didn't fire fell through to Rules 2/3. The merged loop's concept branch had `continue` at the OUTER level — concept nodes silently never reached Rules 2/3. No mechanical check caught it; only walking the original branches against the new structure did.
+
+**Severity: HIGH** when found. Refactor regressions are silent and load-bearing.
 
 ## Output shape
 
