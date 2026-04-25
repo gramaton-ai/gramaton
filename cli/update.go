@@ -28,23 +28,20 @@ func init() {
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
-	var input map[string]any
-	if updateFile != "" {
-		if err := readInputJSON(updateFile, &input, defaultLimits()); err != nil {
-			return writeError("input_error", err.Error(), true)
-		}
-	} else {
-		if err := readStdinJSON(&input, defaultLimits()); err != nil {
-			return writeError("input_error", err.Error(), true)
-		}
+	input, err := readCommandInput(updateFile)
+	if err != nil {
+		return err
 	}
-
 	id, _ := input["id"].(string)
 	if id == "" {
 		return writeError("missing_field", "id is required", true)
 	}
 
-	// Check if this is an edge creation.
+	// Check if this is an edge creation. Update keeps id in the body
+	// (unlike classify/resolve) because the property-update path
+	// needs it for the URL but the edge-creation path doesn't, and
+	// we do the branching after the lookup; using extractRequiredID
+	// would prematurely delete from the map.
 	if linkTo, ok := input["link_to"].(string); ok && linkTo != "" {
 		edgeBody := map[string]any{
 			"target_id": linkTo,

@@ -28,24 +28,14 @@ func init() {
 }
 
 func runClassify(cmd *cobra.Command, args []string) error {
-	var input map[string]any
-	if classifyFile != "" {
-		if err := readInputJSON(classifyFile, &input, defaultLimits()); err != nil {
-			return writeError("input_error", err.Error(), true)
-		}
-	} else {
-		if err := readStdinJSON(&input, defaultLimits()); err != nil {
-			return writeError("input_error", err.Error(), true)
-		}
+	input, err := readCommandInput(classifyFile)
+	if err != nil {
+		return err
 	}
-
-	id, _ := input["id"].(string)
-	if id == "" {
-		return writeError("missing_field", "id is required", true)
+	id, err := extractRequiredID(input)
+	if err != nil {
+		return err
 	}
-
-	// Remove id from body -- it goes in the URL.
-	delete(input, "id")
 
 	resp, err := serverPost(fmt.Sprintf("/v1/records/%s/classify", url.PathEscape(id)), input)
 	if err != nil {

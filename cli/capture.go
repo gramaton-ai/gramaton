@@ -34,17 +34,10 @@ func init() {
 }
 
 func runCapture(cmd *cobra.Command, args []string) error {
-	// Read the input (from file or stdin) using the existing v0.1 reader.
 	// The server accepts the same JSON shape via POST /v1/records.
-	var input map[string]any
-	if captureFile != "" {
-		if err := readInputJSON(captureFile, &input, defaultLimits()); err != nil {
-			return fmt.Errorf("input_error: %s", err)
-		}
-	} else {
-		if err := readStdinJSON(&input, defaultLimits()); err != nil {
-			return fmt.Errorf("input_error: %s", err)
-		}
+	input, err := readCommandInput(captureFile)
+	if err != nil {
+		return err
 	}
 
 	resp, err := serverPost("/v1/records", input)

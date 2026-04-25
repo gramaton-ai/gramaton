@@ -25,6 +25,31 @@ func readInputJSON(filePath string, target any, limits config.LimitsConfig) erro
 	return readStdinJSON(target, limits)
 }
 
+// readCommandInput is the shared file-or-stdin reader for record-shaped
+// CLI subcommands (capture, classify, update, resolve). Returns the
+// parsed map or a writeError-formatted error so the caller can `return
+// err` directly. Wraps readInputJSON with the standard error code +
+// retryable flag the four commands had been duplicating inline.
+func readCommandInput(filePath string) (map[string]any, error) {
+	var input map[string]any
+	if err := readInputJSON(filePath, &input, defaultLimits()); err != nil {
+		return nil, writeError("input_error", err.Error(), true)
+	}
+	return input, nil
+}
+
+// extractRequiredID pops the "id" field off input, returning the id or
+// a writeError-formatted "missing_field" error if absent/empty. Used
+// by classify/update/resolve which thread the id into the URL path.
+func extractRequiredID(input map[string]any) (string, error) {
+	id, _ := input["id"].(string)
+	if id == "" {
+		return "", writeError("missing_field", "id is required", true)
+	}
+	delete(input, "id")
+	return id, nil
+}
+
 // readFileJSON reads and parses JSON from a file with the same validation
 // as readStdinJSON. Only accepts files inside the gramaton temp directory.
 // Deletes the file after successful parse.

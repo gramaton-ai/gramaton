@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CLI record subcommands share two new helpers; mcp_proxy split was
+  already done.** P2-14 had two complaints: cli/mcp_proxy.go monolith
+  (already split into 7 cluster files during T-02 -- one piece of the
+  tracker is stale), and ~80% structural duplication across capture/
+  classify/update/resolve. Added two helpers in `cli/input.go`:
+  `readCommandInput(filePath)` (file-or-stdin reader returning
+  writeError-formatted errors) and `extractRequiredID(input)` (pop
+  the "id" field with missing_field error if absent). Migrated
+  capture, classify, resolve, update; capture's previous
+  `fmt.Errorf("input_error: %s", ...)` shape now matches the
+  others' `writeError("input_error", ...)`. Net ~30 LOC saved.
+  Skipped: branch.go's 5 subcommands -- each is 6-8 lines of
+  serverGet/Post/Delete + writeError + printEnvelope. The
+  consolidation would replace clear short functions with a
+  closure-passing helper; not worth the indirection. (P2-14.)
+
 - **Server bootstrap drift fixed; Run() and StartHTTP() share helpers.**
   Pre-fix, `server.Run()` and `server.StartHTTP()` had ~50 lines of
   near-identical bootstrap (self-heal goroutine, curation runner,
