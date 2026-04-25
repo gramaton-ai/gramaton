@@ -261,6 +261,68 @@ func TestGCKeepsMinCommits(t *testing.T) {
 	}
 }
 
+// TestGCRefusesToSweepWhenTreeChunkCorrupt pins the safety invariant:
+// when GC's mark phase encounters an unreadable or corrupt prolly tree
+// chunk, descendants of that subtree may not get marked, and a
+// downstream sweep would silently delete live data. Pre-fix, the
+// markProllyTree path swallowed Read/Unmarshal errors and let GC
+// proceed. Post-fix, it increments result.Errors and GC short-circuits
+// before phase 2 with DeletedCount=0.
+func TestGCRefusesToSweepWhenTreeChunkCorrupt(t *testing.T) {
+	s := tempGCStore(t)
+	now := time.Now().UTC()
+
+	// Build a commit with a real prolly tree.
+	commitHash, _ := makeCommit(t, s, "", now, "tipped", 3)
+
+	// Load the commit, reach into its tree, and corrupt one of the
+	// leaf-tree chunks by overwriting it with junk that won't
+	// json-unmarshal as a ProllyNode. We need to make the corruption
+	// targeted so the corruption flag fires (not miss-because-already-
+	// visited). Simulate by writing a chunk whose hash equals the
+	// node tree root but whose content is non-JSON garbage. We
+	// achieve that by deleting the chunk and rewriting under the
+	// same hash via direct file write -- not portable -- so instead,
+	// take the simpler route: fabricate a fresh commit that points
+	// at a non-existent node tree root. Mark phase fails to read
+	// the tree, surfaces Errors++, GC refuses to sweep.
+	badCommit := GCCommit{
+		Parent:       "",
+		Timestamp:    now,
+		NodeTreeRoot: "0000000000000000000000000000000000000000000000000000000000000000",
+	}
+	badData, err := json.Marshal(badCommit)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	badHash, err := s.Write(badData)
+	if err != nil {
+		t.Fatalf("Write bad commit: %v", err)
+	}
+	_ = commitHash // keep the realistic commit alive; not the focus
+
+	// Add an orphan chunk that GC would normally delete.
+	orphan, _ := s.Write([]byte("orphan that should NOT be swept"))
+
+	result, err := s.GC(GCOptions{
+		CommitLoader: commitLoader(s),
+		BranchTips:   func() []string { return []string{badHash} },
+		HeadHash:     badHash,
+	})
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	if result.Errors == 0 {
+		t.Fatal("expected Errors > 0 when tree chunk is unreadable")
+	}
+	if result.DeletedCount != 0 {
+		t.Fatalf("GC must NOT sweep when marking incomplete; deleted %d", result.DeletedCount)
+	}
+	if !s.Has(orphan) {
+		t.Fatal("orphan chunk was deleted despite incomplete marking -- live data could have been swept")
+	}
+}
+
 func TestGCLegacyIndexRoots(t *testing.T) {
 	s := tempGCStore(t)
 	now := time.Now().UTC()

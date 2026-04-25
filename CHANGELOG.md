@@ -7,6 +7,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Storage GC now refuses to sweep when prolly-tree marking is
+  incomplete.** Pre-fix, `markProllyTree` swallowed `Read` and
+  `json.Unmarshal` failures and returned silently; the recursive
+  walk skipped that subtree's descendants. The downstream sweep
+  in phase 2 would then delete those (legitimately reachable)
+  chunks, silently destroying live data. Post-fix, `markProllyTree`
+  surfaces failures via `result.Errors++`, and the main `GC`
+  function short-circuits to `result, nil` (DeletedCount=0,
+  ReachableCount populated up to the failure) when `Errors > 0`
+  after the mark phase. The operator should investigate
+  (`gramaton verify`, restore from backup) before retrying.
+  `markFromTip` and `markCommitChunks` thread the `*GCResult` to
+  reach `markProllyTree`. Regression test
+  `TestGCRefusesToSweepWhenTreeChunkCorrupt` pins the invariant by
+  pointing a commit at a non-existent NodeTreeRoot, then asserting
+  Errors > 0, DeletedCount == 0, and that an orphan chunk
+  survives. (P2-03 sub-fix 3.)
+
 ### Changed
 
 - **Search internals tightened across five small fixes from P2-05.**

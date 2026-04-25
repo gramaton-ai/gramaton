@@ -87,12 +87,22 @@ func (s *Store) GC(opts GCOptions) (*GCResult, error) {
 	}
 
 	for _, tipHash := range tips {
-		if err := s.markFromTip(tipHash, cutoff, opts.MinKeepCommits, reachable, opts.CommitLoader); err != nil {
+		if err := s.markFromTip(tipHash, cutoff, opts.MinKeepCommits, reachable, opts.CommitLoader, result); err != nil {
 			return nil, fmt.Errorf("storage gc: mark from tip %s: %w", tipHash[:12], err)
 		}
 	}
 
 	result.ReachableCount = len(reachable)
+
+	// Refuse to sweep if marking incomplete: a corrupt or unreadable
+	// tree subtree means some live chunks may be unmarked, and
+	// proceeding to phase 2 would delete them. The operator should
+	// investigate (gramaton verify, restore from backup) before
+	// retrying GC. Phase 1 marking errors are recorded in
+	// result.Errors so the caller can decide how to surface this.
+	if result.Errors > 0 {
+		return result, nil
+	}
 
 	// Phase 2: List all chunks and sweep unreachable ones.
 	allHashes, err := s.List()
@@ -125,7 +135,8 @@ func (s *Store) GC(opts GCOptions) (*GCResult, error) {
 // markFromTip walks the commit chain from a branch tip backward,
 // marking all reachable CAS chunks. Stops when it reaches a commit
 // older than the cutoff (after keeping at least minKeep commits).
-func (s *Store) markFromTip(tipHash string, cutoff time.Time, minKeep int, reachable map[string]struct{}, loadCommit func(string) (*GCCommit, error)) error {
+// Tree-walk failures during marking are surfaced via result.Errors.
+func (s *Store) markFromTip(tipHash string, cutoff time.Time, minKeep int, reachable map[string]struct{}, loadCommit func(string) (*GCCommit, error), result *GCResult) error {
 	hash := tipHash
 	kept := 0
 
@@ -151,7 +162,7 @@ func (s *Store) markFromTip(tipHash string, cutoff time.Time, minKeep int, reach
 		kept++
 
 		// Mark all chunks reachable from this commit.
-		s.markCommitChunks(commit, reachable)
+		s.markCommitChunks(commit, reachable, result)
 
 		hash = commit.Parent
 	}
@@ -160,13 +171,15 @@ func (s *Store) markFromTip(tipHash string, cutoff time.Time, minKeep int, reach
 
 // markCommitChunks marks all CAS chunks referenced by a commit:
 // prolly tree nodes (recursive), leaf data chunks, and index blobs.
-func (s *Store) markCommitChunks(c *GCCommit, reachable map[string]struct{}) {
+// Tree-walk failures (unreadable or corrupt chunks) are surfaced as
+// result.Errors++ so GC can refuse to sweep when marking is incomplete.
+func (s *Store) markCommitChunks(c *GCCommit, reachable map[string]struct{}, result *GCResult) {
 	// Walk prolly trees (nodes and edges).
 	if c.NodeTreeRoot != "" {
-		s.markProllyTree(c.NodeTreeRoot, reachable, 0)
+		s.markProllyTree(c.NodeTreeRoot, reachable, 0, result)
 	}
 	if c.EdgeTreeRoot != "" {
-		s.markProllyTree(c.EdgeTreeRoot, reachable, 0)
+		s.markProllyTree(c.EdgeTreeRoot, reachable, 0, result)
 	}
 
 	// Mark legacy index blobs (may be empty after sidecar migration).
@@ -183,7 +196,13 @@ func (s *Store) markCommitChunks(c *GCCommit, reachable map[string]struct{}) {
 // markProllyTree recursively walks a prolly tree node, marking all
 // chunk hashes as reachable. For leaf nodes, it also marks leaf
 // value hashes (individual node/edge data chunks).
-func (s *Store) markProllyTree(hash string, reachable map[string]struct{}, depth int) {
+//
+// Read or unmarshal failures increment result.Errors instead of
+// crashing GC. The caller (GC) refuses to sweep when Errors > 0
+// after the mark phase -- a corrupt subtree means we cannot safely
+// distinguish reachable from unreachable, and proceeding would
+// risk deleting live data.
+func (s *Store) markProllyTree(hash string, reachable map[string]struct{}, depth int, result *GCResult) {
 	if depth > maxTreeDepth {
 		return
 	}
@@ -195,12 +214,14 @@ func (s *Store) markProllyTree(hash string, reachable map[string]struct{}, depth
 
 	data, err := s.Read(hash)
 	if err != nil {
-		return // chunk missing or corrupt -- skip, don't crash GC
+		result.Errors++
+		return
 	}
 
 	var node ProllyNode
 	if err := json.Unmarshal(data, &node); err != nil {
-		return // corrupt node -- skip
+		result.Errors++
+		return
 	}
 
 	if node.Leaf {
@@ -214,7 +235,7 @@ func (s *Store) markProllyTree(hash string, reachable map[string]struct{}, depth
 		// Internal: values are child node hashes.
 		for _, e := range node.Entries {
 			if e.Value != "" {
-				s.markProllyTree(e.Value, reachable, depth+1)
+				s.markProllyTree(e.Value, reachable, depth+1, result)
 			}
 		}
 	}
