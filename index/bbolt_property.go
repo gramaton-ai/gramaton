@@ -143,7 +143,7 @@ func (idx *BboltPropertyIndex) AddTx(tx *bolt.Tx, nodeID, key string, val graph.
 			slog.Error("bbolt property index: create str bucket", "key", key, "err", err)
 			return
 		}
-		sb.Put([]byte(nodeID), []byte(val.String()))
+		sb.Put([]byte(nodeID), []byte(val.StringValue()))
 	}
 
 	// Keyword index (string list type only).

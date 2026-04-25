@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Commit save split into `PrepareCommit` + `WriteCommit`; eliminates
+  per-save orphan commit chunk.** The previous flow called
+  `graph.SaveWithActions` (which wrote a commit chunk) and then
+  `graph.RewriteCommit` (which re-wrote the chunk after attaching
+  engine-managed index roots). Each save orphaned one commit JSON
+  blob in the store, recovered later by GC. The new
+  `graph.PrepareCommit` returns a `*Commit` with NodeTreeRoot and
+  EdgeTreeRoot populated but the commit chunk not yet written;
+  callers attach any extra fields and then call
+  `graph.WriteCommit`. `core.Engine.commitInternal` uses the new
+  pair, so a save now writes exactly one commit chunk. Dirty
+  tracking now clears in WriteCommit (after the chunk lands), so a
+  Prepare without a successful Write preserves dirty state for
+  retry. `RewriteCommit` is removed (sole caller migrated). Two
+  regression tests pin the deferred-hash/dirty contract and the
+  single-chunk landing. (P2-02 sub-fix 6.)
+
 - **Skill editorial touch-ups** (`new-operation`, `benchmark-extract`,
   `store-health`). `new-operation`'s done-check now explicitly chains
   to `gramaton-review` + `gramaton-security-review` first, then
@@ -51,6 +68,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refactor preserves, not just what changed.
 
 ### Fixed
+
+- **`graph.Save` rejects the lazy-mode footgun.** The full-save branch
+  iterates `g.nodes` directly via `sortedNodeIDs`, which only contains
+  the cache-resident set; entering this branch with a populated
+  `g.lastNodeTreeRoot` (i.e. lazy mode active) would silently emit a
+  partial commit that drops every uncached node. Save now refuses
+  loudly with an explicit error in this state. The legitimate
+  full-save path is only first-save before any commit exists, where
+  `g.nodes` is authoritative. Regression test pins the rejection.
+  Defensive guard against future caller-side bugs; no current code
+  path triggers the bad state. (P2-02 sub-fix 5.)
+
+- **`graph.Property.String()` no longer shadows `fmt.Stringer` and
+  panics on non-string values.** Previously the typed accessor
+  returned `p.str` and panicked for any other type, which meant any
+  `slog`/`fmt` call that formatted a Property with `%v` crashed the
+  server. The panicking accessor is renamed to `StringValue()`
+  (matching `Float64()`/`Int64()`/etc. as the typed-asserting
+  accessor); the new `String()` is a non-panicking `fmt.Stringer`
+  implementation that delegates to `FormatValue()`. Three production
+  callers in `index/property.go`, `index/bbolt_property.go`, and
+  `api/collections.go` migrated to `StringValue()`. Regression test
+  pins that `fmt.Sprintf("%v", prop)` returns a non-empty string for
+  every Property type. (P2-02 sub-fix 1.)
 
 - **Curation review-pass cleanups (post-P2-07 / P2-08 / P2-09 review).**
   Six follow-up fixes from a deep review of the P2-07/P2-08/P2-09

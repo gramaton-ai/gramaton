@@ -116,6 +116,58 @@ func TestDeleteNodeSelfEdge(t *testing.T) {
 	}
 }
 
+// TestNodeCountTracksAddDeleteCycles pins that NodeCount stays in sync
+// with the live node set across interleaved add/delete cycles in eager
+// mode. The tracker hypothesis (P2-02 sub-fix 4) was that nodeTotal
+// could drift below the true count, but current code increments
+// nodeTotal in AddNode and decrements in DeleteNode in both modes.
+// This test stays as a regression guard against that drift returning.
+func TestNodeCountTracksAddDeleteCycles(t *testing.T) {
+	g := New()
+
+	if got := g.NodeCount(); got != 0 {
+		t.Fatalf("fresh graph: NodeCount()=%d, want 0", got)
+	}
+
+	var ids []string
+	for range 5 {
+		n := g.AddNode(Properties{"content_full": StringProperty("a")})
+		ids = append(ids, n.ID)
+	}
+	if got := g.NodeCount(); got != 5 {
+		t.Fatalf("after 5 adds: NodeCount()=%d, want 5", got)
+	}
+
+	// Delete two -- count drops by exactly two.
+	if err := g.DeleteNode(ids[0]); err != nil {
+		t.Fatalf("DeleteNode: %v", err)
+	}
+	if err := g.DeleteNode(ids[1]); err != nil {
+		t.Fatalf("DeleteNode: %v", err)
+	}
+	if got := g.NodeCount(); got != 3 {
+		t.Fatalf("after 2 deletes: NodeCount()=%d, want 3", got)
+	}
+
+	// Add three more -- count is 6.
+	for range 3 {
+		g.AddNode(Properties{"content_full": StringProperty("b")})
+	}
+	if got := g.NodeCount(); got != 6 {
+		t.Fatalf("after 3 more adds: NodeCount()=%d, want 6", got)
+	}
+
+	// Delete all remaining.
+	for _, id := range g.AllNodeIDs() {
+		if err := g.DeleteNode(id); err != nil {
+			t.Fatalf("DeleteNode %s: %v", id, err)
+		}
+	}
+	if got := g.NodeCount(); got != 0 {
+		t.Fatalf("after deleting all: NodeCount()=%d, want 0", got)
+	}
+}
+
 func TestDeleteNonexistentNode(t *testing.T) {
 	g := New()
 	err := g.DeleteNode("nonexistent")

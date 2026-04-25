@@ -147,7 +147,7 @@ func (idx *MemoryPropertyIndex) Add(nodeID, key string, val graph.Property) {
 			byNode = make(map[string]string)
 			idx.strings[key] = byNode
 		}
-		byNode[nodeID] = val.String()
+		byNode[nodeID] = val.StringValue()
 	}
 
 	// Keyword index (string list type only).

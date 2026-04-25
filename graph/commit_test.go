@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,153 @@ func tempStorage(t *testing.T) *storage.Store {
 		t.Fatalf("storage.New: %v", err)
 	}
 	return s
+}
+
+// TestPrepareCommitDeferredHashAndDirty pins the contract that
+// PrepareCommit returns a *Commit with NodeTreeRoot/EdgeTreeRoot
+// populated but Hash empty (commit chunk not yet written) and that
+// dirty tracking is preserved until WriteCommit lands. This is the
+// invariant that lets engine attach index roots between Prepare and
+// Write without orphaning a commit chunk on every save.
+func TestPrepareCommitDeferredHashAndDirty(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	g.AddNode(Properties{"k": StringProperty("v")})
+
+	commit, err := g.PrepareCommit(s, "", "prep only", nil)
+	if err != nil {
+		t.Fatalf("PrepareCommit: %v", err)
+	}
+	if commit.Hash != "" {
+		t.Fatalf("PrepareCommit set Hash=%q, expected empty until WriteCommit", commit.Hash)
+	}
+	if commit.NodeTreeRoot == "" {
+		t.Fatalf("PrepareCommit did not populate NodeTreeRoot")
+	}
+	if !g.IsDirty() {
+		t.Fatalf("PrepareCommit cleared dirty before WriteCommit")
+	}
+
+	// Round-trip via WriteCommit: Hash set, commit chunk readable,
+	// dirty cleared.
+	commit, err = g.WriteCommit(s, commit)
+	if err != nil {
+		t.Fatalf("WriteCommit: %v", err)
+	}
+	if commit.Hash == "" {
+		t.Fatalf("WriteCommit did not set Hash")
+	}
+	if g.IsDirty() {
+		t.Fatalf("WriteCommit did not clear dirty")
+	}
+	if _, err := s.Read(commit.Hash); err != nil {
+		t.Fatalf("WriteCommit hash not readable from store: %v", err)
+	}
+}
+
+// TestPrepareCommitFollowedBySaveStaysSingleChunk pins the
+// engine-style flow: PrepareCommit + populate index roots +
+// WriteCommit produces exactly one commit chunk in the store. The
+// pre-refactor flow (Save -> attach -> RewriteCommit) wrote two
+// commit JSON blobs per save and orphaned the first. The test scans
+// every chunk in the store and counts those that JSON-unmarshal to
+// a Commit body, asserting delta == 1 across the Prepare+Write call.
+func TestPrepareCommitFollowedBySaveStaysSingleChunk(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+	g.AddNode(Properties{"k": StringProperty("v")})
+
+	before := countCommitChunks(t, s)
+
+	commit, err := g.PrepareCommit(s, "", "single chunk", nil)
+	if err != nil {
+		t.Fatalf("PrepareCommit: %v", err)
+	}
+	// Simulate engine attaching index roots.
+	commit.BM25FullRoot = "fakebm25"
+	commit.VecRoot = "fakevec"
+
+	commit, err = g.WriteCommit(s, commit)
+	if err != nil {
+		t.Fatalf("WriteCommit: %v", err)
+	}
+
+	after := countCommitChunks(t, s)
+	if delta := after - before; delta != 1 {
+		t.Fatalf("commit chunk delta = %d, want 1 (pre-refactor flow produced 2)", delta)
+	}
+
+	// The commit's Hash must read back with the index roots intact
+	// -- if the body changed between Prepare and Write, we'd have
+	// hashed the pre-attached payload.
+	loaded, err := LoadCommitMeta(s, commit.Hash)
+	if err != nil {
+		t.Fatalf("LoadCommitMeta: %v", err)
+	}
+	if loaded.BM25FullRoot != "fakebm25" || loaded.VecRoot != "fakevec" {
+		t.Fatalf("loaded commit missing attached index roots: BM25=%q Vec=%q",
+			loaded.BM25FullRoot, loaded.VecRoot)
+	}
+}
+
+// countCommitChunks scans the entire CAS and returns the number of
+// chunks whose body JSON-unmarshals to a Commit (Version==1, has a
+// non-zero Timestamp). Non-commit chunks (binary node/edge data,
+// prolly tree nodes, fake index payloads) fail unmarshal or lack
+// the required fields and are skipped.
+func countCommitChunks(t *testing.T, s *storage.Store) int {
+	t.Helper()
+	hashes, err := s.List()
+	if err != nil {
+		t.Fatalf("Store.List: %v", err)
+	}
+	n := 0
+	for _, h := range hashes {
+		data, err := s.Read(h)
+		if err != nil {
+			continue
+		}
+		var c Commit
+		if err := json.Unmarshal(data, &c); err != nil {
+			continue
+		}
+		if c.Version == 1 && !c.Timestamp.IsZero() {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSaveRejectsFullSaveWhenTreeRootPresent confirms the lazy-mode
+// guard fires: if Save lands in the full-save branch (empty hash
+// caches) but a prior tree root is set (i.e. lazy mode was active),
+// it must return an error rather than silently emit a partial commit
+// that drops every uncached node. This is a defensive guard against
+// a future caller-side bug -- the legitimate full-save path is only
+// reached on first save before any commit exists.
+func TestSaveRejectsFullSaveWhenTreeRootPresent(t *testing.T) {
+	g := New()
+	s := tempStorage(t)
+
+	// Seed and save once so a real tree root exists.
+	g.AddNode(Properties{"k": StringProperty("v")})
+	commit, err := g.Save(s, "", "seed")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if g.lastNodeTreeRoot == "" {
+		t.Fatalf("expected lastNodeTreeRoot to be set after first Save")
+	}
+
+	// Force the bad-state shape: hash caches empty (would route to
+	// full-save) AND tree root non-empty (lazy-mode invariant).
+	g.nodeHashes = map[string]string{}
+	g.edgeHashes = map[string]string{}
+
+	if _, err := g.Save(s, commit.Hash, "would silently drop nodes"); err == nil {
+		t.Fatalf("Save: expected error, got nil")
+	}
 }
 
 // TestSaveWithActionsRoundTrip confirms the D3 Actions field

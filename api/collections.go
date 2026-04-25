@@ -175,7 +175,7 @@ func extractFields(n *graph.Node) map[string]any {
 		name := strings.TrimPrefix(k, "field.")
 		switch v.Type {
 		case graph.TypeString:
-			fields[name] = v.String()
+			fields[name] = v.StringValue()
 		case graph.TypeFloat64:
 			fields[name] = v.Float64()
 		case graph.TypeBool:

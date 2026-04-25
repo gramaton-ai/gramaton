@@ -101,9 +101,15 @@ func BytesProperty(v []byte) Property {
 
 // Accessors. Each panics if called on the wrong type.
 
-func (p Property) String() string {
+// StringValue returns the underlying string. Panics if Type != TypeString.
+// Use Properties.GetString for a safe accessor that returns (value, ok).
+//
+// String (without Value) is the fmt.Stringer implementation and never
+// panics; reaching for the panicking variant from a fmt/log site is the
+// bug this rename was designed to prevent.
+func (p Property) StringValue() string {
 	if p.Type != TypeString {
-		panic(fmt.Sprintf("String() called on %s property", p.Type))
+		panic(fmt.Sprintf("StringValue() called on %s property", p.Type))
 	}
 	return p.str
 }
@@ -613,6 +619,13 @@ func sortedKeys(ps Properties) []string {
 		}
 	}
 	return keys
+}
+
+// String implements fmt.Stringer with a human-readable rendering of the
+// property value. Never panics. Use StringValue for the typed accessor
+// that asserts Type == TypeString.
+func (p Property) String() string {
+	return p.FormatValue()
 }
 
 // FormatValue returns a human-readable string representation of the property value.

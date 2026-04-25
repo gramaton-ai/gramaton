@@ -71,7 +71,33 @@ func (g *Graph) Save(s *storage.Store, parent string, message string, pCfg ...st
 // (commit is filterable by Message prefix only). Callers that emit
 // actions (api/ cluster, future curation/ cluster) invoke this
 // directly; engine.Save routes here via its variadic actions arg.
+//
+// SaveWithActions is the single-call form -- it composes PrepareCommit
+// and WriteCommit with no fields set in between. Callers (e.g. core
+// engine) that need to attach engine-managed index roots before the
+// commit chunk lands call PrepareCommit + WriteCommit directly to
+// avoid a per-save orphan commit chunk.
 func (g *Graph) SaveWithActions(s *storage.Store, parent string, message string, actions []CommitAction, pCfg ...storage.ProllyConfig) (*Commit, error) {
+	commit, err := g.PrepareCommit(s, parent, message, actions, pCfg...)
+	if err != nil {
+		return nil, err
+	}
+	return g.WriteCommit(s, commit)
+}
+
+// PrepareCommit persists all dirty/new graph state (nodes, edges,
+// prolly trees) into the store and returns a *Commit with
+// NodeTreeRoot and EdgeTreeRoot populated. The commit chunk itself
+// is NOT yet written -- the caller may set additional fields (e.g.
+// engine-managed index roots) on the returned commit, then call
+// WriteCommit to persist.
+//
+// PrepareCommit advances g.lastNodeTreeRoot and g.lastEdgeTreeRoot
+// so subsequent saves apply incremental updates against the freshly
+// persisted trees. ClearDirty runs in WriteCommit, after the commit
+// chunk lands -- not here -- so dirty state is preserved if the
+// caller fails between Prepare and Write.
+func (g *Graph) PrepareCommit(s *storage.Store, parent string, message string, actions []CommitAction, pCfg ...storage.ProllyConfig) (*Commit, error) {
 	var treeCfg storage.ProllyConfig
 	if len(pCfg) > 0 {
 		treeCfg = pCfg[0]
@@ -123,9 +149,20 @@ func (g *Graph) SaveWithActions(s *storage.Store, parent string, message string,
 			delete(g.edgeHashes, id)
 		}
 	} else {
-		// Full save: marshal all nodes and edges (first save or after
-		// branch switch). Populates the hash caches for future
-		// incremental saves.
+		// Full save: marshal all nodes and edges (first save before any
+		// commit exists). Populates the hash caches for future incremental
+		// saves.
+		//
+		// Guard: full save iterates g.nodes directly via sortedNodeIDs,
+		// which only contains the cache resident set. If we entered this
+		// branch with a backing tree root present (lazy mode), most nodes
+		// are uncached and would be silently dropped from the resulting
+		// commit. Refuse loudly rather than emit a partial commit. The
+		// only legitimate full-save path is first-save with no prior
+		// tree, where g.nodes is authoritative.
+		if g.lastNodeTreeRoot != "" || g.lastEdgeTreeRoot != "" {
+			return nil, fmt.Errorf("save: full-save path entered with a populated tree root (lazy mode); this would silently drop uncached nodes -- caller invariant broken")
+		}
 		g.nodeHashes = make(map[string]string, len(g.nodes))
 		for _, id := range sortedNodeIDs(g) {
 			n := g.nodes[id]
@@ -224,20 +261,33 @@ func (g *Graph) SaveWithActions(s *storage.Store, parent string, message string,
 		Actions:      actions,
 	}
 
-	commitData, err := json.Marshal(commit)
-	if err != nil {
-		return nil, fmt.Errorf("save: marshal commit: %w", err)
-	}
-	commitHash, err := s.Write(commitData)
-	if err != nil {
-		return nil, fmt.Errorf("save: write commit: %w", err)
-	}
-	commit.Hash = commitHash
+	return commit, nil
+}
 
-	// Clear dirty tracking after successful save.
+// WriteCommit serializes c, writes it as a content-addressed chunk,
+// sets c.Hash, and clears dirty tracking on success. Pair with
+// PrepareCommit -- typical flow is PrepareCommit, populate any
+// engine-managed fields (index roots), then WriteCommit. Calling
+// WriteCommit twice on the same commit writes two chunks and
+// orphans the first; the engine path writes once.
+func (g *Graph) WriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
+	c.Hash = "" // exclude prior hash from serialization
+	data, err := json.Marshal(c)
+	if err != nil {
+		return nil, fmt.Errorf("write commit: marshal: %w", err)
+	}
+	hash, err := s.Write(data)
+	if err != nil {
+		return nil, fmt.Errorf("write commit: %w", err)
+	}
+	c.Hash = hash
+
+	// Dirty tracking only clears once the commit chunk has durably
+	// landed -- a Prepare without a successful Write must leave the
+	// dirty/deleted sets alone so a retry re-marshals the same state.
 	g.ClearDirty()
 
-	return commit, nil
+	return c, nil
 }
 
 // LoadCommitMeta reads a commit's JSON from storage without mutating
@@ -256,23 +306,6 @@ func LoadCommitMeta(s *storage.Store, commitHash string) (*Commit, error) {
 	}
 	c.Hash = commitHash
 	return &c, nil
-}
-
-// RewriteCommit re-serializes a commit with updated fields (e.g.,
-// index roots) and returns the new commit with updated hash. The
-// old commit chunk remains in the store but is unreferenced.
-func RewriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
-	c.Hash = "" // clear so it doesn't affect serialization
-	data, err := json.Marshal(c)
-	if err != nil {
-		return nil, fmt.Errorf("rewrite commit: marshal: %w", err)
-	}
-	hash, err := s.Write(data)
-	if err != nil {
-		return nil, fmt.Errorf("rewrite commit: write: %w", err)
-	}
-	c.Hash = hash
-	return c, nil
 }
 
 // Load restores graph state from a commit. For v1 commits, nodes are

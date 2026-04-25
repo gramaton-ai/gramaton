@@ -400,12 +400,18 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 		}
 	}
 
-	commit, err := e.graph.SaveWithActions(e.store, e.headHash, message, actions, storage.ProllyConfig{
+	// PrepareCommit persists nodes/edges/trees and returns a *Commit
+	// with NodeTreeRoot+EdgeTreeRoot populated but the commit chunk
+	// not yet written. We attach engine-managed index roots before
+	// the single chunk write in WriteCommit -- this avoids the
+	// per-save orphan chunk that the prior write+rewrite flow
+	// produced. (P2-02 sub-fix 6.)
+	commit, err := e.graph.PrepareCommit(e.store, e.headHash, message, actions, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
 		SplitBits:       e.cfg.Storage.ProllySplitBits,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("save commit: %w", err)
+		return nil, fmt.Errorf("prepare commit: %w", err)
 	}
 
 	// Persist edge adjacency maps (only for MemoryEdgeStore).
@@ -418,15 +424,16 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 		}
 	}
 
-	// Attach index roots and re-serialize the commit.
+	// Attach engine-managed index roots, then write the single
+	// commit chunk.
 	commit.BM25FullRoot = bm25FullRoot
 	// BM25MediumRoot and BM25ShortRoot left empty (D12: single BM25 layer).
 	commit.VecRoot = vecRoot
 	commit.PropRoot = propRoot
 	commit.EdgeAdjRoot = edgeAdjRoot
-	commit, err = graph.RewriteCommit(e.store, commit)
+	commit, err = e.graph.WriteCommit(e.store, commit)
 	if err != nil {
-		return nil, fmt.Errorf("rewrite commit with indexes: %w", err)
+		return nil, fmt.Errorf("write commit: %w", err)
 	}
 
 	// Index the commit's timestamp for D7 temporal queries. Fires on

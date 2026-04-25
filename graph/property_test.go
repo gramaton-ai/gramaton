@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -12,15 +13,15 @@ func TestStringProperty(t *testing.T) {
 	if p.Type != TypeString {
 		t.Fatalf("expected TypeString, got %s", p.Type)
 	}
-	if p.String() != "hello" {
-		t.Fatalf("expected %q, got %q", "hello", p.String())
+	if p.StringValue() != "hello" {
+		t.Fatalf("expected %q, got %q", "hello", p.StringValue())
 	}
 }
 
 func TestStringPropertyEmpty(t *testing.T) {
 	p := StringProperty("")
-	if p.String() != "" {
-		t.Fatalf("expected empty string, got %q", p.String())
+	if p.StringValue() != "" {
+		t.Fatalf("expected empty string, got %q", p.StringValue())
 	}
 }
 
@@ -221,7 +222,7 @@ func TestAccessorPanics(t *testing.T) {
 		prop Property
 		fn   func(Property)
 	}{
-		{"String on Int64", Int64Property(1), func(p Property) { _ = p.String() }},
+		{"StringValue on Int64", Int64Property(1), func(p Property) { _ = p.StringValue() }},
 		{"Float64 on String", StringProperty("x"), func(p Property) { p.Float64() }},
 		{"Int64 on Bool", BoolProperty(true), func(p Property) { p.Int64() }},
 		{"Bool on Float64", Float64Property(1.0), func(p Property) { p.Bool() }},
@@ -238,6 +239,39 @@ func TestAccessorPanics(t *testing.T) {
 				}
 			}()
 			tc.fn(tc.prop)
+		})
+	}
+}
+
+// --- Property.String fmt.Stringer compliance ---
+
+// TestPropertyStringNeverPanics pins that Property.String() returns a
+// human-readable rendering for every type without panicking. Regression
+// guard: previously String() shadowed fmt.Stringer and panicked on any
+// non-TypeString value, so any "%v" log site that touched a Property
+// crashed the server.
+func TestPropertyStringNeverPanics(t *testing.T) {
+	cases := []Property{
+		StringProperty("hello"),
+		Float64Property(3.14),
+		Int64Property(42),
+		BoolProperty(true),
+		TimestampProperty(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		VectorProperty([]float32{1, 2, 3}),
+		StringListProperty([]string{"a", "b"}),
+		BytesProperty([]byte{0xff, 0x00}),
+	}
+	for _, p := range cases {
+		t.Run(p.Type.String(), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("String() panicked on %s: %v", p.Type, r)
+				}
+			}()
+			s := fmt.Sprintf("%v", p)
+			if s == "" {
+				t.Fatalf("String() returned empty for %s", p.Type)
+			}
 		})
 	}
 }
