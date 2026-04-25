@@ -197,12 +197,15 @@ targeted retry.
 
 - **Load questions/gold evidence into a collection.** Separate step
   after all sessions are in — uses `gramaton_collection_add_batch`
-  (P1-78) against a `longmemeval-s-questions` collection. Track as a
-  sibling skill or a follow-up task.
-- **Snapshot to ndjson.** Reproducibility artifact lives in a separate
-  `benchmark-snapshot` skill (future). Extraction and snapshotting are
-  decoupled so re-extraction doesn't force a re-snapshot.
-- **Run eval.** `benchmark-eval` skill (future).
+  (P1-78) against a `longmemeval-s-questions` collection.
+- **Snapshot to ndjson.** Reproducibility artifact is a separate
+  pass; extraction and snapshotting are decoupled so re-extraction
+  doesn't force a re-snapshot.
+- **Run eval.** Eval is a separate pass against the populated
+  bench store.
+
+These are sibling tasks, not promised future skills — they happen
+on the user's drive when needed.
 
 ## Gotchas
 

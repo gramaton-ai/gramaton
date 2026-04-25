@@ -68,4 +68,4 @@ In `server/bindings_<cluster>_test.go`:
 
 ## Done check
 
-Run `pre-merge-check` skill before declaring finished.
+Run `gramaton-review` and `gramaton-security-review`, then `pre-merge-check`, before declaring finished. The mechanical gate alone won't catch convention slips or behavior-preservation gaps — the reviews are where those surface.

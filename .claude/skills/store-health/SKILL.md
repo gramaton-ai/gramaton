@@ -5,7 +5,23 @@ description: Use to diagnose the health of a Gramaton knowledge store. Aggregate
 
 # store-health
 
-One report, seven probes, clear recommendations. Use MCP tools, not the CLI, unless MCP is unavailable.
+## Purpose
+
+Single-call diagnostic audit of a Gramaton knowledge store. Bundles seven probes — total stats, pending classification, orphans, duplicates, stale temporal records, refuted/expiring records, heavily-connected concept candidates — into one structured report with actionable recommendations.
+
+The value over running `gramaton_stats` plus a few ad-hoc searches is the **cross-probe synthesis**: pending count interpreted against autonomous-curation availability ("pending > 0 AND autonomous: false → run curation-sweep"); orphan count interpreted against age ("many AGED orphans → capture pipeline isn't linking, investigate"); duplicate clusters interpreted against the auto-supersession threshold ("pre-existing pre-0.92 duplicates → optional dedup pass with consent"). Raw probe output gives you numbers; this skill gives you what to do.
+
+When NOT to use:
+- You only need one stat (use `gramaton_stats` directly).
+- You're mid-task and don't want a context-eating audit (run at task boundaries).
+- The store is brand new with under ~50 records (signals will be noisy and unactionable).
+
+When TO use:
+- User asks "is my store healthy?", "audit the store", or any general health question.
+- After a substantial ingest pass (benchmark extraction, bulk import) to confirm the store landed cleanly.
+- Periodically as a maintenance check on a long-lived store.
+
+Output is one structured report. Use MCP tools, not the CLI, unless MCP is unavailable.
 
 ## Sequence
 

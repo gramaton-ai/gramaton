@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Skill editorial touch-ups** (`new-operation`, `benchmark-extract`,
+  `store-health`). `new-operation`'s done-check now explicitly chains
+  to `gramaton-review` + `gramaton-security-review` first, then
+  `pre-merge-check`, matching the new "always run reviews first"
+  guidance. `benchmark-extract`'s "What this skill does NOT do"
+  section drops the speculative `(future)` skill names — siblings
+  are described as user-driven separate passes, not promised future
+  skills. `store-health` gets an explicit Purpose section at the
+  top describing what the skill provides over raw probe output
+  (cross-probe synthesis with actionable recommendations) and
+  When-to-use vs When-NOT-to-use guidance.
+
 - **Review skills (`gramaton-review`, `gramaton-security-review`,
   `pre-merge-check`) hardened against the bug shapes the post-P2-07
   review caught.** Two HIGH regressions of stated intent shipped past
