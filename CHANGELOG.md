@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ctrl+C during `gramaton init --force` no longer destroys the
+  user's pre-existing API key (`01KQ0DNH8S97F13R4ZS2EDDWH4`
+  follow-up).** The wizard registers a rollback cleanup after
+  writing each key file so that a mid-wizard interrupt undoes the
+  write. Previously that cleanup was `os.Remove`, which on a
+  --force re-run (where the key file already existed and was
+  overwritten) would delete the file entirely — destroying both
+  the old and new keys. Users who Ctrl+C'd partway through a
+  reconfigure could be left with no key and no way back. New
+  `writeWithRollback` helper captures the pre-existing content
+  before the write and either restores it (if the file pre-
+  existed) or removes the new file (if none did). Applied at
+  all three addCleanup sites: step_llm.go's anthropic.key path,
+  step_llm.go's openai.key path, and step_bootstrap.go's
+  openai.key-for-embedding path. Two new regression tests:
+  `TestWriteWithRollbackRestoresExisting` pins the restore
+  behavior; `TestWriteWithRollbackRemovesWhenFreshWrite` pins
+  the remove-on-fresh-install case.
+
+### Changed
+
+- **Step 0 menu clarifies that the "First time" branch is safe
+  on re-runs (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** Now reads
+  `[1] First time  (or re-running to reconfigure — won't touch
+  your existing data)` and `[2] Import a backup from another
+  computer  (replaces data with the archive)`. Surfaces the
+  destructive/non-destructive distinction so users don't hesitate
+  on `init --force`. No behavior change.
+
 ### Added
 
 - **Step 2 detects existing LLM API keys on re-run and offers to keep

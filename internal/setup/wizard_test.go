@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -158,5 +159,71 @@ func TestWizardFreshPathSkipEverything(t *testing.T) {
 	}
 	if cfg.LLM.Provider != "" {
 		t.Errorf("expected empty LLM.Provider, got %q", cfg.LLM.Provider)
+	}
+}
+
+// TestWriteWithRollbackRestoresExisting pins the --force-re-run
+// safety guarantee: if a key file exists before the wizard overwrites
+// it, a cleanup must restore the ORIGINAL content rather than delete
+// the file. The naive `os.Remove`-on-rollback pattern (pre-fix)
+// destroyed both the old and new keys on Ctrl+C.
+func TestWriteWithRollbackRestoresExisting(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := tmpDir + "/anthropic.key"
+	original := []byte("sk-ant-original-key\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Minimal wizard scaffold — we're only exercising the cleanup
+	// registration, not the prompt flow.
+	wiz := New(NewScriptedPrompter(), NewWriter(&bytes.Buffer{}),
+		&config.Config{}, tmpDir+"/config.yaml", tmpDir)
+
+	// Simulate the replace-with-new-key path: overwrite with new.
+	newKey := []byte("sk-ant-new-key-from-forced-init\n")
+	if err := wiz.writeWithRollback(path, newKey, 0o600); err != nil {
+		t.Fatalf("writeWithRollback: %v", err)
+	}
+	gotNew, _ := os.ReadFile(path)
+	if string(gotNew) != string(newKey) {
+		t.Errorf("after write: file = %q, want %q", gotNew, newKey)
+	}
+
+	// Simulate Ctrl+C firing cleanups.
+	wiz.runCleanups()
+
+	// Original key must be restored (not deleted).
+	restored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("file missing after rollback — existing key destroyed: %v", err)
+	}
+	if string(restored) != string(original) {
+		t.Errorf("rollback didn't restore original:\n  got:  %q\n  want: %q", restored, original)
+	}
+}
+
+// TestWriteWithRollbackRemovesWhenFreshWrite verifies the opposite
+// case: if the file did NOT exist before, rollback deletes the new
+// file (preserves the clean-slate state).
+func TestWriteWithRollbackRemovesWhenFreshWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := tmpDir + "/anthropic.key"
+
+	wiz := New(NewScriptedPrompter(), NewWriter(&bytes.Buffer{}),
+		&config.Config{}, tmpDir+"/config.yaml", tmpDir)
+
+	// Fresh install: no pre-existing file.
+	if err := wiz.writeWithRollback(path, []byte("sk-ant-new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
+
+	wiz.runCleanups()
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("fresh-install rollback should remove the file, got err = %v", err)
 	}
 }

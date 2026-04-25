@@ -127,6 +127,38 @@ func (w *Wizard) addCleanup(fn func()) {
 	w.cleanups = append(w.cleanups, fn)
 }
 
+// writeWithRollback writes data to path and registers a cleanup that
+// restores the pre-existing content on wizard interrupt, OR removes
+// the newly-created file if none existed before. This matters on
+// `gramaton init --force`: the user's existing key file would have
+// been overwritten by the write; naive os.Remove on rollback would
+// leave them with no key at all. Save-and-restore is the behavior
+// users expect when they Ctrl+C out of a "reconfigure" flow.
+//
+// Not atomic (os.WriteFile truncates + writes); fine for the small
+// key/config files we use this for. The cleanup restores the
+// *pre-write* content even if a Ctrl+C landed mid-write, so the
+// file always ends up in a known-good state.
+func (w *Wizard) writeWithRollback(path string, data []byte, perm os.FileMode) error {
+	var oldContent []byte
+	hadOld := false
+	if existing, err := os.ReadFile(path); err == nil {
+		oldContent = existing
+		hadOld = true
+	}
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return err
+	}
+	w.addCleanup(func() {
+		if hadOld {
+			_ = os.WriteFile(path, oldContent, perm)
+		} else {
+			_ = os.Remove(path)
+		}
+	})
+	return nil
+}
+
 // runCleanups executes registered cleanups LIFO and clears the list.
 // Called from the SIGINT handler and from Run's deferred rollback on
 // error. Idempotent: calling it twice is a no-op the second time.

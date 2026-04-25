@@ -215,14 +215,15 @@ func (w *Wizard) llmAnthropic(ctx context.Context) error {
 	}
 
 	// keyPath already resolved at top of function.
-	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
+	// writeWithRollback: if the wizard is interrupted (Ctrl+C, error
+	// in a later step) before Step 5 commits, restores the pre-
+	// existing key file or removes the new one if none existed. On
+	// --force re-run where a key file was already present, this
+	// preserves the user's previous key rather than leaving them
+	// with nothing.
+	if err := w.writeWithRollback(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
-	// Register cleanup: if the wizard is interrupted (Ctrl+C, error
-	// in a later step) before Step 5 commits, remove the orphan key
-	// file. Otherwise the user sees a half-wired install with a key
-	// file but no config.yaml referencing it.
-	w.addCleanup(func() { _ = os.Remove(keyPath) })
 	w.writer.Check(fmt.Sprintf("Saved to %s (0600 perms -- only you can read it)", keyPath))
 
 	// Update config in-memory; we save to disk later (either in
@@ -347,11 +348,13 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 		return w.llmSkip(ctx)
 	}
 
-	// keyPath already resolved at top of function.
-	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0o600); err != nil {
+	// keyPath already resolved at top of function. writeWithRollback
+	// preserves an existing key file across Ctrl+C on --force re-runs
+	// (restores the pre-existing content; removes the new file only
+	// when none existed before).
+	if err := w.writeWithRollback(keyPath, []byte(key+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}
-	w.addCleanup(func() { _ = os.Remove(keyPath) })
 	w.writer.Check(fmt.Sprintf("Saved to %s (0600 perms)", keyPath))
 
 	w.cfg.LLM.Provider = "openai"
