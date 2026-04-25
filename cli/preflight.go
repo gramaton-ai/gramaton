@@ -69,12 +69,19 @@ const (
 )
 
 // preflightResult is what each check returns. name + message render
-// regardless; remediation only shows on warn/error.
+// regardless; fix hints only show on warn/error.
+//
+// fixCmd is an exact shell command the user can run to remediate;
+// printed as "Run: <cmd>" so it's unambiguous what to copy/paste.
+// fixNote is free-form prose for cases where there's no single
+// command (config edits, multi-step instructions, "ask your admin").
+// Both can be set: command first, prose second.
 type preflightResult struct {
-	name        string
-	status      preflightStatus
-	message     string
-	remediation string
+	name    string
+	status  preflightStatus
+	message string
+	fixCmd  string
+	fixNote string
 }
 
 func runPreflight(cmd *cobra.Command, args []string) error {
@@ -94,6 +101,12 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 		cfgErr = err
 	}
 
+	// Headline goes out first so users see activity even though the
+	// checks themselves haven't started yet — some (claude mcp list)
+	// shell out and have noticeable latency.
+	fmt.Fprintln(cmd.OutOrStdout(), "Gramaton preflight — checking environment...")
+	fmt.Fprintln(cmd.OutOrStdout())
+
 	// Run checks in a stable order. Config check runs first so users
 	// see "config not found / unparseable" before downstream checks
 	// noise the output up.
@@ -110,9 +123,6 @@ func runPreflight(cmd *cobra.Command, args []string) error {
 		results = append(results, checkPreflightHooks(cfgDir)...)
 	}
 	results = append(results, checkPreflightRecentErrors(cfgDir))
-
-	fmt.Fprintln(cmd.OutOrStdout(), "Gramaton preflight")
-	fmt.Fprintln(cmd.OutOrStdout())
 	var warnCount, errCount int
 	for _, r := range results {
 		printPreflightResult(cmd.OutOrStdout(), r)
@@ -154,8 +164,15 @@ func printPreflightResult(w io.Writer, r preflightResult) {
 		icon = "○"
 	}
 	fmt.Fprintf(w, "  %s %s: %s\n", icon, r.name, r.message)
-	if r.remediation != "" && (r.status == statusWarn || r.status == statusError) {
-		fmt.Fprintf(w, "      → %s\n", r.remediation)
+	// Only warn/error get fix hints. Command first (the
+	// copy-pasteable thing), prose note after.
+	if r.status == statusWarn || r.status == statusError {
+		if r.fixCmd != "" {
+			fmt.Fprintf(w, "      → Run: %s\n", r.fixCmd)
+		}
+		if r.fixNote != "" {
+			fmt.Fprintf(w, "      → %s\n", r.fixNote)
+		}
 	}
 }
 
@@ -164,28 +181,29 @@ func printPreflightResult(w io.Writer, r preflightResult) {
 func checkPreflightConfig(cfgPath string, loadErr error) preflightResult {
 	if os.IsNotExist(loadErr) {
 		return preflightResult{
-			name:        "Config",
-			status:      statusError,
-			message:     fmt.Sprintf("not found at %s", cfgPath),
-			remediation: "Run `gramaton init` to create one.",
+			name:    "Config",
+			status:  statusError,
+			message: fmt.Sprintf("not found at %s", cfgPath),
+			fixCmd:  "gramaton init",
 		}
 	}
 	if loadErr != nil {
 		return preflightResult{
-			name:        "Config",
-			status:      statusError,
-			message:     fmt.Sprintf("failed to parse: %v", loadErr),
-			remediation: "Fix YAML syntax, or reset with `gramaton init --force`.",
+			name:    "Config",
+			status:  statusError,
+			message: fmt.Sprintf("failed to parse: %v", loadErr),
+			fixCmd:  "gramaton init --force",
+			fixNote: "Or fix the YAML syntax by hand.",
 		}
 	}
 	if runtime.GOOS != "windows" {
 		if info, err := os.Stat(cfgPath); err == nil {
 			if mode := info.Mode().Perm(); mode != 0o600 {
 				return preflightResult{
-					name:        "Config",
-					status:      statusWarn,
-					message:     fmt.Sprintf("loaded, but perms are %o (expected 0600)", mode),
-					remediation: fmt.Sprintf("chmod 600 %s", cfgPath),
+					name:    "Config",
+					status:  statusWarn,
+					message: fmt.Sprintf("loaded, but perms are %o (expected 0600)", mode),
+					fixCmd:  fmt.Sprintf("chmod 600 %s", cfgPath),
 				}
 			}
 		}
@@ -197,10 +215,11 @@ func checkPreflightDataDir(cfg config.Config) preflightResult {
 	info, err := os.Stat(cfg.DataDir)
 	if err != nil || !info.IsDir() {
 		return preflightResult{
-			name:        "Data directory",
-			status:      statusError,
-			message:     fmt.Sprintf("missing or not a directory: %s", cfg.DataDir),
-			remediation: fmt.Sprintf("mkdir -p %s, or re-run `gramaton init`.", cfg.DataDir),
+			name:    "Data directory",
+			status:  statusError,
+			message: fmt.Sprintf("missing or not a directory: %s", cfg.DataDir),
+			fixCmd:  fmt.Sprintf("mkdir -p %s", cfg.DataDir),
+			fixNote: "Or re-run `gramaton init`.",
 		}
 	}
 	// Writability test: drop a tiny file and remove it. Real runtime
@@ -209,10 +228,11 @@ func checkPreflightDataDir(cfg config.Config) preflightResult {
 	testPath := filepath.Join(cfg.DataDir, ".preflight-write-test")
 	if err := os.WriteFile(testPath, []byte{}, 0o600); err != nil {
 		return preflightResult{
-			name:        "Data directory",
-			status:      statusError,
-			message:     fmt.Sprintf("not writable: %v", err),
-			remediation: fmt.Sprintf("chmod u+w %s, or check disk space.", cfg.DataDir),
+			name:    "Data directory",
+			status:  statusError,
+			message: fmt.Sprintf("not writable: %v", err),
+			fixCmd:  fmt.Sprintf("chmod u+w %s", cfg.DataDir),
+			fixNote: "Or check disk space.",
 		}
 	}
 	_ = os.Remove(testPath)
@@ -228,18 +248,18 @@ func checkPreflightEmbedding(cfg config.Config) preflightResult {
 	case "openai":
 		if cfg.Embedding.APIKeyFile == "" {
 			return preflightResult{
-				name:        "Embedding",
-				status:      statusWarn,
-				message:     "OpenAI configured but api_key_file is empty",
-				remediation: "Re-run `gramaton init --force` to set the key file.",
+				name:    "Embedding",
+				status:  statusWarn,
+				message: "OpenAI configured but api_key_file is empty",
+				fixCmd:  "gramaton init --force",
 			}
 		}
 		if _, err := os.Stat(cfg.Embedding.APIKeyFile); err != nil {
 			return preflightResult{
-				name:        "Embedding",
-				status:      statusError,
-				message:     fmt.Sprintf("OpenAI key file missing: %s", cfg.Embedding.APIKeyFile),
-				remediation: "Re-run `gramaton init --force` to re-save the key.",
+				name:    "Embedding",
+				status:  statusError,
+				message: fmt.Sprintf("OpenAI key file missing: %s", cfg.Embedding.APIKeyFile),
+				fixCmd:  "gramaton init --force",
 			}
 		}
 		return preflightResult{name: "Embedding", status: statusOK, message: "OpenAI (cloud, key file present)"}
@@ -247,10 +267,11 @@ func checkPreflightEmbedding(cfg config.Config) preflightResult {
 		return preflightResult{name: "Embedding", status: statusOK, message: "AWS Bedrock (cloud)"}
 	case "":
 		return preflightResult{
-			name:        "Embedding",
-			status:      statusWarn,
-			message:     "disabled (BM25 keyword search still works; semantic search unavailable)",
-			remediation: "Run `gramaton init --force` and pick a provider in Step 1.",
+			name:    "Embedding",
+			status:  statusWarn,
+			message: "disabled (BM25 keyword search still works; semantic search unavailable)",
+			fixCmd:  "gramaton init --force",
+			fixNote: "Then pick a provider in Step 1.",
 		}
 	}
 	return preflightResult{
@@ -263,10 +284,11 @@ func checkPreflightEmbedding(cfg config.Config) preflightResult {
 func checkPreflightLLM(cfg config.Config) preflightResult {
 	if cfg.LLM.Provider == "" {
 		return preflightResult{
-			name:        "LLM",
-			status:      statusWarn,
-			message:     "not configured (curation runs in deterministic-only mode)",
-			remediation: "Run `gramaton init --force` and configure an LLM in Step 2.",
+			name:    "LLM",
+			status:  statusWarn,
+			message: "not configured (curation runs in deterministic-only mode)",
+			fixCmd:  "gramaton init --force",
+			fixNote: "Then configure an LLM in Step 2.",
 		}
 	}
 	switch cfg.LLM.Provider {
@@ -275,19 +297,19 @@ func checkPreflightLLM(cfg config.Config) preflightResult {
 			info, err := os.Stat(cfg.LLM.APIKeyFile)
 			if err != nil {
 				return preflightResult{
-					name:        "LLM",
-					status:      statusError,
-					message:     fmt.Sprintf("api_key_file missing: %s", cfg.LLM.APIKeyFile),
-					remediation: "Re-run `gramaton init --force` and re-save the key.",
+					name:    "LLM",
+					status:  statusError,
+					message: fmt.Sprintf("api_key_file missing: %s", cfg.LLM.APIKeyFile),
+					fixCmd:  "gramaton init --force",
 				}
 			}
 			if runtime.GOOS != "windows" {
 				if mode := info.Mode().Perm(); mode != 0o600 {
 					return preflightResult{
-						name:        "LLM",
-						status:      statusWarn,
-						message:     fmt.Sprintf("%s key file perms are %o (expected 0600)", cfg.LLM.Provider, mode),
-						remediation: fmt.Sprintf("chmod 600 %s", cfg.LLM.APIKeyFile),
+						name:    "LLM",
+						status:  statusWarn,
+						message: fmt.Sprintf("%s key file perms are %o (expected 0600)", cfg.LLM.Provider, mode),
+						fixCmd:  fmt.Sprintf("chmod 600 %s", cfg.LLM.APIKeyFile),
 					}
 				}
 			}
@@ -296,27 +318,27 @@ func checkPreflightLLM(cfg config.Config) preflightResult {
 		if cfg.LLM.APIKeyEnv != "" {
 			if os.Getenv(cfg.LLM.APIKeyEnv) == "" {
 				return preflightResult{
-					name:        "LLM",
-					status:      statusWarn,
-					message:     fmt.Sprintf("%s configured but env var %s is not set", cfg.LLM.Provider, cfg.LLM.APIKeyEnv),
-					remediation: fmt.Sprintf("export %s=...", cfg.LLM.APIKeyEnv),
+					name:    "LLM",
+					status:  statusWarn,
+					message: fmt.Sprintf("%s configured but env var %s is not set", cfg.LLM.Provider, cfg.LLM.APIKeyEnv),
+					fixCmd:  fmt.Sprintf("export %s=...", cfg.LLM.APIKeyEnv),
 				}
 			}
 			return preflightResult{name: "LLM", status: statusOK, message: fmt.Sprintf("%s (via env var %s)", cfg.LLM.Provider, cfg.LLM.APIKeyEnv)}
 		}
 		return preflightResult{
-			name:        "LLM",
-			status:      statusError,
-			message:     fmt.Sprintf("%s configured but no key source (api_key_file / api_key_env)", cfg.LLM.Provider),
-			remediation: "Re-run `gramaton init --force`.",
+			name:    "LLM",
+			status:  statusError,
+			message: fmt.Sprintf("%s configured but no key source (api_key_file / api_key_env)", cfg.LLM.Provider),
+			fixCmd:  "gramaton init --force",
 		}
 	case "bedrock":
 		if cfg.LLM.Region == "" {
 			return preflightResult{
-				name:        "LLM",
-				status:      statusWarn,
-				message:     "Bedrock configured but region is empty",
-				remediation: "Set llm.region in config.yaml.",
+				name:    "LLM",
+				status:  statusWarn,
+				message: "Bedrock configured but region is empty",
+				fixNote: "Set llm.region in config.yaml.",
 			}
 		}
 		return preflightResult{name: "LLM", status: statusOK, message: fmt.Sprintf("Bedrock + Anthropic (%s)", cfg.LLM.Region)}
@@ -330,18 +352,19 @@ func checkPreflightServer(cfgDir string) preflightResult {
 		// server.json missing → server cleanly stopped or never started.
 		// Not an error; just informational.
 		return preflightResult{
-			name:        "Server",
-			status:      statusWarn,
-			message:     "not running",
-			remediation: "Run `gramaton serve` to start it.",
+			name:    "Server",
+			status:  statusWarn,
+			message: "not running",
+			fixCmd:  "gramaton serve",
 		}
 	}
 	if !server.IsProcessAlive(info.PID) {
 		return preflightResult{
-			name:        "Server",
-			status:      statusWarn,
-			message:     fmt.Sprintf("server.json points at PID %d but the process isn't alive", info.PID),
-			remediation: fmt.Sprintf("Run `gramaton serve` to start, or `rm %s/server.json` to clear stale info.", cfgDir),
+			name:    "Server",
+			status:  statusWarn,
+			message: fmt.Sprintf("server.json points at PID %d but the process isn't alive", info.PID),
+			fixCmd:  "gramaton serve",
+			fixNote: fmt.Sprintf("Or `rm %s/server.json` to clear stale info first.", cfgDir),
 		}
 	}
 	return preflightResult{
@@ -362,10 +385,11 @@ func checkPreflightMCP(ctx context.Context) []preflightResult {
 		out, err := exec.CommandContext(ctx, claudeBin, "mcp", "list").CombinedOutput()
 		if err != nil {
 			results = append(results, preflightResult{
-				name:        "MCP (Claude Code)",
-				status:      statusWarn,
-				message:     "couldn't run `claude mcp list` to verify",
-				remediation: "Try the command manually. Re-run `gramaton init --force` to re-register if needed.",
+				name:    "MCP (Claude Code)",
+				status:  statusWarn,
+				message: "couldn't run `claude mcp list` to verify",
+				fixCmd:  "claude mcp list",
+				fixNote: "Run it manually to diagnose. Then `gramaton init --force` to re-register.",
 			})
 		} else {
 			found := false
@@ -383,10 +407,11 @@ func checkPreflightMCP(ctx context.Context) []preflightResult {
 				})
 			} else {
 				results = append(results, preflightResult{
-					name:        "MCP (Claude Code)",
-					status:      statusWarn,
-					message:     "gramaton not registered with Claude Code",
-					remediation: "Run `claude mcp add --scope user gramaton gramaton -- mcp` or re-run `gramaton init --force`.",
+					name:    "MCP (Claude Code)",
+					status:  statusWarn,
+					message: "gramaton not registered with Claude Code",
+					fixCmd:  "claude mcp add --scope user gramaton gramaton -- mcp",
+					fixNote: "Or re-run `gramaton init --force` to register.",
 				})
 			}
 		}
@@ -433,10 +458,10 @@ func checkPreflightHooks(cfgDir string) []preflightResult {
 		}
 		if nonExec > 0 {
 			results = append(results, preflightResult{
-				name:        fmt.Sprintf("Hooks (%s)", client),
-				status:      statusWarn,
-				message:     fmt.Sprintf("%d script(s) installed, %d not executable", count, nonExec),
-				remediation: fmt.Sprintf("chmod +x %s/*.sh", dir),
+				name:    fmt.Sprintf("Hooks (%s)", client),
+				status:  statusWarn,
+				message: fmt.Sprintf("%d script(s) installed, %d not executable", count, nonExec),
+				fixCmd:  fmt.Sprintf("chmod +x %s/*.sh", dir),
 			})
 			continue
 		}
@@ -467,10 +492,10 @@ func checkPreflightRecentErrors(cfgDir string) preflightResult {
 	f, err := os.Open(logPath)
 	if err != nil {
 		return preflightResult{
-			name:        "Recent log errors",
-			status:      statusWarn,
-			message:     fmt.Sprintf("couldn't open %s: %v", logPath, err),
-			remediation: fmt.Sprintf("ls -la %s", logPath),
+			name:    "Recent log errors",
+			status:  statusWarn,
+			message: fmt.Sprintf("couldn't open %s: %v", logPath, err),
+			fixCmd:  fmt.Sprintf("ls -la %s", logPath),
 		}
 	}
 	defer f.Close()
@@ -492,10 +517,10 @@ func checkPreflightRecentErrors(cfgDir string) preflightResult {
 	}
 	if errCount > 0 {
 		return preflightResult{
-			name:        "Recent log errors",
-			status:      statusWarn,
-			message:     fmt.Sprintf("%d ERROR line(s) in tail of %s", errCount, logPath),
-			remediation: fmt.Sprintf("tail -200 %s | grep ERROR", logPath),
+			name:    "Recent log errors",
+			status:  statusWarn,
+			message: fmt.Sprintf("%d ERROR line(s) in tail of %s", errCount, logPath),
+			fixCmd:  fmt.Sprintf("tail -200 %s | grep ERROR", logPath),
 		}
 	}
 	return preflightResult{name: "Recent log errors", status: statusOK, message: "no errors in tail of log"}

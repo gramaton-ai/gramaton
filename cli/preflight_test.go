@@ -19,8 +19,8 @@ func TestCheckPreflightConfigMissing(t *testing.T) {
 	if !strings.Contains(r.message, "not found") {
 		t.Errorf("message = %q, want contains 'not found'", r.message)
 	}
-	if !strings.Contains(r.remediation, "gramaton init") {
-		t.Errorf("remediation should mention init: %q", r.remediation)
+	if !strings.Contains(r.fixCmd, "gramaton init") {
+		t.Errorf("fixCmd should mention init: %q", r.fixCmd)
 	}
 }
 
@@ -278,15 +278,40 @@ func TestPrintPreflightResultShowsRemediationOnWarnError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			printPreflightResult(&buf, preflightResult{
-				name:        "Test",
-				status:      tc.status,
-				message:     "msg",
-				remediation: "do the thing",
+				name:    "Test",
+				status:  tc.status,
+				message: "msg",
+				fixCmd:  "do the thing",
 			})
 			has := strings.Contains(buf.String(), "do the thing")
 			if has != tc.shouldShow {
 				t.Errorf("output:\n%s\nwant remediation visible=%v", buf.String(), tc.shouldShow)
 			}
 		})
+	}
+}
+
+// TestPrintPreflightResultFormatsRunPrefix pins the user-facing
+// rendering: shell commands print as "→ Run: <cmd>" so they're
+// visually marked as copy-pasteable; prose notes print as plain
+// "→ <note>" without the Run prefix.
+func TestPrintPreflightResultFormatsRunPrefix(t *testing.T) {
+	var buf bytes.Buffer
+	printPreflightResult(&buf, preflightResult{
+		name:    "Test",
+		status:  statusWarn,
+		message: "needs fixing",
+		fixCmd:  "chmod 600 /path",
+		fixNote: "Then restart the server.",
+	})
+	out := buf.String()
+	if !strings.Contains(out, "→ Run: chmod 600 /path") {
+		t.Errorf("output should contain '→ Run: <cmd>':\n%s", out)
+	}
+	if !strings.Contains(out, "→ Then restart the server.") {
+		t.Errorf("output should contain prose note '→ <note>':\n%s", out)
+	}
+	if strings.Contains(out, "→ Run: Then restart") {
+		t.Errorf("prose note should NOT have Run: prefix:\n%s", out)
 	}
 }
