@@ -91,12 +91,30 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	staleCount := 0
 
+	// Single-pass collector: this loop replaces three previously-separate
+	// full-graph iterators (it / it2 / cnIt). Each iterator did its own
+	// O(N) scan of the node set with overlapping skip filters. At 100k
+	// nodes on a 1m curation cadence that was 3 full scans every 60s
+	// just for the read phase — wasted disk + CPU. The pass below
+	// branches on node_type to feed the right phase: concept nodes
+	// populate `existingConcepts` and run the concept-quality rule;
+	// non-concept records feed the manifest stats, lifecycle/orphan
+	// checks, and the two non-concept quality rules. Tracker
+	// 01KPEDCAAP4EV93ZS9GD0Z8C9E.
+	type qualityIssue struct {
+		nodeID string
+		fix    string // "concept_summary" | "extract_short" | "flag_embed"
+		short  string // new content_short for deterministic fixes
+	}
+	var qualityIssues []qualityIssue
+	existingConcepts := make(map[string]struct{})
+
 	it := g.NodeIterator()
 	for it.Next() {
 		n := it.Node()
 		id := n.ID
 
-		// Skip chunks and deleted records.
+		// Skip chunks and deleted records (common to all three phases).
 		if isChunkNode(g, id) {
 			continue
 		}
@@ -104,11 +122,31 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			continue
 		}
 
-		// Skip concept nodes.
-		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
+		nodeType, _ := n.Properties.GetString("node_type")
+		isConcept := nodeType == "concept"
+
+		contentFull, hasFullContent := n.Properties.GetString("content_full")
+		contentShort, hasShort := n.Properties.GetString("content_short")
+		_, hasEmbedShort := n.Properties["embedding_short"]
+
+		if isConcept {
+			// Concept-only branch: track existing keywords + concept-quality rule.
+			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
+				existingConcepts[kw] = struct{}{}
+				// Quality rule 1: concept node with label-as-summary.
+				if contentShort == kw && hasFullContent {
+					qualityIssues = append(qualityIssues, qualityIssue{
+						nodeID: id,
+						fix:    "concept_summary",
+						short:  conceptShortSummary(contentFull, 200),
+					})
+				}
+			}
 			continue
 		}
 
+		// Non-concept branch: manifest, lifecycle, orphans, non-concept
+		// quality rules.
 		manifest.TotalRecords++
 
 		// Track by knowledge type.
@@ -164,8 +202,25 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				orphanIDs = append(orphanIDs, id)
 			}
 		}
-	}
 
+		// Quality rule 2: content_short too short relative to content_full.
+		if hasShort && hasFullContent && len(contentShort) < 20 && len(contentFull) > 100 {
+			qualityIssues = append(qualityIssues, qualityIssue{
+				nodeID: id,
+				fix:    "extract_short",
+				short:  conceptShortSummary(contentFull, 200),
+			})
+			continue
+		}
+
+		// Quality rule 3: content_short exists but embedding_short is missing.
+		if hasShort && len(contentShort) > 10 && !hasEmbedShort {
+			qualityIssues = append(qualityIssues, qualityIssue{
+				nodeID: id,
+				fix:    "flag_embed",
+			})
+		}
+	}
 	it.Close()
 
 	manifest.TotalEdges = g.EdgeCount()
@@ -277,74 +332,9 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 	}
 
-	// Quality audit: find records with metadata gaps that hurt retrieval.
-	type qualityIssue struct {
-		nodeID string
-		fix    string // "concept_summary" | "extract_short" | "flag_embed"
-		short  string // new content_short for deterministic fixes
-	}
-	var qualityIssues []qualityIssue
-
-	it2 := g.NodeIterator()
-	for it2.Next() {
-		n := it2.Node()
-		id := n.ID
-		if isChunkNode(g, id) {
-			continue
-		}
-		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
-			continue
-		}
-
-		contentFull, hasFullContent := n.Properties.GetString("content_full")
-		contentShort, hasShort := n.Properties.GetString("content_short")
-		_, hasEmbedShort := n.Properties["embedding_short"]
-
-		// Rule 1: Concept node with label-as-summary.
-		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
-			if kw, ok := n.Properties.GetString("concept_keyword"); ok && contentShort == kw && hasFullContent {
-				qualityIssues = append(qualityIssues, qualityIssue{
-					nodeID: id,
-					fix:    "concept_summary",
-					short:  conceptShortSummary(contentFull, 200),
-				})
-				continue
-			}
-		}
-
-		// Rule 2: content_short too short relative to content_full.
-		if hasShort && hasFullContent && len(contentShort) < 20 && len(contentFull) > 100 {
-			// Short is suspiciously brief. Extract first sentence from full.
-			qualityIssues = append(qualityIssues, qualityIssue{
-				nodeID: id,
-				fix:    "extract_short",
-				short:  conceptShortSummary(contentFull, 200),
-			})
-			continue
-		}
-
-		// Rule 3: content_short exists but embedding_short is missing.
-		if hasShort && len(contentShort) > 10 && !hasEmbedShort {
-			qualityIssues = append(qualityIssues, qualityIssue{
-				nodeID: id,
-				fix:    "flag_embed",
-			})
-		}
-	}
-	it2.Close()
-
-	// Find existing concept nodes to avoid creating duplicates.
-	existingConcepts := make(map[string]struct{})
-	cnIt := g.NodeIterator()
-	for cnIt.Next() {
-		n := cnIt.Node()
-		if nt, ok := n.Properties.GetString("node_type"); ok && nt == "concept" {
-			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
-				existingConcepts[kw] = struct{}{}
-			}
-		}
-	}
-	cnIt.Close()
+	// Quality issues + existingConcepts are now collected in the single-
+	// pass loop at the top of this function (`it`). The previous `it2`
+	// and `cnIt` blocks have been folded in.
 
 	var newConcepts []ConceptCandidate
 	maxNewConcepts := cfg.LLMCuration.MaxConceptsPerRun // reuse as deterministic budget
@@ -705,9 +695,15 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 			continue
 		}
 
-		// Must be ephemeral.
+		// Temporality: allow unset or ephemeral. The previous
+		// `temp != "ephemeral"` requirement filtered to ~0 matches in
+		// practice — the captured filter above means the record has
+		// not been classified yet, so temporality is always unset (LLM
+		// classification is what assigns it). Treating unset+ephemeral
+		// as the GC-eligible band lets aged-out unclassified debris
+		// actually reach deletion. Tracker 01KPEDCAAP4EV93ZS9GD0Z8C9E.
 		temp, _ := n.Properties.GetString("temporality")
-		if temp != "ephemeral" {
+		if temp != "" && temp != "ephemeral" {
 			continue
 		}
 
@@ -820,9 +816,19 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 			}
 		}
 
-		// Check if update is needed.
+		// Check if update is needed. Pre-fix this used `count > 0` as
+		// a fall-through trigger which always fired once a concept had
+		// any inbound edge — so every concept with evidence got
+		// re-written every cycle, producing a hot write loop with no
+		// real change. Post-fix: only update when evidence_count
+		// actually changed OR last_evidence_at drifted (new edge from
+		// a source whose created_at exceeds the stored timestamp).
+		// Tracker 01KPEDCAAP4EV93ZS9GD0Z8C9E.
 		existingCount, _ := n.Properties.GetInt64("evidence_count")
-		if int64(count) != existingCount || count > 0 {
+		existingLatest, _ := n.Properties.GetTimestamp("last_evidence_at")
+		countChanged := int64(count) != existingCount
+		latestChanged := !latestEvidence.IsZero() && latestEvidence.After(existingLatest)
+		if countChanged || latestChanged {
 			updates = append(updates, conceptUpdate{
 				id:             id,
 				evidenceCount:  count,

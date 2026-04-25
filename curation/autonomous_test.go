@@ -2074,6 +2074,79 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 	}
 }
 
+// TestGenerateSummariesNonStructuralWithEdges pins P2-07 fix #4:
+// the unified edge walk distinguishes structural (chunk_of /
+// section_of) from semantic (related_to / supersedes / etc.) edges.
+// A record with semantic edges only is NOT structural and must hit
+// the Priority 1 (no-summary) path. Pre-refactor, the
+// `!isChunkNode` check ran first (one edge walk) and the section
+// check ran later (a second edge walk) — both walks paid the same
+// per-edge cost. The unified walk does it once.
+func TestGenerateSummariesNonStructuralWithEdges(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.BatchSize = 10
+
+	now := time.Now().UTC()
+
+	eng.Lock()
+	// Two unrelated processed records, then a third with no summary
+	// that links to both via related_to.
+	other1 := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("first related"),
+		"content_short":     graph.StringProperty("first"),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+	})
+	for k, v := range other1.Properties {
+		eng.PropIdx().Add(other1.ID, k, v)
+	}
+	other2 := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("second related"),
+		"content_short":     graph.StringProperty("second"),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+	})
+	for k, v := range other2.Properties {
+		eng.PropIdx().Add(other2.ID, k, v)
+	}
+	target := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Target record with two outbound related_to edges and no summary."),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(now),
+		// No content_short.
+	})
+	for k, v := range target.Properties {
+		eng.PropIdx().Add(target.ID, k, v)
+	}
+	eng.Graph().AddEdge(target.ID, other1.ID, "related_to", 0.7, nil)
+	eng.Graph().AddEdge(target.ID, other2.ID, "related_to", 0.6, nil)
+	eng.Save("test")
+	eng.Unlock()
+
+	llm := &mockLLM{responses: []string{"target summary from llm"}}
+
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	// Target must have hit Priority 1 (no-summary record) despite
+	// having related_to edges. Pre-fix this behaved correctly already
+	// (related_to is not a chunk_of edge); the test pins that the
+	// unified edge walk's `isStructural` flag correctly excludes
+	// related_to.
+	if result.SummariesGenerated != 1 {
+		t.Errorf("expected 1 summary generated for non-structural record with related_to edges, got %d", result.SummariesGenerated)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(target.ID)
+	got, _ := n.Properties.GetString("content_short")
+	if got != "target summary from llm" {
+		t.Errorf("expected target.content_short = %q, got %q", "target summary from llm", got)
+	}
+}
+
 func TestCreateConceptNodes(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

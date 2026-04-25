@@ -563,27 +563,39 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		}
 		content, hasContent := n.Properties.GetString("content_full")
 		summary, hasSummary := n.Properties.GetString("content_short")
+		if !hasContent || content == "" {
+			continue
+		}
 
-		// Priority 1: non-chunk records with no summary.
-		if !isChunkNode(g, id) && hasContent && !hasSummary && content != "" && len(batch) < batchSize {
+		// Single edge walk per node (was: two — once in isChunkNode for
+		// Priority 1, again for the section check in Priority 2). Now
+		// we enumerate edges once and capture both signals. Tracker
+		// 01KPEDCAAP4EV93ZS9GD0Z8C9E.
+		isStructural := false
+		isSection := false
+		for _, edge := range g.EdgesFrom(id) {
+			if !graph.IsStructuralEdge(edge.Type) {
+				continue
+			}
+			isStructural = true
+			if edge.Type == "section_of" {
+				isSection = true
+				break // section_of implies structural; no need to keep scanning
+			}
+		}
+
+		// Priority 1: non-structural record with no summary.
+		if !isStructural && !hasSummary && len(batch) < batchSize {
 			batch = append(batch, needsSummary{id: id, content: content})
 			continue
 		}
 
-		// Priority 2: section nodes with truncated summaries.
-		// Section nodes ARE structural children (isChunkNode returns true)
-		// so this must be checked separately.
-		if hasContent && hasSummary && content != "" {
-			isSection := false
-			for _, edge := range g.EdgesFrom(id) {
-				if edge.Type == "section_of" {
-					isSection = true
-					break
-				}
-			}
-			if isSection && len(summary) >= 150 && len(content) > len(summary) && strings.HasPrefix(content, summary) {
-				sectionCandidates = append(sectionCandidates, needsSummary{id: id, content: content})
-			}
+		// Priority 2: section node with a truncated summary (existing
+		// short is just a content-prefix slice, not a real summary).
+		// Chunk nodes hit isStructural but not isSection, so they
+		// fall through with no work.
+		if isSection && hasSummary && len(summary) >= 150 && len(content) > len(summary) && strings.HasPrefix(content, summary) {
+			sectionCandidates = append(sectionCandidates, needsSummary{id: id, content: content})
 		}
 	}
 	sumIt.Close()

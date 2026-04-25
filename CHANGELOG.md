@@ -9,6 +9,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Curation cycle: redundant full-graph iteration + dead GC criterion + always-fire enrichment trigger
+  (`01KPEDCAAP4EV93ZS9GD0Z8C9E`).** Four targeted fixes in
+  `curation/`:
+  (1) `RunDeterministic` now collects manifest stats, lifecycle
+  staleness, orphan candidates, quality issues, AND existingConcepts
+  in a single pass (was three separate full-graph iterators: it,
+  it2, cnIt). At 100k nodes on a 1m curation cadence that's 2 fewer
+  full scans every 60s — the read-phase work shrinks by ~67%.
+  Branching on `node_type == "concept"` keeps the per-category
+  filter logic correct.
+  (2) `collectGarbage` no longer requires `temporality == "ephemeral"`
+  for deletion eligibility. The captured-status filter immediately
+  above means the record has not been classified yet (LLM
+  classification is what assigns temporality), so the strict
+  ephemeral check filtered to ~0 matches in practice. Now: empty
+  OR ephemeral both pass — aged-out unclassified debris actually
+  reaches deletion. The other six GC criteria (captured + min age +
+  zero access + low confidence + zero importance + zero edges) are
+  unchanged. Five new regression tests pin: DeletesUnclassifiedDebris,
+  StillDeletesEphemeralDebris, RespectsDurableTemporality (durable /
+  temporal / immutable subcases), RespectsAgeFloor,
+  RespectsAccessCount.
+  (3) `enrichConcepts` no longer re-writes every concept with any
+  inbound edge every cycle. Pre-fix gate
+  `count != existingCount || count > 0` always fired once a concept
+  had any evidence — producing a hot write loop on no-change cycles.
+  Post-fix: only update when evidence_count changed OR
+  last_evidence_at drifted forward (new edge from a source whose
+  created_at exceeds the stored timestamp). Two new tests:
+  `TestEnrichConceptsSkipsRedundantUpdates` (commit chain stable
+  on no-op rerun) and `TestEnrichConceptsUpdatesWhenLatestEvidenceDrifts`.
+  (4) `generateSummaries` walks `EdgesFrom(id)` once per node
+  instead of twice. Pre-fix: `isChunkNode` ran an edge-walk for the
+  Priority 1 filter, then a second edge-walk checked for `section_of`
+  for Priority 2. Now a single loop captures both `isStructural`
+  (any chunk_of/section_of) and `isSection` (specifically section_of).
+  Behaviour-preserving: existing TestGenerateSummariesSkipsChunks
+  + TestGenerateSummariesForTruncatedSections continue to pass; new
+  TestGenerateSummariesNonStructuralWithEdges pins that records with
+  semantic edges (related_to) correctly hit Priority 1.
+
 - **Curation dedup safeguards + multi-dim embedding handling
   (`01KPEDCPMXR23V1SSGTNXGRS7T`).** Five targeted fixes in
   `curation/`:

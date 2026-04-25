@@ -715,6 +715,101 @@ func TestQualityAuditShortSummary(t *testing.T) {
 	}
 }
 
+// TestRunDeterministicSinglePassMixedNodes pins the P2-07 fix #1
+// invariant: the unified single-pass collector still produces the
+// right outputs across the three node categories (regular records,
+// concept nodes, deleted records) that the previous three separate
+// iterators each filtered differently. Specifically:
+//
+//   - regular records contribute to manifest.TotalRecords + quality
+//     rules 2/3 (extract_short, flag_embed)
+//   - concept nodes do NOT contribute to TotalRecords but DO populate
+//     existingConcepts (so duplicate-concept creation is suppressed)
+//     AND run the concept-quality rule
+//   - deleted records are skipped from all phases
+//
+// The previous three-iterator structure made these branch
+// independently; the merged loop has to branch correctly inside one
+// pass.
+func TestRunDeterministicSinglePassMixedNodes(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	now := time.Now().UTC()
+
+	eng.Lock()
+
+	// Regular processed record — should count in manifest.
+	regular := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("regular processed record content for the manifest"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range regular.Properties {
+		eng.PropIdx().Add(regular.ID, k, v)
+	}
+
+	// Concept node — must be excluded from TotalRecords AND must
+	// populate existingConcepts so a duplicate concept isn't proposed.
+	conceptKW := "kafka"
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Concept synthesis: kafka stream processing patterns and operational lessons."),
+		"content_short":     graph.StringProperty("kafka concept synthesis"),
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty(conceptKW),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+
+	// Deleted record — must be skipped entirely.
+	del := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("deleted record body"),
+		"processing_status": graph.StringProperty("deleted"),
+		"created_at":        graph.TimestampProperty(now),
+	})
+	for k, v := range del.Properties {
+		eng.PropIdx().Add(del.ID, k, v)
+	}
+
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+	m := result.Manifest
+	if m == nil {
+		t.Fatal("manifest should not be nil")
+	}
+	// Manifest counts regular records only — not concept, not deleted.
+	if m.TotalRecords != 1 {
+		t.Errorf("manifest.TotalRecords = %d, want 1 (regular only; concept and deleted excluded)", m.TotalRecords)
+	}
+
+	// existingConcepts must have been populated; a second
+	// RunDeterministic with the same store should not propose a
+	// duplicate concept for "kafka" even if its keyword count is high
+	// enough — the cnIt phase prevented that pre-refactor and the
+	// unified pass must too. (Concept proposal is gated by a few
+	// thresholds; the easiest behavioral check is that we don't crash
+	// and the second run is stable.)
+	r2 := RunDeterministic(eng, cfg, nil)
+	if r2.Manifest == nil || r2.Manifest.TotalRecords != 1 {
+		t.Errorf("second-run TotalRecords drifted: got %v",
+			func() any {
+				if r2.Manifest == nil {
+					return "nil manifest"
+				}
+				return r2.Manifest.TotalRecords
+			}())
+	}
+}
+
 func TestQualityAuditNoFalsePositive(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
