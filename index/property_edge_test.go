@@ -152,31 +152,6 @@ func TestRemoveNodeCleansAllIndexes(t *testing.T) {
 	}
 }
 
-func TestRangeQueryBoundaries(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "confidence", graph.Float64Property(0.0))
-	idx.Add("n2", "confidence", graph.Float64Property(0.5))
-	idx.Add("n3", "confidence", graph.Float64Property(1.0))
-
-	// Exact boundary match.
-	ids := idx.Range("confidence", graph.Float64Property(0.5), graph.Float64Property(0.5))
-	if len(ids) != 1 {
-		t.Fatalf("expected 1 at exact boundary, got %d", len(ids))
-	}
-
-	// Full range.
-	ids = idx.Range("confidence", graph.Float64Property(0.0), graph.Float64Property(1.0))
-	if len(ids) != 3 {
-		t.Fatalf("expected 3 for full range, got %d", len(ids))
-	}
-
-	// Empty range.
-	ids = idx.Range("confidence", graph.Float64Property(0.6), graph.Float64Property(0.9))
-	if len(ids) != 0 {
-		t.Fatalf("expected 0 for empty range, got %d", len(ids))
-	}
-}
-
 func TestContainsFoldCaseInsensitive(t *testing.T) {
 	idx := NewPropertyIndex()
 	idx.Add("n1", "content_full", graph.StringProperty("RWMutex Deadlock"))

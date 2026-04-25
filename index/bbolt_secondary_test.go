@@ -127,26 +127,6 @@ func TestSecondaryFieldExists(t *testing.T) {
 	}
 }
 
-func TestSecondaryNodesMissingField(t *testing.T) {
-	idx := newTestSecondaryIdx(t)
-
-	idx.SetFieldExists("temporality", "n1")
-	idx.SetFieldExists("temporality", "n3")
-
-	missing := idx.NodesMissingField("temporality", []string{"n1", "n2", "n3", "n4"})
-	if len(missing) != 2 {
-		t.Fatalf("expected 2 missing, got %d", len(missing))
-	}
-	// n2 and n4 are missing.
-	has := make(map[string]bool)
-	for _, id := range missing {
-		has[id] = true
-	}
-	if !has["n2"] || !has["n4"] {
-		t.Fatalf("expected n2 and n4 missing, got %v", missing)
-	}
-}
-
 func TestSecondaryRemoveNode(t *testing.T) {
 	idx := newTestSecondaryIdx(t)
 	now := time.Now().UTC()

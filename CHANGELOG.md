@@ -7,6 +7,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead `PropertyIndex.Range` and `BboltSecondaryIndex.NodesMissingField`
+  APIs.** Both had zero production callers — `Range` was exposed via
+  the `PropertyIndex` interface but unused; `NodesMissingField` was
+  designed for `missing=` search filters but `search/search.go` uses
+  `NodesWithKey` + manual diff against the property index instead
+  (the property index is the authoritative source; the secondary
+  field-existence index can drift on test paths that bypass
+  `IndexNode`). Removing them drops the `Range` method from
+  `MemoryPropertyIndex` and `BboltPropertyIndex` plus supporting
+  machinery (`sorted` field, `rangeEntry` type, `isOrdered` helper,
+  range-index handling in Add/Remove, the `deserializeValue` helper),
+  and 13 tests that exercised the dead surface. `Property.Compare`
+  remains because tests still assert its behavior; nothing in
+  production calls it after this change. Surfaced during P2-04 deep
+  read; the perf concerns the tracker named were investigated and
+  did not reproduce — see resolution note on tracker
+  01KPEDBSN7QT6HX1FZKWV3WB4E.
+
 ### Changed
 
 - **Commit save split into `PrepareCommit` + `WriteCommit`; eliminates

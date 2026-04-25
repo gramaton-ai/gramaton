@@ -236,36 +236,6 @@ func (idx *BboltPropertyIndex) Lookup(key string, val graph.Property) []string {
 	return result
 }
 
-func (idx *BboltPropertyIndex) Range(key string, min, max graph.Property) []string {
-	var result []string
-	idx.db.View(func(tx *bolt.Tx) error {
-		eb := tx.Bucket(exactBucket(key))
-		if eb == nil {
-			return nil
-		}
-		// Scan all entries and filter by range. The bucket keys are
-		// serialized Property values. We deserialize and compare.
-		seen := make(map[string]struct{})
-		c := eb.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			prop, err := deserializeValue(k)
-			if err != nil {
-				continue
-			}
-			if prop.Compare(min) >= 0 && prop.Compare(max) <= 0 {
-				for _, id := range decodeIDSet(v) {
-					if _, ok := seen[id]; !ok {
-						seen[id] = struct{}{}
-						result = append(result, id)
-					}
-				}
-			}
-		}
-		return nil
-	})
-	return result
-}
-
 func (idx *BboltPropertyIndex) Contains(key, substring string) []string {
 	var result []string
 	idx.db.View(func(tx *bolt.Tx) error {
@@ -459,7 +429,3 @@ func removeFromIDSet(b *bolt.Bucket, key []byte, id string) {
 	}
 }
 
-// deserializeValue reconstructs a Property from its binary form.
-func deserializeValue(data []byte) (graph.Property, error) {
-	return graph.UnmarshalProperty(data)
-}

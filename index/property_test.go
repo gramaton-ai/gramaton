@@ -1,7 +1,6 @@
 package index
 
 import (
-	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -80,133 +79,6 @@ func TestLookupMissingKey(t *testing.T) {
 	}
 }
 
-// --- Range queries ---
-
-func TestRangeFloat64(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "confidence", graph.Float64Property(0.3))
-	idx.Add("n2", "confidence", graph.Float64Property(0.5))
-	idx.Add("n3", "confidence", graph.Float64Property(0.7))
-	idx.Add("n4", "confidence", graph.Float64Property(0.9))
-	idx.Add("n5", "confidence", graph.Float64Property(0.1))
-
-	got := idx.Range("confidence",
-		graph.Float64Property(0.4),
-		graph.Float64Property(0.8))
-
-	if len(got) != 2 {
-		t.Fatalf("expected 2 results, got %d: %v", len(got), got)
-	}
-	assertContains(t, got, "n2", "n3")
-}
-
-func TestRangeInt64(t *testing.T) {
-	idx := NewPropertyIndex()
-	for i := int64(0); i < 10; i++ {
-		idx.Add(fmt.Sprintf("n%d", i), "count", graph.Int64Property(i))
-	}
-
-	got := idx.Range("count",
-		graph.Int64Property(3),
-		graph.Int64Property(6))
-
-	if len(got) != 4 {
-		t.Fatalf("expected 4 results, got %d: %v", len(got), got)
-	}
-	assertContains(t, got, "n3", "n4", "n5", "n6")
-}
-
-func TestRangeString(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "name", graph.StringProperty("alpha"))
-	idx.Add("n2", "name", graph.StringProperty("beta"))
-	idx.Add("n3", "name", graph.StringProperty("gamma"))
-	idx.Add("n4", "name", graph.StringProperty("delta"))
-
-	got := idx.Range("name",
-		graph.StringProperty("beta"),
-		graph.StringProperty("gamma"))
-
-	if len(got) != 3 {
-		t.Fatalf("expected 3 results (beta, delta, gamma), got %d: %v", len(got), got)
-	}
-	assertContains(t, got, "n2", "n3", "n4")
-}
-
-func TestRangeTimestamp(t *testing.T) {
-	idx := NewPropertyIndex()
-	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	t3 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	t4 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-
-	idx.Add("n1", "created", graph.TimestampProperty(t1))
-	idx.Add("n2", "created", graph.TimestampProperty(t2))
-	idx.Add("n3", "created", graph.TimestampProperty(t3))
-	idx.Add("n4", "created", graph.TimestampProperty(t4))
-
-	got := idx.Range("created",
-		graph.TimestampProperty(t2),
-		graph.TimestampProperty(t3))
-
-	if len(got) != 2 {
-		t.Fatalf("expected 2, got %d: %v", len(got), got)
-	}
-	assertContains(t, got, "n2", "n3")
-}
-
-func TestRangeInclusive(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "x", graph.Int64Property(5))
-	idx.Add("n2", "x", graph.Int64Property(10))
-
-	got := idx.Range("x",
-		graph.Int64Property(5),
-		graph.Int64Property(10))
-
-	if len(got) != 2 {
-		t.Fatalf("expected 2 (inclusive bounds), got %d", len(got))
-	}
-}
-
-func TestRangeNoMatch(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "x", graph.Int64Property(1))
-	idx.Add("n2", "x", graph.Int64Property(10))
-
-	got := idx.Range("x",
-		graph.Int64Property(3),
-		graph.Int64Property(5))
-
-	if len(got) != 0 {
-		t.Fatalf("expected 0 results, got %d", len(got))
-	}
-}
-
-func TestRangeMissingKey(t *testing.T) {
-	idx := NewPropertyIndex()
-	got := idx.Range("missing",
-		graph.Int64Property(0),
-		graph.Int64Property(100))
-	if len(got) != 0 {
-		t.Fatal("expected empty for missing key")
-	}
-}
-
-func TestRangeDuplicateValues(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "score", graph.Float64Property(0.5))
-	idx.Add("n2", "score", graph.Float64Property(0.5))
-	idx.Add("n3", "score", graph.Float64Property(0.5))
-
-	got := idx.Range("score",
-		graph.Float64Property(0.5),
-		graph.Float64Property(0.5))
-
-	if len(got) != 3 {
-		t.Fatalf("expected 3, got %d", len(got))
-	}
-}
 
 // --- Substring search ---
 
@@ -284,22 +156,6 @@ func TestRemove(t *testing.T) {
 	got := idx.Lookup("x", graph.StringProperty("hello"))
 	if len(got) != 1 || got[0] != "n2" {
 		t.Fatalf("expected [n2] after remove, got %v", got)
-	}
-}
-
-func TestRemoveFromRange(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "score", graph.Float64Property(0.5))
-	idx.Add("n2", "score", graph.Float64Property(0.7))
-
-	idx.Remove("n1", "score", graph.Float64Property(0.5))
-
-	got := idx.Range("score",
-		graph.Float64Property(0.0),
-		graph.Float64Property(1.0))
-
-	if len(got) != 1 || got[0] != "n2" {
-		t.Fatalf("expected [n2], got %v", got)
 	}
 }
 
@@ -392,27 +248,6 @@ func TestCount(t *testing.T) {
 	}
 }
 
-// --- Non-ordered types should not appear in range index ---
-
-func TestNonOrderedTypesNotInRange(t *testing.T) {
-	idx := NewPropertyIndex()
-	idx.Add("n1", "active", graph.BoolProperty(true))
-	idx.Add("n2", "vec", graph.VectorProperty([]float32{1, 2}))
-	idx.Add("n3", "tags", graph.StringListProperty([]string{"a"}))
-	idx.Add("n4", "raw", graph.BytesProperty([]byte{1}))
-
-	// These keys should not have sorted entries.
-	if len(idx.sorted) != 0 {
-		t.Fatalf("expected 0 sorted keys, got %d", len(idx.sorted))
-	}
-
-	// But exact lookup should still work.
-	got := idx.Lookup("active", graph.BoolProperty(true))
-	if len(got) != 1 {
-		t.Fatal("exact lookup on bool should work")
-	}
-}
-
 // --- Non-string types should not appear in substring index ---
 
 func TestNonStringTypesNotInSubstring(t *testing.T) {
@@ -456,10 +291,6 @@ func TestPropertyIndexRoundTrip(t *testing.T) {
 	// Exact match.
 	assertContains(t, idx2.Lookup("temporality", graph.StringProperty("durable")), "n1")
 	assertContains(t, idx2.Lookup("temporality", graph.StringProperty("ephemeral")), "n2")
-
-	// Range query.
-	rangeResult := idx2.Range("confidence", graph.Float64Property(0.5), graph.Float64Property(1.0))
-	assertContains(t, rangeResult, "n1")
 
 	// Substring search.
 	subResult := idx2.ContainsFold("content_full", "kafka")

@@ -170,20 +170,6 @@ func TestBboltPropertyCount(t *testing.T) {
 	}
 }
 
-func TestBboltPropertyRange(t *testing.T) {
-	idx := newTestBboltPropIdx(t)
-
-	idx.Add("n1", "score", graph.Float64Property(0.5))
-	idx.Add("n2", "score", graph.Float64Property(0.8))
-	idx.Add("n3", "score", graph.Float64Property(0.3))
-	idx.Add("n4", "score", graph.Float64Property(0.9))
-
-	results := idx.Range("score", graph.Float64Property(0.4), graph.Float64Property(0.85))
-	if len(results) != 2 {
-		t.Fatalf("expected 2 range results, got %d: %v", len(results), results)
-	}
-}
-
 func TestBboltPropertyPersistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "persist.db")

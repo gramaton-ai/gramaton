@@ -1,7 +1,6 @@
 package index
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -32,8 +31,6 @@ type PropertyIndex interface {
 	RemoveNodeTx(tx *bolt.Tx, nodeID string, props graph.Properties)
 	// Lookup returns all node IDs with an exact property match.
 	Lookup(key string, val graph.Property) []string
-	// Range returns all node IDs where the property value is between min and max (inclusive).
-	Range(key string, min, max graph.Property) []string
 	// Contains returns all node IDs where the string property contains the substring (case-sensitive).
 	Contains(key, substring string) []string
 	// ContainsFold returns all node IDs where the string property contains the substring (case-insensitive).
@@ -54,9 +51,6 @@ type MemoryPropertyIndex struct {
 	// Exact match: key → serialized value → set of node IDs.
 	exact map[string]map[string]map[string]struct{}
 
-	// Range queries: key → sorted slice of entries (ordered types only).
-	sorted map[string][]rangeEntry
-
 	// Substring search: key → node ID → string value (string properties only).
 	strings map[string]map[string]string
 
@@ -67,13 +61,6 @@ type MemoryPropertyIndex struct {
 	// Reverse index: node ID → set of keys indexed for that node.
 	// Used by RemoveNode to clean up all entries for a deleted node.
 	nodeKeys map[string]map[string]struct{}
-}
-
-// rangeEntry pairs a property value with the node it belongs to.
-// Stored in sorted order within each key's slice.
-type rangeEntry struct {
-	Value  graph.Property
-	NodeID string
 }
 
 // NewPropertyIndex creates an empty in-memory property index.
@@ -87,7 +74,6 @@ func NewPropertyIndex() *MemoryPropertyIndex {
 func NewMemoryPropertyIndex() *MemoryPropertyIndex {
 	return &MemoryPropertyIndex{
 		exact:    make(map[string]map[string]map[string]struct{}),
-		sorted:   make(map[string][]rangeEntry),
 		strings:  make(map[string]map[string]string),
 		keywords: make(map[string]map[string]map[string]struct{}),
 		nodeKeys: make(map[string]map[string]struct{}),
@@ -116,29 +102,6 @@ func (idx *MemoryPropertyIndex) Add(nodeID, key string, val graph.Property) {
 		byVal[serialized] = nodes
 	}
 	nodes[nodeID] = struct{}{}
-
-	// Range index (ordered types only).
-	if isOrdered(val.Type) {
-		entries := idx.sorted[key]
-		pos := sort.Search(len(entries), func(i int) bool {
-			e := entries[i]
-			// Mixed types for the same key (e.g., String and Float64
-			// from JSON). Sort by type ordinal to group by type.
-			if e.Value.Type != val.Type {
-				return e.Value.Type > val.Type
-			}
-			c := e.Value.Compare(val)
-			if c == 0 {
-				return e.NodeID >= nodeID
-			}
-			return c > 0
-		})
-		// Insert at pos.
-		entries = append(entries, rangeEntry{})
-		copy(entries[pos+1:], entries[pos:])
-		entries[pos] = rangeEntry{Value: val, NodeID: nodeID}
-		idx.sorted[key] = entries
-	}
 
 	// Substring index (string type only).
 	if val.Type == graph.TypeString {
@@ -182,20 +145,6 @@ func (idx *MemoryPropertyIndex) Remove(nodeID, key string, val graph.Property) {
 		}
 		if len(byVal) == 0 {
 			delete(idx.exact, key)
-		}
-	}
-
-	// Range index.
-	if isOrdered(val.Type) {
-		entries := idx.sorted[key]
-		for i, e := range entries {
-			if e.NodeID == nodeID && e.Value.Equal(val) {
-				idx.sorted[key] = append(entries[:i], entries[i+1:]...)
-				break
-			}
-		}
-		if len(idx.sorted[key]) == 0 {
-			delete(idx.sorted, key)
 		}
 	}
 
@@ -257,36 +206,6 @@ func (idx *MemoryPropertyIndex) Lookup(key string, val graph.Property) []string 
 	result := make([]string, 0, len(nodes))
 	for id := range nodes {
 		result = append(result, id)
-	}
-	return result
-}
-
-// Range returns all node IDs where the property value is between min
-// and max (inclusive). Only works for ordered types (String, Float64,
-// Int64, Timestamp). Panics if min and max have different types.
-func (idx *MemoryPropertyIndex) Range(key string, min, max graph.Property) []string {
-	entries, ok := idx.sorted[key]
-	if !ok {
-		return nil
-	}
-
-	// Find lower bound: first entry >= min.
-	lo := sort.Search(len(entries), func(i int) bool {
-		return entries[i].Value.Compare(min) >= 0
-	})
-
-	// Collect entries from lo while <= max.
-	seen := make(map[string]struct{})
-	var result []string
-	for i := lo; i < len(entries); i++ {
-		if entries[i].Value.Compare(max) > 0 {
-			break
-		}
-		id := entries[i].NodeID
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			result = append(result, id)
-		}
 	}
 	return result
 }
@@ -406,12 +325,3 @@ func serializeValue(val graph.Property) string {
 	return string(data)
 }
 
-// isOrdered reports whether a property type supports comparison.
-func isOrdered(t graph.PropertyType) bool {
-	switch t {
-	case graph.TypeString, graph.TypeFloat64, graph.TypeInt64, graph.TypeTimestamp:
-		return true
-	default:
-		return false
-	}
-}

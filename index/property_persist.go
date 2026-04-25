@@ -27,8 +27,7 @@ var propMagic = [4]byte{'P', 'I', 'D', 'X'}
 
 // MarshalBinary serializes the property index. The format stores each
 // (key, property, nodeID) tuple. On unmarshal, Add is called for each
-// tuple, rebuilding all derived indexes (sorted, strings, keywords,
-// nodeKeys).
+// tuple, rebuilding all derived indexes (strings, keywords, nodeKeys).
 func (idx *MemoryPropertyIndex) MarshalBinary() ([]byte, error) {
 	// Collect all tuples for deterministic output.
 	type tuple struct {
@@ -92,7 +91,6 @@ func (idx *MemoryPropertyIndex) UnmarshalBinary(data []byte) error {
 
 	// Reset state.
 	idx.exact = make(map[string]map[string]map[string]struct{})
-	idx.sorted = make(map[string][]rangeEntry)
 	idx.strings = make(map[string]map[string]string)
 	idx.keywords = make(map[string]map[string]map[string]struct{})
 	idx.nodeKeys = make(map[string]map[string]struct{})

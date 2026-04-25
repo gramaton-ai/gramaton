@@ -303,19 +303,3 @@ func (idx *BboltSecondaryIndex) NodesWithField(field string) []string {
 	return ids
 }
 
-// NodesMissingField returns node IDs that are in allIDs but NOT in
-// the field existence index. This enables missing=["temporality"]
-// queries without scanning the prolly tree.
-func (idx *BboltSecondaryIndex) NodesMissingField(field string, allIDs []string) []string {
-	has := make(map[string]struct{})
-	for _, id := range idx.NodesWithField(field) {
-		has[id] = struct{}{}
-	}
-	var missing []string
-	for _, id := range allIDs {
-		if _, ok := has[id]; !ok {
-			missing = append(missing, id)
-		}
-	}
-	return missing
-}
