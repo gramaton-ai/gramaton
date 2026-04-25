@@ -9,6 +9,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Server bootstrap drift fixed; Run() and StartHTTP() share helpers.**
+  Pre-fix, `server.Run()` and `server.StartHTTP()` had ~50 lines of
+  near-identical bootstrap (self-heal goroutine, curation runner,
+  cancel storage). Drift had already started -- only StartHTTP()
+  stored `s.curationCancel` for `Shutdown()` to find; Run() used a
+  local `defer curationCancel()` so its curation goroutine couldn't
+  be cleanly stopped via Shutdown. Extracted two helpers:
+  `runStartupSelfHeal()` and `startCurationRunner()` (the latter
+  always stores curationCancel on the server). Run()'s own shutdown
+  path now reads `s.curationCancel` and stops the runner explicitly,
+  matching StartHTTP's contract. Net: ~70 LOC saved, single source
+  of truth for curation lifecycle. Shutdown semantics preserved.
+  Documented the prepared-session sweeper TTL race in
+  `api/sessions.go::preparedSessionTTL` so a future grace-period
+  tweak has the rationale (race is theoretical: 30 min TTL vs
+  seconds-to-minutes realistic agent flow). The idleWatcher
+  hot-reload concern in the tracker is speculative future work --
+  no live config-reload feature, no fix needed today. (P2-12.)
+
 - **Server preEmbedContent + ingest now thread request context.**
   P2-11 was filed in the pre-T-02 era when most service methods
   didn't take ctx. The T-02 review (commit f874cab) already wired

@@ -328,47 +328,8 @@ func (s *Server) Run() error {
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
-	// One-shot content-quality self-heal on boot (Cluster 2 Phase 3).
-	// Async, non-blocking — the pass is cheap on a clean store
-	// (microseconds per record for sanitize.Field comparisons) and
-	// we never want it to delay the server's listen-ready state.
-	// Running on every cycle would be wasteful (Phase 1 prevents new
-	// contamination at write time); running at boot catches legacy
-	// drift and any slippage from bulk imports / future write paths.
-	// Manual on-demand sweeps remain available via
-	// `gramaton repair --content-quality`.
-	go func() {
-		result := curation.RunSelfHeal(s.engine, s.log)
-		if result.Repaired+result.FlaggedForLLM > 0 {
-			s.log.Info("startup self-heal: repairs applied",
-				"component", "server",
-				"scanned", result.Scanned,
-				"repaired", result.Repaired,
-				"flagged_for_llm", result.FlaggedForLLM)
-		}
-	}()
-
-	// Start curation runner. engine.LLM() already returns the Metered
-	// wrapper from server construction (see server.New), so no per-call
-	// wrapping is needed here.
-	engineCfg := s.engine.Config()
-	if engineCfg.Curation.Enabled {
-		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
-		s.api.SetRunner(s.runner)
-		curationCtx, curationCancel := context.WithCancel(context.Background())
-		defer curationCancel()
-		go s.runner.Start(curationCtx)
-		if engineCfg.Backup.Enabled {
-			s.runner.SetPostCycleHook(func() {
-				s.runAutoBackup()
-			})
-		}
-		if s.engine.LLM() != nil {
-			s.log.Info("curation started", "mode", "deterministic+autonomous", "llm", s.engine.LLM().ModelID())
-		} else {
-			s.log.Info("curation started", "mode", "deterministic")
-		}
-	}
+	go s.runStartupSelfHeal()
+	s.startCurationRunner()
 
 	// Serve in background.
 	errCh := make(chan error, 1)
@@ -391,15 +352,21 @@ func (s *Server) Run() error {
 		}
 	}
 
-	// Stop access flusher (triggers final flush) and prepared-sessions sweeper.
+	// Stop access flusher (triggers final flush), prepared-sessions
+	// sweeper, and curation runner. Curation cancellation moved here
+	// from a Run-local `defer curationCancel()` so Run() and StartHTTP()
+	// share one shutdown shape -- both store curationCancel on s and
+	// both stop it explicitly.
 	s.mu.Lock()
 	if s.accessCancel != nil {
 		s.accessCancel()
 	}
-	{
-		s.api.StopPreparedSweeper()
-	}
+	curationCancel := s.curationCancel
 	s.mu.Unlock()
+	s.api.StopPreparedSweeper()
+	if curationCancel != nil {
+		curationCancel()
+	}
 
 	// Graceful shutdown with 30-second deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -447,41 +414,8 @@ func (s *Server) StartHTTP() error {
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
-	// One-shot content-quality self-heal on boot. See Run() for
-	// rationale; this branch handles the StartHTTP (MCP companion)
-	// startup path. Async, non-blocking.
-	go func() {
-		result := curation.RunSelfHeal(s.engine, s.log)
-		if result.Repaired+result.FlaggedForLLM > 0 {
-			s.log.Info("startup self-heal: repairs applied",
-				"component", "server",
-				"scanned", result.Scanned,
-				"repaired", result.Repaired,
-				"flagged_for_llm", result.FlaggedForLLM)
-		}
-	}()
-
-	// Start curation runner. engine.LLM() already returns the Metered
-	// wrapper from server construction (see server.New), so no per-call
-	// wrapping is needed here.
-	engineCfg := s.engine.Config()
-	if engineCfg.Curation.Enabled {
-		s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
-		s.api.SetRunner(s.runner)
-		curationCtx, curationCancel := context.WithCancel(context.Background())
-		go s.runner.Start(curationCtx)
-
-		// Store cancel for shutdown.
-		s.mu.Lock()
-		s.curationCancel = curationCancel
-		s.mu.Unlock()
-
-		if engineCfg.Backup.Enabled {
-			s.runner.SetPostCycleHook(func() {
-				s.runAutoBackup()
-			})
-		}
-	}
+	go s.runStartupSelfHeal()
+	s.startCurationRunner()
 
 	// Serve HTTP in background.
 	go func() {
@@ -524,6 +458,58 @@ func (s *Server) Shutdown() {
 	}
 
 	s.log.Info("HTTP server stopped (MCP companion)")
+}
+
+// runStartupSelfHeal runs the one-shot content-quality self-heal pass
+// (Cluster 2 Phase 3). The pass is cheap on a clean store (microseconds
+// per record for sanitize.Field comparisons) so we never want it to
+// delay listen-ready state. Running on every cycle would be wasteful
+// (Phase 1 prevents new contamination at write time); running at boot
+// catches legacy drift and any slippage from bulk imports / future
+// write paths. Manual on-demand sweeps remain available via
+// `gramaton repair --content-quality`.
+//
+// Caller invokes in a goroutine; the function returns when the sweep
+// completes.
+func (s *Server) runStartupSelfHeal() {
+	result := curation.RunSelfHeal(s.engine, s.log)
+	if result.Repaired+result.FlaggedForLLM > 0 {
+		s.log.Info("startup self-heal: repairs applied",
+			"component", "server",
+			"scanned", result.Scanned,
+			"repaired", result.Repaired,
+			"flagged_for_llm", result.FlaggedForLLM)
+	}
+}
+
+// startCurationRunner constructs and starts the curation runner if
+// curation is enabled. Stores the runner's cancel function on s so
+// Run() / StartHTTP() / Shutdown() share one teardown shape (the
+// pre-refactor Run path used a `defer curationCancel()` local that
+// Shutdown couldn't reach -- the StartHTTP variant stored on s and
+// became the canonical shape).
+func (s *Server) startCurationRunner() {
+	engineCfg := s.engine.Config()
+	if !engineCfg.Curation.Enabled {
+		return
+	}
+	s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
+	s.api.SetRunner(s.runner)
+	curationCtx, curationCancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.curationCancel = curationCancel
+	s.mu.Unlock()
+	go s.runner.Start(curationCtx)
+	if engineCfg.Backup.Enabled {
+		s.runner.SetPostCycleHook(func() {
+			s.runAutoBackup()
+		})
+	}
+	if s.engine.LLM() != nil {
+		s.log.Info("curation started", "mode", "deterministic+autonomous", "llm", s.engine.LLM().ModelID())
+	} else {
+		s.log.Info("curation started", "mode", "deterministic")
+	}
 }
 
 // RequestShutdown triggers a graceful shutdown from an API call.

@@ -334,6 +334,15 @@ const compactionFlagTTL = 2 * time.Hour
 // flag is in-memory only (B2 resolution) and lives long enough to span
 // the realistic gap between a prepare call and the agent's commit.
 // Anything older than this is almost certainly orphaned.
+//
+// Race window: a commit issued at exactly TTL+epsilon races the sweeper
+// (which fires every preparedSweepInterval). The same a.mu serialises
+// both, so this is observable behaviour, not a data race -- the commit
+// just sees prepare_required and the agent retries with a fresh
+// prepare. 30 minutes is far longer than any realistic agent flow
+// (prepare->extract->commit is seconds to a few minutes), so the race
+// is theoretical. Documented here so a future grace-period tweak has
+// the rationale.
 const preparedSessionTTL = 30 * time.Minute
 
 // preparedSweepInterval is how often the background sweeper runs.
