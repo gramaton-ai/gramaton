@@ -211,7 +211,9 @@ func TestAPIDiffSinceFutureReturnsEmpty(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "diff target")
 
-	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight, so the
+	// test must construct the date in UTC for the result to match.
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Since: tomorrow})
 	if apiErr != nil {
 		t.Fatalf("Diff: %v", apiErr)
@@ -272,7 +274,11 @@ func TestAPIDiffUntilAtHeadMatchesNoUntil(t *testing.T) {
 
 	// HEAD's timestamp is the most recent commit. Use "tomorrow" as Until
 	// so we know every commit is included (same as the no-Until case).
-	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	// Use UTC explicitly: parseDateArg interprets YYYY-MM-DD as UTC midnight,
+	// so tomorrow-in-local can be today-in-UTC if local is east of UTC, or
+	// today-in-local can be tomorrow-in-UTC if local is west — the test
+	// must construct tomorrow in the same frame the parser uses.
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 
 	// Baseline: no Until.
 	withoutUntil, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{})
@@ -299,7 +305,9 @@ func TestAPIDiffUntilBeforeAnyCommit(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "target")
 
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight. See
+	// TestAPIDiffSinceFutureReturnsEmpty for the same TZ rationale.
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Until: yesterday})
 	if apiErr != nil {
 		t.Fatalf("Diff: %v", apiErr)
@@ -322,12 +330,11 @@ func TestAPIDiffTopicCap(t *testing.T) {
 	}
 }
 
-// TestAPIDiffTopicFilterNegative: when topic=kafka is provided, the
-// api must never surface records that don't contain "kafka" in their
-// keywords or summary_short. This is a negative-only assertion: if
-// the diff is empty (prolly tree Diff degrades to full scan, which
-// surfaces here as empty results in tests), the test still proves
-// the filter doesn't leak unrelated records.
+// TestAPIDiffTopicFilterNegative pins the leak-prevention property:
+// when topic=kafka is provided, the api must never surface records
+// that don't match "kafka" in keywords or summary_short. Paired with
+// TestAPIDiffTopicFilterPositive (which asserts a matching record DOES
+// surface) for full filter coverage.
 func TestAPIDiffTopicFilterNegative(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
@@ -376,5 +383,126 @@ func TestAPIDiffTopicFilterNegative(t *testing.T) {
 		if e.ID == other.ID {
 			t.Errorf("non-matching record %s leaked through topic=kafka filter", other.ID)
 		}
+	}
+}
+
+// TestAPIDiffAddedNodeAppears is the positive complement to
+// TestAPIDiffTopicFilterNegative. It pins the load-bearing behavior:
+// a node added between sinceCommit and HEAD must appear in
+// resp.Added. The negative-only test passes vacuously when the diff
+// returns empty (which is the bug); this one asserts the diff
+// surfaces the new record.
+func TestAPIDiffAddedNodeAppears(t *testing.T) {
+	srv, eng := setupTestServer(t)
+
+	addRecord(t, eng, "seed before since")
+
+	time.Sleep(20 * time.Millisecond)
+	since := time.Now().UTC().Format(time.RFC3339Nano)
+	time.Sleep(20 * time.Millisecond)
+
+	wantID := addRecord(t, eng, "added after since")
+
+	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{
+		Since: since,
+	})
+	if apiErr != nil {
+		t.Fatalf("Diff: %v", apiErr)
+	}
+
+	t.Logf("diff window since=%s\n  added=%d modified=%d removed=%d",
+		since, len(resp.Added), len(resp.Modified), len(resp.Removed))
+	for _, e := range resp.Added {
+		t.Logf("  added: %s", e.ID)
+	}
+
+	found := false
+	for _, e := range resp.Added {
+		if e.ID == wantID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected added record %s in resp.Added; got %d added entries: %+v",
+			wantID, len(resp.Added), resp.Added)
+	}
+}
+
+// TestAPIDiffTopicFilterPositive is the positive complement: a kafka
+// record added between since and HEAD must appear when filtered by
+// topic=kafka. This mirrors the repro the tracker describes (flip the
+// negative test to assert presence).
+func TestAPIDiffTopicFilterPositive(t *testing.T) {
+	srv, eng := setupTestServer(t)
+
+	// Seed pre-since commit so the diff window has a parent.
+	eng.Lock()
+	seed := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("seed"),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+	})
+	for k, v := range seed.Properties {
+		eng.PropIdx().Add(seed.ID, k, v)
+	}
+	eng.Save("seed")
+	eng.Unlock()
+
+	time.Sleep(20 * time.Millisecond)
+	since := time.Now().UTC().Format(time.RFC3339Nano)
+	time.Sleep(20 * time.Millisecond)
+
+	// Add a kafka record AND an unrelated redis record after since.
+	eng.Lock()
+	kafka := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("About kafka streams"),
+		"content_short":     graph.StringProperty("Kafka usage"),
+		"content_keywords":  graph.StringListProperty([]string{"kafka", "streams"}),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+	})
+	for k, v := range kafka.Properties {
+		eng.PropIdx().Add(kafka.ID, k, v)
+	}
+	eng.Save("kafka")
+
+	redis := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("About redis caching"),
+		"content_short":     graph.StringProperty("Redis usage"),
+		"content_keywords":  graph.StringListProperty([]string{"redis", "caching"}),
+		"processing_status": graph.StringProperty("processed"),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+	})
+	for k, v := range redis.Properties {
+		eng.PropIdx().Add(redis.ID, k, v)
+	}
+	eng.Save("redis")
+	eng.Unlock()
+
+	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{
+		Since: since,
+		Topic: "kafka",
+	})
+	if apiErr != nil {
+		t.Fatalf("Diff: %v", apiErr)
+	}
+
+	t.Logf("diff topic=kafka since=%s\n  added=%d modified=%d removed=%d",
+		since, len(resp.Added), len(resp.Modified), len(resp.Removed))
+	for _, e := range resp.Added {
+		t.Logf("  added: %s short=%q", e.ID, e.SummaryShort)
+	}
+
+	found := false
+	for _, e := range resp.Added {
+		if e.ID == kafka.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected kafka record %s in resp.Added (filtered by topic=kafka); got %d added entries",
+			kafka.ID, len(resp.Added))
 	}
 }

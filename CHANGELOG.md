@@ -7,6 +7,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **api.Diff regression coverage + timezone-fragile date tests
+  (`01KPKNK4AV6F61S9CN4ESE553Q` resolved as already-fixed).** The
+  tracker reported `api.Diff` returning empty buckets even when
+  records were added between two commits. Investigation showed
+  the underlying full-scan-degradation bug had already been fixed
+  by commit `0207485` (storage: merge-walk prolly Diff, P1-54)
+  on 2026-04-23. Confirmed via two new positive-assertion
+  regression tests that the original tracker was missing:
+  `TestAPIDiffAddedNodeAppears` (added record surfaces in
+  `resp.Added` for an empty-topic diff) and
+  `TestAPIDiffTopicFilterPositive` (kafka record surfaces when
+  filtered by topic=kafka, complementing the negative-only
+  filter-leak test). En route, found and fixed three TZ-fragile
+  date-construction patterns that had a real failing test on the
+  user's machine: `time.Now().AddDate(0, 0, 1).Format("2006-01-02")`
+  produces a local-TZ "tomorrow" string that `parseDateArg`
+  decodes as UTC midnight — when local clocks are west of UTC
+  across the day boundary, "tomorrow" parses to a UTC time
+  earlier than HEAD. Fixed at all three callsites
+  (`server/bindings_history_test.go` lines 214 / 281 / 308 and
+  `api/collections_test.go` line 126) by switching to
+  `time.Now().UTC().AddDate(...).Format(...)` so the test's frame
+  matches the parser's. Made `TestAPIDiffUntilAtHeadMatchesNoUntil`
+  and `TestCollectionItemsAsOfFutureRejected` go from
+  intermittently-failing on west-of-UTC machines to deterministic.
+  Also rewrote the docstring on `TestAPIDiffTopicFilterNegative`,
+  which used to admit it was a workaround for the now-fixed
+  full-scan bug, to reflect its real purpose as a leak-prevention
+  test paired with the new positive case.
+
 ### Added
 
 - **`gramaton preflight` environment-verification command

@@ -123,7 +123,10 @@ func TestCollectionItemsAsOfFutureRejected(t *testing.T) {
 	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "L"})
 	collID := coll["id"].(string)
 
-	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight, so a
+	// local-TZ-formatted "tomorrow" can decode to a past UTC time when
+	// the local clock is east of UTC across the day boundary.
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{AsOf: tomorrow})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error for future as_of, got %+v", apiErr)
