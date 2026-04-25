@@ -1395,6 +1395,88 @@ func TestManifestCacheInvalidatesOnTemporalityShift(t *testing.T) {
 	}
 }
 
+// TestManifestCacheIgnoresHistoricalRecords pins P2-09 fix #4: the
+// manifest summary describes the CURRENT state of the store, so
+// records whose valid_until is in the past must be excluded from
+// the fingerprint inputs. Pre-fix, adding a historical record (the
+// shape produced by auto-supersession) would inflate totalRecords
+// and bust the cache even though the live store hadn't changed.
+func TestManifestCacheIgnoresHistoricalRecords(t *testing.T) {
+	eng := setupEngine(t)
+
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	// On the first manifest run only one summary is needed — but
+	// stage extras in case a hash collision unexpectedly forces a
+	// second LLM call. (mockLLM panics on out-of-responses, so over-
+	// providing is the safe direction.)
+	llm := &mockLLM{responses: []string{"baseline summary", "should-not-be-called", "should-not-be-called-2"}}
+
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	if result1.ManifestCacheHit {
+		t.Fatal("first run should miss")
+	}
+	firstHash := cache.Hash
+
+	// Inject a historical record (valid_until in the past).
+	histID := addProcessedNodeWithEmbedding(t, eng, "Old record that's been superseded", []float32{0.5, 0.5, 0.5})
+	eng.Lock()
+	eng.SetProp(histID, "valid_until", graph.TimestampProperty(time.Now().UTC().Add(-1*time.Hour)))
+	eng.Save("supersede")
+	eng.Unlock()
+
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+
+	if !result2.ManifestCacheHit {
+		t.Errorf("historical-only mutation should not bust the manifest cache (current state unchanged); got cache miss")
+	}
+	if cache.Hash != firstHash {
+		t.Errorf("fingerprint should be stable across historical-record additions; got hash change %q -> %q",
+			firstHash, cache.Hash)
+	}
+}
+
+// TestManifestCacheInvalidatesOnLiveSupersession is the complement:
+// when a CURRENT record is superseded (gets valid_until applied),
+// the live record set shrinks by one and the fingerprint must
+// change.
+func TestManifestCacheInvalidatesOnLiveSupersession(t *testing.T) {
+	eng := setupEngine(t)
+
+	ids := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		id := addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+		ids = append(ids, id)
+	}
+
+	llm := &mockLLM{responses: []string{"baseline", "post-supersede"}}
+	cache := &ManifestCache{}
+	result1 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result1, cache, nil)
+	firstHash := cache.Hash
+
+	// Supersede one of the live records. Live count drops 6 -> 5.
+	eng.Lock()
+	eng.SetProp(ids[0], "valid_until", graph.TimestampProperty(time.Now().UTC().Add(-1*time.Minute)))
+	eng.Save("supersede")
+	eng.Unlock()
+
+	result2 := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, config.Defaults(), result2, cache, nil)
+
+	if result2.ManifestCacheHit {
+		t.Errorf("supersession of a live record changes the live count; expected cache miss")
+	}
+	if cache.Hash == firstHash {
+		t.Errorf("fingerprint should change when a live record moves to historical; got stable hash")
+	}
+}
+
 func TestClassifySystemPromptShortIsSmaller(t *testing.T) {
 	if ClassifySystemPromptShort == "" {
 		t.Fatal("ClassifySystemPromptShort must be defined")
@@ -1467,7 +1549,7 @@ func TestMeanCosineToCentroidUnit(t *testing.T) {
 	}
 
 	eng.RLock()
-	mean, n := meanCosineToCentroid(eng.Graph(), ids)
+	mean, n, _ := meanCosineToCentroid(eng.Graph(), ids)
 	eng.RUnlock()
 
 	if n != 3 {
@@ -1484,7 +1566,7 @@ func TestMeanCosineToCentroidUnit(t *testing.T) {
 		addProcessedNodeWithEmbedding(t, eng, "z", []float32{0.0, 0.0, 1.0}),
 	}
 	eng.RLock()
-	meanDiv, _ := meanCosineToCentroid(eng.Graph(), divIDs)
+	meanDiv, _, _ := meanCosineToCentroid(eng.Graph(), divIDs)
 	eng.RUnlock()
 
 	if meanDiv > 0.7 {
@@ -1497,12 +1579,48 @@ func TestMeanCosineToCentroidEmpty(t *testing.T) {
 	eng.RLock()
 	defer eng.RUnlock()
 
-	mean, n := meanCosineToCentroid(eng.Graph(), []string{"nonexistent-1", "nonexistent-2"})
+	mean, n, _ := meanCosineToCentroid(eng.Graph(), []string{"nonexistent-1", "nonexistent-2"})
 	if n != 0 {
 		t.Fatalf("no embeddings should count 0, got %d", n)
 	}
 	if mean != 0 {
 		t.Fatalf("no embeddings should return 0 mean, got %f", mean)
+	}
+}
+
+// TestMeanCosineToCentroidDimMismatchSurfaced is the regression for
+// P2-09 fix #2: when concept members have heterogeneous embedding
+// dimensions (e.g. embedding model changed mid-store), the function
+// must report the count of skipped members so the caller can warn
+// instead of silently producing a misleadingly-low n.
+func TestMeanCosineToCentroidDimMismatchSurfaced(t *testing.T) {
+	eng := setupEngine(t)
+
+	// Two 3-dim members + two 4-dim members. The first wins as the
+	// reference dim (loop order is deterministic with stable IDs);
+	// the others are reported as mismatched.
+	ids := []string{
+		addProcessedNodeWithEmbedding(t, eng, "first-3d", []float32{1.0, 0.0, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "second-3d", []float32{0.99, 0.1, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "first-4d", []float32{1.0, 0.0, 0.0, 0.0}),
+		addProcessedNodeWithEmbedding(t, eng, "second-4d", []float32{0.99, 0.1, 0.0, 0.0}),
+	}
+
+	eng.RLock()
+	mean, used, mismatched := meanCosineToCentroid(eng.Graph(), ids)
+	eng.RUnlock()
+
+	if used+mismatched != 4 {
+		t.Errorf("used (%d) + mismatched (%d) should sum to total members (4)", used, mismatched)
+	}
+	if mismatched == 0 {
+		t.Errorf("mixed-dim members should produce mismatched > 0; got 0 (silent skip is the bug)")
+	}
+	if used < 2 {
+		t.Errorf("at least one of the dim-groups should still produce ≥2 vectors for a coherent mean; got used=%d", used)
+	}
+	if mean == 0 && used >= 2 {
+		t.Errorf("with %d valid same-dim members the mean should be non-zero", used)
 	}
 }
 

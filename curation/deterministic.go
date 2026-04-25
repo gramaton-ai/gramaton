@@ -865,23 +865,36 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 // to confirm a cosine-based duplicate match. True duplicates (even with
 // minor edits) easily exceed this; structurally similar but semantically
 // different documents fall well below.
-const dedupJaccardMin = 0.3
+const (
+	dedupJaccardMin       = 0.3 // long-content threshold
+	dedupJaccardShortMin  = 0.5 // short-content threshold (stricter)
+	dedupShortContentChars = 200
+)
 
 // verifyDedupJaccard checks whether two nodes are genuine duplicates by
 // comparing word-level Jaccard similarity on their content. Returns false
-// for long documents with high cosine similarity but different content.
+// when token overlap is below the threshold.
+//
+// The threshold is stricter for short content. Reason: BERT-class
+// embeddings compress short text into a region dominated by positional
+// and structural tokens, so cosine ≥ 0.92 on a short pair is much less
+// discriminating than the same score on a long pair. The previous
+// behaviour (skip Jaccard entirely when both sides <200 chars and trust
+// cosine) was load-bearing for false-positive supersession on short
+// records — see tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
 func verifyDedupJaccard(a, b *graph.Node) bool {
 	textA := curationNodeText(a)
 	textB := curationNodeText(b)
 
-	// Skip check for short content where cosine alone is reliable.
-	if len(textA) < 200 && len(textB) < 200 {
-		return true
-	}
-
 	tokA := index.Tokenize(textA)
 	tokB := index.Tokenize(textB)
-	return index.JaccardSimilarity(tokA, tokB) >= dedupJaccardMin
+	sim := index.JaccardSimilarity(tokA, tokB)
+
+	threshold := dedupJaccardMin
+	if len(textA) < dedupShortContentChars || len(textB) < dedupShortContentChars {
+		threshold = dedupJaccardShortMin
+	}
+	return sim >= threshold
 }
 
 // curationNodeText returns the best content text for Jaccard comparison.
@@ -1126,9 +1139,15 @@ func isWeakConceptKeyword(kw string) bool {
 	}
 	// Meta-terms that describe the source, not the content.
 	weak := map[string]bool{
+		// Source/structure meta-terms.
 		"article": true, "section": true, "overview": true,
 		"summary": true, "reference": true, "document": true,
 		"note": true, "notes": true, "todo": true,
+		// Generic LLM/agent vocabulary that appears across nearly
+		// every record without distinguishing concepts. Pre-fix these
+		// were leaking into concept clusters and producing muddled
+		// "context"-themed concepts. Tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
+		"context": true, "content": true, "system": true,
 	}
 	return weak[strings.ToLower(kw)]
 }

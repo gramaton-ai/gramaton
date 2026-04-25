@@ -9,6 +9,45 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Curation dedup safeguards + multi-dim embedding handling
+  (`01KPEDCPMXR23V1SSGTNXGRS7T`).** Five targeted fixes in
+  `curation/`:
+  (1) `verifyDedupJaccard` no longer skips the token-overlap check
+  for short content. The previous behaviour returned true (= "yes,
+  consolidate") whenever both sides were <200 chars, so cosine ≥
+  0.92 alone could trigger auto-supersession. Short-content cosine
+  is the *least* reliable signal (BERT subspaces compress short
+  text into a region dominated by structural tokens), not the most.
+  Now: when either side is <200 chars, the Jaccard threshold tightens
+  from 0.3 to 0.5 — catches the false-positive shape "auth bug" vs
+  "login bug" (Jaccard 0.33, was passing).
+  (2) `meanCosineToCentroid` returns a third value `dimMismatched`
+  counting members skipped due to embedding-dimension mismatch
+  (e.g. embedding model changed mid-store). The caller now Warn-logs
+  with a hint to run `gramaton reembed`. Pre-fix this was a silent
+  skip producing misleadingly-low n counts at scale.
+  (3) `ExtractObservations` docstring expanded to call out the
+  `score=1.0` stub when sentence count ≤ maxObs (no TF-IDF ranking
+  happens). Behaviour unchanged; the gap was that operators reading
+  the score field assumed it meant "high confidence extraction".
+  (4) `generateManifestSummary` now skips historical records
+  (`valid_until` set + in the past) when computing the fingerprint.
+  The manifest summarises the CURRENT state of the store, so
+  counting superseded records inflated the totals and muddied the
+  per-classification breakdowns. Cache invalidation still fires
+  correctly on live-record supersession (live count drops 1, hash
+  changes); historical-only mutations no longer bust the cache.
+  (5) Weak-keyword denylist extended with `context`, `content`,
+  `system` — generic LLM/agent vocabulary that was leaking into
+  concept clusters and producing muddled "context"-themed
+  syntheses. Six new tests: `TestVerifyDedupJaccard{Long,Short
+  RejectsFalsePositives,MixedLengthUsesStricterThreshold}`,
+  `TestMeanCosineToCentroidDimMismatchSurfaced`,
+  `TestManifestCacheIgnoresHistoricalRecords`,
+  `TestManifestCacheInvalidatesOnLiveSupersession`,
+  `TestIsWeakConceptKeyword`. Three callers of
+  `meanCosineToCentroid` updated to consume the new third return.
+
 - **api.Diff regression coverage + timezone-fragile date tests
   (`01KPKNK4AV6F61S9CN4ESE553Q` resolved as already-fixed).** The
   tracker reported `api.Diff` returning empty buckets even when

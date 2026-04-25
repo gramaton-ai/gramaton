@@ -19,12 +19,27 @@ type Observation struct {
 	Score float64 // TF-IDF importance score (higher = more informative)
 }
 
-// ExtractObservations selects the most informative sentences from content
-// using TF-IDF scoring. Returns up to maxObs observations, sorted by
-// their order of appearance in the text (not by score).
+// ExtractObservations selects the most informative sentences from
+// content using TF-IDF scoring. Returns up to maxObs observations,
+// sorted by their order of appearance in the text (not by score).
+//
+// Length-based behaviour:
+//
+//   - <500 chars: returns nil. The record is too short to decompose;
+//     it is its own observation. (Production callers in observe.go
+//     gate at ObservationMinContentLength, default 1500, so this
+//     internal 500-char check is a defence-in-depth backstop.)
+//
+//   - sentences ≤ maxObs: bypasses TF-IDF and returns every sentence
+//     with score=1.0. There's no scoring signal when there's nothing
+//     to rank. Documented because the score=1.0 looks like a "high
+//     confidence" extraction but actually means "stub score, no
+//     ranking happened".
+//
+//   - sentences > maxObs: scores via TF-IDF, selects top maxObs by
+//     score, returns them in document order.
 //
 // Sliding scale (D23): maxObs = min(len(content)/1000, cap).
-// Records <500 chars return nil (the record itself is the observation).
 func ExtractObservations(content string, maxCap int) []Observation {
 	if len(content) < 500 {
 		return nil
@@ -43,7 +58,8 @@ func ExtractObservations(content string, maxCap int) []Observation {
 
 	sentences := splitSentences(content)
 	if len(sentences) <= maxObs {
-		// Fewer sentences than slots -- return all.
+		// Fewer sentences than slots -- return all with stub score.
+		// See ExtractObservations docstring for the score=1.0 caveat.
 		obs := make([]Observation, len(sentences))
 		for i, s := range sentences {
 			obs[i] = Observation{Text: s.text, Score: 1.0}

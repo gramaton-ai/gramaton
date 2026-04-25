@@ -724,6 +724,17 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		if isChunkNode(e.Graph(), id) {
 			continue
 		}
+		// Skip historical records (valid_until set + in the past).
+		// The manifest summarises the CURRENT state of the store;
+		// counting superseded records inflates the totals and muddies
+		// the per-classification breakdowns. The fingerprint cache
+		// remains correctly invalidated when the *current* set
+		// changes — supersession adds valid_until, which moves the
+		// record out of this count, which changes the fingerprint.
+		// Tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
+		if vu, ok := n.Properties.GetTimestamp("valid_until"); ok && vu.Before(time.Now().UTC()) {
+			continue
+		}
 		totalRecords++
 		if kt, ok := n.Properties.GetString("knowledge_type"); ok {
 			typeMap[kt]++
@@ -1017,7 +1028,15 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		// threshold is 0 (no filter) so behavior is unchanged unless
 		// the user opts in.
 		if coherenceMin > 0 {
-			cos, n := meanCosineToCentroid(g, pc.memberIDs)
+			cos, n, dimMismatched := meanCosineToCentroid(g, pc.memberIDs)
+			if dimMismatched > 0 {
+				logger.Warn("concept members skipped due to embedding dimension mismatch",
+					"component", "curation",
+					"keyword", pc.keyword,
+					"mismatched", dimMismatched,
+					"used", n,
+					"hint", "embedding model likely changed mid-store; run gramaton reembed")
+			}
 			if n >= 2 && cos < coherenceMin {
 				logger.Debug("concept below coherence threshold, skipping",
 					"component", "curation",
@@ -1169,12 +1188,18 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 // meanCosineToCentroid computes the mean cosine similarity of member
 // records to their centroid, using `embedding_full` as the vector.
-// Members without an embedding are skipped. Returns (0, 0) when fewer
-// than 2 members have embeddings (meaningful coherence requires at least
-// two vectors). Assumes embeddings are already L2-normalized (which the
-// current embedding pipelines produce); the centroid is re-normalized
+// Members without an embedding are skipped silently. Members with a
+// dimension mismatch (e.g. embedding model changed mid-store) are
+// skipped and counted in `dimMismatched` so the caller can surface it
+// — silently dropping mismatched members produced misleadingly-low n
+// counts at scale (tracker 01KPEDCPMXR23V1SSGTNXGRS7T).
+//
+// Returns (0, n, dimMismatched) when fewer than 2 members have valid
+// embeddings (meaningful coherence requires at least two vectors).
+// Assumes embeddings are already L2-normalized (which the current
+// embedding pipelines produce); the centroid is re-normalized
 // defensively.
-func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (float64, int) {
+func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (cos float64, used int, dimMismatched int) {
 	var vecs [][]float32
 	var dim int
 	for _, id := range memberIDs {
@@ -1190,12 +1215,13 @@ func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (float64, int) {
 			dim = len(emb)
 		}
 		if len(emb) != dim {
-			continue // dimension mismatch, skip
+			dimMismatched++
+			continue
 		}
 		vecs = append(vecs, emb)
 	}
 	if len(vecs) < 2 {
-		return 0, len(vecs)
+		return 0, len(vecs), dimMismatched
 	}
 
 	// Centroid = mean of all vectors.
@@ -1216,7 +1242,7 @@ func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (float64, int) {
 		norm += f * f
 	}
 	if norm <= 0 {
-		return 0, len(vecs)
+		return 0, len(vecs), dimMismatched
 	}
 	invN := 1.0 / float32(math.Sqrt(float64(norm)))
 	for i := range centroid {
@@ -1232,7 +1258,7 @@ func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (float64, int) {
 		}
 		sum += float64(dot)
 	}
-	return sum / float64(len(vecs)), len(vecs)
+	return sum / float64(len(vecs)), len(vecs), dimMismatched
 }
 
 // parseBatchSynthesis extracts synthesis strings from a JSON array
