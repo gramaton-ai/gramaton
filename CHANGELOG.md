@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gramaton preflight` environment-verification command
+  (`01KPVD4YF4PZT8CHSCM345S1TX`).** A diagnostic command that
+  answers "is my Gramaton install healthy?" in plain English.
+  Pairs with `gramaton init`: init sets up first-time, preflight
+  verifies every-time-before-use. Scope is the install/environment
+  (config, providers, MCP registration, hooks, log errors) — store
+  data is covered by `gramaton validate` / `repair` / `reembed`.
+  Eight checks: Config (presence + parseability + perms), Data
+  directory (writable), Embedding (provider configured + key file
+  if cloud), LLM (provider + key file/env + perms), Server
+  (running with live PID), MCP (gramaton registered with Claude
+  Code via `claude mcp list`), Hooks (per-client script count +
+  exec bits), Recent log errors (tail of gramaton.log scanned for
+  ERROR lines). Output: `✓` / `⚠` / `✗` / `○` per check, with
+  one-line remediation on warn/error. Non-zero exit on any error
+  so CI / pre-flight scripts can gate on a clean run. 16 unit
+  tests cover the per-check logic against pre-seeded
+  filesystems. The `--fix` auto-remediation stretch goal from
+  the original tracker is deferred to a P3 follow-up — diagnose
+  first, fix-flag once we have specific remediations per check.
+
 ### Fixed
 
 - **Ctrl+C during `gramaton init --force` no longer destroys the
