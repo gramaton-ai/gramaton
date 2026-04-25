@@ -271,8 +271,8 @@ func (w *Wizard) askImportOrFresh() (bool, error) {
 		"an existing knowledge store from another computer?",
 	)
 	w.writer.Blank()
-	w.writer.Raw("    [1] First time")
-	w.writer.Raw("    [2] Import a backup from another computer")
+	w.writer.Raw("    [1] First time  (or re-running to reconfigure — won't touch your existing data)")
+	w.writer.Raw("    [2] Import a backup from another computer  (replaces data with the archive)")
 	w.writer.Blank()
 	w.writer.Prompt(">")
 
