@@ -236,9 +236,15 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 // could starve every downstream task in a 1-minute curation cycle.
 // Tracker 01KPEDCF8T9NXTRMJ04HFE93K2.
 //
-// `timeout <= 0` disables the per-task cap and runs fn under the
-// parent ctx (legacy behavior).
+// Bails immediately when the parent ctx is already cancelled (server
+// shutdown / cycle cancellation) so a cancelled cycle doesn't pay
+// per-task setup cost across N remaining tasks. `timeout <= 0`
+// disables the per-task cap and runs fn under the parent ctx (legacy
+// behavior).
 func runTaskWithTimeout(parentCtx context.Context, name string, timeout time.Duration, logger *slog.Logger, fn func(context.Context)) {
+	if err := parentCtx.Err(); err != nil {
+		return
+	}
 	if timeout <= 0 {
 		fn(parentCtx)
 		return
@@ -774,9 +780,16 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	// speculative-low to well_established-high) that should
 	// invalidate the cached manifest summary.
 	confidenceMap := make(map[string]int)
-	kwCounts := e.PropIdx().KeywordCounts("content_keywords")
+	// kwCounts is built inline from the SAME live-record loop that
+	// produces totalRecords/typeMap/etc., not from the unfiltered
+	// PropIdx().KeywordCounts() — that index includes historical
+	// (valid_until-past) records and would defeat the historical-
+	// filter cache stability guarantee. Tracker 01KPEDCPMXR23V1SSGTNXGRS7T
+	// follow-up.
+	kwCounts := make(map[string]int)
 	var earliest, latest time.Time
 
+	now := time.Now().UTC()
 	msIt := e.Graph().NodeIterator()
 	for msIt.Next() {
 		n := msIt.Node()
@@ -795,7 +808,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		// changes — supersession adds valid_until, which moves the
 		// record out of this count, which changes the fingerprint.
 		// Tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
-		if vu, ok := n.Properties.GetTimestamp("valid_until"); ok && vu.Before(time.Now().UTC()) {
+		if vu, ok := n.Properties.GetTimestamp("valid_until"); ok && vu.Before(now) {
 			continue
 		}
 		totalRecords++
@@ -819,6 +832,11 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 			}
 		} else {
 			confidenceMap["unset"]++
+		}
+		if kws, ok := n.Properties.GetStringList("content_keywords"); ok {
+			for _, kw := range kws {
+				kwCounts[kw]++
+			}
 		}
 		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
 			if earliest.IsZero() || ca.Before(earliest) {

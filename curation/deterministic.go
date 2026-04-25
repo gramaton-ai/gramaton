@@ -129,81 +129,93 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		contentShort, hasShort := n.Properties.GetString("content_short")
 		_, hasEmbedShort := n.Properties["embedding_short"]
 
+		// Concept-only work: existingConcepts tracking + Quality Rule 1.
+		// Rule 1 (label-as-summary) firing is exclusive — when it fires
+		// the original `it2` continued without checking Rules 2/3,
+		// matching the cleanup intent (replace the placeholder summary
+		// in one shot). Rule 1 NOT firing falls through to Rules 2/3
+		// below (so a fresh concept with a template content_short still
+		// gets flag_embed coverage).
+		rule1Fired := false
 		if isConcept {
-			// Concept-only branch: track existing keywords + concept-quality rule.
 			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
 				existingConcepts[kw] = struct{}{}
-				// Quality rule 1: concept node with label-as-summary.
 				if contentShort == kw && hasFullContent {
 					qualityIssues = append(qualityIssues, qualityIssue{
 						nodeID: id,
 						fix:    "concept_summary",
 						short:  conceptShortSummary(contentFull, 200),
 					})
+					rule1Fired = true
 				}
 			}
+		}
+
+		// Non-concept work: manifest stats, lifecycle, orphan detection.
+		// Concepts are derived from clusters, not user records, so they
+		// don't contribute to TotalRecords / RecordsByType / etc., and
+		// they don't get the staleness lifecycle treatment.
+		if !isConcept {
+			manifest.TotalRecords++
+
+			if kt, ok := n.Properties.GetString("knowledge_type"); ok {
+				manifest.RecordsByType[kt]++
+			}
+
+			if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
+				if manifest.EarliestRecord.IsZero() || ca.Before(manifest.EarliestRecord) {
+					manifest.EarliestRecord = ca
+				}
+				if ca.After(manifest.LatestRecord) {
+					manifest.LatestRecord = ca
+				}
+			}
+
+			if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "captured" {
+				manifest.PendingCount++
+			}
+
+			staleness := search.ComputeStaleness(n, now, cfg.Decay)
+			if staleness > 0.5 {
+				staleCount++
+			}
+
+			temp, _ := n.Properties.GetString("temporality")
+			_, hasValidUntil := n.Properties.GetTimestamp("valid_until")
+			if !hasValidUntil {
+				shouldExpire := false
+				if temp == "ephemeral" && staleness >= cfg.Curation.StaleEphemeralScore {
+					shouldExpire = true
+				}
+				if temp == "temporal" && staleness >= cfg.Curation.StaleTemporalScore {
+					shouldExpire = true
+				}
+				if shouldExpire {
+					staleIDs = append(staleIDs, id)
+				}
+			}
+
+			ec := nonChunkEdgeCount(g, id)
+			if ec == 0 {
+				conf, hasConf := n.Properties.GetFloat64("confidence")
+				ps, _ := n.Properties.GetString("processing_status")
+				if ps != "captured" && (!hasConf || conf >= 0.3) {
+					orphanIDs = append(orphanIDs, id)
+				}
+			}
+		}
+
+		// Quality Rules 2 and 3 apply to BOTH concept and non-concept
+		// nodes (the original `it2` ran them on every non-deleted,
+		// non-chunk node), but skip when Rule 1 already produced a fix
+		// for this concept. This preserves the original semantics that
+		// a fresh concept with a template content_short and no
+		// embedding_short fires flag_embed.
+		if rule1Fired {
 			continue
 		}
 
-		// Non-concept branch: manifest, lifecycle, orphans, non-concept
-		// quality rules.
-		manifest.TotalRecords++
-
-		// Track by knowledge type.
-		if kt, ok := n.Properties.GetString("knowledge_type"); ok {
-			manifest.RecordsByType[kt]++
-		}
-
-		// Track temporal range.
-		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
-			if manifest.EarliestRecord.IsZero() || ca.Before(manifest.EarliestRecord) {
-				manifest.EarliestRecord = ca
-			}
-			if ca.After(manifest.LatestRecord) {
-				manifest.LatestRecord = ca
-			}
-		}
-
-		// Pending count.
-		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "captured" {
-			manifest.PendingCount++
-		}
-
-		// Staleness check for lifecycle transitions.
-		staleness := search.ComputeStaleness(n, now, cfg.Decay)
-		if staleness > 0.5 {
-			staleCount++
-		}
-
-		temp, _ := n.Properties.GetString("temporality")
-		_, hasValidUntil := n.Properties.GetTimestamp("valid_until")
-		if !hasValidUntil {
-			shouldExpire := false
-			if temp == "ephemeral" && staleness >= cfg.Curation.StaleEphemeralScore {
-				shouldExpire = true
-			}
-			if temp == "temporal" && staleness >= cfg.Curation.StaleTemporalScore {
-				shouldExpire = true
-			}
-			if shouldExpire {
-				staleIDs = append(staleIDs, id)
-			}
-		}
-
-		// Orphan detection: records with 0 non-chunk edges.
-		// Skip low-quality records to prevent creating edges on junk
-		// that blocks GC. Unclassified (captured) records should be
-		// classified first; low-confidence records are likely noise.
-		ec := nonChunkEdgeCount(g, id)
-		if ec == 0 {
-			conf, hasConf := n.Properties.GetFloat64("confidence")
-			ps, _ := n.Properties.GetString("processing_status")
-			if ps != "captured" && (!hasConf || conf >= 0.3) {
-				orphanIDs = append(orphanIDs, id)
-			}
-		}
-
-		// Quality rule 2: content_short too short relative to content_full.
+		// Rule 2: content_short too short relative to content_full.
 		if hasShort && hasFullContent && len(contentShort) < 20 && len(contentFull) > 100 {
 			qualityIssues = append(qualityIssues, qualityIssue{
 				nodeID: id,
@@ -213,7 +225,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			continue
 		}
 
-		// Quality rule 3: content_short exists but embedding_short is missing.
+		// Rule 3: content_short exists but embedding_short is missing.
 		if hasShort && len(contentShort) > 10 && !hasEmbedShort {
 			qualityIssues = append(qualityIssues, qualityIssue{
 				nodeID: id,

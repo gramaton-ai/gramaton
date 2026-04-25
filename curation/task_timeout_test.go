@@ -47,8 +47,15 @@ func TestRunTaskWithTimeoutCancelsHungTask(t *testing.T) {
 	if atomic.LoadInt32(&taskCancelled) != 1 {
 		t.Errorf("task fn did not observe ctx cancellation")
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("runTaskWithTimeout took %v, expected ~50ms (hung task should not block long)", elapsed)
+	// Generous upper bound to absorb goroutine startup latency on
+	// slow CI under -race; the load-bearing assertion is "this
+	// returned at all", not "it returned at exactly 50ms". A 1s
+	// ceiling is still 20x the timeout, so a regression that
+	// genuinely doesn't cancel (e.g. a future bug that drops the
+	// WithTimeout) would still fail this test on any reasonable
+	// machine.
+	if elapsed > time.Second {
+		t.Errorf("runTaskWithTimeout took %v, expected well under 1s for a 50ms timeout (cancellation regressed?)", elapsed)
 	}
 	if !strings.Contains(buf.String(), `task=classify`) ||
 		!strings.Contains(buf.String(), `per-task timeout`) {
@@ -96,6 +103,28 @@ func TestRunTaskWithTimeoutZeroDisablesTimeout(t *testing.T) {
 
 	if receivedCtx != parentCtx {
 		t.Errorf("with timeout=0, fn should receive the parent ctx unchanged")
+	}
+}
+
+// TestRunTaskWithTimeoutBailsOnCancelledParent pins that a cancelled
+// parent ctx (server shutdown / cycle cancellation) skips fn entirely
+// — no per-task setup cost paid for the remaining N tasks in the
+// cycle when the cycle has already been told to stop.
+func TestRunTaskWithTimeoutBailsOnCancelledParent(t *testing.T) {
+	logger := slog.Default()
+
+	parent, cancel := context.WithCancel(context.Background())
+	cancel() // cancel BEFORE the call
+
+	var ran int32
+
+	runTaskWithTimeout(parent, "classify", 5*time.Second, logger,
+		func(c context.Context) {
+			atomic.StoreInt32(&ran, 1)
+		})
+
+	if atomic.LoadInt32(&ran) != 0 {
+		t.Errorf("fn should NOT run when parent ctx is already cancelled")
 	}
 }
 

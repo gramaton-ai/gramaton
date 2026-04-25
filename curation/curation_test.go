@@ -715,23 +715,31 @@ func TestQualityAuditShortSummary(t *testing.T) {
 	}
 }
 
-// TestRunDeterministicSinglePassMixedNodes pins the P2-07 fix #1
-// invariant: the unified single-pass collector still produces the
-// right outputs across the three node categories (regular records,
-// concept nodes, deleted records) that the previous three separate
-// iterators each filtered differently. Specifically:
+// TestRunDeterministicMergedLoopBranchesByNodeType pins the
+// behavioral invariants the P2-07 iterator merge had to preserve:
 //
-//   - regular records contribute to manifest.TotalRecords + quality
-//     rules 2/3 (extract_short, flag_embed)
+//   - regular records contribute to manifest.TotalRecords +
+//     non-concept lifecycle / orphan checks + quality Rules 2/3
 //   - concept nodes do NOT contribute to TotalRecords but DO populate
-//     existingConcepts (so duplicate-concept creation is suppressed)
-//     AND run the concept-quality rule
-//   - deleted records are skipped from all phases
+//     existingConcepts (suppressing duplicate concept creation)
+//     AND fall through to Rules 2/3 when Rule 1 doesn't fire
+//   - deleted records are skipped from every phase
 //
-// The previous three-iterator structure made these branch
-// independently; the merged loop has to branch correctly inside one
-// pass.
-func TestRunDeterministicSinglePassMixedNodes(t *testing.T) {
+// The pre-merge code split these three concerns across separate
+// iterators (`it`, `it2`, `cnIt`), each with its own filter. The
+// merged loop has to keep all three filters correct in one pass.
+// Two regression-grade specific assertions (beyond the original
+// stability check):
+//
+//   1. A SECOND RunDeterministic over the same store proposes ZERO
+//      new concepts for the existing kafka keyword, proving
+//      existingConcepts was populated correctly.
+//   2. A FRESH concept node with template-style content_short and
+//      missing embedding_short triggers Rule 3 (flag_embed),
+//      bumping QualityFlags. The pre-fix merged loop's
+//      unconditional `continue` after the concept branch dropped
+//      this — concept embeddings drifted silently.
+func TestRunDeterministicMergedLoopBranchesByNodeType(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
 
@@ -751,12 +759,20 @@ func TestRunDeterministicSinglePassMixedNodes(t *testing.T) {
 		eng.PropIdx().Add(regular.ID, k, v)
 	}
 
-	// Concept node — must be excluded from TotalRecords AND must
-	// populate existingConcepts so a duplicate concept isn't proposed.
+	// Existing concept node with kafka keyword — must populate
+	// existingConcepts so a duplicate concept isn't proposed.
+	// Note: content_short = "kafka stream patterns" (≠ keyword), so
+	// Rule 1 does NOT fire on this node — leaving the path open for
+	// Rules 2/3 to evaluate (Rule 2 is gated on len < 20 / len > 100,
+	// Rule 3 on hasEmbedShort). This concept has neither short<20 nor
+	// missing embedding_short (we set neither), so it produces no
+	// quality issue. The freshConcept below is the one that exercises
+	// the Rule 3 fall-through.
 	conceptKW := "kafka"
 	concept := eng.Graph().AddNode(graph.Properties{
 		"content_full":      graph.StringProperty("Concept synthesis: kafka stream processing patterns and operational lessons."),
-		"content_short":     graph.StringProperty("kafka concept synthesis"),
+		"content_short":     graph.StringProperty("kafka stream patterns and operational lessons synthesis"),
+		"embedding_short":   graph.VectorProperty([]float32{0.1, 0.2, 0.3}),
 		"processing_status": graph.StringProperty("processed"),
 		"node_type":         graph.StringProperty("concept"),
 		"concept_keyword":   graph.StringProperty(conceptKW),
@@ -766,6 +782,25 @@ func TestRunDeterministicSinglePassMixedNodes(t *testing.T) {
 	})
 	for k, v := range concept.Properties {
 		eng.PropIdx().Add(concept.ID, k, v)
+	}
+
+	// Fresh concept node — content_short is template-style ("redis"
+	// itself, NOT "redis (5 records)" — that would match concept_keyword
+	// and fire Rule 1). With contentShort != keyword + no
+	// embedding_short, this pin ONLY catches when concept-Rule-3 fall-
+	// through is preserved.
+	freshConcept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Concept page for redis covering caching patterns and replication strategies and lots of detail to push past the 100 char floor of Rule 2."),
+		"content_short":     graph.StringProperty("Cache + replication"), // 19 chars; ≠ keyword; would also trip Rule 2
+		// No embedding_short — Rule 3 candidate.
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("redis"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range freshConcept.Properties {
+		eng.PropIdx().Add(freshConcept.ID, k, v)
 	}
 
 	// Deleted record — must be skipped entirely.
@@ -788,25 +823,29 @@ func TestRunDeterministicSinglePassMixedNodes(t *testing.T) {
 	}
 	// Manifest counts regular records only — not concept, not deleted.
 	if m.TotalRecords != 1 {
-		t.Errorf("manifest.TotalRecords = %d, want 1 (regular only; concept and deleted excluded)", m.TotalRecords)
+		t.Errorf("manifest.TotalRecords = %d, want 1 (regular only; concept + freshConcept + deleted excluded)", m.TotalRecords)
 	}
 
-	// existingConcepts must have been populated; a second
-	// RunDeterministic with the same store should not propose a
-	// duplicate concept for "kafka" even if its keyword count is high
-	// enough — the cnIt phase prevented that pre-refactor and the
-	// unified pass must too. (Concept proposal is gated by a few
-	// thresholds; the easiest behavioral check is that we don't crash
-	// and the second run is stable.)
+	// Rule 2 fires on the fresh concept (short=19, full>100). Rule 3
+	// would also fire if Rule 2 didn't (no embedding_short). Either
+	// way, the merged loop must produce a quality issue for the
+	// fresh concept; pre-fix it produced ZERO because the concept
+	// branch unconditionally continue'd.
+	if result.QualityRepairs+result.QualityFlags == 0 {
+		t.Errorf("expected at least one quality issue from the fresh concept node (Rules 2/3 should fall through for concept nodes when Rule 1 doesn't fire); got %d repairs + %d flags",
+			result.QualityRepairs, result.QualityFlags)
+	}
+
+	// existingConcepts must have been populated. Pin specifically
+	// that no duplicate "kafka" concept candidate is proposed on a
+	// second run — the populated existingConcepts should suppress
+	// it.
 	r2 := RunDeterministic(eng, cfg, nil)
-	if r2.Manifest == nil || r2.Manifest.TotalRecords != 1 {
-		t.Errorf("second-run TotalRecords drifted: got %v",
-			func() any {
-				if r2.Manifest == nil {
-					return "nil manifest"
-				}
-				return r2.Manifest.TotalRecords
-			}())
+	for _, c := range r2.ConceptCandidates {
+		if c.Keyword == conceptKW {
+			t.Errorf("existingConcepts didn't suppress duplicate concept proposal for %q; got candidate %+v",
+				conceptKW, c)
+		}
 	}
 }
 

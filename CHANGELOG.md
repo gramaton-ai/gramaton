@@ -9,6 +9,63 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Curation review-pass cleanups (post-P2-07 / P2-08 / P2-09 review).**
+  Six follow-up fixes from a deep review of the P2-07/P2-08/P2-09
+  commits:
+  (1) `generateManifestSummary` keyword counts now come from the
+  same live-only loop as the other manifest stats. Pre-fix, the
+  P2-09 fix #4 historical-record filter only protected
+  totalRecords/typeMap/etc. — `kwCounts` was sourced from
+  `PropIdx().KeywordCounts()` which includes historical records, so
+  adding/removing a historical record could still bust the
+  manifest cache via the top-keywords fingerprint. Post-fix:
+  inline kwCounts inside the filtered loop. Strengthened
+  `TestManifestCacheIgnoresHistoricalRecords` to seed
+  `content_keywords` and inject a distinctive "leakcanary" keyword
+  on the historical record — pre-fix this would have busted the
+  cache; post-fix the live-only count keeps it stable.
+  (2) `RunDeterministic` merged loop now restores the original
+  `it2` semantics where Quality Rules 2/3 fall through for concept
+  nodes when Rule 1 doesn't fire. Pre-fix (P2-07 fix #1's first
+  cut), the concept branch unconditionally `continue`d, so fresh
+  concept nodes with template-style content_short and missing
+  `embedding_short` no longer triggered Rule 3 (flag_embed) →
+  concept embeddings drifted silently. Post-fix: a `rule1Fired`
+  flag governs the skip; concept-only manifest/lifecycle work
+  stays gated on `!isConcept`. New
+  `TestRunDeterministicMergedLoopBranchesByNodeType` (renamed from
+  `TestRunDeterministicSinglePassMixedNodes` to describe the
+  invariant, not the implementation) seeds a fresh concept and
+  asserts QualityRepairs+QualityFlags > 0, plus pins that
+  existingConcepts suppresses duplicate concept proposal on a
+  second run.
+  (3) `runTaskWithTimeout` now bails immediately when the parent
+  ctx is already cancelled — no per-task setup cost paid for
+  remaining tasks when a cycle has been told to stop. New
+  `TestRunTaskWithTimeoutBailsOnCancelledParent` pins it.
+  (4) Test bug: `enrich_concepts_test.go` was calling
+  `eng.HeadHashLocked()` without holding the lock. Switched to
+  `eng.HeadHash()` (the locking variant); single-goroutine test so
+  no race in practice, but the convention-violation could mask a
+  real race on a future change.
+  (5) New `TestEnrichConceptSynthesesLogsDimMismatch` exercises
+  the user-visible payoff of P2-09 fix #2: when a concept cluster
+  has mixed-dimension embeddings, the warn log emits with
+  "embedding dimension mismatch" + "gramaton reembed" hint. The
+  pre-existing `TestMeanCosineToCentroidDimMismatchSurfaced` only
+  asserted the third return value, not the log emission.
+  (6) New `TestTaskCtxAttachesLabelOnSinglePath` /
+  `TestTaskCtxAttachesLabelOnWorkerPath` /
+  `TestTaskCtxNoTaskNoLabel` pin that `parallelLLM`'s deduplicated
+  `taskCtx` helper attaches the telemetry task label correctly on
+  both the single-item fast path and the worker-loop path.
+  Drift-resistant — if the helper ever silently drops the label,
+  these tests fail on either path. Plus minor cleanups: renamed
+  `TestGenerateSummariesNonStructuralWithEdges` to describe the
+  invariant; deflaked
+  `TestRunTaskWithTimeoutCancelsHungTask` upper-bound check
+  (50ms→1s tolerance for slow CI under -race).
+
 - **Curation autonomous tasks no longer block each other on a hung LLM call
   (`01KPEDCF8T9NXTRMJ04HFE93K2`).** Three targeted fixes:
   (1) Each task in the cycle (classify, summarize, concept,

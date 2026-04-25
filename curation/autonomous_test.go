@@ -1,9 +1,11 @@
 package curation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -1398,14 +1400,25 @@ func TestManifestCacheInvalidatesOnTemporalityShift(t *testing.T) {
 // TestManifestCacheIgnoresHistoricalRecords pins P2-09 fix #4: the
 // manifest summary describes the CURRENT state of the store, so
 // records whose valid_until is in the past must be excluded from
-// the fingerprint inputs. Pre-fix, adding a historical record (the
-// shape produced by auto-supersession) would inflate totalRecords
-// and bust the cache even though the live store hadn't changed.
+// the fingerprint inputs. Pre-fix (initial), adding a historical
+// record would inflate totalRecords and bust the cache. The
+// follow-up review caught a second leak: the kwCounts source was
+// PropIdx().KeywordCounts() which includes historical records, so
+// even after the totalRecords filter the keyword fingerprint would
+// drift and bust the cache. This test seeds content_keywords on
+// every record (including the historical one) with a distinctive
+// keyword that would dominate the top-keywords list if leaked.
 func TestManifestCacheIgnoresHistoricalRecords(t *testing.T) {
 	eng := setupEngine(t)
 
+	// Baseline: 6 live records, all sharing the keyword "auth".
 	for i := 0; i < 6; i++ {
-		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+		id := addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d about auth", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+		eng.Lock()
+		eng.SetProp(id, "content_keywords", graph.StringListProperty([]string{"auth"}))
+		eng.PropIdx().Add(id, "content_keywords", graph.StringListProperty([]string{"auth"}))
+		eng.Save("seed-auth")
+		eng.Unlock()
 	}
 
 	// On the first manifest run only one summary is needed — but
@@ -1422,9 +1435,17 @@ func TestManifestCacheIgnoresHistoricalRecords(t *testing.T) {
 	}
 	firstHash := cache.Hash
 
-	// Inject a historical record (valid_until in the past).
-	histID := addProcessedNodeWithEmbedding(t, eng, "Old record that's been superseded", []float32{0.5, 0.5, 0.5})
+	// Inject a historical record carrying a DISTINCTIVE keyword
+	// "leakcanary" that doesn't appear on any live record. If the
+	// fingerprint pulls keyword counts from the unfiltered
+	// PropIdx index (the bug shape), this single historical
+	// record would shift the top-keywords list and bust the
+	// cache. Post-fix, kwCounts is built inline from the same
+	// live-only loop and "leakcanary" never enters the count.
+	histID := addProcessedNodeWithEmbedding(t, eng, "Old record with leakcanary keyword", []float32{0.5, 0.5, 0.5})
 	eng.Lock()
+	eng.SetProp(histID, "content_keywords", graph.StringListProperty([]string{"leakcanary"}))
+	eng.PropIdx().Add(histID, "content_keywords", graph.StringListProperty([]string{"leakcanary"}))
 	eng.SetProp(histID, "valid_until", graph.TimestampProperty(time.Now().UTC().Add(-1*time.Hour)))
 	eng.Save("supersede")
 	eng.Unlock()
@@ -1585,6 +1606,96 @@ func TestMeanCosineToCentroidEmpty(t *testing.T) {
 	}
 	if mean != 0 {
 		t.Fatalf("no embeddings should return 0 mean, got %f", mean)
+	}
+}
+
+// TestEnrichConceptSynthesesLogsDimMismatch pins the user-visible
+// payoff of P2-09 fix #2: when meanCosineToCentroid skips members
+// for embedding-dimension mismatch, enrichConceptSyntheses must
+// emit a Warn-level log with the "gramaton reembed" hint so
+// operators see the embedding-model drift.
+//
+// Setup: a concept with synthesis_status=pending plus 4 member
+// records — 2 with 3-dim embeddings, 2 with 4-dim embeddings.
+// coherenceMin > 0 forces the meanCosineToCentroid call. The
+// dim-mismatch arm should fire and the slog buffer should record
+// the warn.
+func TestEnrichConceptSynthesesLogsDimMismatch(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.ConceptCoherenceMin = 0.6 // > 0 forces the cosine check
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+
+	now := time.Now().UTC()
+
+	// Build the concept + members with mixed-dim embeddings.
+	eng.Lock()
+
+	// Concept node with synthesis_status=pending. Without that
+	// status the enrich loop short-circuits.
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Concept synthesis"),
+		"content_short":     graph.StringProperty("kafka concept"),
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("kafka"),
+		"synthesis_status":  graph.StringProperty("pending"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+
+	// 2x 3-dim, 2x 4-dim. 3-dim wins as the "first" centroid dim
+	// (loop order is stable); the 4-dim members are then counted as
+	// dimMismatched.
+	type memberSpec struct {
+		emb []float32
+	}
+	members := []memberSpec{
+		{[]float32{1.0, 0.0, 0.0}},
+		{[]float32{0.99, 0.1, 0.0}},
+		{[]float32{1.0, 0.0, 0.0, 0.0}},
+		{[]float32{0.99, 0.1, 0.0, 0.0}},
+	}
+	for i, m := range members {
+		mid := eng.Graph().AddNode(graph.Properties{
+			"content_full":      graph.StringProperty(fmt.Sprintf("member %d", i)),
+			"processing_status": graph.StringProperty("processed"),
+			"embedding_full":    graph.VectorProperty(m.emb),
+			"created_at":        graph.TimestampProperty(now),
+		})
+		for k, v := range mid.Properties {
+			eng.PropIdx().Add(mid.ID, k, v)
+		}
+		// instance_of edge from member to concept (enrichConceptSyntheses
+		// reads EdgesTo(concept) for "instance_of").
+		eng.Graph().AddEdge(mid.ID, concept.ID, "instance_of", 1.0, nil)
+	}
+
+	eng.Save("seed")
+	eng.Unlock()
+
+	// Capture slog output via a bytes.Buffer-backed handler.
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logger := slog.New(handler)
+
+	llm := &mockLLM{responses: []string{`{"synthesis":"ignored","tags":["x"]}`}}
+	result := &AutonomousResult{}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, 0, logger, false)
+
+	out := buf.String()
+	if !strings.Contains(out, "embedding dimension mismatch") {
+		t.Errorf("expected dim-mismatch Warn log; got:\n%s", out)
+	}
+	if !strings.Contains(out, "gramaton reembed") {
+		t.Errorf("expected 'gramaton reembed' hint in the log; got:\n%s", out)
+	}
+	// Rough sanity: log mentions the keyword + a positive mismatched count.
+	if !strings.Contains(out, `keyword=kafka`) {
+		t.Errorf("expected concept keyword in the log; got:\n%s", out)
 	}
 }
 
@@ -2074,15 +2185,17 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 	}
 }
 
-// TestGenerateSummariesNonStructuralWithEdges pins P2-07 fix #4:
-// the unified edge walk distinguishes structural (chunk_of /
-// section_of) from semantic (related_to / supersedes / etc.) edges.
-// A record with semantic edges only is NOT structural and must hit
-// the Priority 1 (no-summary) path. Pre-refactor, the
-// `!isChunkNode` check ran first (one edge walk) and the section
-// check ran later (a second edge walk) — both walks paid the same
-// per-edge cost. The unified walk does it once.
-func TestGenerateSummariesNonStructuralWithEdges(t *testing.T) {
+// TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural
+// pins P2-07 fix #4: the unified edge walk in generateSummaries
+// must distinguish structural (chunk_of / section_of) from semantic
+// (related_to / supersedes / etc.) edges. A record with semantic
+// edges only is NOT structural and must hit Priority 1 (no-summary).
+// Pre-refactor, `!isChunkNode` and the section check each walked
+// edges independently; the unified walk does it once. The risk
+// addressed: if the merged walk's `IsStructuralEdge` filter ever
+// drifts to also treat related_to as structural, this test will
+// fail because the target record would silently be skipped.
+func TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
 	cfg.LLMCuration.BatchSize = 10

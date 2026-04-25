@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/llm"
+	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
 // concurrentMockLLM tracks concurrent calls to verify parallelism.
@@ -313,3 +314,86 @@ func containsKey(s, key string) bool {
 
 // Silence unused import warnings if the file ever gets pared down.
 var _ = llm.ErrCapped
+
+// taskRecordingMockLLM exposes the ctx its Complete call received,
+// so tests can introspect telemetry attachments.
+type taskRecordingMockLLM struct {
+	mu       sync.Mutex
+	gotTasks []string // task label observed per call
+}
+
+func (m *taskRecordingMockLLM) Complete(ctx context.Context, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gotTasks = append(m.gotTasks, telemetry.TaskFromContext(ctx))
+	return "ok", nil
+}
+func (m *taskRecordingMockLLM) CompleteWithModel(ctx context.Context, _, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gotTasks = append(m.gotTasks, telemetry.TaskFromContext(ctx))
+	return "ok", nil
+}
+func (m *taskRecordingMockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
+	return nil, nil
+}
+func (m *taskRecordingMockLLM) ModelID() string                                    { return "task-recorder" }
+func (m *taskRecordingMockLLM) ProviderName() string                               { return "task-recorder" }
+func (m *taskRecordingMockLLM) SupportsStructuredOutput() bool                     { return false }
+
+// TestTaskCtxAttachesLabelOnSinglePath pins that the single-item
+// fast path in parallelLLM correctly attaches w.task to the context
+// so downstream telemetry sees the label. Pre-fix this logic was
+// duplicated between the single-item and worker-loop paths; the
+// dedup in P2-08 collapsed both to a shared taskCtx helper, and
+// this test guards against silent drift on either path.
+func TestTaskCtxAttachesLabelOnSinglePath(t *testing.T) {
+	rec := &taskRecordingMockLLM{}
+	work := []llmWork{{id: "n1", prompt: "p", task: "classify"}}
+
+	results := parallelLLM(context.Background(), rec, work, 1)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if len(rec.gotTasks) != 1 || rec.gotTasks[0] != "classify" {
+		t.Errorf("single-item path didn't attach task label; got %v", rec.gotTasks)
+	}
+}
+
+// TestTaskCtxAttachesLabelOnWorkerPath pins the same invariant for
+// the worker-loop path (len(work) > 1). Both paths must produce the
+// same telemetry-context shape so dropping the dedup never causes
+// the two paths to diverge.
+func TestTaskCtxAttachesLabelOnWorkerPath(t *testing.T) {
+	rec := &taskRecordingMockLLM{}
+	work := []llmWork{
+		{id: "a", prompt: "p", task: "summarize"},
+		{id: "b", prompt: "p", task: "summarize"},
+	}
+
+	results := parallelLLM(context.Background(), rec, work, 2)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if len(rec.gotTasks) != 2 {
+		t.Fatalf("expected 2 calls, got %d (tasks=%v)", len(rec.gotTasks), rec.gotTasks)
+	}
+	for i, got := range rec.gotTasks {
+		if got != "summarize" {
+			t.Errorf("call %d: task label = %q, want %q", i, got, "summarize")
+		}
+	}
+}
+
+// TestTaskCtxNoTaskNoLabel pins the empty-task path: when w.task ==
+// "", taskCtx returns the parent ctx unchanged and no label is
+// attached.
+func TestTaskCtxNoTaskNoLabel(t *testing.T) {
+	rec := &taskRecordingMockLLM{}
+	work := []llmWork{{id: "n1", prompt: "p"}} // task left empty
+
+	parallelLLM(context.Background(), rec, work, 1)
+	if len(rec.gotTasks) != 1 || rec.gotTasks[0] != "" {
+		t.Errorf("empty task should not attach label; got %v", rec.gotTasks)
+	}
+}

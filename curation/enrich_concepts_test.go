@@ -55,15 +55,17 @@ func TestEnrichConceptsSkipsRedundantUpdates(t *testing.T) {
 	// First run: writes evidence_count=1, last_evidence_at=member.created_at.
 	enrichConcepts(eng, nil)
 
-	// Capture commit hash after first run.
-	firstHead := eng.HeadHashLocked()
+	// Capture commit hash after first run. HeadHash takes its own
+	// read lock; the *Locked variant requires the caller to already
+	// hold one, which we don't here.
+	firstHead := eng.HeadHash()
 
 	// Second run: graph unchanged. Pre-fix, this would have re-written
 	// the concept's properties anyway because count > 0. Post-fix,
 	// no update should fire and the commit chain should not advance.
 	enrichConcepts(eng, nil)
 
-	secondHead := eng.HeadHashLocked()
+	secondHead := eng.HeadHash()
 	if firstHead != secondHead {
 		t.Errorf("redundant enrichConcepts re-wrote the concept; expected commit chain stable\n  first=%s\n  second=%s",
 			firstHead, secondHead)
