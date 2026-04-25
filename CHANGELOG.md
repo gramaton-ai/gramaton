@@ -9,6 +9,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Curation autonomous tasks no longer block each other on a hung LLM call
+  (`01KPEDCF8T9NXTRMJ04HFE93K2`).** Three targeted fixes:
+  (1) Each task in the cycle (classify, summarize, concept,
+  contradict, manifest) now runs under its own per-task sub-context
+  with a wall-clock timeout (default 30s, configurable via
+  `llm_curation.task_timeout`). Pre-fix, all five tasks shared the
+  parent ctx and ran sequentially — so one stuck LLM call (e.g. a
+  120s HTTP timeout) would consume the entire 1-minute curation
+  cadence and silently starve every downstream task. The
+  `runTaskWithTimeout` helper wraps each task; when the timeout
+  fires, the in-flight LLM call's ctx cancels and the next task
+  starts fresh. Setting timeout=0 in config disables the wrapper
+  for legacy behavior.
+  (2) `parallelLLM` no longer duplicates `telemetry.WithTask`
+  setup. Pre-fix, the single-item fast path AND the worker loop
+  each had their own copy of `if w.task != "" { callCtx =
+  telemetry.WithTask(ctx, w.task) }`. Post-fix: both paths call a
+  shared `taskCtx(ctx, w)` helper. Drift-resistant; if the
+  task-context contract changes, both paths pick up the change.
+  (3) `classifyPending` now checks ctx cancellation BEFORE the
+  RLock + read-phase iteration. Pre-fix, a cancelled cycle still
+  walked the entire pending list under RLock before noticing —
+  wasted CPU + lock-holding for backlogs of any size. Four new
+  tests pin the per-task timeout helper:
+  TestRunTaskWithTimeoutCancelsHungTask (the load-bearing
+  regression), TestRunTaskWithTimeoutCompletesNormally,
+  TestRunTaskWithTimeoutZeroDisablesTimeout,
+  TestRunTaskWithTimeoutNextTaskGetsFreshCtx (per-task isolation
+  invariant — second task gets a fresh sub-ctx after the first one
+  times out).
+
 - **Curation cycle: redundant full-graph iteration + dead GC criterion + always-fire enrichment trigger
   (`01KPEDCAAP4EV93ZS9GD0Z8C9E`).** Four targeted fixes in
   `curation/`:

@@ -106,18 +106,30 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	cycleUsage := &telemetry.UsageRecorder{}
 	ctx = telemetry.WithUsageRecorder(ctx, cycleUsage)
 
-	classifyPending(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	taskTimeout := cfg.LLMCuration.TaskTimeout
+
+	runTaskWithTimeout(ctx, "classify", taskTimeout, logger, func(c context.Context) {
+		classifyPending(c, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	})
 	runtime.Gosched() // yield so other goroutines can acquire the lock
-	generateSummaries(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	runTaskWithTimeout(ctx, "summarize", taskTimeout, logger, func(c context.Context) {
+		generateSummaries(c, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	})
 	runtime.Gosched()
-	enrichConceptSyntheses(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	runTaskWithTimeout(ctx, "concept", taskTimeout, logger, func(c context.Context) {
+		enrichConceptSyntheses(c, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	})
 	runtime.Gosched()
-	detectContradictions(ctx, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	runTaskWithTimeout(ctx, "contradict", taskTimeout, logger, func(c context.Context) {
+		detectContradictions(c, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
+	})
 
 	// Generate manifest qualitative summary if we have a manifest from
 	// the last deterministic run and haven't used too many LLM calls.
 	if !dryRun && !cycleBudgetExceeded(ctx, cfg, result, maxCalls, maxCostUSD) {
-		generateManifestSummary(ctx, e, llmProv, cfg, result, manifestCache, logger)
+		runTaskWithTimeout(ctx, "manifest", taskTimeout, logger, func(c context.Context) {
+			generateManifestSummary(c, e, llmProv, cfg, result, manifestCache, logger)
+		})
 	}
 
 	// Attach the cycle-level usage totals and per-task breakdown to the
@@ -216,6 +228,35 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 // model lookup -- unknown models contribute 0, so the count cap is the
 // real backstop in that regime. Post-call check: the cycle may exceed
 // the cost cap by one in-flight call before the next iteration breaks.
+// runTaskWithTimeout runs fn under a per-task sub-context that
+// expires after `timeout`. When the timeout fires, the in-flight LLM
+// call is cancelled (via the sub-context) and fn returns; the next
+// task in the cycle starts with a fresh sub-context derived from the
+// parent. Without this, one stuck LLM call (e.g. a 120s HTTP timeout)
+// could starve every downstream task in a 1-minute curation cycle.
+// Tracker 01KPEDCF8T9NXTRMJ04HFE93K2.
+//
+// `timeout <= 0` disables the per-task cap and runs fn under the
+// parent ctx (legacy behavior).
+func runTaskWithTimeout(parentCtx context.Context, name string, timeout time.Duration, logger *slog.Logger, fn func(context.Context)) {
+	if timeout <= 0 {
+		fn(parentCtx)
+		return
+	}
+	taskCtx, cancel := context.WithTimeout(parentCtx, timeout)
+	defer cancel()
+
+	start := time.Now()
+	fn(taskCtx)
+	if taskCtx.Err() == context.DeadlineExceeded {
+		logger.Warn("curation task hit per-task timeout",
+			"component", "curation",
+			"task", name,
+			"timeout", timeout,
+			"elapsed", time.Since(start))
+	}
+}
+
 func cycleBudgetExceeded(ctx context.Context, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64) bool {
 	if result.LLMCalls >= maxCalls {
 		return true
@@ -273,6 +314,16 @@ func modelForTaskLabel(cfg config.Config, task string) string {
 // classifyPending classifies records with processing_status="captured".
 func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
+
+	// Early ctx-cancel check: bail before grabbing RLock and walking the
+	// pending list. Pre-fix this check was after the read phase, so a
+	// cancelled cycle still iterated every pending record under RLock
+	// before noticing. Tracker 01KPEDCF8T9NXTRMJ04HFE93K2.
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 
 	// Each tier (short / long) sets its own system prompt per pass.
 	// Ensure the provider's cached prompt is cleared on exit.

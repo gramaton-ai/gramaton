@@ -353,6 +353,16 @@ type LLMCurationConfig struct {
 	// cost cap is enabled.
 	MaxCallsPerRun int `yaml:"max_calls_per_run"`
 
+	// TaskTimeout is the wall-clock cap on a single curation task
+	// (classify, summarize, enrich, contradict, manifest). When a
+	// task hits the timeout, its in-flight LLM call is cancelled and
+	// the next task starts with a fresh ctx. Without this, one stuck
+	// LLM call (e.g. a 120s HTTP timeout) could starve every
+	// downstream task in the cycle. Default: 30s. Zero disables the
+	// per-task cap (entire cycle runs under the parent ctx, legacy
+	// behavior).
+	TaskTimeout time.Duration `yaml:"task_timeout"`
+
 	// MaxCostUSDPerRun caps estimated LLM cost per curation cycle in
 	// USD. 0 = no cost cap; MaxCallsPerRun still applies. Cost is
 	// estimated via llm.EstimateCost from per-task token counts and
@@ -948,6 +958,7 @@ func Defaults() Config {
 		LLMCuration: LLMCurationConfig{
 			BatchSize:                   10,
 			MaxCallsPerRun:              20,
+			TaskTimeout:                 30 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,
 			ContradictionMaxSim:         0.85,

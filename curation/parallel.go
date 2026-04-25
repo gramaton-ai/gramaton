@@ -48,6 +48,17 @@ type llmResult struct {
 	err      error
 }
 
+// taskCtx attaches a telemetry task label to ctx when w carries one.
+// Single helper used by both the single-item fast path and the
+// worker loop in parallelLLM so the two stay in sync (tracker
+// 01KPEDCF8T9NXTRMJ04HFE93K2).
+func taskCtx(ctx context.Context, w llmWork) context.Context {
+	if w.task == "" {
+		return ctx
+	}
+	return telemetry.WithTask(ctx, w.task)
+}
+
 // runSingleWork executes one llmWork item, dispatching to the
 // structured-output path when the provider supports it and the work
 // item carries a schema. Returns the response text (or raw JSON from
@@ -94,11 +105,7 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 
 	// For single item, skip the goroutine overhead.
 	if len(work) == 1 {
-		callCtx := ctx
-		if work[0].task != "" {
-			callCtx = telemetry.WithTask(ctx, work[0].task)
-		}
-		resp, err := runSingleWork(callCtx, llmProv, work[0])
+		resp, err := runSingleWork(taskCtx(ctx, work[0]), llmProv, work[0])
 		return []llmResult{{id: work[0].id, response: resp, err: err}}
 	}
 
@@ -120,11 +127,7 @@ func parallelLLM(ctx context.Context, llmProv llm.Provider, work []llmWork, maxW
 					continue
 				default:
 				}
-				callCtx := ctx
-				if work[idx].task != "" {
-					callCtx = telemetry.WithTask(ctx, work[idx].task)
-				}
-				resp, err := runSingleWork(callCtx, llmProv, work[idx])
+				resp, err := runSingleWork(taskCtx(ctx, work[idx]), llmProv, work[idx])
 				results[idx] = llmResult{
 					id:       work[idx].id,
 					response: resp,
