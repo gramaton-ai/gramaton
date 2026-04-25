@@ -170,6 +170,52 @@ func TestSplitSentences(t *testing.T) {
 	}
 }
 
+// TestSplitSentencesUTF8Boundary pins that the boundary check after a
+// terminal punctuation reads the NEXT RUNE, not the next byte. Pre-fix,
+// `unicode.IsSpace(rune(text[i+1]))` cast a single byte to rune; a
+// multi-byte UTF-8 character following the period would surface as its
+// leading byte (e.g. 0xE6 for "日"), and IsSpace on that single byte
+// is always false, so the boundary detection silently missed cases
+// where the next rune was a multi-byte WHITESPACE character (NBSP
+// U+00A0, ideographic space U+3000, etc.). The load-bearing test is
+// the ideographic-space case below.
+func TestSplitSentencesUTF8Boundary(t *testing.T) {
+	// Two sentences separated by ASCII space (control case).
+	asciiText := "This sentence ends here. Then the second one keeps going for a while."
+	asciiSents := splitSentences(asciiText)
+
+	// Two sentences separated by a Japanese ideograph -- which IS NOT
+	// whitespace, so we expect the period not to be a boundary. The
+	// whole input is one long sentence as far as splitSentences cares.
+	cjkText := "This sentence ends with a period.日本語 followed by ideographs and more text here for length."
+	cjkSents := splitSentences(cjkText)
+
+	// Pre-fix, the cast `rune(text[i+1])` saw the leading byte of '日'
+	// (0xE3) which is not whitespace -- so behavior happened to be
+	// correct on this input in the no-boundary direction. The bug
+	// fires the OTHER way: when a non-whitespace multi-byte char
+	// follows the period and the leading byte HAPPENS to fall in a
+	// range that unicode.IsSpace returns true for. Modern unicode
+	// returns false for all such single-byte casts, so the bug
+	// manifests as missed boundaries when a multi-byte WHITESPACE
+	// (e.g. NBSP U+00A0, ideographic space U+3000) follows. Test
+	// the corrected path: ideographic space ('　', U+3000) DOES
+	// represent a whitespace boundary post-fix and SHOULD cause a
+	// split.
+	idspaceText := "This sentence ends here.　Then the second sentence continues here."
+	idspaceSents := splitSentences(idspaceText)
+
+	if len(asciiSents) < 2 {
+		t.Fatalf("ASCII control: expected 2 sentences, got %d", len(asciiSents))
+	}
+	if len(cjkSents) != 1 {
+		t.Fatalf("CJK after period (no whitespace): expected 1 sentence, got %d", len(cjkSents))
+	}
+	if len(idspaceSents) < 2 {
+		t.Fatalf("ideographic-space boundary: expected 2 sentences, got %d (pre-fix would miss this boundary)", len(idspaceSents))
+	}
+}
+
 func TestMaxObservationsZeroCap(t *testing.T) {
 	// Zero cap should default to 20.
 	got := maxObservations(50000, 0)

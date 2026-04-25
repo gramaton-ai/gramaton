@@ -16,6 +16,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
 
 const maxImportRecords = 10000
@@ -418,7 +419,7 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 		for _, f := range files {
 			props := graph.Properties{
 				"content_full":      graph.StringProperty(f.content),
-				"content_short":     graph.StringProperty(truncate(f.name, 200)),
+				"content_short":     graph.StringProperty(strutil.TruncateRunes(f.name, 200)),
 				"source_ref":        graph.StringProperty(f.path),
 				"processing_status": graph.StringProperty("captured"),
 				"created_at":        graph.TimestampProperty(time.Now().UTC()),
@@ -615,10 +616,3 @@ func extractWikilinks(content string) []string {
 	return links
 }
 
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		return string(runes[:maxLen])
-	}
-	return s
-}

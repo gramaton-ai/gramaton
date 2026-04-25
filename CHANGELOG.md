@@ -9,6 +9,50 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **UTF-8 safe string-cutting helpers replace byte-indexing across
+  five sites.** Pre-fix, several functions cut UTF-8 strings on byte
+  boundaries when the cap was documented in characters, risking
+  invalid trailing bytes for multi-byte input (CJK, accented Latin,
+  emoji). The fix adds `internal/strutil.TruncateRunes` and
+  `internal/strutil.TrimToValidUTF8` and migrates the call sites:
+  (1) `curation/extract.go::splitSentences` — the boundary check
+  after a sentence-terminal `.`/`!`/`?` was casting a single byte
+  to rune (`unicode.IsSpace(rune(text[i+1]))`), missing whitespace
+  for any multi-byte whitespace following (e.g. ideographic space
+  U+3000). Now decodes the next rune properly via
+  `utf8.DecodeRuneInString`.
+  (2) `curation/autonomous.go::conceptShortSummary` — the function
+  documented `maxLen` as characters but indexed bytes; multi-byte
+  inputs could be cut mid-rune. Renamed to `maxRunes`, walked rune
+  positions, used `strutil.TruncateRunes` for the no-boundary
+  fallback. Cap semantics shift: callers (`deterministic.go`,
+  `autonomous.go::generateSummaries`) all pass `200`. Pre-fix this
+  was 200 bytes (~66 CJK chars, ~200 ASCII); post-fix this is 200
+  runes (200 chars regardless of byte width). Multi-byte content
+  is therefore allowed up to ~3x more bytes through this path.
+  ASCII inputs unchanged.
+  (3) `curation/autonomous.go::parseClassification` keyword cap —
+  `kw[:100]` byte-truncation could land mid-rune for non-ASCII
+  keywords. Wrapped in `strutil.TrimToValidUTF8` so the result is
+  always valid UTF-8.
+  (4) `backup/import.go::truncate` — local helper was already
+  rune-correct but mis-named `maxLen`. Replaced with
+  `strutil.TruncateRunes` (single source of truth).
+  (5) `embed/bert/tokenizer.go::Encode` — the byte-by-byte trim
+  loop after `text[:maxChars]` was a correctness fix in disguise:
+  pre-fix called `utf8.ValidString(text[len-1:])` on a single byte,
+  which returns false for ANY byte that isn't ASCII (continuation
+  bytes are not valid UTF-8 strings on their own), so the loop
+  would strip bytes off a complete trailing multi-byte rune even
+  when no truncation was needed. Replaced with
+  `strutil.TrimToValidUTF8`, which uses `DecodeLastRuneInString` to
+  preserve complete runes. Practical impact for BERT input is
+  small (text was already over the cap and would have been
+  truncated anyway), but the new code is correct as-stated.
+  Helpers have unit tests covering CJK, emoji, accented Latin, and
+  invalid trailing bytes. New `TestSplitSentencesUTF8Boundary`
+  exercises the ideographic-space boundary path. (T-08.)
+
 - **Storage GC now refuses to sweep when prolly-tree marking is
   incomplete.** Pre-fix, `markProllyTree` swallowed `Read` and
   `json.Unmarshal` failures and returned silently; the recursive

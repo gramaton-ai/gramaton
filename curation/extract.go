@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Observation is a single extracted fact or key sentence from a parent
@@ -129,15 +130,29 @@ func splitSentences(text string) []sentence {
 	for i, r := range text {
 		current.WriteRune(r)
 
-		// Sentence boundary: period, exclamation, question mark followed
-		// by whitespace or end of text.
-		if (r == '.' || r == '!' || r == '?') && (i+1 >= len(text) || unicode.IsSpace(rune(text[i+1]))) {
-			s := strings.TrimSpace(current.String())
-			if len(s) >= 20 && len(s) <= 2000 {
-				sentences = append(sentences, sentence{text: s, pos: pos})
+		// Sentence boundary: period, exclamation, question mark
+		// followed by whitespace or end of text. Decode the next
+		// rune properly rather than casting a byte -- text[i+1]
+		// is a single byte, so multi-byte characters would have
+		// been treated as their first byte (typically not whitespace,
+		// so the boundary detection silently fired or missed for
+		// CJK/accented inputs).
+		if r == '.' || r == '!' || r == '?' {
+			next := i + utf8.RuneLen(r)
+			atEnd := next >= len(text)
+			var nextSpace bool
+			if !atEnd {
+				nr, _ := utf8.DecodeRuneInString(text[next:])
+				nextSpace = unicode.IsSpace(nr)
 			}
-			pos++
-			current.Reset()
+			if atEnd || nextSpace {
+				s := strings.TrimSpace(current.String())
+				if len(s) >= 20 && len(s) <= 2000 {
+					sentences = append(sentences, sentence{text: s, pos: pos})
+				}
+				pos++
+				current.Reset()
+			}
 		}
 	}
 

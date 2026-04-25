@@ -18,6 +18,7 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
@@ -1367,27 +1368,35 @@ func parseBatchSynthesis(resp string) []string {
 }
 
 // conceptShortSummary extracts a short summary from a synthesis text.
-// Takes the first sentence, capped at maxLen characters.
-func conceptShortSummary(synthesis string, maxLen int) string {
-	// Find first sentence boundary.
+// Takes the first sentence, capped at maxRunes user-visible characters.
+// All bounds are in runes -- the byte-indexed pre-image could split
+// multi-byte characters mid-rune for CJK or accented input.
+func conceptShortSummary(synthesis string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	// Walk runes, tracking both the rune count and the byte index of
+	// each rune so we can return clean substrings on rune boundaries.
+	runeIdx := 0
 	for i, r := range synthesis {
-		if r == '.' && i > 20 && i < maxLen {
+		if r == '.' && runeIdx > 20 && runeIdx < maxRunes {
+			// Include the period. byte position of next rune is
+			// i + utf8.RuneLen(r), but for '.' that's i+1.
 			return synthesis[:i+1]
 		}
+		runeIdx++
 	}
-	// No sentence boundary found within limit; truncate at word boundary.
-	if len(synthesis) <= maxLen {
+	// No sentence boundary within limit; cap at rune limit.
+	if runeIdx <= maxRunes {
 		return synthesis
 	}
-	// Find last space before maxLen.
-	cut := maxLen
-	for cut > 0 && synthesis[cut] != ' ' {
-		cut--
+	// runeIdx > maxRunes: cap at maxRunes runes and trim back to a
+	// word boundary if possible.
+	capped := strutil.TruncateRunes(synthesis, maxRunes)
+	if idx := strings.LastIndexByte(capped, ' '); idx > 0 {
+		return capped[:idx]
 	}
-	if cut == 0 {
-		cut = maxLen
-	}
-	return synthesis[:cut]
+	return capped
 }
 
 // detectContradictions finds records with moderate similarity and uses the
@@ -1965,7 +1974,9 @@ func parseClassification(resp string) (*classificationResult, error) {
 	}
 	for i, kw := range result.Keywords {
 		if len(kw) > 100 {
-			result.Keywords[i] = kw[:100]
+			// Byte cap as a fast path; rune-safe trim follows in
+			// case the cap landed mid-rune for multi-byte input.
+			result.Keywords[i] = strutil.TrimToValidUTF8(kw[:100])
 		}
 	}
 

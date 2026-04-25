@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
 
 // Tokenizer implements BERT's WordPiece tokenization pipeline.
@@ -120,11 +122,9 @@ func (t *Tokenizer) Encode(text string) (ids, mask, types []int32) {
 	// miss tokens that would have fit in the window.
 	maxChars := t.maxLen * 6
 	if len(text) > maxChars {
-		// Truncate on a UTF-8 boundary.
-		text = text[:maxChars]
-		for len(text) > 0 && !utf8.ValidString(text[len(text)-1:]) {
-			text = text[:len(text)-1]
-		}
+		// Byte-cap, then trim back to a complete-rune boundary so the
+		// downstream tokenizer never sees a partial multi-byte sequence.
+		text = strutil.TrimToValidUTF8(text[:maxChars])
 	}
 
 	// Normalize.
