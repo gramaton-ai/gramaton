@@ -9,6 +9,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **T-10 documentation sweep — fix docs that promised behaviour code
+  doesn't deliver.** Five doc fixes; four other tracker items
+  verified already-correct or not reproducing.
+  (1) `integration/claude-code/CLAUDE.md` said the curation cycle
+  runs every 5 minutes; the default is `curation.interval = 1
+  minute` and is configurable. Doc now says "configurable cadence
+  (default 1 minute, set via `curation.interval`)".
+  (2) `integration/kiro/gramaton-capture.md` listed only four
+  `epistemic_status` values; the schema has had `refuted` for
+  months. Added.
+  (3) `integration/kiro/gramaton-observe.md` documented the
+  retired `gramaton_observe` tool. Removed (see Removed section).
+  (4) `embed/bert/bert.go` Provider doc said "concurrent Embed
+  calls are serialized" but didn't mention that Close holds the
+  same mutex (so Close-during-Embed is safe -- Embed re-checks the
+  zeroed model field under the lock and returns "bert: provider
+  closed"). Doc now describes the full synchronization contract.
+  (5) `llm/llm.go` `Provider.CompleteWithModel` doc said unsupported
+  models fall back to the default; reality is per-provider:
+  anthropic honours overrides, openai/bedrock IGNORE the model arg
+  entirely (model is fixed at client construction), claude-cli /
+  kiro-cli route through subprocess. Doc now spells out per-provider
+  semantics. (T-10.)
+
+  Verified already-correct or not reproducing: `prolly.Diff`
+  docstring (now accurately describes mark+fallback semantics);
+  `secret.ResolveKey` (three-source priority + sk- legacy overload
+  documented in detail); `BboltBM25Index` (has a Concurrency block
+  citing the engine RWMutex); `flat_mmap.go` quantization warning
+  (couldn't locate the specific contradiction the tracker named).
+
 - **UTF-8 safe string-cutting helpers replace byte-indexing across
   five sites.** Pre-fix, several functions cut UTF-8 strings on byte
   boundaries when the cap was documented in characters, risking
@@ -108,6 +139,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   disagree. Trivial consistency improvement.
 
 ### Removed
+
+- **Deprecated kiro `gramaton-observe.md` integration doc deleted.**
+  The `gramaton_observe` MCP tool was retired during the
+  T-02/sessions migration (replaced by the
+  `gramaton_session_prepare` / `gramaton_session_commit` two-phase
+  flow). The kiro guide for it remained on disk and led future
+  agents to the dead tool. Removed alongside other T-10 docstring
+  fixes. (T-10.)
 
 - **Dead `PropertyIndex.Range` and `BboltSecondaryIndex.NodesMissingField`
   APIs.** Both had zero production callers — `Range` was exposed via

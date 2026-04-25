@@ -214,7 +214,8 @@ To find completed items: `gramaton_search(resolution="completed")`
 
 ### Curation
 
-The server runs background curation automatically every 5 minutes:
+The server runs background curation on a configurable cadence
+(default 1 minute, set via `curation.interval` in config.yaml):
 - **Deterministic** (always): lifecycle transitions, orphan linking,
   duplicate consolidation, concept enrichment (evidence_count,
   last_evidence_at), store manifest computation.

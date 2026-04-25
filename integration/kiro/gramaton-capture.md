@@ -14,7 +14,7 @@ Capture knowledge into the Gramaton store.
    - temporality: immutable | durable | temporal | ephemeral
    - confidence: 0.0-1.0
    - knowledge_type: episodic | semantic | procedural | conceptual | reference
-   - epistemic_status: well_established | probable | speculative | contested
+   - epistemic_status: well_established | probable | speculative | contested | refuted
 
 2. Extract keywords from the content and conversation context
 

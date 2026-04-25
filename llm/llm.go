@@ -29,6 +29,13 @@ type Provider interface {
 
 	// CompleteWithModel sends a prompt using a specific model override.
 	// If model is empty or unsupported, falls back to the default model.
+	//
+	// Per-provider semantics vary: anthropic honours the override per
+	// call; openai and bedrock ignore the model arg entirely (the model
+	// is fixed at client construction time); claude-cli and kiro-cli
+	// route the override through their CLI subprocess. Callers that
+	// need cross-provider consistency should rely on the model being
+	// configured up-front rather than overridden per call.
 	CompleteWithModel(ctx context.Context, model, prompt string) (string, error)
 
 	// ModelID returns the identifier of the default model.

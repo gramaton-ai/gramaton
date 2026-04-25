@@ -12,9 +12,14 @@ import (
 
 // Provider implements embed.Provider using a pure Go BERT inference engine.
 // Default model is bge-small-en-v1.5 (384-dim, 12-layer BERT encoder).
-// Thread-safe: uses a mutex to serialize forward passes (scratch buffers
-// are shared). Multiple concurrent Embed calls are serialized but each
-// is fast enough (~100-200ms) that this is not a bottleneck.
+//
+// Thread-safety: a single mutex serializes Embed and Close. Multiple
+// concurrent Embed calls run sequentially (each ~100-200ms, not a
+// bottleneck). Close takes the same mutex so an in-flight Forward pass
+// cannot read float32 slices that point into the mmap'd region after
+// Munmap. Embed re-checks the model/tokenizer fields under the lock and
+// returns "bert: provider closed" if a concurrent Close zeroed them --
+// callers must NOT call Embed after Close returns.
 type Provider struct {
 	model     *Model
 	tokenizer *Tokenizer
