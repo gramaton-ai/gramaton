@@ -805,7 +805,7 @@ func TestMetadataSummaryExpirationVisibility(t *testing.T) {
 				"confidence":  graph.Float64Property(0.8),
 				"valid_until": graph.TimestampProperty(tt.validUntil),
 			}
-			summary := buildMetadataSummary(props)
+			summary := buildMetadataSummary(props, time.Now().UTC())
 			if !containsSubstring(summary, tt.wantContains) {
 				t.Fatalf("summary %q should contain %q", summary, tt.wantContains)
 			}
@@ -818,7 +818,7 @@ func TestMetadataSummaryNoExpiration(t *testing.T) {
 		"temporality": graph.StringProperty("durable"),
 		"confidence":  graph.Float64Property(0.95),
 	}
-	summary := buildMetadataSummary(props)
+	summary := buildMetadataSummary(props, time.Now().UTC())
 	if !containsSubstring(summary, "Current.") {
 		t.Fatalf("summary %q should contain 'Current.'", summary)
 	}
@@ -1032,7 +1032,7 @@ func TestMetadataSummaryResolution(t *testing.T) {
 		"confidence":  graph.Float64Property(0.85),
 		"resolution":  graph.StringProperty("completed"),
 	}
-	summary := buildMetadataSummary(props)
+	summary := buildMetadataSummary(props, time.Now().UTC())
 
 	if !strings.Contains(summary, "Resolved: completed") {
 		t.Fatalf("summary should contain resolution, got %q", summary)

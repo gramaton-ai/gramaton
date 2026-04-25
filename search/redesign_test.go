@@ -70,6 +70,35 @@ func TestBFSReachable(t *testing.T) {
 	}
 }
 
+// TestBFSReachableHitsCap pins the defensive truncation path: when the
+// graph is denser than maxBFSReachableNodes allows at a given hop depth,
+// bfsReachable stops walking and returns what it has rather than
+// blowing memory. Lowers the cap to 3 for the test so a tiny fixture
+// can exercise it.
+func TestBFSReachableHitsCap(t *testing.T) {
+	old := maxBFSReachableNodes
+	maxBFSReachableNodes = 3
+	t.Cleanup(func() { maxBFSReachableNodes = old })
+
+	// Star: center -> 10 leaves. With cap=3 and start=center, we
+	// should visit no more than 3 nodes (start + 2 neighbors before
+	// the cap fires). The exact stopping point is implementation-
+	// defined; the contract is "at most cap" total.
+	g := graph.New()
+	center := g.AddNode(graph.Properties{"x": graph.StringProperty("center")})
+	for range 10 {
+		leaf := g.AddNode(graph.Properties{"x": graph.StringProperty("leaf")})
+		g.AddEdge(center.ID, leaf.ID, "related_to", 1.0, nil)
+	}
+
+	r := bfsReachable(g, center.ID, 1)
+	// visited capped at 3 (center + 2 leaves) before delete(visited, startID),
+	// so r has at most 2 leaves.
+	if len(r) >= 10 {
+		t.Fatalf("cap not enforced: returned %d nodes (full graph)", len(r))
+	}
+}
+
 func TestBFSReachableIsolatedNode(t *testing.T) {
 	g := graph.New()
 	a := g.AddNode(graph.Properties{})

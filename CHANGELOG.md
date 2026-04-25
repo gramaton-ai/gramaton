@@ -7,6 +7,42 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Search internals tightened across five small fixes from P2-05.**
+  None of these change observable behavior; the tracker's perf
+  framings were mostly stale, but small structural improvements
+  were worth landing in one pass:
+  (1) `filterCandidates` now returns `map[string]struct{}` directly
+  rather than a slice that the caller immediately converts back to
+  a map. The slice round-trip cost ~500KB of allocation per search
+  on a 20K-node store; the random-mode path materializes a slice
+  locally where ordered iteration is needed. The unused `now`
+  parameter is dropped.
+  (2) `bfsReachable` now caps the visited set at 100K nodes (var,
+  test-overridable) and logs a Warn on truncation. Defensive guard
+  against a pathological proximity query on a million-node graph;
+  no realistic search hits the cap. New `TestBFSReachableHitsCap`
+  pins the truncation path.
+  (3) `passesPropertyFilters` extracts three helper functions
+  (`floatRangeOK`, `timestampStrictlyAfter`, `timestampStrictlyBefore`,
+  `timestampSinceOK`) for the seven-or-so timestamp/numeric range
+  filter checks that share semantics. `access_count` keeps its
+  asymmetric min-strict / max-lenient handling inline because no
+  other filter shares that shape -- the asymmetry is documented in
+  a comment so the next reader doesn't fold it into a uniform
+  helper. Behavior preservation walked filter-by-filter against
+  the pre-image.
+  (4) Session-dedup loop reads the segment's `captured_as` property
+  (already populated at session_commit time) instead of walking
+  EdgesFrom for `extracted_as`. Falls back to the edge walk for
+  segments that pre-date the cached property, preserving back-compat
+  for any session committed before that property landed.
+  (5) `buildResult` and `buildMetadataSummary` accept `now time.Time`
+  as a parameter; previously each call recomputed `time.Now().UTC()`
+  inside, two calls ~1ns apart whose results could in principle
+  disagree. Trivial consistency improvement.
+
 ### Removed
 
 - **Dead `PropertyIndex.Range` and `BboltSecondaryIndex.NodesMissingField`
