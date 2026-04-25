@@ -491,14 +491,17 @@ func (e *Engine) SaveOrLog(message string) {
 // dirty. Acquires the write lock internally. Safe to call from a
 // background goroutine.
 func (e *Engine) FlushAccess() {
-	slog.Info("access flush: acquiring write lock", "component", "engine")
+	// Lifecycle steps stay at DEBUG -- this fires every 30s under
+	// normal operation. The end-of-flush INFO captures the only
+	// state change a user cares about: a save actually happened.
+	slog.Debug("access flush: acquiring write lock", "component", "engine")
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.accessDirty {
-		slog.Info("access flush: nothing dirty, skipping", "component", "engine")
+		slog.Debug("access flush: nothing dirty, skipping", "component", "engine")
 		return
 	}
-	slog.Info("access flush: saving", "component", "engine")
+	slog.Debug("access flush: saving", "component", "engine")
 	start := time.Now()
 	e.SaveOrLog("access_flush")
 	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
@@ -595,7 +598,7 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 	}
 
 	if !mutated {
-		slog.Info("write batch complete (no-op)",
+		slog.Debug("write batch complete (no-op)",
 			"component", "engine",
 			"message", message,
 			"batch_ms", batchDur.Milliseconds())

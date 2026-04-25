@@ -44,7 +44,7 @@ func MigrateStore(cfgDir string, globalCfgDirs []string) error {
 	}
 
 	if current == version.StoreFormatVersion {
-		slog.Info("store already at current version; nothing to do",
+		slog.Debug("store already at current version; nothing to do",
 			"component", "migrate",
 			"version", current)
 		return nil
@@ -84,7 +84,7 @@ func backfillTSIndex(eng *Engine) error {
 	start := time.Now()
 	head := eng.HeadHash()
 	if head == "" {
-		slog.Info("no HEAD commit; timestamp index is empty",
+		slog.Debug("no HEAD commit; timestamp index is empty",
 			"component", "migrate")
 		return nil
 	}

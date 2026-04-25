@@ -320,7 +320,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	step1 := time.Now()
 	candidateSet := t.filterCandidates(q)
 	filterDur := time.Since(step1)
-	slog.Info("search step 1: filter", "component", "search", "candidates", len(candidateSet), "ms", filterDur.Milliseconds())
+	slog.Debug("search step 1: filter", "component", "search", "candidates", len(candidateSet), "ms", filterDur.Milliseconds())
 
 	// Exclude the source record from its own similar-to results.
 	if q.SimilarTo != "" {
@@ -366,7 +366,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	step2 := time.Now()
 	similarities, matchSources := t.computeSimilarities(q, queryVec, candidateSet)
 	simDur := time.Since(step2)
-	slog.Info("search step 2: similarity", "component", "search", "matches", len(similarities), "ms", simDur.Milliseconds())
+	slog.Debug("search step 2: similarity", "component", "search", "matches", len(similarities), "ms", simDur.Milliseconds())
 
 	// Step 3: Score candidates. When we have a text query, only score
 	// nodes that appeared in vector or BM25 results -- not all 151K
@@ -443,7 +443,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	}
 
 	scoreDur := time.Since(step3)
-	slog.Info("search step 3: score", "component", "search", "scored", len(scoredResults), "ms", scoreDur.Milliseconds())
+	slog.Debug("search step 3: score", "component", "search", "scored", len(scoredResults), "ms", scoreDur.Milliseconds())
 
 	// Step 4: Sort.
 	step4 := time.Now()
@@ -479,7 +479,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		if reranked != nil {
 			scoredResults = append(reranked, scoredResults[rerankN:]...)
 		}
-		slog.Info("search step 4b: rerank",
+		slog.Debug("search step 4b: rerank",
 			"component", "search",
 			"candidates", rerankN,
 			"ms", time.Since(rerankStart).Milliseconds())

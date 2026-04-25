@@ -377,7 +377,7 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 		for _, e := range entries {
 			g.nodeHashes[e.Key] = e.Value
 		}
-		slog.Info("node tree loaded",
+		slog.Debug("node tree loaded",
 			"component", "graph",
 			"nodes", g.nodeTotal,
 			"elapsed", time.Since(loadStart).Round(time.Millisecond).String())
@@ -417,14 +417,14 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	// Load edges. If the bbolt edge store already has data (checked
 	// above before Clear), skip the expensive per-edge Put calls.
 	if edgeStorePopulated {
-		slog.Info("edge store already populated, skipping load from prolly tree",
+		slog.Debug("edge store already populated, skipping load from prolly tree",
 			"component", "graph",
 			"edges", len(edgeEntries))
 		for _, eh := range edgeEntries {
 			g.edgeHashes[eh.id] = eh.hash
 		}
 	} else {
-		slog.Info("loading edges into bbolt",
+		slog.Debug("loading edges into bbolt",
 			"component", "graph",
 			"edges", len(edgeEntries))
 		for _, eh := range edgeEntries {

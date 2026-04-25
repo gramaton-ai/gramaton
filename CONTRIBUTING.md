@@ -607,6 +607,30 @@ platforms, behavior or presentation differs). Examples:
 Don't combine them. If a divergence grows past ~10 LOC or picks
 up a compile-gated API, promote to a two-file split.
 
+### Log-level discipline
+
+`gramaton.log` is read by humans tailing under load, not just by
+operators triaging an incident. The default level is INFO so
+anything at INFO better be worth the line every time it fires:
+
+- **WARN**: recoverable failures (embedding error with a fallback,
+  retry-trigger conditions, stale state detected and skipped).
+  Operators should be able to grep for WARN and find every degraded
+  path without noise.
+- **INFO**: state-change events the user wants to see *once per
+  occurrence* — capture done, session committed, write batch
+  complete (when there was actual work), curation cycle summary,
+  graph load complete. One INFO per logical operation; not per
+  sub-step.
+- **DEBUG**: per-step lifecycle, no-op log lines ("nothing dirty,
+  skipping"), per-request hot-path lines, internal rebuild
+  intermediate timing. Things you only want when you've raised the
+  level deliberately.
+
+When in doubt: would the user benefit from seeing this every time
+under normal load? If no, DEBUG. If only when something interesting
+happened, INFO. If something went wrong, WARN.
+
 ---
 
 ## Anti-patterns we've learned the hard way

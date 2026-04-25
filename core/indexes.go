@@ -346,7 +346,7 @@ func (s *indexSet) close() error {
 // replaces the old SetBatch type-assertion dance.
 func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
 	if bm25FullLoaded && vecLoaded && propLoaded {
-		slog.Info("indexes already populated, skipping rebuild",
+		slog.Debug("indexes already populated, skipping rebuild",
 			"component", "engine",
 			"bm25", bm25Full.Len(),
 			"vec", vecIdx.Len(),

@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Log-level discipline pass demotes 11 INFO sites to DEBUG.** The
+  default INFO level was too chatty on hot paths and engine
+  startup. Demoted: per-search step timings (filter / similarity /
+  score / rerank — kept the "search timing" summary as INFO),
+  access-flush lifecycle steps (acquiring lock, nothing-dirty,
+  saving — kept the "done" line with save_ms as INFO), graph-load
+  intermediate steps (node-tree-loaded, edge-store-already-
+  populated, loading-edges — kept the "loading" and "load
+  complete" anchors as INFO), and three migrate.go no-op-state
+  lines (already at current version, no HEAD commit, write batch
+  complete no-op). Search down to one INFO line per call instead
+  of four. Engine load down to two INFO lines instead of five.
+  Access flush down to one INFO line per real save instead of four
+  per 30s. Convention codified in `CONTRIBUTING.md` so new code
+  lands at the right level. (Audit log-level tracker.)
+
 ### Fixed
 
 - **T-10 documentation sweep — fix docs that promised behaviour code
