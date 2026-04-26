@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +40,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 
 	resp, err := serverPost("/v1/records", input)
 	if err != nil {
-		return fmt.Errorf("capture: %w", err)
+		return writeServerError("capture", err)
 	}
 
 	return printEnvelope(resp)

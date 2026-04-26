@@ -39,7 +39,7 @@ func runResolve(cmd *cobra.Command, args []string) error {
 
 	resp, err := serverPost(fmt.Sprintf("/v1/records/%s/resolve", url.PathEscape(id)), input)
 	if err != nil {
-		return fmt.Errorf("resolve: %w", err)
+		return writeServerError("resolve", err)
 	}
 
 	return printEnvelope(resp)

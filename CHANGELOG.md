@@ -9,6 +9,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CLI error handling unified: single output stream, structured codes
+  preserved.** Pre-fix the CLI had three error styles: (a)
+  `fmt.Errorf+%w` paired with Cobra's stderr print, (b) `writeError`
+  printing JSON to stdout AND returning an error that Cobra ALSO
+  printed to stderr (dual-output -- pipe consumers saw both
+  streams), (c) the `fmt.Errorf("input_error: %s", ...)` that capture
+  used (already normalized in P2-14). Two structural fixes:
+  (1) `writeError` now returns a `*silentError` sentinel; `Execute`
+  detects it via `errors.As` and skips the redundant stderr print so
+  the JSON on stdout is the only error artefact pipe consumers see.
+  Exit code propagation unchanged.
+  (2) `writeServerError(op, err)` helper unwraps a `*server.ErrorDetail`
+  (preserved through the HTTP hop by parseResponse) and routes it
+  through `writeError` -- so the server's structured Code/Message/
+  Retryable land on stdout for HTTP 4xx/5xx instead of being collapsed
+  into a Cobra-printed string. Network/timeout errors fall back to a
+  generic "request_failed" code with the operation name. Migrated
+  capture, classify, update, resolve, and all 5 branch commands. The
+  `branch_error` ad-hoc code that branch.go used is replaced by the
+  server's actual code (or "request_failed" for transport errors)
+  -- a real improvement: callers can now distinguish "branch
+  already exists" (ErrConflict) from "server unreachable". (P2-15.)
+
 - **CLI record subcommands share two new helpers; mcp_proxy split was
   already done.** P2-14 had two complaints: cli/mcp_proxy.go monolith
   (already split into 7 cluster files during T-02 -- one piece of the

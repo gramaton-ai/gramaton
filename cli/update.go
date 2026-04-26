@@ -53,7 +53,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 		resp, err := serverPost(fmt.Sprintf("/v1/records/%s/edges", url.PathEscape(id)), edgeBody)
 		if err != nil {
-			return fmt.Errorf("update: %w", err)
+			return writeServerError("update", err)
 		}
 		return printEnvelope(resp)
 	}
@@ -82,7 +82,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	resp, err := serverPatch(fmt.Sprintf("/v1/records/%s", url.PathEscape(id)), updateBody)
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
+		return writeServerError("update", err)
 	}
 
 	return printEnvelope(resp)

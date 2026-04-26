@@ -39,7 +39,7 @@ func runClassify(cmd *cobra.Command, args []string) error {
 
 	resp, err := serverPost(fmt.Sprintf("/v1/records/%s/classify", url.PathEscape(id)), input)
 	if err != nil {
-		return fmt.Errorf("classify: %w", err)
+		return writeServerError("classify", err)
 	}
 
 	return printEnvelope(resp)

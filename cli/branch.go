@@ -61,56 +61,47 @@ func init() {
 
 func runBranchCreate(cmd *cobra.Command, args []string) error {
 	name := args[0]
-
 	resp, err := serverPost("/v1/branches", map[string]string{"name": name})
 	if err != nil {
-		return writeError("branch_error", fmt.Sprintf("create branch: %s", err), false)
+		return writeServerError("branch create", err)
 	}
-
 	return printEnvelope(resp)
 }
 
 func runBranchList(cmd *cobra.Command, args []string) error {
 	resp, err := serverGet("/v1/branches")
 	if err != nil {
-		return writeError("branch_error", fmt.Sprintf("list branches: %s", err), false)
+		return writeServerError("branch list", err)
 	}
-
 	return printEnvelope(resp)
 }
 
 func runBranchCheckout(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	path := fmt.Sprintf("/v1/branches/%s/checkout", url.PathEscape(name))
-
 	resp, err := serverPost(path, nil)
 	if err != nil {
-		return writeError("branch_error", fmt.Sprintf("checkout branch: %s", err), false)
+		return writeServerError("branch checkout", err)
 	}
-
 	return printEnvelope(resp)
 }
 
 func runBranchMerge(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	path := fmt.Sprintf("/v1/branches/%s/merge", url.PathEscape(name))
-
 	resp, err := serverPost(path, nil)
 	if err != nil {
-		return writeError("branch_error", fmt.Sprintf("merge branch: %s", err), false)
+		return writeServerError("branch merge", err)
 	}
-
 	return printEnvelope(resp)
 }
 
 func runBranchDiscard(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	path := fmt.Sprintf("/v1/branches/%s", url.PathEscape(name))
-
 	resp, err := serverDelete(path)
 	if err != nil {
-		return writeError("branch_error", fmt.Sprintf("discard branch: %s", err), false)
+		return writeServerError("branch discard", err)
 	}
-
 	return printEnvelope(resp)
 }

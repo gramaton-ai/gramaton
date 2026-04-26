@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -31,9 +32,17 @@ func init() {
 }
 
 // Execute runs the root command.
+//
+// silentError-typed errors are swallowed (no stderr print) because
+// the structured JSON already landed on stdout via writeError. Other
+// errors print to stderr in the conventional shape so end users see
+// what went wrong. Either way, exit code is 1 on any error.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		var silent *silentError
+		if !errors.As(err, &silent) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
