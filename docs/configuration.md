@@ -353,9 +353,14 @@ Controls when candidate keywords become concept nodes.
 concepts:
   emergence_threshold: 3             # min records sharing a keyword to become a candidate
   min_content_length_direct: 50      # min content length for direct concept creation
+  member_overlap_threshold: 0.6      # Jaccard above which a candidate aliases an existing concept (0 disables)
 ```
 
 Concept candidate *detection* is deterministic and always-on. *Promotion* of candidates to concept nodes is LLM-gated (requires an `llm:` provider).
+
+`member_overlap_threshold` suppresses the duplicate-cluster pattern where each member record's 5-6 content_keywords each cross emergence_threshold on the same evidence set, spawning multiple concept nodes about the same idea. When a candidate's member-set Jaccard with an existing or peer-pending concept exceeds this threshold, the candidate's keyword is folded into that concept's `content_keywords` as an alias rather than emitting a new concept node. Setting 0 disables the gate (legacy behavior).
+
+**Search default excludes concepts.** `gramaton_search` filters out `node_type=concept` from results by default — concept syntheses are derivative cross-record summaries that compete with their member records for top-N slots without earning the space. Pass `include_concepts=true` (or `--include-concepts` on the CLI) to opt back in. `gramaton_explore` and `gramaton_inspect` are unchanged; concepts remain walkable and inspectable when their IDs are known.
 
 ### Dedup
 
