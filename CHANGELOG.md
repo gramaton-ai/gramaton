@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Default search now excludes concept nodes; opt-in via
+  `include_concepts=true`.** New `SearchRequest.IncludeConcepts` field
+  (api/search.go) and matching `--include-concepts` CLI flag flip the
+  new `Query.ExcludeConcepts` filter in `search.Tool.filterCandidates`.
+  Concept nodes are LLM-synthesized cross-record summaries; pre-fix
+  they competed with their own member records for top-N slots, with
+  no special boost or penalty. Sample data showed duplicate-cluster
+  concepts split access uniformly (5 concepts at access=5 each =
+  cluster surfacing redundantly), diluting retrieval quality.
+  `gramaton_explore` and `gramaton_inspect` are unchanged — concepts
+  remain walkable and inspectable when their IDs are known. Tests at
+  `search/search_test.go` (`TestSearchExcludeConcepts`) pin both
+  default-exclude and opt-in-include behavior. Tracker
+  01KQ5JVJ8WWFH14MWH5MG1ZQ4Y.
+
 - **Member-set overlap gate at concept emergence.** New
   `concepts.member_overlap_threshold` config (default 0.6,
   `ConceptsConfig.MemberOverlapThreshold`) suppresses duplicate concept

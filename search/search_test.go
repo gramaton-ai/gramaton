@@ -253,6 +253,61 @@ func TestSearchFilterByProcessingStatus(t *testing.T) {
 	}
 }
 
+// TestSearchExcludeConcepts pins Phase A-minimal: when ExcludeConcepts
+// is set, node_type=concept results are filtered out. Default search
+// at the api layer flips this on so concepts (LLM-synthesized
+// cross-record summaries) don't compete with their own member records
+// for top-N slots. Tracker 01KQ5JVJ8WWFH14MWH5MG1ZQ4Y.
+func TestSearchExcludeConcepts(t *testing.T) {
+	g := graph.New()
+	propIdx := index.NewPropertyIndex()
+	vecIdx := index.NewFlatIndex()
+	now := time.Now().UTC()
+
+	regular := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("regular record"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now.Add(-1 * time.Hour)),
+	})
+	concept := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("synthesized concept"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("topic"),
+		"created_at":        graph.TimestampProperty(now.Add(-2 * time.Hour)),
+	})
+	for _, n := range []*graph.Node{regular, concept} {
+		for k, v := range n.Properties {
+			propIdx.Add(n.ID, k, v)
+		}
+	}
+
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
+
+	// ExcludeConcepts off (legacy / direct caller default): both surface.
+	results, err := tool.Execute(context.Background(), Query{Top: 10})
+	if err != nil {
+		t.Fatalf("Execute (include): %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("ExcludeConcepts=false: got %d results, want 2", len(results))
+	}
+
+	// ExcludeConcepts on: only the regular record.
+	results, err = tool.Execute(context.Background(), Query{Top: 10, ExcludeConcepts: true})
+	if err != nil {
+		t.Fatalf("Execute (exclude): %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("ExcludeConcepts=true: got %d results, want 1", len(results))
+	}
+	if results[0].ID != regular.ID {
+		t.Errorf("ExcludeConcepts=true returned id %q, want %q (regular)", results[0].ID, regular.ID)
+	}
+}
+
 func TestSearchCombinedFilters(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
 	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())

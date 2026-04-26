@@ -21,6 +21,7 @@ func addSearchFlags(cmd *cobra.Command) {
 	f.String("processing-status", "", "filter: captured|processed|stuck|deleted")
 	f.Int("top", 10, "number of results")
 	f.Bool("include-historical", false, "include records past valid_until")
+	f.Bool("include-concepts", false, "include synthesized concept nodes (node_type=concept) in results")
 	f.String("since", "", "created after date (YYYY-MM-DD)")
 	f.String("sort", "", "sort field")
 	f.String("order", "", "asc or desc")
@@ -50,6 +51,8 @@ func buildSearchBody(cmd *cobra.Command, args []string) map[string]any {
 	body["top"] = top
 	hist, _ := cmd.Flags().GetBool("include-historical")
 	body["include_historical"] = hist
+	concepts, _ := cmd.Flags().GetBool("include-concepts")
+	body["include_concepts"] = concepts
 
 	if len(args) > 0 {
 		body["text"] = args[0]

@@ -25,6 +25,7 @@ type SearchRequest struct {
 	ImportanceMin      *float64          `json:"importance_min,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMax      *float64          `json:"importance_max,omitempty" jsonschema:"0.0-1.0"`
 	IncludeHistorical  bool              `json:"include_historical,omitempty" jsonschema:"include records past valid_until"`
+	IncludeConcepts    bool              `json:"include_concepts,omitempty" jsonschema:"include synthesized concept nodes (node_type=concept) in results. Default false: concepts are derivative cross-record summaries and compete with their member records for top-N slots, so they're filtered out of default search. Set true when you specifically want concepts (e.g. browsing what patterns have crystallized)."`
 	Since              string            `json:"since,omitempty" jsonschema:"filter: created after date (YYYY-MM-DD or RFC3339)"`
 	Missing            []string          `json:"missing,omitempty" jsonschema:"array of field names that must be unset (e.g. [temporality, confidence])"`
 	Keywords           []string          `json:"keywords,omitempty" jsonschema:"array of keywords that must all be present on the record (exact match)"`
@@ -147,6 +148,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		Resolution:        req.Resolution,
 		ProcessingStatus:  req.ProcessingStatus,
 		IncludeHistorical: req.IncludeHistorical,
+		ExcludeConcepts:   !req.IncludeConcepts,
 		ConfidenceMin:     req.ConfidenceMin,
 		ConfidenceMax:     req.ConfidenceMax,
 		ImportanceMin:     req.ImportanceMin,

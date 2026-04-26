@@ -135,6 +135,13 @@ type Query struct {
 	MaxHops            int        // max graph distance from NearNode (default 2)
 	Since              *time.Time
 	IncludeHistorical bool
+	// ExcludeConcepts filters out node_type=concept results. Set by the
+	// api layer for default search to keep concept nodes out of records
+	// retrieval (concepts are derivative summaries; they compete with
+	// their own member records for top-N slots without earning the
+	// space). Direct callers of search.Query default to false (no
+	// filter); api.Search flips it via SearchRequest.IncludeConcepts.
+	ExcludeConcepts bool
 	Top             int
 	MinEdges        *int   // minimum total edge count (in + out)
 	MaxEdges        *int   // maximum total edge count
@@ -768,6 +775,22 @@ func (t *Tool) filterCandidates(q Query) map[string]struct{} {
 	enumFilter("knowledge_type", q.KnowledgeType)
 	enumFilter("epistemic_status", q.EpistemicStatus)
 	enumFilter("processing_status", q.ProcessingStatus)
+
+	// ExcludeConcepts filters out node_type=concept. Concepts are
+	// LLM-synthesized cross-record summaries; they shouldn't compete
+	// with their own member records in default search results.
+	// Default-on at the api layer; opt-in via IncludeConcepts.
+	if q.ExcludeConcepts {
+		exclude := toSet(t.propIdx.Lookup("node_type", graph.StringProperty("concept")))
+		all := t.graph.NodeIDSet()
+		result := make(map[string]struct{}, len(all))
+		for id := range all {
+			if _, ex := exclude[id]; !ex {
+				result[id] = struct{}{}
+			}
+		}
+		sets = append(sets, result)
+	}
 
 	// Resolution filter: "unresolved" is special -- means no resolution
 	// property set. Other values use the standard enum filter.
