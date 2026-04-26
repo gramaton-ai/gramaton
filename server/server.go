@@ -664,7 +664,18 @@ func (s *Server) runAutoBackup() {
 
 	result, apiErr := s.api.BackupCreate(context.Background())
 	if apiErr != nil {
-		s.log.Error("auto-backup failed", "err", apiErr.Code, "msg", apiErr.Message)
+		// Advance lastBackup on failure too; otherwise a deterministic
+		// failure (disk full, permission denied, target dir is a file)
+		// retries on every post-curation-cycle hook (~1 min default,
+		// not 24h) because elapsed stays >= schedule. An operator who
+		// fixes the underlying problem can manually trigger a backup
+		// via gramaton_backup; otherwise we wait the full schedule
+		// before re-attempting.
+		s.log.Error("auto-backup failed; next attempt waits the full schedule",
+			"err", apiErr.Code, "msg", apiErr.Message)
+		s.mu.Lock()
+		s.lastBackup = time.Now()
+		s.mu.Unlock()
 		return
 	}
 	archivePath := result.Path

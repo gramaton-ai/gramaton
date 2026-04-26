@@ -108,6 +108,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Auto-backup no longer retries every curation cycle on failure.**
+  `runAutoBackup` runs as a post-curation-cycle hook (default ~1 min
+  cadence) and gates its work behind `time.Since(s.lastBackup) >=
+  schedule` (default 24h). Pre-fix: success advanced `s.lastBackup` to
+  `time.Now()`, but failure returned without advancing it — meaning
+  the next post-cycle hook still saw `elapsed >= 24h` and re-attempted.
+  For deterministic failures (disk full, permission denied, configured
+  backup directory is a regular file or unreadable, target volume
+  unmounted) this re-attempted at curation cadence (~1 minute), not
+  the intended 24h. On a large store each attempt walks the graph and
+  compresses under RLock — meaningful production impact and constant
+  Error log spam. Fix: advance `s.lastBackup = time.Now()` on the
+  failure path too. The next attempt waits the full schedule before
+  re-trying; an operator who has resolved the underlying problem can
+  manually trigger a backup via `gramaton_backup` without waiting.
+  Regression test: `TestAutoBackupAdvancesLastBackupOnFailure` in
+  `server/server_test.go` sabotages the configured backup dir
+  (writes a regular file at the path) and asserts `s.lastBackup` was
+  updated post-failure. Tracker `01KQ409C61Y9SQRAZFAYJEXV1X`.
+
 - **`docs/project-design/data-model.md` `processing_status`
   enumeration corrected.** Pre-fix listed `captured | processed |
   pending` — but no code writes `pending` as a `processing_status`

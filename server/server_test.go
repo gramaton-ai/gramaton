@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -126,6 +128,49 @@ func addRecord(t *testing.T, eng *core.Engine, content string) string {
 	}
 	eng.Save("test")
 	return n.ID
+}
+
+// TestAutoBackupAdvancesLastBackupOnFailure pins the fix for tracker
+// 01KQ409C61Y9SQRAZFAYJEXV1X: pre-fix, runAutoBackup did NOT advance
+// s.lastBackup on a BackupCreate failure, so a deterministic failure
+// (disk full, permission denied, configured backup dir is a regular
+// file) re-attempted on every post-curation-cycle hook (~1 minute
+// cadence) once the schedule had lapsed -- not the intended 24h.
+//
+// The regression: a 100MB store walks + compresses under RLock every
+// ~1 minute on a stuck disk, while logging Error at every attempt.
+//
+// The fix: advance s.lastBackup = time.Now() on the failure path too,
+// so the next attempt waits the full schedule. Operator can manually
+// trigger gramaton_backup if the underlying problem has been resolved.
+func TestAutoBackupAdvancesLastBackupOnFailure(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// Sabotage the configured backup directory so CreateSnapshot's
+	// MkdirAll fails deterministically: write a regular file at the
+	// path it expects to be (or create) a directory.
+	backupDir := srv.engine.Config().Backup.Dir
+	if err := os.MkdirAll(filepath.Dir(backupDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll parent: %v", err)
+	}
+	if err := os.WriteFile(backupDir, []byte("blocker"), 0o644); err != nil {
+		t.Fatalf("WriteFile blocker: %v", err)
+	}
+
+	// Force lastBackup to a stale time so elapsed >= schedule (default 24h).
+	srv.mu.Lock()
+	srv.lastBackup = time.Now().Add(-48 * time.Hour)
+	srv.mu.Unlock()
+
+	srv.runAutoBackup()
+
+	// Pre-fix: lastBackup unchanged at -48h. Post-fix: advanced to ~now.
+	srv.mu.Lock()
+	advanced := time.Since(srv.lastBackup)
+	srv.mu.Unlock()
+	if advanced > 5*time.Second {
+		t.Errorf("lastBackup not advanced after backup failure: %v ago (want < 5s)", advanced)
+	}
 }
 
 func doRequest(t *testing.T, srv *Server, method, path string, body any) *httptest.ResponseRecorder {
