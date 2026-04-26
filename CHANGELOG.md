@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ExcludeConcepts` filter now reads `node_type` directly off graph
+  nodes instead of going through `propIdx.Lookup`.** The property
+  index has a load-path issue where rebuild is skipped when
+  `propIdx.Count() > 0` (`core/indexes.go:275`), leaving older nodes'
+  properties unindexed. Production exhibited this: 378 concept nodes
+  in the graph but `propIdx.Lookup("node_type", "concept")` returned
+  zero, so the Phase A-minimal filter passed concepts through. Direct
+  graph walk is O(N) per query but reliable; ~1ms at current N=1369.
+  Caught when verifying the new binary against a real query that
+  should have matched the TZ-fragile concept cluster — concepts were
+  appearing in `top_k` despite the new filter. Tests pass with both
+  the old and new approaches; production fix bypasses the index
+  partial-load bug. The underlying property-index load logic is its
+  own bug (filed separately if it bites again). Tracker
+  01KQ5JVJ8WWFH14MWH5MG1ZQ4Y followup.
+
 ### Added
 
 - **Concept-match telemetry: structured `concept_match` slog events

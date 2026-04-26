@@ -780,14 +780,25 @@ func (t *Tool) filterCandidates(q Query) map[string]struct{} {
 	// LLM-synthesized cross-record summaries; they shouldn't compete
 	// with their own member records in default search results.
 	// Default-on at the api layer; opt-in via IncludeConcepts.
+	//
+	// Reads node_type directly off graph nodes rather than going through
+	// propIdx.Lookup. The property index has a known load-path issue
+	// where rebuild is skipped on partial load (propLoaded gate uses
+	// propIdx.Count() > 0), leaving older nodes' properties unindexed.
+	// Direct read is O(N) per query but reliable; current N is ~1k so
+	// the cost is negligible. Revisit if N grows past ~50k.
 	if q.ExcludeConcepts {
-		exclude := toSet(t.propIdx.Lookup("node_type", graph.StringProperty("concept")))
 		all := t.graph.NodeIDSet()
 		result := make(map[string]struct{}, len(all))
 		for id := range all {
-			if _, ex := exclude[id]; !ex {
-				result[id] = struct{}{}
+			n, ok := t.graph.GetNode(id)
+			if !ok {
+				continue
 			}
+			if nt, _ := n.Properties.GetString("node_type"); nt == "concept" {
+				continue
+			}
+			result[id] = struct{}{}
 		}
 		sets = append(sets, result)
 	}
