@@ -92,6 +92,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Pathological records can no longer infinite-retry through curation.**
+  `classifyPending` previously had no per-record retry bound. Records
+  selected by `processing_status="captured"` were re-attempted every
+  cycle until they succeeded — but a record the LLM consistently can't
+  classify (content > effective context window, content-policy
+  refusals, output that always fails JSON parse, mid-call timeouts)
+  stays `"captured"` forever, sits at the front of the FIFO pending
+  queue (sort by `created_at` ASC), and bills input tokens on every
+  cycle (~1440 retries/day at 1-min cadence; both Anthropic and OpenAI
+  bill input tokens on cancelled streams). The cycle-level
+  `MaxCallsPerRun=20` and the daily caps DID bound damage, but they
+  trip the entire store's curation rather than just the offending
+  record, and the >80%-error circuit breaker doesn't fire when 1 bad
+  record is in a batch of 10 (10% error rate). Fix: a new
+  `LLMCurationConfig.MaxClassifyAttempts` field (yaml:
+  `llm_curation.max_classify_attempts`, default 3) caps consecutive
+  failures per record. Failed classify attempts now write a
+  `classify_attempts` counter and the truncated error reason in
+  `last_classify_error`; on reaching the threshold, `processing_status`
+  flips to `"stuck"` and the record is excluded from future classify
+  cycles. A successful manual `gramaton_classify` (or any successful
+  autonomous re-classify) clears the counter and resets the status.
+  Setting `MaxClassifyAttempts: 0` reverts to the legacy
+  infinite-retry behavior. Operators surface stuck records via
+  `gramaton_search(processing_status="stuck")` and triage them
+  manually. Same shape exists in `generateSummaries`; filed as
+  separate follow-up. Tests in `curation/autonomous_test.go` cover
+  failure-bumps-counter, marks-stuck-at-threshold, max-zero-disables,
+  success-clears-attempts. Tracker
+  `01KQ3X9EBX4WKVJQ56W1C31V97`.
+
 - **Panic-recover at the HTTP transport boundary; structured 500 instead
   of broken-pipe.** Pre-fix, a panic in any api/ method (unchecked type
   assertion, nil deref, unforeseen graph state) propagated past

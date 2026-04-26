@@ -414,6 +414,20 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		data    *classificationResult
 	}
 
+	// failedClassify carries an id + truncated error reason for a record
+	// whose classification attempt did not produce a usable result.
+	// Surfaces in the write phase as a classify_attempts increment and
+	// (at threshold) processing_status="stuck".
+	type failedClassify struct {
+		id     string
+		reason string
+	}
+
+	type classifyOutcome struct {
+		succeeded []classified
+		failed    []failedClassify
+	}
+
 	// Assign model per record: effort-based (short vs long classification).
 	longThreshold := cfg.LLMCuration.LongClassificationThreshold
 	if longThreshold <= 0 {
@@ -457,9 +471,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		}
 	}
 
-	runPass := func(sub []pending, systemPrompt, model string) []classified {
+	runPass := func(sub []pending, systemPrompt, model string) classifyOutcome {
 		if len(sub) == 0 {
-			return nil
+			return classifyOutcome{}
 		}
 
 		userTemplate := classifyPrompt
@@ -487,11 +501,15 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		llmResults := parallelLLM(ctx, llmProv, work, 4)
 		result.LLMCalls += len(llmResults)
 
-		var out []classified
+		var out classifyOutcome
 		for i, lr := range llmResults {
 			if lr.err != nil {
 				result.Errors++
 				logger.Warn("classify LLM error", "component", "curation", "record", sub[i].id, "err", lr.err)
+				out.failed = append(out.failed, failedClassify{
+					id:     sub[i].id,
+					reason: strutil.TruncateRunes(lr.err.Error(), 200),
+				})
 				continue
 			}
 
@@ -499,6 +517,10 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			if err != nil {
 				result.Errors++
 				logger.Warn("classify parse error", "component", "curation", "record", sub[i].id, "err", err)
+				out.failed = append(out.failed, failedClassify{
+					id:     sub[i].id,
+					reason: strutil.TruncateRunes("parse: "+err.Error(), 200),
+				})
 				continue
 			}
 
@@ -506,15 +528,17 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			if usedModel == "" {
 				usedModel = llmProv.ModelID()
 			}
-			out = append(out, classified{id: sub[i].id, content: sub[i].content, model: usedModel, data: classification})
+			out.succeeded = append(out.succeeded, classified{id: sub[i].id, content: sub[i].content, model: usedModel, data: classification})
 		}
 		return out
 	}
 
-	ready := append(runPass(shortBatch, shortSystemPrompt, shortModel),
-		runPass(longBatch, ClassifySystemPrompt, longModel)...)
+	shortOut := runPass(shortBatch, shortSystemPrompt, shortModel)
+	longOut := runPass(longBatch, ClassifySystemPrompt, longModel)
+	ready := append(shortOut.succeeded, longOut.succeeded...)
+	failed := append(shortOut.failed, longOut.failed...)
 
-	if len(ready) == 0 {
+	if len(ready) == 0 && len(failed) == 0 {
 		return
 	}
 
@@ -566,13 +590,54 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			e.SetProp(r.id, "classified_by", graph.StringProperty(r.model))
 		}
 		e.SetProp(r.id, "processing_status", graph.StringProperty("processed"))
+		// Successful classification clears any prior failure tracking
+		// so an operator-fixed record can pass cleanly. The outer
+		// `if !ok { continue }` guard above already proved the node
+		// exists; re-fetch is cheap. Skip the SetProp when the property
+		// was never present so we don't churn the index for happy-path
+		// records that never failed.
+		n, _ := e.Graph().GetNode(r.id)
+		if _, has := n.Properties.GetInt64("classify_attempts"); has {
+			e.SetProp(r.id, "classify_attempts", graph.Int64Property(0))
+		}
 		result.Classified++
 		if result.ModelCounts == nil {
 			result.ModelCounts = make(map[string]int)
 		}
 		result.ModelCounts[r.model]++
 	}
-	if result.Classified > 0 {
+
+	// Failed records: bump attempts counter, capture the reason for
+	// triage, and mark stuck once the threshold is reached. Skipped
+	// when MaxClassifyAttempts is 0 (legacy infinite-retry behavior).
+	maxAttempts := cfg.LLMCuration.MaxClassifyAttempts
+	if maxAttempts > 0 {
+		for _, f := range failed {
+			n, ok := e.Graph().GetNode(f.id)
+			if !ok {
+				logger.Debug("classify failure: node gone", "component", "curation", "record", f.id)
+				continue
+			}
+			var attempts int64
+			if v, ok := n.Properties.GetInt64("classify_attempts"); ok {
+				attempts = v
+			}
+			attempts++
+			e.SetProp(f.id, "classify_attempts", graph.Int64Property(attempts))
+			e.SetProp(f.id, "last_classify_error", graph.StringProperty(f.reason))
+			if attempts >= int64(maxAttempts) {
+				e.SetProp(f.id, "processing_status", graph.StringProperty("stuck"))
+				logger.Warn("classify: marking record stuck after repeated failures",
+					"component", "curation",
+					"record", f.id,
+					"attempts", attempts,
+					"max_attempts", maxAttempts,
+					"last_error", f.reason)
+			}
+		}
+	}
+
+	if result.Classified > 0 || (maxAttempts > 0 && len(failed) > 0) {
 		e.SaveOrLog("curation: classify")
 	}
 	e.Unlock()

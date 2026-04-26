@@ -217,6 +217,151 @@ func TestClassifyPendingParseError(t *testing.T) {
 	}
 }
 
+// TestClassifyPendingFailureBumpsAttemptCounter verifies that a single
+// failed classify run writes classify_attempts=1 and last_classify_error
+// without flipping processing_status.
+//
+// Regression guard for tracker 01KQ3X9EBX4WKVJQ56W1C31V97 — without
+// this counter, a record that cannot be classified (oversized content,
+// content-policy refusal, persistent parse failures) re-enters the
+// FIFO pending queue every minute and bills tokens forever.
+func TestClassifyPendingFailureBumpsAttemptCounter(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxClassifyAttempts = 3
+
+	id := addPendingNode(t, eng, "Content that always fails")
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("API timeout")}}
+
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("classify_attempts")
+	if attempts != 1 {
+		t.Errorf("classify_attempts: got %d, want 1", attempts)
+	}
+	reason, _ := n.Properties.GetString("last_classify_error")
+	if !strings.Contains(reason, "API timeout") {
+		t.Errorf("last_classify_error: got %q, want contains %q", reason, "API timeout")
+	}
+	status, _ := n.Properties.GetString("processing_status")
+	if status != "captured" {
+		t.Errorf("processing_status: got %q, want still %q (below threshold)", status, "captured")
+	}
+}
+
+// TestClassifyPendingMarksStuckAtThreshold verifies that after
+// MaxClassifyAttempts consecutive failures, the record is moved to
+// processing_status="stuck" and excluded from the next cycle's batch.
+func TestClassifyPendingMarksStuckAtThreshold(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxClassifyAttempts = 3
+
+	id := addPendingNode(t, eng, "Pathological content")
+
+	// Three consecutive cycles, each one failure.
+	for cycle := 1; cycle <= 3; cycle++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("cycle %d failure", cycle)}}
+		result := &AutonomousResult{}
+		classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	}
+
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("classify_attempts")
+	status, _ := n.Properties.GetString("processing_status")
+	eng.RUnlock()
+
+	if attempts != 3 {
+		t.Errorf("classify_attempts: got %d, want 3", attempts)
+	}
+	if status != "stuck" {
+		t.Errorf("processing_status: got %q, want %q", status, "stuck")
+	}
+
+	// Next cycle: no attempt should be made on this record (stuck
+	// records are excluded from the captured-status filter).
+	llm := &mockLLM{errors: []error{fmt.Errorf("should not fire")}}
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.LLMCalls != 0 {
+		t.Errorf("stuck record was re-attempted: LLMCalls=%d, want 0", result.LLMCalls)
+	}
+}
+
+// TestClassifyPendingMaxAttemptsZeroDisables verifies legacy behavior:
+// when MaxClassifyAttempts=0, the counter feature is disabled and
+// failed records are not annotated.
+func TestClassifyPendingMaxAttemptsZeroDisables(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxClassifyAttempts = 0
+
+	id := addPendingNode(t, eng, "Content")
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("error")}}
+	result := &AutonomousResult{}
+	classifyPending(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	if _, ok := n.Properties.GetInt64("classify_attempts"); ok {
+		t.Error("classify_attempts was written when MaxClassifyAttempts=0")
+	}
+	if _, ok := n.Properties.GetString("last_classify_error"); ok {
+		t.Error("last_classify_error was written when MaxClassifyAttempts=0")
+	}
+}
+
+// TestClassifyPendingSuccessClearsAttempts verifies that a successful
+// classification on a record that previously failed resets the
+// classify_attempts counter so an operator-fixed record passes
+// cleanly on its next attempt.
+func TestClassifyPendingSuccessClearsAttempts(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxClassifyAttempts = 3
+
+	id := addPendingNode(t, eng, "Initially failing content")
+
+	// Fail twice -- attempts now 2, still captured.
+	for i := 0; i < 2; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("err %d", i)}}
+		classifyPending(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	// Verify intermediate state.
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	if a, _ := n.Properties.GetInt64("classify_attempts"); a != 2 {
+		eng.RUnlock()
+		t.Fatalf("intermediate classify_attempts: got %d, want 2", a)
+	}
+	eng.RUnlock()
+
+	// Now succeed -- counter must reset, status flips to processed.
+	llm := &mockLLM{responses: []string{`{"temporality":"durable","confidence":0.8}`}}
+	classifyPending(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ = eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("classify_attempts")
+	status, _ := n.Properties.GetString("processing_status")
+	if attempts != 0 {
+		t.Errorf("classify_attempts after success: got %d, want 0", attempts)
+	}
+	if status != "processed" {
+		t.Errorf("processing_status after success: got %q, want %q", status, "processed")
+	}
+}
+
 func TestClassifyPendingMaxCallsLimit(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

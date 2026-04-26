@@ -164,6 +164,7 @@ llm_curation:
   batch_size: 10                        # records per LLM classification batch
   max_calls_per_run: 20                 # max LLM calls per curation cycle (count cap)
   max_cost_usd_per_run: 0               # USD cap per curation cycle (0 = disabled)
+  max_classify_attempts: 3              # mark a record stuck after N consecutive classify failures (0 = legacy infinite-retry)
 
   # Contradiction detection.
   max_contradiction_checks: 5
@@ -199,6 +200,10 @@ llm_curation:
 The effort dials are the primary cost/quality knob. Short classification, summarization, and manifest rollup are Haiku-grade (clear-signal work, enum picks, distilled summaries). Contradiction detection, concept synthesis, and long-content classification benefit from Sonnet-grade reasoning. Opus is rarely needed — reserved for particularly nuanced tasks if you want to set one.
 
 `max_cost_usd_per_run` (per cycle) and `llm.max_cost_usd_per_day` (across the day) are independent — the per-cycle cap bounds a single cycle's damage, the per-day cap bounds the aggregate across many cycles. Both complement `max_calls_per_run` / `max_calls_per_day` rather than replacing them; see "Cost and call caps" under the LLM section above for why keeping the count caps set is important.
+
+`max_classify_attempts` bounds the worst case for a *single* pathological record. Without it, a record whose content the LLM consistently can't classify (oversized content, content-policy refusal, persistent malformed-output, mid-call timeouts) sits at the front of the FIFO pending queue and re-attempts every cycle forever — billing input tokens on each retry. After `max_classify_attempts` consecutive failures, the record's `processing_status` flips to `"stuck"`, which excludes it from future cycles. The last failure reason is captured in `last_classify_error` (truncated to 200 runes) for triage. Surface stuck records via `gramaton_search(processing_status="stuck")`, inspect, then either fix the underlying record (`gramaton_update`) and let curation pick it up again, or `gramaton_classify` it manually (which clears the stuck state and the attempts counter). Setting `max_classify_attempts: 0` reverts to the legacy infinite-retry behavior.
+
+`last_classify_error` may include provider-side error fragments (HTTP status messages, request IDs, occasional echoed prompt snippets, transport URLs). It's stored on the record as a normal property — surfaced through `gramaton_inspect` and any property-filtered `gramaton_search`. If you share an export or backup, redact stuck records' `last_classify_error` first if any of them sit on sensitive content.
 
 ## Observe
 

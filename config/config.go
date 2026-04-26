@@ -363,6 +363,20 @@ type LLMCurationConfig struct {
 	// cost cap is enabled.
 	MaxCallsPerRun int `yaml:"max_calls_per_run"`
 
+	// MaxClassifyAttempts caps how many times a single record will be
+	// retried by autonomous classification before being marked
+	// processing_status="stuck". Without this, a pathological record
+	// (oversized content, content-policy refusal, persistent parse
+	// failures) sits at the front of the FIFO pending queue and
+	// re-attempts every cycle forever -- billing input tokens on every
+	// retry. Stuck records are excluded from future cycles; operators
+	// surface them via gramaton_search(processing_status="stuck"),
+	// inspect last_classify_error for triage, and either fix the
+	// underlying record (gramaton_update / gramaton_classify) or
+	// resolve it. Default: 3. Zero disables the counter (legacy
+	// infinite-retry behavior).
+	MaxClassifyAttempts int `yaml:"max_classify_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -971,6 +985,7 @@ func Defaults() Config {
 		LLMCuration: LLMCurationConfig{
 			BatchSize:                   10,
 			MaxCallsPerRun:              20,
+			MaxClassifyAttempts:         3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,
