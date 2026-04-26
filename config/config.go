@@ -423,6 +423,22 @@ type LLMCurationConfig struct {
 	// re-enter every cycle, legacy behavior).
 	MaxContradictionAttempts int `yaml:"max_contradiction_attempts"`
 
+	// MaxEmbedAttempts caps how many times gramaton_reembed will
+	// retry a single record before excluding it from the candidate
+	// set. Failed embed calls (oversized content past the model's
+	// context window after halving truncation, content-policy
+	// refusals on paid embedders, persistent dimension mismatch
+	// after a model switch) accumulate `embed_attempts` on the
+	// record; once at threshold the record is skipped at selection
+	// time. Failure reason captured in `last_embed_error` for
+	// triage. Default: 3. Zero disables (failed records re-enter
+	// every reembed invocation -- legacy behaviour). Reembed is
+	// manual-only (gramaton_reembed CLI / MCP tool / HTTP endpoint),
+	// so the per-call cost is bounded by the operator, but each
+	// invocation still re-pays for the same failures without this
+	// counter.
+	MaxEmbedAttempts int `yaml:"max_embed_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -1036,6 +1052,7 @@ func Defaults() Config {
 			MaxSynthesisAttempts:        3,
 			MaxManifestAttempts:         3,
 			MaxContradictionAttempts:    3,
+			MaxEmbedAttempts:            3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,

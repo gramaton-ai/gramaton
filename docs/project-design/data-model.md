@@ -125,6 +125,8 @@ All Vector properties are independently searchable via the vector index.
 | `last_summary_error` | String | Truncated reason (max 200 runes) for the most recent summary failure. Same redaction guidance as `last_classify_error`. |
 | `synthesis_attempts` | Int64 | (Concept nodes only.) How many times concept synthesis has failed on this concept. Reset to 0 on successful synthesis. At `llm_curation.max_synthesis_attempts` (default 3), `synthesis_status` flips to `stuck`. |
 | `last_synthesis_error` | String | (Concept nodes only.) Truncated reason (max 200 runes) for the most recent synthesis failure. Same redaction guidance as `last_classify_error`. |
+| `embed_attempts` | Int64 | How many times gramaton_reembed has failed to produce an embedding for this record. Reset to 0 on successful re-embed. At `llm_curation.max_embed_attempts` (default 3), the record is excluded from reembed candidate selection. |
+| `last_embed_error` | String | Truncated reason (max 200 runes) for the most recent embed failure. Same redaction guidance as `last_classify_error`. |
 
 ### Provenance
 

@@ -108,6 +108,66 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **gramaton_reembed no longer re-pays for the same failing records on
+  every invocation; session-commit promotion now writes
+  embedding_model on success.** Two coupled fixes for tracker
+  01KQ408WXSTDN5X15TGE24X416.
+
+  Main fix: api.Reembed's failure path at api/reembed.go:159 logged
+  the error and continued without writing per-record state. The
+  candidate selection at line 67 picks records whose embedding_model
+  is missing or differs from the configured embedder; a record whose
+  embed call kept failing (oversized content past the model's context
+  window after halving truncation, content-policy refusal on paid
+  embedders, persistent dimension mismatch) stayed without an
+  embedding_model and re-entered the candidate set on every reembed
+  invocation, re-paying full embed cost. Reembed is manual-only (CLI
+  / MCP tool / HTTP endpoint), so per-call frequency is bounded by
+  the operator -- but pathological records still re-cost on every
+  call. New config: LLMCurationConfig.MaxEmbedAttempts (yaml:
+  llm_curation.max_embed_attempts, default 3, 0 disables). Failed
+  embed calls now write an embed_attempts counter (Int64) and the
+  truncated reason in last_embed_error (max 200 runes via
+  strutil.TruncateRunes); records past the threshold are skipped at
+  selection time. Successful re-embed clears the counter to 0.
+
+  Companion fix: api/sessions.go:915 IndexNode call only sets
+  embedding_full from the supplied vec; it never set embedding_model
+  on the new memory node. So every successful session-commit
+  promote-to-memory path (the default) created records that LOOKED
+  like they needed re-embedding from the candidate-selection
+  perspective. Without this companion fix, the new embed_attempts
+  counter would correctly bound damage on consistently-failing
+  records, but every successful promotion would still re-enter
+  reembed's candidate pool and pay one full embed cycle each time
+  -- defeating most of the cost savings. Now session-commit
+  explicitly writes embedding_model on the promoted node when the
+  embedder succeeded.
+
+  Pre-action validation gate from the tracker confirmed:
+  - Reembed is manual-only (no background scheduler invokes it).
+  - The four embed callsites (capture, session-commit, intake, bulk
+    ingest) still leave records with missing embedding_model on
+    failure.
+  - capture's applyPreEmbedded WAS already setting embedding_model
+    on success; the companion bug only affected sessions.
+  - The helper from curation/task_retry.go is in package curation;
+    couldn't reuse from package api without a cross-package
+    extraction. Pragmatic call: inline ~25 lines in api/reembed.go,
+    defer the extraction.
+
+  Tests in api/reembed_test.go (new file with a configurableEmbedder
+  test double): failure increments embed_attempts; N consecutive
+  failures exclude the record from the next invocation's candidate
+  set (embedder not called); MaxEmbedAttempts=0 disables (no counter
+  writes); successful re-embed clears the counter. Companion fix
+  test deliberately deferred -- the change is mechanical (one-line
+  add inside the success-with-vec branch) and visible in code
+  review; an end-to-end session-commit test would be heavy fixture
+  for marginal coverage gain.
+
+  Build, vet, race detector on api, full test suite all green.
+
 - **Contradiction-check failures no longer re-ask the same pairs every cycle.**
   `detectContradictions` (curation/autonomous.go) was patched in D38 to
   drain the candidate pool by writing `no_contradiction` edges on

@@ -9,7 +9,15 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
+
+// lastEmbedErrorMaxRunes caps the size of the per-record
+// last_embed_error property. Same rationale as the curation
+// counterparts: provider errors may embed prompt fragments / URLs;
+// the cap bounds what lands on a record visible through
+// gramaton_inspect.
+const lastEmbedErrorMaxRunes = 200
 
 // ReembedRequest bounds how many records the cycle processes per call.
 // Reembed is idempotent and pageable: callers can drive the store to
@@ -56,6 +64,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 	}
 
 	currentModel := a.engine.Embedder().ModelID()
+	maxEmbedAttempts := a.engine.Config().LLMCuration.MaxEmbedAttempts
 
 	type reembedTarget struct {
 		nodeID string
@@ -74,6 +83,17 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		_, hasContent := n.Properties.GetString("content_full")
 		if !hasContent {
 			continue
+		}
+		// Skip records that have exhausted their reembed retry budget.
+		// Without this guard, a record whose embedding consistently
+		// fails (oversized after halving truncation, content-policy
+		// refusal, persistent dimension issue) would re-enter the
+		// candidate set every gramaton_reembed invocation and re-pay
+		// the full embed cost. Tracker 01KQ408WXSTDN5X15TGE24X416.
+		if maxEmbedAttempts > 0 {
+			if attempts, ok := n.Properties.GetInt64("embed_attempts"); ok && attempts >= int64(maxEmbedAttempts) {
+				continue
+			}
 		}
 		model, ok := n.Properties.GetString("embedding_model")
 		if ok && model == currentModel {
@@ -160,9 +180,35 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 			resp.Errors++
 			resp.ErrorIDs = append(resp.ErrorIDs, res.target.nodeID)
 			a.log.Warn("reembed failed", "component", "reembed", "node", res.target.nodeID, "err", res.err)
+
+			// Per-record retry tracking: increment embed_attempts and
+			// capture the truncated reason. Records past
+			// MaxEmbedAttempts are skipped at selection time on
+			// subsequent invocations. Skipped when MaxEmbedAttempts
+			// is 0 (legacy behaviour).
+			if maxEmbedAttempts > 0 {
+				if n, ok := a.engine.Graph().GetNode(res.target.nodeID); ok {
+					var attempts int64
+					if v, ok := n.Properties.GetInt64("embed_attempts"); ok {
+						attempts = v
+					}
+					attempts++
+					a.engine.SetProp(res.target.nodeID, "embed_attempts", graph.Int64Property(attempts))
+					a.engine.SetProp(res.target.nodeID, "last_embed_error", graph.StringProperty(strutil.TruncateRunes(res.err.Error(), lastEmbedErrorMaxRunes)))
+					if attempts >= int64(maxEmbedAttempts) {
+						a.log.Warn("reembed: record will be skipped after repeated failures",
+							"component", "reembed",
+							"node", res.target.nodeID,
+							"attempts", attempts,
+							"max_attempts", maxEmbedAttempts,
+							"last_error", res.err)
+					}
+				}
+			}
 			continue
 		}
-		if _, ok := a.engine.Graph().GetNode(res.target.nodeID); !ok {
+		n, ok := a.engine.Graph().GetNode(res.target.nodeID)
+		if !ok {
 			resp.Errors++
 			resp.ErrorIDs = append(resp.ErrorIDs, res.target.nodeID)
 			continue
@@ -180,6 +226,14 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		modelProp := graph.StringProperty(currentModel)
 		a.engine.Graph().SetNodeProperty(res.target.nodeID, "embedding_model", modelProp)
 		a.engine.PropIdx().Add(res.target.nodeID, "embedding_model", modelProp)
+
+		// Successful re-embed clears any prior failure tracking so an
+		// operator-fixed record passes cleanly on its next run. Skip
+		// the SetProp when the property was never present so we don't
+		// churn the index for happy-path records.
+		if _, has := n.Properties.GetInt64("embed_attempts"); has {
+			a.engine.SetProp(res.target.nodeID, "embed_attempts", graph.Int64Property(0))
+		}
 
 		resp.Reembedded++
 	}

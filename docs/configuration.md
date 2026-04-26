@@ -169,6 +169,7 @@ llm_curation:
   max_synthesis_attempts: 3             # mark a concept stuck after N consecutive synthesis failures (0 = legacy infinite-retry)
   max_manifest_attempts: 3              # negative-cache the manifest LLM call after N consecutive failures on the same store fingerprint (0 = legacy infinite-retry)
   max_contradiction_attempts: 3         # lock out a contradiction-check pair after N consecutive failures via a contradiction_check_skipped edge (0 = legacy infinite-retry)
+  max_embed_attempts: 3                 # exclude a record from gramaton_reembed after N consecutive embed failures (0 = legacy infinite-retry)
 
   # Contradiction detection.
   max_contradiction_checks: 5
@@ -216,6 +217,8 @@ The effort dials are the primary cost/quality knob. Short classification, summar
 `max_manifest_attempts` is shaped differently because the manifest summary is keyed by a content-derived store-state fingerprint, not by a record. After N consecutive failures on the same fingerprint, the in-memory `ManifestCache` flips into a "negative cache" mode and the LLM call is skipped on subsequent cycles. The negative cache clears automatically when the fingerprint changes (records added, removed, or modified) or when any later success lands. No on-disk state — a server restart with the same store gets the same fingerprint and may retry once before re-tripping the negative cache.
 
 `max_contradiction_attempts` covers the contradiction-detection pipeline, where the unit is a *pair* of records, not a single record. Per-pair failure state lives on a `contradiction_check_skipped` edge between the pair, which carries `attempts` (Int64), `last_error` (String, max 200 runes), and `checked_at` (Timestamp) properties. While `attempts < max`, the read-phase guard treats the edge as a *soft skip* — the pair stays in the candidate pool and gets retried next time the random shuffle surfaces it. At `attempts >= max`, the edge becomes a *hard skip* — the pair is locked out of future cycles. Operator triage: find stuck pairs via `gramaton_explore` from one of the records (looking for `contradiction_check_skipped` outbound edges), then `gramaton_unlink` to retry. Setting `max_contradiction_attempts: 0` reverts to legacy behavior: failed pairs never get a marker, just re-enter every cycle. Distinct from `no_contradiction` (which is a real LLM affirmation of no conflict) — the epistemic state is "we tried and couldn't determine," not "we determined no conflict."
+
+`max_embed_attempts` covers `gramaton_reembed`. The reembed candidate selection picks records whose `embedding_model` is missing or differs from the configured embedder. After N consecutive embed failures, the record is excluded from selection on subsequent invocations; failure reason captured in `last_embed_error`. A successful re-embed clears the counter. Reembed is manual-only (CLI / MCP tool / HTTP endpoint), so the per-call cost is bounded by operator cadence — but each invocation still re-paid for the same failures pre-fix. Operator triage: surface stuck records via `gramaton_search(missing=["embedding_model"])` filtered by `embed_attempts >= 3`, inspect `last_embed_error`, then either fix the underlying record or let the next reembed try after `gramaton_update` clears the counter.
 
 ## Observe
 

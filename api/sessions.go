@@ -914,6 +914,17 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		}
 		a.engine.IndexNode(memNode.ID, bm25Text, vec)
 
+		// Mark the embedding model on success so gramaton_reembed
+		// doesn't re-pay for this record on every invocation. IndexNode
+		// only sets `embedding_full` from the vec; without this write,
+		// every successful session-commit promotion would land in
+		// reembed's candidate set forever (selection at api/reembed.go
+		// treats missing/different embedding_model as "needs reembed").
+		// Tracker 01KQ408WXSTDN5X15TGE24X416 (companion latent bug).
+		if vec != nil && a.engine.Embedder() != nil {
+			a.engine.SetProp(memNode.ID, "embedding_model", graph.StringProperty(a.engine.Embedder().ModelID()))
+		}
+
 		batchIDs[memNode.ID] = struct{}{}
 		memoryRecordsCreated++
 
