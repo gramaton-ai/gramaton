@@ -150,7 +150,7 @@ curation:
   max_section_links_per_run: 30
   observation_batch_size: 0          # 0 = auto (500 for local providers, 20 for external)
   observation_min_content_length: 1500
-  task_timeout: 30s                  # wall-clock cap on a single curation task; 0 disables
+  task_timeout: 90s                  # wall-clock cap on a single curation task; 0 disables
 ```
 
 A hung LLM call (or stalled embedding) on a single task can otherwise starve a whole curation cycle. `task_timeout` cancels the task's context after the deadline; the cycle moves on and retries on the next interval.

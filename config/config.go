@@ -368,9 +368,12 @@ type LLMCurationConfig struct {
 	// task hits the timeout, its in-flight LLM call is cancelled and
 	// the next task starts with a fresh ctx. Without this, one stuck
 	// LLM call (e.g. a 120s HTTP timeout) could starve every
-	// downstream task in the cycle. Default: 30s. Zero disables the
-	// per-task cap (entire cycle runs under the parent ctx, legacy
-	// behavior).
+	// downstream task in the cycle. Default: 90s -- comfortable for
+	// multi-wave phases (classify/summarize do up to 3 sequential
+	// waves of 4 parallel calls) on slower providers like Bedrock
+	// cross-region while still catching genuine hangs well before the
+	// 5-minute cycle deadline. Zero disables the per-task cap
+	// (entire cycle runs under the parent ctx, legacy behavior).
 	TaskTimeout time.Duration `yaml:"task_timeout"`
 
 	// MaxCostUSDPerRun caps estimated LLM cost per curation cycle in
@@ -968,7 +971,7 @@ func Defaults() Config {
 		LLMCuration: LLMCurationConfig{
 			BatchSize:                   10,
 			MaxCallsPerRun:              20,
-			TaskTimeout:                 30 * time.Second,
+			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,
 			ContradictionMaxSim:         0.85,

@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Curation per-task timeout default raised from 30s to 90s.**
+  `curation.task_timeout` (P2-08) wraps each autonomous phase
+  (classify, summarize, concept, contradict, manifest) so one hung
+  LLM call can't starve a cycle. The 30s default was tight for
+  multi-wave phases — `classify` and `summarize` can do up to 3
+  sequential waves of 4 parallel calls (BatchSize=10, 4 workers), so
+  on slower providers (Bedrock cross-region, throttled APIs, larger
+  models) a phase legitimately at 25-35s would tickle the timeout
+  even when nothing was actually hung. 90s gives multi-wave phases
+  comfortable headroom while still catching genuine hangs well
+  before the 5-minute cycle deadline. The cycle deadline is
+  unchanged. Knob is in `~/.gramaton/config.yaml` under
+  `curation.task_timeout` for sites that want to override.
+
 - **Comprehensive doc sweep across 16 files reflecting the last three
   days of changes.** Three parallel drift-survey agents identified ~30
   findings; the bulk of them clustered around the retired
