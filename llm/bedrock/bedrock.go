@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -21,6 +23,10 @@ import (
 type Client struct {
 	client *bedrockruntime.Client
 	model  string
+
+	// ignoredModelWarned dedups the per-override Warn from
+	// CompleteWithModel so a tight curation loop doesn't flood logs.
+	ignoredModelWarned sync.Map
 }
 
 // New creates a Bedrock LLM client from the LLM config.
@@ -42,9 +48,27 @@ func New(cfg config.LLMConfig) (*Client, error) {
 }
 
 // CompleteWithModel ignores the model override (Bedrock uses a fixed
-// endpoint per model). Falls back to the configured model.
+// endpoint per model). Logs a one-shot Warn per distinct override
+// so callers expecting cross-provider consistency notice that this
+// provider treats its model as fixed at construction.
 func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	if model != "" && model != c.model {
+		c.warnIgnoredModel(model)
+	}
 	return c.Complete(ctx, prompt)
+}
+
+// warnIgnoredModel deduplicates the per-override warning so a tight
+// curation loop doesn't flood the logs with the same line.
+func (c *Client) warnIgnoredModel(model string) {
+	if _, loaded := c.ignoredModelWarned.LoadOrStore(model, struct{}{}); loaded {
+		return
+	}
+	slog.Warn("bedrock: ignoring CompleteWithModel override",
+		"component", "llm",
+		"requested", model,
+		"using", c.model,
+		"hint", "bedrock client uses the model fixed at construction; configure llm.model or llm.models.* to switch")
 }
 
 // Complete sends a prompt via the Converse API and returns the text.

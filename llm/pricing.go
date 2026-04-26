@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
@@ -30,7 +32,12 @@ var modelPricing = []struct {
 		InputPerMtok: 15, OutputPerMtok: 75,
 		CacheReadPerMtok: 1.50, CacheWritePerMtok: 18.75,
 	}},
-	{"claude-opus-3", ModelPricing{
+	// Claude 3 used the "claude-3-{tier}-..." naming convention
+	// (e.g. claude-3-opus-20240229). The "claude-{tier}-3" prefix
+	// matches nothing in real API IDs -- left as a separate entry
+	// rather than the inverted Claude-4 form so future readers can
+	// see the naming-convention shift between generations.
+	{"claude-3-opus", ModelPricing{
 		InputPerMtok: 15, OutputPerMtok: 75,
 		CacheReadPerMtok: 1.50, CacheWritePerMtok: 18.75,
 	}},
@@ -38,7 +45,11 @@ var modelPricing = []struct {
 		InputPerMtok: 3, OutputPerMtok: 15,
 		CacheReadPerMtok: 0.30, CacheWritePerMtok: 3.75,
 	}},
-	{"claude-sonnet-3", ModelPricing{
+	{"claude-3-sonnet", ModelPricing{
+		InputPerMtok: 3, OutputPerMtok: 15,
+		CacheReadPerMtok: 0.30, CacheWritePerMtok: 3.75,
+	}},
+	{"claude-3-5-sonnet", ModelPricing{
 		InputPerMtok: 3, OutputPerMtok: 15,
 		CacheReadPerMtok: 0.30, CacheWritePerMtok: 3.75,
 	}},
@@ -46,9 +57,13 @@ var modelPricing = []struct {
 		InputPerMtok: 0.80, OutputPerMtok: 4,
 		CacheReadPerMtok: 0.08, CacheWritePerMtok: 1.00,
 	}},
-	{"claude-haiku-3", ModelPricing{
+	{"claude-3-haiku", ModelPricing{
 		InputPerMtok: 0.25, OutputPerMtok: 1.25,
 		CacheReadPerMtok: 0.03, CacheWritePerMtok: 0.30,
+	}},
+	{"claude-3-5-haiku", ModelPricing{
+		InputPerMtok: 0.80, OutputPerMtok: 4,
+		CacheReadPerMtok: 0.08, CacheWritePerMtok: 1.00,
 	}},
 	// OpenAI.
 	{"gpt-4o-mini", ModelPricing{
@@ -61,13 +76,28 @@ var modelPricing = []struct {
 	}},
 }
 
+// pricingMissWarned tracks models we've already warned about so a
+// hot-path call site doesn't log on every invocation.
+var pricingMissWarned sync.Map
+
 // LookupPricing returns pricing for the given model name via prefix
 // match. Returns the zero value (all rates 0) when the model is
-// unknown -- the cost calculator treats that as "no cost data".
+// unknown -- the cost calculator treats that as "no cost data". Logs
+// a one-shot Warn per unknown model so operators notice when a new
+// model lands without a pricing entry (cost dashboards would silently
+// read zero otherwise).
 func LookupPricing(model string) ModelPricing {
 	for _, m := range modelPricing {
 		if strings.HasPrefix(model, m.prefix) {
 			return m.pricing
+		}
+	}
+	if model != "" {
+		if _, loaded := pricingMissWarned.LoadOrStore(model, struct{}{}); !loaded {
+			slog.Warn("LLM pricing miss; cost will read as $0",
+				"component", "llm",
+				"model", model,
+				"hint", "add a pricing entry in llm/pricing.go for this model")
 		}
 	}
 	return ModelPricing{}

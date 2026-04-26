@@ -30,7 +30,11 @@ type Client struct {
 	baseURL string
 	model   string
 	apiKey  string
-	client  *http.Client
+	// maxTokens caps the response length on every messages-API call.
+	// Sourced from config.LLMConfig.MaxResponseTokens; defaults to
+	// 4096 to match the historical hardcoded value.
+	maxTokens int
+	client    *http.Client
 
 	// batchClient has a longer timeout (5 min) for the message
 	// batches API which streams results that can take noticeably
@@ -59,10 +63,16 @@ func New(cfg config.LLMConfig) (*Client, error) {
 		model = "claude-sonnet-4-6"
 	}
 
+	maxTokens := cfg.MaxResponseTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
 	return &Client{
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		model:       model,
 		apiKey:      key,
+		maxTokens:   maxTokens,
 		client:      &http.Client{Timeout: 120 * time.Second},
 		batchClient: &http.Client{Timeout: 5 * time.Minute},
 	}, nil
@@ -186,7 +196,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 func (c *Client) completeImpl(ctx context.Context, model, prompt string) (string, error) {
 	req := messagesRequest{
 		Model:     model,
-		MaxTokens: 4096,
+		MaxTokens: c.maxTokens,
 		Messages: []message{
 			{Role: "user", Content: prompt},
 		},
@@ -270,7 +280,7 @@ func (c *Client) SupportsStructuredOutput() bool { return true }
 func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
 	req := messagesRequest{
 		Model:     c.model,
-		MaxTokens: 4096,
+		MaxTokens: c.maxTokens,
 		Messages: []message{
 			{Role: "user", Content: prompt},
 		},

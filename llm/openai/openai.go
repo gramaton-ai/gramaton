@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -30,6 +32,10 @@ type Client struct {
 	model   string
 	apiKey  string
 	client  *http.Client
+
+	// ignoredModelWarned dedups the per-override Warn from
+	// CompleteWithModel so a tight curation loop doesn't flood logs.
+	ignoredModelWarned sync.Map
 }
 
 // New creates an OpenAI-compatible LLM client.
@@ -110,9 +116,27 @@ type apiError struct {
 }
 
 // CompleteWithModel ignores the model override (OpenAI client uses
-// the configured model). Falls back to the configured model.
+// the configured model). Logs a one-shot Warn per distinct override
+// so callers expecting cross-provider consistency notice that this
+// provider treats its model as fixed at construction.
 func (c *Client) CompleteWithModel(ctx context.Context, model, prompt string) (string, error) {
+	if model != "" && model != c.model {
+		c.warnIgnoredModel(model)
+	}
 	return c.Complete(ctx, prompt)
+}
+
+// warnIgnoredModel deduplicates the per-override warning so a tight
+// curation loop doesn't flood the logs with the same line.
+func (c *Client) warnIgnoredModel(model string) {
+	if _, loaded := c.ignoredModelWarned.LoadOrStore(model, struct{}{}); loaded {
+		return
+	}
+	slog.Warn("openai: ignoring CompleteWithModel override",
+		"component", "llm",
+		"requested", model,
+		"using", c.model,
+		"hint", "openai client uses the model fixed at construction; configure llm.model or llm.models.* to switch")
 }
 
 // Complete sends a prompt via /v1/chat/completions and returns the text.

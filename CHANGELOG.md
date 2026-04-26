@@ -9,6 +9,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **LLM provider inconsistencies: pricing prefixes, ignored-override
+  warnings, configurable Anthropic max_tokens.** P2-18 named seven
+  issues; addressed four:
+  (1) `bedrock` and `openai` clients silently dropped the
+  `CompleteWithModel(model, ...)` override -- callers expecting the
+  cross-provider semantic that anthropic provides got their
+  Complete redirected to the configured model with no signal. Both
+  providers now log a one-shot Warn (`sync.Map`-deduped) when an
+  override is requested that doesn't match the configured model,
+  pointing operators at `llm.model` / `llm.models.*` config.
+  (2) `LookupPricing` had `claude-opus-3` / `claude-sonnet-3` /
+  `claude-haiku-3` prefixes that matched no real Anthropic model
+  ID -- Claude 3 uses `claude-3-{tier}-...` (note position).
+  Replaced with the correct prefixes (`claude-3-opus`,
+  `claude-3-sonnet`, `claude-3-5-sonnet`, `claude-3-haiku`,
+  `claude-3-5-haiku`); cost dashboards for Claude 3 deployments
+  now actually compute non-zero costs.
+  (3) `LookupPricing` returned the zero ModelPricing on miss with
+  no signal -- callers got `$0` cost for unknown models silently.
+  Now logs a one-shot Warn per missing model with a hint to add a
+  pricing entry. Cost is still 0 (correct -- we don't have data),
+  but the log makes it visible.
+  (4) Anthropic `MaxTokens` was hardcoded `4096` on every messages
+  call -- long curation outputs (concept synthesis on large stores)
+  silently truncated. New `LLMConfig.MaxResponseTokens` config
+  field threads through `anthropic.New`; defaults to 4096 to match
+  prior behaviour. Operators who hit truncation can raise it.
+  Skipped: (5) anthropic Content multi-block / tool-use (would
+  require a richer message protocol; current text-only is fine for
+  curation), (6) openai response-size LLM-vs-embed inconsistency
+  (10MB vs 50MB are tuned to their respective payload shapes; not
+  the same axis), (7) ratelimit interface-loses-concrete-methods
+  (T-07 territory). (P2-18.)
+
 - **CLI server-spawn fd leak; lock-free liveness probe; clean Ctrl-C
   on the MCP transport.** P2-16 named six issues; three were real
   production bugs:

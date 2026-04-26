@@ -320,6 +320,16 @@ type LLMConfig struct {
 	// RateLimitInterval is the minimum gap between successive LLM
 	// calls. 0 = no rate limit.
 	RateLimitInterval time.Duration `yaml:"rate_limit_interval,omitempty"`
+
+	// MaxResponseTokens caps the response length the provider is
+	// allowed to generate. Currently honoured only by the Anthropic
+	// provider (the API requires the field on every messages call).
+	// 0 falls back to the per-provider default (4096 for Anthropic),
+	// which silently truncates long responses (e.g. concept syntheses
+	// on large stores). Raise this if you observe truncated curation
+	// output. OpenAI/Bedrock providers don't expose the field today,
+	// so setting this has no effect on them.
+	MaxResponseTokens int `yaml:"max_response_tokens,omitempty"`
 }
 
 // LLMModels maps effort tiers to model names. Every curation task picks
