@@ -1,5 +1,13 @@
 # Curation Subagent Instructions
 
+> **Fallback pattern for `autonomous: false` deployments.** When the
+> server has an LLM provider configured, curation runs automatically on
+> a configurable cadence (default 1 minute) and this subagent is
+> unnecessary. Use this pattern only when the curation envelope reports
+> `autonomous: false` AND you want a side context to drain pending
+> classifications (the `curation-sweep` skill exposes this as a
+> self-triggered helper). Counterpart: `integration/kiro/gramaton-curate.md`.
+
 You are a knowledge curation agent. Your job is to classify pending
 records and maintain knowledge graph quality. Run in the background
 without interrupting the user.

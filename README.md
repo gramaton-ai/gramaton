@@ -176,6 +176,7 @@ Gramaton's primary interface is MCP. The 38 tools register into clusters matched
 | `gramaton_update` | Modify properties on an existing record |
 | `gramaton_classify` | Assign or update classification metadata on a pending record |
 | `gramaton_resolve` | Mark a record as resolved (completed / superseded / abandoned / obsolete) |
+| `gramaton_intake` | Submit pre-extracted facts for deferred curation |
 | `gramaton_link` / `gramaton_unlink` | Manage typed, weighted edges between records |
 | `gramaton_history` | Per-record change history |
 
@@ -213,7 +214,7 @@ Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`,
 | `gramaton_backup` | Create a backup archive of the store |
 | `gramaton_curation` | View curation status, trigger a sweep, or dry-run |
 | `gramaton_reembed` | Re-embed records after an embedding model change |
-| `gramaton_guide` | Live topic-addressable reference (capture, search, sessions, collections, metadata, curation) |
+| `gramaton_guide` | Live topic-addressable reference (capture, search, sessions, collections, metadata, curation, temporal-queries) |
 
 Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
 
@@ -224,7 +225,8 @@ A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curate
 
 | Command | Description |
 |---------|-------------|
-| `gramaton init` | Interactive setup wizard (embed provider, LLM, MCP clients, hooks, verify). `--non-interactive` runs the legacy scripted defaults path. |
+| `gramaton init [--force]` | Interactive setup wizard (embed provider, LLM, MCP clients, hooks, agent-usage instructions, verify). `--force` re-runs the wizard on an existing install (preserves API keys). `--non-interactive` runs the scripted defaults path. |
+| `gramaton preflight` | Verify daemon health, embedding model, LLM connectivity, and config sanity. Exits non-zero on blocking issues. |
 | `gramaton serve` | Run the server in the foreground (otherwise auto-started on first use) |
 | `gramaton status` | Server and store health |
 | `gramaton store <subcmd>` | Manage named stores (create, list, delete) |
@@ -240,11 +242,14 @@ A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curate
 | `gramaton ingest <files>` | Bulk-load text files |
 | `gramaton log [--last N]` | Commit history |
 | `gramaton diff [ref1..ref2]` | Structural diff |
+| `gramaton history <id>` | Per-record change history |
 | `gramaton branch <subcmd>` | Branch management |
 | `gramaton revert <commit>` | Rollback to a prior commit |
 | `gramaton export` / `gramaton import` | Export and import records |
 | `gramaton reembed [--batch N]` | Re-embed after model change |
+| `gramaton repair [--content-quality]` | Operator-driven self-heal (e.g. backfill missing summaries) |
 | `gramaton mcp` | Run as an MCP stdio proxy to the HTTP server |
+| `gramaton hook <event>` | Internal: agent-lifecycle hook dispatcher invoked by hook scripts |
 
 Run `gramaton <command> --help` for flags.
 
@@ -288,6 +293,12 @@ See [docs/configuration.md](docs/configuration.md) for all fields and [docs/prov
 | [Tenets](docs/tenets.md) | Design principles |
 | [Project Design](docs/project-design/) | Data model, retrieval, collections, threat model, research foundations, design decisions |
 | [Contributing](CONTRIBUTING.md) | Conventions for contributors — the operation recipe, lock discipline, tests, CHANGELOG etiquette |
+| [Windows](docs/windows.md) | Windows-specific notes — install, supported features, current limitations |
+
+## Community
+
+- [Code of Conduct](CODE_OF_CONDUCT.md) — Contributor Covenant v2.1.
+- [Security](SECURITY.md) — vulnerability disclosure process. Do not file public issues for security bugs.
 
 ## License
 

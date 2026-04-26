@@ -187,9 +187,6 @@ For the full guide on extraction triggers, segment granularity,
 classification, and how to write good segment content, call
 `gramaton_guide(topic="sessions")`.
 
-`gramaton_observe` is soft-deprecated. Do not use it for new work;
-use the session flow instead.
-
 ### Resolving Records
 
 When a TODO is done, a question is answered, a decision is made, or

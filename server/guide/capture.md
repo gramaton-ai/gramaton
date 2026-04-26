@@ -93,12 +93,6 @@ content with no future value:
 - Mechanical tool-call narration unless the result itself is the
   knowledge.
 
-## Deprecated: `gramaton_observe`
-
-Soft-deprecated. Still works but will be removed once session
-extraction benchmarks confirm quality. Use
-`gramaton_session_prepare/commit` instead.
-
 ## Related Tools
 
 - `gramaton_capture`: User-initiated capture to Memory.

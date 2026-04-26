@@ -35,7 +35,7 @@ embedding:
 - Single-binary install. No external process to manage. Quick Start is `go install && gramaton init`.
 - Offline-first after the first-run model download. No network required for capture or search once cached.
 - Graceful degradation: no embedding provider is still a fallback, but the BERT default means every install gets semantic search out of the box.
-- Cross-platform consistency: Apple Silicon has a hand-written NEON matmul kernel (`matmul_arm64.s`); amd64 currently uses a pure-Go matmul fallback (AVX2 kernel planned, tracked in-repo).
+- Cross-platform consistency: Apple Silicon uses a hand-written NEON matmul kernel (`matmul_arm64.s`); amd64 ships an AVX2+FMA3 kernel (`matmul_amd64.s`) with a pure-Go fallback for older CPUs.
 
 **Alternative models:** set `model` to a different HuggingFace repo path (e.g. `BAAI/bge-base-en-v1.5` for a 768-dim version, or any BERT-encoder repo containing `config.json`, `tokenizer.json`, and `model.safetensors`). Update `dimension` to match.
 

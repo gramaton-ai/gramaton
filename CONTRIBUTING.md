@@ -857,9 +857,9 @@ NOT bump versions in their PRs.
 - **Bug reports**: open a GitHub issue with reproduction steps,
   expected vs actual behaviour, and `gramaton --version` output.
   Templates in `.github/ISSUE_TEMPLATE/` (to be added).
-- **Security vulnerabilities**: do NOT open a public issue. Email
-  details per `SECURITY.md` (to be added). We aim to respond within
-  72 hours.
+- **Security vulnerabilities**: do NOT open a public issue. Follow
+  the disclosure process in [`SECURITY.md`](SECURITY.md). We aim to
+  respond within 72 hours.
 - **Questions, design discussions**: open a GitHub Discussion (to
   be enabled at public release) or open an issue tagged
   "question". For non-trivial designs, prefer discussion-first

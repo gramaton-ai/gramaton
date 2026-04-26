@@ -19,7 +19,7 @@ embedding:
   dimension: 384
 ```
 
-**Setup:** pick `bert` at the embedding prompt in `gramaton init`'s wizard (it's the default), or leave the `embedding:` section off your config entirely. The model downloads automatically on first use; internet required for the first run, subsequent runs serve from cache.
+**Setup:** pick `bert` at the embedding prompt in `gramaton init`'s wizard (it's the default), or leave the `embedding:` section off your config entirely. The model downloads automatically on first use; internet required for the first run, subsequent runs serve from cache. To re-run the wizard later (switch providers, reconfigure clients, install agent-usage instructions), use `gramaton init --force`; existing API keys in `~/.gramaton/config.yaml` are preserved unless explicitly overwritten.
 
 **Custom BERT models:** set `model` to a HuggingFace repo path. The provider expects the repo to contain `config.json`, `tokenizer.json`, and `model.safetensors`. Context window is read from `config.json` (`max_position_embeddings`).
 

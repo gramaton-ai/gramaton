@@ -7,6 +7,75 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Comprehensive doc sweep across 16 files reflecting the last three
+  days of changes.** Three parallel drift-survey agents identified ~30
+  findings; the bulk of them clustered around the retired
+  `gramaton_observe` tool, the temporal-queries surface (Phases 2-9),
+  collection templates, and configuration knobs added during engine-
+  debt cleanup. Fixes:
+  - `internal/setup/agent_instructions.md`: curation cadence corrected
+    from "every 5 minutes" to "configurable cadence (default 1 minute,
+    set via `curation.interval`)" — the embedded source ships into
+    every fresh `gramaton init`, so the wrong cadence was being
+    written into ~/.claude/CLAUDE.md and ~/.kiro/steering/gramaton.md
+    on every install.
+  - `integration/docs/custom-agents.md`: rewrote MCP tool list (38
+    tools across 9 clusters, grouped by cluster), updated REST
+    endpoint reference (added /v1/intake, /v1/sessions/*,
+    /v1/branches/*/checkout, /v1/curation/{batch,drain},
+    /v1/collections/{id}/items/batch, /v1/health, /v1/records/{id}/history;
+    removed the retired /v1/observe), replaced "When to Observe" section
+    with intake/sessions guidance.
+  - `integration/claude-code/CLAUDE.md`: dropped soft-deprecation note
+    for `gramaton_observe` (tool retired in T-02).
+  - `integration/claude-code/subagent-capture.md`: added legacy/fallback
+    banner — the autonomous-classify-via-subagent pattern conflicts with
+    the user-initiated capture rule and the autonomous-curation /
+    sessions paths now cover the autonomous side.
+  - `integration/claude-code/subagent-curate.md`: added banner clarifying
+    the file is for `autonomous: false` deployments only.
+  - `server/guide/capture.md`: removed stale "Deprecated:
+    gramaton_observe" section.
+  - `server/guide/collections.md`: complete operations list (added 5
+    missing tools: add_batch, rename, delete, schema, migrate),
+    `template` parameter, `as_of=T` on `_items`, idempotent dedup on
+    `curation: minimal`, behaviour fields section, templates section
+    listing the 5 starters, temporal-queries cross-reference.
+  - `server/guide/search.md`: added date-range patterns (`since`,
+    `until`, `last_accessed_after`, `valid_before`) and a
+    temporal-queries cross-reference.
+  - `docs/integrator-guide.md`: added Temporal queries subsection,
+    CLI parity note, `gramaton preflight` / `gramaton init --force`
+    pointers, `template` and `as_of=T` references in collection ops,
+    `temporal-queries` added to the live-reference topic list.
+  - `docs/architecture.md`: noted the panic-recover defer in
+    `securityHeaders` (commit 910b268), updated curation row with
+    1-minute default cadence + `task_timeout` + startup self-heal,
+    updated LLM provider row with `CompleteStructured` capability.
+  - `docs/configuration.md`: added `llm.max_response_tokens` (P2-18)
+    and `curation.task_timeout` (P2-08) yaml entries; cleaned up stale
+    "doc older than 2026-04: was 5m" parenthetical on
+    `curation.interval`.
+  - `docs/providers.md`: noted `gramaton init --force` re-run path
+    with API-key preservation.
+  - `docs/project-design/data-integrity.md`: dedup threshold from 0.95
+    to 0.92 (post-D37); action enum from `flag | reject | merge_silent`
+    to `supersede | reject` (default `supersede`).
+  - `docs/project-design/embedding.md`: AVX2+FMA3 amd64 matmul kernel
+    documented as shipped (was "planned").
+  - `docs/project-design/collections.md`: collection-templates entry
+    updated — five starter templates ship.
+  - `README.md`: CLI table additions (`gramaton preflight`, `--force`
+    on `init`, `gramaton history`, `gramaton repair`, `gramaton hook`),
+    `gramaton_intake` row in MCP Records cluster, `temporal-queries`
+    added to guide topics list, new Community section linking
+    SECURITY.md and CODE_OF_CONDUCT.md, Windows row in Documentation
+    table.
+  - `CONTRIBUTING.md`: dropped "to be added" parenthetical on the
+    SECURITY.md disclosure pointer (file landed in commit 6563d80).
+
 ### Fixed
 
 - **Panic-recover at the HTTP transport boundary; structured 500 instead

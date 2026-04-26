@@ -235,7 +235,7 @@ This means agents can interact with collections without perfect behavior. The se
 
 3. **Schema format** -- YAML for human authoring, JSON via MCP tools. Stored on the collection node in the graph (schema-in-the-data). Schemas travel with the store on export/import. No separate registry or config directory.
 
-4. **Collection templates** -- start blank. No shipped templates. Templates are opinionation we don't need yet.
+4. **Collection templates** -- five starter templates ship: `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`. Pass `template=<name>` to `gramaton_collection_create` to seed the schema and behaviour fields (`curation`, `clear_mode`, `supersession`). Custom schemas remain fully supported; templates are an opinionation entry point, not a constraint.
 
 5. **Cross-collection queries** -- deferred. Single-collection queries first.
 

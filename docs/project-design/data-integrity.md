@@ -67,19 +67,19 @@ concepts:
 
 ### Duplicate captures
 
-The agent captures the same knowledge twice in different sessions. The wording is slightly different. Embedding similarity is close (0.92) but below the dedup threshold (0.95). Two near-duplicate records exist.
+The agent captures the same knowledge twice in different sessions. The wording is slightly different. Embedding similarity is close (0.93) and crosses the auto-supersession threshold (0.92). The older record is auto-marked historical.
 
 **Why this happens:** The agent doesn't remember what it captured in prior sessions. It sees the user state a preference and captures it, not knowing it was captured last week.
 
 **Defense:**
-- Configurable similarity threshold for dedup detection. At capture time, the server checks if any existing record has embedding similarity above the threshold. If so, it flags or rejects the duplicate.
+- Configurable similarity threshold for dedup detection. At capture time, the server checks if any existing record has embedding similarity above the threshold. If so, it auto-supersedes the older record (sets `valid_until`, creates a `supersedes` edge) or rejects the new write outright depending on the configured action.
 - The agent system prompt includes: "Before capturing, search Gramaton for existing records on this topic. Don't capture what's already stored."
 - Curation scans for near-duplicates and proposes merges.
 
 ```yaml
 dedup:
-  similarity_threshold: 0.92   # records above this similarity flagged as potential duplicates
-  action: flag                  # flag | reject | merge_silent
+  similarity_threshold: 0.92    # records above this similarity trigger the action
+  action: supersede              # supersede | reject (default: supersede)
 ```
 
 ### Capturing the agent's own output
@@ -336,7 +336,7 @@ concepts:
 
 dedup:
   similarity_threshold: 0.92
-  action: flag
+  action: supersede
 ```
 
 ## Summary

@@ -44,6 +44,9 @@ Default = both. Narrow only when you know what you want.
 ## Useful Patterns
 
 - Newest records: `sort="created_at"`
+- Created in a window: `since="2026-04-01", until="2026-04-30"`
+- Recently accessed: `last_accessed_after="2026-04-15"`
+- Asserted before a date: `valid_before="2026-04-01"` (when the source claim was made)
 - Unclassified records: `missing=["temporality"]`
 - By tag: `keywords=["auth", "migration"]`
 - Stale (unaccessed): `sort="staleness", order="desc"`
@@ -80,3 +83,7 @@ content competing for top-K slots.
 - `gramaton_duplicates`: Find near-duplicate records (cosine ≥ 0.92).
 - `gramaton_guide(topic="metadata")`: Which metadata to filter on
   for which question types.
+- `gramaton_guide(topic="temporal-queries")`: When you need "what
+  changed", "when did X happen", or "what did the store look like
+  at time T", switch to `gramaton_log` / `gramaton_diff` /
+  `gramaton_history`. Search itself is the live (latest-only) axis.

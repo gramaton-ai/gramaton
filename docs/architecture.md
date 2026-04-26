@@ -47,7 +47,7 @@ Requests flow downward; dependencies flow inward. Nothing in `core/`, `graph/`, 
 
 The outermost layer. Three transports, one surface underneath.
 
-- **HTTP**: `server/bindings_*.go` register Cobra-style routes via `http.ServeMux`. Each route deserializes a request body, calls an `api.API` method, and serializes the response. No business logic — just wire format translation and an `api.APIError` → HTTP status mapping.
+- **HTTP**: `server/bindings_*.go` register Cobra-style routes via `http.ServeMux`. Each route deserializes a request body, calls an `api.API` method, and serializes the response. No business logic — just wire format translation and an `api.APIError` → HTTP status mapping. The whole mux is wrapped by `securityHeaders`, which sets security headers, captures the response status for the request log, and installs a panic-recover defer at the transport boundary — an unrecovered panic inside any api/ method is logged and turned into a structured `{code:"internal", retryable:false}` 500 envelope rather than a closed connection. `http.ErrAbortHandler` is re-panicked so net/http's intentional-abort semantics survive.
 - **MCP (Streamable HTTP + stdio)**: `server/mcp.go` wires the MCP SDK's server to a `/mcp` route on the same HTTP listener (loopback-only — non-loopback callers get rejected before reaching the handler), and `cli/mcp_cmd.go` exposes an equivalent stdio entry point. `server.registerMCPTools` calls nine cluster registrars (`bindings_records.go`, `bindings_search.go`, `bindings_sessions.go`, `bindings_collections.go`, `bindings_admin.go`, `bindings_history.go`, `bindings_maintenance.go`, `mcp_intake.go`, `mcp_guide.go`), each of which registers MCP tools that call `api.API` methods directly — not through HTTP.
 - **CLI**: `cli/*.go` holds one Cobra command per operation. A CLI command opens a local HTTP client against the server and calls the HTTP route (`cli/httpclient.go`). For MCP-native clients that run Gramaton as a stdio subprocess, `cli/mcp_cmd.go` + `cli/mcp_proxy_*.go` register the same MCP tool set, proxying each call to the HTTP server via the same local client.
 
@@ -120,7 +120,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 |---------|---------|
 | `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
 | `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
-| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). |
+| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 30s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. |
 | `dedup/` | Near-duplicate detection via vector similarity + Jaccard guard. |
 | `chunking/` | Long-content splitting before embedding. |
 
@@ -129,7 +129,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `embed/` | `Provider` interface + factory. Implementations: `embed/bert/` (pure-Go default), `embed/ollama/`, `embed/openai/`, `embed/bedrock/`. |
-| `llm/` | `Provider` interface + factory. Implementations: `llm/anthropic/`, `llm/openai/`, `llm/bedrock/`. Usage tracking and rate limiting live at this layer (`metered.go`, `ratelimit.go`, `pricing.go`, `usage.go`). |
+| `llm/` | `Provider` interface + factory. Implementations: `llm/anthropic/`, `llm/openai/`, `llm/bedrock/`. Provides `Complete`, `CompleteWithModel`, and `CompleteStructured` (provider-gated via `SupportsStructuredOutput()`); curation uses the structured path for classification when available and falls back to plain `Complete` otherwise. Usage tracking and rate limiting live at this layer (`metered.go`, `ratelimit.go`, `pricing.go`, `usage.go`). |
 
 ### Data
 

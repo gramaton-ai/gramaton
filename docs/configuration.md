@@ -74,6 +74,10 @@ llm:
   region: ""                      # AWS region (Bedrock)
   aws_profile: ""                 # AWS named profile (Bedrock)
 
+  # Per-call output ceiling. Anthropic clamps responses to this many
+  # tokens; raise if concept synthesis on large stores truncates.
+  max_response_tokens: 4096
+
   # Safety caps. 0 = disabled.
   max_calls_per_day: 0            # hard cap on LLM calls per calendar day
   max_calls_per_session: 0        # hard cap per server lifetime
@@ -136,7 +140,7 @@ Controls the deterministic + autonomous background maintenance pipeline.
 ```yaml
 curation:
   enabled: true
-  interval: 1m                      # how often curation runs (doc older than 2026-04: was 5m)
+  interval: 1m                      # how often curation runs
   orphan_similarity_min: 0.6        # min similarity to link an orphan to its nearest neighbor
   stale_ephemeral_score: 0.95       # freshness-decay threshold for expiring ephemeral records
   stale_temporal_score: 0.99        # freshness-decay threshold for expiring temporal records
@@ -146,7 +150,10 @@ curation:
   max_section_links_per_run: 30
   observation_batch_size: 0          # 0 = auto (500 for local providers, 20 for external)
   observation_min_content_length: 1500
+  task_timeout: 30s                  # wall-clock cap on a single curation task; 0 disables
 ```
+
+A hung LLM call (or stalled embedding) on a single task can otherwise starve a whole curation cycle. `task_timeout` cancels the task's context after the deadline; the cycle moves on and retries on the next interval.
 
 ## LLM curation
 

@@ -309,7 +309,8 @@ be linked to knowledge records via `gramaton_link`.
 
 ### Curation
 
-The server runs background curation automatically every 5 minutes to
+The server runs background curation on a configurable cadence
+(default 1 minute, set via `curation.interval` in config.yaml) to
 classify pending records, link orphans, detect duplicates, and
 synthesize concept nodes. You don't need to trigger it manually — but
 you can inspect or force it:

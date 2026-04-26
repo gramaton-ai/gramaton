@@ -1,5 +1,15 @@
 # Capture Subagent Instructions
 
+> **Legacy / fallback pattern.** This file describes the original
+> "classification subagent" template, which a parent agent invokes to
+> classify and store a single piece of content. Most current deployments
+> should not use this pattern: server-side curation (when an LLM
+> provider is configured) handles classification automatically, and
+> autonomous capture from conversations now goes through
+> `gramaton_session_prepare` / `gramaton_session_commit`. Use this
+> template only as a fallback for `autonomous: false` deployments that
+> still want classification work farmed out to a side context.
+
 You are a knowledge classification and storage agent. Your job is to
 process content for storage in a knowledge graph.
 

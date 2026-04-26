@@ -209,9 +209,10 @@ Field names must match `^[a-zA-Z_][a-zA-Z0-9_]*$` — they become property keys 
 
 ### Adding, listing, updating, moving
 
+- `gramaton_collection_create` — create a collection. Optional `schema` for field types and required fields, optional `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`) to seed schema + behaviour fields, optional behaviour fields (`curation`, `clear_mode`, `supersession`).
 - `gramaton_collection_add` — validates fields against schema, creates an item node, returns its ID.
 - `gramaton_collection_add_batch` — up to 500 items in one call. Schema-validated and dedup-checked per item; passing items commit atomically in one engine save, failing items are reported in the `Failed` array with per-item `{index, client_ref, code, message}`. Use instead of repeated `_add` when loading more than ~10 items.
-- `gramaton_collection_items` — exhaustive list. `fields: [...]` projects a subset; `filter: {...}` narrows by exact field match or any-of.
+- `gramaton_collection_items` — exhaustive list. `fields: [...]` projects a subset; `filter: {...}` narrows by exact field match or any-of. Pass `as_of=T` (RFC3339 or `YYYY-MM-DD`) to return membership at a historical commit; the response carries `semantics: point_in_time`.
 - `gramaton_collection_update` — partial update, preserves unspecified fields.
 - `gramaton_collection_move` — move between collections.
 - `gramaton_collection_remove` — remove from collection (the underlying item node stays in the graph; it's just not a member of this collection anymore).
@@ -289,6 +290,21 @@ The three retrieval tools are shaped as a funnel, cheap to expensive:
 
 Use the cheapest tier that answers the question. `_explore` on every hit is wasteful; `_search` with no follow-up leaves relationships on the table.
 
+### Temporal queries
+
+For "what changed", "when did this happen", or "what did the store look like at time T", use the temporal-query surface:
+
+- **`gramaton_log`** — commit history. Filters: `actions` (semantic activity-level filter), `exclude_curation` (drop autonomous-curation noise), `include_record_mutations` (CRUD-level commit shapes). Date-range params: `since`, `until`.
+- **`gramaton_diff`** — what changed between two commits or two dates. Accepts `since`/`until` for date-bounded queries.
+- **`gramaton_history`** — per-record change history.
+- **`gramaton_collection_items(as_of=T)`** — membership at a historical commit.
+
+Search itself is the live (latest-only) axis. Call `gramaton_guide(topic="temporal-queries")` for the full taxonomy and patterns.
+
+### CLI parity
+
+Every MCP tool has a corresponding CLI subcommand. `gramaton --help` lists the surface; `gramaton <subcommand> --help` shows flags. Use this when you want to pipe to a script, run a one-off operation outside an agent context, or verify behaviour without standing up an MCP client.
+
 ## Agent prompt guidance
 
 When writing system prompts or agent instructions for Gramaton integration:
@@ -302,6 +318,10 @@ When writing system prompts or agent instructions for Gramaton integration:
 7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for capture / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
 Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md), [Kiro specs](../integration/kiro/), and [custom agent frameworks](../integration/docs/custom-agents.md).
+
+### Verifying the install
+
+Run `gramaton preflight` after a fresh install (or after any major config change) to verify daemon health, embedding model availability, LLM connectivity, and config sanity. The command exits non-zero if anything blocks normal operation, so it's a fit for shell scripts or first-run docs in a downstream tool. To re-run the interactive setup wizard on an existing install (preserving API keys), use `gramaton init --force`.
 
 ## What NOT to build on Gramaton
 
@@ -325,6 +345,6 @@ The boundary: **Gramaton stores and retrieves. Your agent thinks and decides.**
 
 ## Live reference
 
-`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `capture`, `search`, `sessions`, `collections`, `metadata`, `curation`. The guide content lives in the repo at `server/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
+`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `capture`, `search`, `sessions`, `collections`, `metadata`, `curation`, `temporal-queries`. The guide content lives in the repo at `server/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
 
 When you're unsure about a field, a trigger, or a flow, call the guide rather than guessing. That's its job.
