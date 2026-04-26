@@ -7,7 +7,7 @@ description: Use for code review of Gramaton changes — PR review, branch revie
 
 Every check below came from a real bug. Don't skip any without an explicit reason.
 
-The 12 checks below are necessary but not sufficient. After walking them, do a second pass with the framing: "what could go wrong here that's not on this list?" Most regressions in this codebase have come from refactor behavior-preservation gaps and vacuous tests — neither of which a mechanical checklist reliably catches. For diffs >200 lines or those that touch multiple subsystems, consider spawning 2-3 independent review agents in parallel with focused prompts (correctness / security / test coverage) and synthesizing findings.
+The 14 checks below are necessary but not sufficient. After walking them, do a second pass with the framing: "what could go wrong here that's not on this list?" Most regressions in this codebase have come from refactor behavior-preservation gaps and vacuous tests — neither of which a mechanical checklist reliably catches. For diffs >200 lines or those that touch multiple subsystems, consider spawning 2-3 independent review agents in parallel with focused prompts (correctness / security / test coverage) and synthesizing findings.
 
 ## Setup
 
@@ -127,20 +127,37 @@ Vacuous tests are worse than missing tests because they create a false sense of 
 
 ### 11. Doc and skill drift
 
-Two drift surfaces to check:
+Three drift surfaces to check:
 
-- **Design docs:** for every exported symbol or MCP tool added/renamed/removed, grep `docs/architecture.md` and `docs/project-design/*.md` for the old shape. Flag mentions for update.
+- **Name-level drift (mechanical):** for every exported symbol, MCP tool, HTTP route, or config key added/renamed/removed, grep `README.md`, `CONTRIBUTING.md`, `docs/architecture.md`, and `docs/project-design/*.md` for the old shape. Flag mentions for update.
+- **Semantic drift (read, don't grep):** for every exported symbol or documented invariant whose *behavior* changed without the name changing, grep is useless. Identify the doc paragraph(s) that describe the affected subsystem (start with `docs/architecture.md`, then any `docs/project-design/*.md` file whose name matches the subsystem) and read them against the new code. Flag any sentence that no longer holds. Common shapes: a stated guarantee ("X is always written before Y"), a documented contract ("returns Z when N"), a layering rule ("api never calls server"). Doc still naming the right symbol is not the same as doc still being correct.
 - **Skills:** if the diff modifies `CONTRIBUTING.md`, grep `.claude/skills/` for references to the changed sections (most skills cite CONTRIBUTING.md by section or line). A skill that references a renamed/renumbered/semantically-changed section needs updating.
 
-**Severity: LOW**, but flag for the author. Never edit a skill without explicit approval — see CLAUDE.md governance.
+**Severity: LOW** for name drift, **MEDIUM** for semantic drift (a wrong doc misleads future readers and agents). Flag for the author. Never edit a skill without explicit approval — see CLAUDE.md governance.
 
-### 12. Changelog entry
+### 12. Inline comment hygiene
+
+Comments rot silently and cost more than missing comments because they mislead. Walk the diff for both added comments and pre-existing comments inside modified blocks.
+
+**Flag added comments that violate project style** (see the global comment policy in CLAUDE.md):
+- Narrating WHAT the code does when a well-named identifier already says it (`// loop over records`, `// check if nil`).
+- Referencing the current task, fix, PR, issue, or caller (`// fix for #123`, `// added for the X flow`, `// used by Y`). These belong in the commit message or PR description, not the source.
+- Tombstones for removed code (`// removed: oldFunc`, `// no longer needed`). If it's gone, it's gone — git history is the record.
+- Multi-paragraph docstrings or multi-line comment blocks that restate the function signature.
+
+**Keep added comments that explain WHY when the why is non-obvious:** a hidden constraint, a subtle invariant, a workaround for a specific bug, behavior that would surprise a reader. The litmus test from CLAUDE.md: would removing the comment confuse a future reader? If no, the comment shouldn't exist.
+
+**Flag stale pre-existing comments in modified blocks.** If the diff changed behavior inside a function that has a comment describing the old behavior, the comment is now wrong. This is the silent-rot class — readers trust comments more than they should. Update or delete.
+
+**Severity: LOW** for style-violation comments, **MEDIUM** for stale comments that now mislead.
+
+### 13. Changelog entry
 
 `CHANGELOG.md` has an entry under `[Unreleased]` describing the change. Correct category.
 
 **Severity: LOW**, but required for every PR.
 
-### 13. Refactor preservation (when the diff merges/splits/restructures existing code)
+### 14. Refactor preservation (when the diff merges/splits/restructures existing code)
 
 Refactor signature: roughly equal `-N/+M` counts in the same file, or one function deleted while another was added/expanded. Refactors silently regress when a behavior path in the original code has no equivalent in the new structure.
 
