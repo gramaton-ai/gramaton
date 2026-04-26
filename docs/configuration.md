@@ -166,6 +166,7 @@ llm_curation:
   max_cost_usd_per_run: 0               # USD cap per curation cycle (0 = disabled)
   max_classify_attempts: 3              # mark a record stuck after N consecutive classify failures (0 = legacy infinite-retry)
   max_summary_attempts: 3               # skip a record after N consecutive summary failures (0 = legacy infinite-retry)
+  max_synthesis_attempts: 3             # mark a concept stuck after N consecutive synthesis failures (0 = legacy infinite-retry)
 
   # Contradiction detection.
   max_contradiction_checks: 5
@@ -207,6 +208,8 @@ The effort dials are the primary cost/quality knob. Short classification, summar
 `last_classify_error` may include provider-side error fragments (HTTP status messages, request IDs, occasional echoed prompt snippets, transport URLs). It's stored on the record as a normal property — surfaced through `gramaton_inspect` and any property-filtered `gramaton_search`. If you share an export or backup, redact stuck records' `last_classify_error` first if any of them sit on sensitive content.
 
 `max_summary_attempts` does the equivalent for summary generation. After N consecutive failures (LLM error or empty-after-trim), the record is skipped at selection time on subsequent cycles; the failure reason is captured in `last_summary_error`. The summary phase doesn't flip `processing_status` to `"stuck"` (that's the classify phase's terminal state) — instead the selection guard skips records with `summary_attempts >= max`. Both counters reset to 0 on a successful classify or summary respectively, so an operator-fixed record passes cleanly.
+
+`max_synthesis_attempts` does the equivalent for concept synthesis. Concept syntheses bundle multiple records' member summaries per LLM call, so a single failure (LLM error, JSON parse error, short response, empty synthesis at a position) rebills the entire batch's input tokens. After N consecutive failures, the concept's `synthesis_status` flips to `"stuck"` — the existing selection guard (`synthesis_status="pending"`) auto-excludes stuck concepts from future cycles. Failure reason captured in `last_synthesis_error`. Operator triage: surface stuck concepts via `gramaton_search(processing_status="processed", missing=["content_full"])` with `synthesis_status="stuck"` (concepts have processing_status=processed regardless of synthesis state).
 
 ## Observe
 

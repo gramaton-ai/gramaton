@@ -79,6 +79,13 @@ const lastClassifyErrorMaxRunes = 200
 // summary-failure error shapes diverge from classify in future.
 const lastSummaryErrorMaxRunes = 200
 
+// lastSynthesisErrorMaxRunes caps the size of the per-concept
+// last_synthesis_error property. Concept synthesis failures are
+// often batch-level (one LLM error or parse failure affects all N
+// concepts in the batch), so the same reason can land on multiple
+// nodes; the cap keeps each individual record-level write bounded.
+const lastSynthesisErrorMaxRunes = 200
+
 // PlannedChange describes a change that autonomous curation would make.
 // Populated in dry-run mode instead of applying the change.
 type PlannedChange struct {
@@ -605,13 +612,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		// Successful classification clears any prior failure tracking
 		// so an operator-fixed record can pass cleanly. The outer
 		// `if !ok { continue }` guard above already proved the node
-		// exists; re-fetch is cheap. Skip the SetProp when the property
-		// was never present so we don't churn the index for happy-path
-		// records that never failed.
+		// exists.
 		n, _ := e.Graph().GetNode(r.id)
-		if _, has := n.Properties.GetInt64("classify_attempts"); has {
-			e.SetProp(r.id, "classify_attempts", graph.Int64Property(0))
-		}
+		recordTaskSuccess(e, n, "classify_attempts")
 		result.Classified++
 		if result.ModelCounts == nil {
 			result.ModelCounts = make(map[string]int)
@@ -623,30 +626,16 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	// triage, and mark stuck once the threshold is reached. Skipped
 	// when MaxClassifyAttempts is 0 (legacy infinite-retry behavior).
 	maxAttempts := cfg.LLMCuration.MaxClassifyAttempts
-	if maxAttempts > 0 {
-		for _, f := range failed {
-			n, ok := e.Graph().GetNode(f.id)
-			if !ok {
-				logger.Debug("classify failure: node gone", "component", "curation", "record", f.id)
-				continue
-			}
-			var attempts int64
-			if v, ok := n.Properties.GetInt64("classify_attempts"); ok {
-				attempts = v
-			}
-			attempts++
-			e.SetProp(f.id, "classify_attempts", graph.Int64Property(attempts))
-			e.SetProp(f.id, "last_classify_error", graph.StringProperty(f.reason))
-			if attempts >= int64(maxAttempts) {
-				e.SetProp(f.id, "processing_status", graph.StringProperty("stuck"))
-				logger.Warn("classify: marking record stuck after repeated failures",
-					"component", "curation",
-					"record", f.id,
-					"attempts", attempts,
-					"max_attempts", maxAttempts,
-					"last_error", f.reason)
-			}
-		}
+	classifyRetry := taskRetryPolicy{
+		AttemptsKey:      "classify_attempts",
+		ErrorKey:         "last_classify_error",
+		StatusKey:        "processing_status",
+		StatusValueAtMax: "stuck",
+		Max:              maxAttempts,
+		TaskName:         "classify",
+	}
+	for _, f := range failed {
+		recordTaskFailure(e, classifyRetry, f.id, f.reason, logger)
 	}
 
 	if result.Classified > 0 || (maxAttempts > 0 && len(failed) > 0) {
@@ -854,44 +843,23 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			continue
 		}
 		e.SetContentProp(s.id, "content_short", s.summary)
-		// Successful summary clears any prior failure tracking so an
-		// operator-fixed record can pass cleanly. Skip the SetProp when
-		// the property was never present so we don't churn the index
-		// for happy-path records.
-		if _, has := n.Properties.GetInt64("summary_attempts"); has {
-			e.SetProp(s.id, "summary_attempts", graph.Int64Property(0))
-		}
+		recordTaskSuccess(e, n, "summary_attempts")
 		result.SummariesGenerated++
 	}
 
 	// Failed records: bump attempts counter and capture the reason for
 	// triage. Records past MaxSummaryAttempts are skipped at selection
-	// time (above) -- no separate "stuck" status flip because the
-	// selection guard handles exclusion. Skipped when MaxSummaryAttempts
-	// is 0 (legacy infinite-retry behavior).
-	if maxSummaryAttempts > 0 {
-		for _, f := range failedSummaries {
-			n, ok := e.Graph().GetNode(f.id)
-			if !ok {
-				logger.Debug("summarize failure: node gone", "component", "curation", "record", f.id)
-				continue
-			}
-			var attempts int64
-			if v, ok := n.Properties.GetInt64("summary_attempts"); ok {
-				attempts = v
-			}
-			attempts++
-			e.SetProp(f.id, "summary_attempts", graph.Int64Property(attempts))
-			e.SetProp(f.id, "last_summary_error", graph.StringProperty(f.reason))
-			if attempts >= int64(maxSummaryAttempts) {
-				logger.Warn("summarize: record will be skipped after repeated failures",
-					"component", "curation",
-					"record", f.id,
-					"attempts", attempts,
-					"max_attempts", maxSummaryAttempts,
-					"last_error", f.reason)
-			}
-		}
+	// time (above) -- no terminal status flip; the selection guard
+	// handles exclusion. Skipped when MaxSummaryAttempts is 0 (legacy
+	// infinite-retry behavior).
+	summarizeRetry := taskRetryPolicy{
+		AttemptsKey: "summary_attempts",
+		ErrorKey:    "last_summary_error",
+		Max:         maxSummaryAttempts,
+		TaskName:    "summarize",
+	}
+	for _, f := range failedSummaries {
+		recordTaskFailure(e, summarizeRetry, f.id, f.reason, logger)
 	}
 
 	if result.SummariesGenerated > 0 || (maxSummaryAttempts > 0 && len(failedSummaries) > 0) {
@@ -1353,38 +1321,65 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 		resp, err := completeWithModelOrDefault(ctx, llmProv, "concept", cfg.ModelForTask(config.TaskConcept), batch.prompt)
 		result.LLMCalls++
+
+		// Determine the batch-level outcome. A non-empty batchFailReason
+		// means EVERY concept in this batch failed for the same
+		// underlying cause (LLM transport error or top-level parse
+		// failure). A successful batch may still have per-concept
+		// failures handled in the loop below (short response, empty
+		// synthesis at a position).
+		var batchFailReason string
+		var syntheses []string
 		if err != nil {
 			result.Errors++
 			logger.Warn("concept synthesis batch failed",
 				"component", "curation",
 				"batch_size", len(batch.concepts),
 				"err", err)
-			continue
-		}
-
-		// Parse JSON array response.
-		syntheses := parseBatchSynthesis(resp)
-		if syntheses == nil {
-			result.Errors++
-			logger.Warn("concept synthesis parse failed",
-				"component", "curation",
-				"batch_size", len(batch.concepts),
-				"response_len", len(resp))
-			continue
-		}
-
-		// Apply syntheses to concept nodes.
-		e.Lock()
-		for i, pc := range batch.concepts {
-			if i >= len(syntheses) {
-				break
+			batchFailReason = strutil.TruncateRunes(err.Error(), lastSynthesisErrorMaxRunes)
+		} else {
+			syntheses = parseBatchSynthesis(resp)
+			if syntheses == nil {
+				result.Errors++
+				logger.Warn("concept synthesis parse failed",
+					"component", "curation",
+					"batch_size", len(batch.concepts),
+					"response_len", len(resp))
+				batchFailReason = "parse: response was not a valid JSON array"
 			}
-			synthesis := syntheses[i]
-			if synthesis == "" {
+		}
+
+		synthesisRetry := taskRetryPolicy{
+			AttemptsKey:      "synthesis_attempts",
+			ErrorKey:         "last_synthesis_error",
+			StatusKey:        "synthesis_status",
+			StatusValueAtMax: "stuck",
+			Max:              cfg.LLMCuration.MaxSynthesisAttempts,
+			TaskName:         "synthesize",
+		}
+
+		// Apply syntheses (or failure tracking) to concept nodes.
+		e.Lock()
+		hadFailures := false
+		for i, pc := range batch.concepts {
+			var failReason string
+			switch {
+			case batchFailReason != "":
+				failReason = batchFailReason
+			case i >= len(syntheses):
+				failReason = "short response: missing synthesis at position"
+			case syntheses[i] == "":
+				failReason = "empty synthesis"
+			}
+
+			if failReason != "" {
+				recordTaskFailure(e, synthesisRetry, pc.id, failReason, logger)
+				hadFailures = true
 				continue
 			}
 
 			// Truncate.
+			synthesis := syntheses[i]
 			runes := []rune(synthesis)
 			if len(runes) > 500 {
 				synthesis = string(runes[:500])
@@ -1395,6 +1390,8 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			e.SetContentProp(pc.id, "content_full", synthesis)
 			e.SetContentProp(pc.id, "content_short", shortSummary)
 			e.SetProp(pc.id, "synthesis_status", graph.StringProperty("complete"))
+			n, _ := e.Graph().GetNode(pc.id)
+			recordTaskSuccess(e, n, "synthesis_attempts")
 			result.ConceptsCreated++
 
 			logger.Info("concept enriched",
@@ -1402,7 +1399,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 				"keyword", pc.keyword,
 				"node_id", pc.id)
 		}
-		if result.ConceptsCreated > 0 {
+		if result.ConceptsCreated > 0 || (synthesisRetry.Max > 0 && hadFailures) {
 			e.SaveOrLog("curation: enrich concepts")
 		}
 		e.Unlock()

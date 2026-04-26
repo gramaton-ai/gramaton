@@ -108,6 +108,43 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Concept synthesis no longer infinite-retries on persistent failure;
+  `recordTaskFailure` / `recordTaskSuccess` helpers factored out.**
+  `enrichConceptSyntheses` selects concept nodes with
+  `synthesis_status="pending"` and asks the LLM to synthesize content
+  from member summaries. Pre-fix: LLM transport errors, JSON parse
+  errors, short responses (concepts at positions past the response
+  array), and empty syntheses all took the `continue` (or `break`)
+  path without writing any per-concept state -- the concept stayed
+  pending and re-entered the candidate set every cycle. Concept
+  syntheses BUNDLE multiple records' member summaries per LLM call,
+  so a single failure rebills the entire batch's input tokens. Same
+  failure shape as the classify (commit 1b16b80) and summary (commit
+  0b94e1d) retry bugs; caught in the codebase-wide sweep on
+  2026-04-25.
+  Fix part 1: a new `LLMCurationConfig.MaxSynthesisAttempts` field
+  (yaml: `llm_curation.max_synthesis_attempts`, default 3) caps
+  consecutive failures per concept. Failed syntheses now write a
+  `synthesis_attempts` counter (Int64) and the truncated error
+  reason in `last_synthesis_error` (200 runes). At threshold,
+  `synthesis_status` flips to `"stuck"` -- the existing selection
+  guard (`ss != "pending"`) auto-excludes stuck concepts. Successful
+  synthesis clears the counter. Tests in `curation/autonomous_test.go`
+  cover batch-level-failure, marks-stuck-at-threshold,
+  max-zero-disables, success-clears-attempts.
+  Fix part 2: factored a shared `taskRetryPolicy` /
+  `recordTaskFailure` / `recordTaskSuccess` helper trio (now in
+  `curation/task_retry.go`) and refactored both classify and
+  summarize to use it. The classify case maps to a policy with
+  `StatusKey="processing_status", StatusValueAtMax="stuck"` (status
+  flip excludes); the summary case has no status flip (selection
+  guard checks `summary_attempts >= max` directly); the synthesis
+  case mirrors classify. Pure refactor for the existing two sites
+  -- their tests still pass without modification. Helps the next
+  HIGH trackers in the codebase-wide sweep (batch path, reembed,
+  contradictions) reuse the same primitive instead of duplicating
+  it again. Tracker `01KQ407BPRJF8AVT7CBKQ6VJDB`.
+
 - **Summary generation no longer infinite-retries on persistent failure.**
   `generateSummaries` selects records with `content_full` and no
   `content_short` (or section nodes with truncated summaries) and

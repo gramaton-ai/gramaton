@@ -389,6 +389,17 @@ type LLMCurationConfig struct {
 	// cleanly but produce an unusable summary (e.g. empty after trim).
 	MaxSummaryAttempts int `yaml:"max_summary_attempts"`
 
+	// MaxSynthesisAttempts caps how many times enrichConceptSyntheses
+	// will retry a single concept node before flipping its
+	// synthesis_status to "stuck". The selection guard keys on
+	// synthesis_status="pending", so flipping to "stuck" auto-excludes
+	// the concept from future cycles. Failures captured per concept
+	// in synthesis_attempts (Int64) and last_synthesis_error (String,
+	// max 200 runes). Concept synthesis bundles multiple records'
+	// member summaries per call -- a single bad concept can rebill
+	// the entire batch's tokens. Default: 3. Zero disables.
+	MaxSynthesisAttempts int `yaml:"max_synthesis_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -999,6 +1010,7 @@ func Defaults() Config {
 			MaxCallsPerRun:              20,
 			MaxClassifyAttempts:         3,
 			MaxSummaryAttempts:          3,
+			MaxSynthesisAttempts:        3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,

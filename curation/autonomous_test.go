@@ -1969,6 +1969,196 @@ func TestEnrichConceptSynthesesLogsDimMismatch(t *testing.T) {
 	}
 }
 
+// addPendingConcept creates a concept node with synthesis_status="pending"
+// plus N "instance_of" member edges. Returns the concept node ID.
+// Used by the synthesis retry-bound tests below.
+func addPendingConcept(t *testing.T, eng *core.Engine, keyword string, memberCount int) string {
+	t.Helper()
+	now := time.Now().UTC()
+	eng.Lock()
+	defer eng.Unlock()
+
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("placeholder"),
+		"content_short":     graph.StringProperty(keyword + " concept"),
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty(keyword),
+		"synthesis_status":  graph.StringProperty("pending"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+	for i := 0; i < memberCount; i++ {
+		m := eng.Graph().AddNode(graph.Properties{
+			"content_full":      graph.StringProperty(fmt.Sprintf("member %d of %s", i, keyword)),
+			"content_short":     graph.StringProperty(fmt.Sprintf("m%d", i)),
+			"processing_status": graph.StringProperty("processed"),
+			"created_at":        graph.TimestampProperty(now),
+			"epistemic_status":  graph.StringProperty("well_established"),
+		})
+		for k, v := range m.Properties {
+			eng.PropIdx().Add(m.ID, k, v)
+		}
+		eng.Graph().AddEdge(m.ID, concept.ID, "instance_of", 1.0, nil)
+	}
+	eng.Save("seed")
+	return concept.ID
+}
+
+// TestSynthesizeBatchFailureBumpsAttemptCounter verifies that an LLM
+// transport error during concept synthesis writes synthesis_attempts
+// + last_synthesis_error on every concept in the batch (not just one).
+//
+// Regression guard for tracker 01KQ407BPRJF8AVT7CBKQ6VJDB: pre-fix
+// concepts with synthesis_status=pending re-entered the candidate set
+// every cycle on persistent failure, billing input tokens forever.
+func TestSynthesizeBatchFailureBumpsAttemptCounter(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSynthesisAttempts = 3
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLMCuration.SynthesisBatchSize = 5
+
+	id := addPendingConcept(t, eng, "kafka", 3)
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("API timeout")}}
+
+	result := &AutonomousResult{}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("synthesis_attempts")
+	if attempts != 1 {
+		t.Errorf("synthesis_attempts: got %d, want 1", attempts)
+	}
+	reason, _ := n.Properties.GetString("last_synthesis_error")
+	if !strings.Contains(reason, "API timeout") {
+		t.Errorf("last_synthesis_error: got %q, want contains %q", reason, "API timeout")
+	}
+	ss, _ := n.Properties.GetString("synthesis_status")
+	if ss != "pending" {
+		t.Errorf("synthesis_status: got %q, want still %q (below threshold)", ss, "pending")
+	}
+}
+
+// TestSynthesizeMarksStuckAtThreshold verifies that after
+// MaxSynthesisAttempts consecutive failures, the concept's
+// synthesis_status flips to "stuck" and is excluded from the next
+// cycle's candidate selection (the existing "ss != pending" guard
+// auto-excludes stuck concepts).
+func TestSynthesizeMarksStuckAtThreshold(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSynthesisAttempts = 3
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLMCuration.SynthesisBatchSize = 5
+
+	id := addPendingConcept(t, eng, "redis", 3)
+
+	for cycle := 1; cycle <= 3; cycle++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("cycle %d failure", cycle)}}
+		enrichConceptSyntheses(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("synthesis_attempts")
+	ss, _ := n.Properties.GetString("synthesis_status")
+	eng.RUnlock()
+
+	if attempts != 3 {
+		t.Errorf("synthesis_attempts: got %d, want 3", attempts)
+	}
+	if ss != "stuck" {
+		t.Errorf("synthesis_status: got %q, want %q", ss, "stuck")
+	}
+
+	// Next cycle: no LLM call -- the concept's synthesis_status="stuck"
+	// fails the "ss != pending" guard at the selection iterator.
+	llm := &mockLLM{errors: []error{fmt.Errorf("should not fire")}}
+	result := &AutonomousResult{}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.LLMCalls != 0 {
+		t.Errorf("stuck concept was re-attempted: LLMCalls=%d, want 0", result.LLMCalls)
+	}
+}
+
+// TestSynthesizeMaxAttemptsZeroDisables verifies legacy behavior:
+// when MaxSynthesisAttempts=0, the counter feature is disabled.
+func TestSynthesizeMaxAttemptsZeroDisables(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSynthesisAttempts = 0
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLMCuration.SynthesisBatchSize = 5
+
+	id := addPendingConcept(t, eng, "postgres", 3)
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("error")}}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	if _, ok := n.Properties.GetInt64("synthesis_attempts"); ok {
+		t.Error("synthesis_attempts was written when MaxSynthesisAttempts=0")
+	}
+	if _, ok := n.Properties.GetString("last_synthesis_error"); ok {
+		t.Error("last_synthesis_error was written when MaxSynthesisAttempts=0")
+	}
+}
+
+// TestSynthesizeSuccessClearsAttempts verifies that a successful
+// synthesis on a concept that previously failed resets the
+// synthesis_attempts counter so an operator-fixed concept passes
+// cleanly on its next attempt.
+func TestSynthesizeSuccessClearsAttempts(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSynthesisAttempts = 3
+	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLMCuration.SynthesisBatchSize = 5
+
+	id := addPendingConcept(t, eng, "elasticsearch", 3)
+
+	// Fail twice -- attempts now 2, still pending.
+	for i := 0; i < 2; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("err %d", i)}}
+		enrichConceptSyntheses(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	if a, _ := n.Properties.GetInt64("synthesis_attempts"); a != 2 {
+		eng.RUnlock()
+		t.Fatalf("intermediate synthesis_attempts: got %d, want 2", a)
+	}
+	eng.RUnlock()
+
+	// Now succeed.
+	llm := &mockLLM{
+		responses: []string{`[{"keyword":"elasticsearch","synthesis":"Elasticsearch: distributed search engine."}]`},
+	}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ = eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("synthesis_attempts")
+	ss, _ := n.Properties.GetString("synthesis_status")
+	if attempts != 0 {
+		t.Errorf("synthesis_attempts after success: got %d, want 0", attempts)
+	}
+	if ss != "complete" {
+		t.Errorf("synthesis_status after success: got %q, want %q", ss, "complete")
+	}
+}
+
 // TestMeanCosineToCentroidDimMismatchSurfaced is the regression for
 // P2-09 fix #2: when concept members have heterogeneous embedding
 // dimensions (e.g. embedding model changed mid-store), the function
