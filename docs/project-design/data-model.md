@@ -250,6 +250,7 @@ Edge types are strings — not a fixed enum. The following are conventions used 
 | **Epistemic** | `justifies`, `contradicts`, `supersedes`, `defeats` | Knowledge relationships — reasoning chains |
 | **Temporal** | `precedes`, `causes`, `enables` | Time and causation |
 | **Referential** | `discusses`, `provides_evidence_for`, `defines`, `exemplifies` | Knowledge record → concept node links |
+| **Curation markers** | `no_contradiction`, `contradiction_check_skipped` | Pair-state for the contradiction-detection pipeline. `no_contradiction` is an LLM affirmation that two similar records do not conflict (drains the candidate pool). `contradiction_check_skipped` carries an `attempts` counter for pairs whose check has failed; soft-skip until threshold, hard-skip after. |
 
 ---
 

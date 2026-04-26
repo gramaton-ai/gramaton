@@ -1659,6 +1659,216 @@ func TestDetectContradictionsLLMError(t *testing.T) {
 	}
 }
 
+// findContradictionCheckSkippedEdge returns the soft-fail edge between
+// two records, in either direction. Used by the contradiction
+// retry-bound tests below.
+func findContradictionCheckSkippedEdge(t *testing.T, eng *core.Engine, idA, idB string) *graph.Edge {
+	t.Helper()
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, e := range eng.Graph().EdgesFrom(idA) {
+		if e.TargetID == idB && e.Type == "contradiction_check_skipped" {
+			return e
+		}
+	}
+	for _, e := range eng.Graph().EdgesFrom(idB) {
+		if e.TargetID == idA && e.Type == "contradiction_check_skipped" {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestDetectContradictionsFailureCreatesSoftFailEdge pins the
+// fix for tracker 01KQ407VR599E2CGAGJ0FBVGJZ. Pre-fix an LLM
+// failure on a contradiction check left no state on the pair, so
+// the pair re-entered the candidate pool every cycle and burned
+// tokens forever. Post-fix, the failure writes a
+// contradiction_check_skipped edge with attempts=1.
+func TestDetectContradictionsFailureCreatesSoftFailEdge(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLMCuration.MaxContradictionAttempts = 3
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("API timeout")}}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	if result.Errors != 1 {
+		t.Fatalf("expected 1 error, got %d", result.Errors)
+	}
+	edge := findContradictionCheckSkippedEdge(t, eng, idA, idB)
+	if edge == nil {
+		t.Fatal("contradiction_check_skipped edge not found in either direction")
+	}
+	attempts, _ := edge.Properties.GetInt64("attempts")
+	if attempts != 1 {
+		t.Errorf("attempts: got %d, want 1", attempts)
+	}
+	reason, _ := edge.Properties.GetString("last_error")
+	if !strings.Contains(reason, "API timeout") {
+		t.Errorf("last_error: got %q, want contains %q", reason, "API timeout")
+	}
+}
+
+// TestDetectContradictionsFailureIncrementsExistingEdge verifies
+// that subsequent failures on the same pair update the existing
+// soft-fail edge in place rather than creating duplicates.
+func TestDetectContradictionsFailureIncrementsExistingEdge(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLMCuration.MaxContradictionAttempts = 5
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
+
+	// Two consecutive failure cycles. attempts < max, so the pair stays
+	// in the candidate pool and gets retried.
+	for i := 0; i < 2; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("err %d", i)}}
+		detectContradictions(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	edge := findContradictionCheckSkippedEdge(t, eng, idA, idB)
+	if edge == nil {
+		t.Fatal("contradiction_check_skipped edge not found")
+	}
+	attempts, _ := edge.Properties.GetInt64("attempts")
+	if attempts != 2 {
+		t.Errorf("attempts after 2 failures: got %d, want 2", attempts)
+	}
+
+	// Verify only ONE edge exists between the pair (no duplicates).
+	count := 0
+	eng.RLock()
+	for _, e := range eng.Graph().EdgesFrom(idA) {
+		if e.TargetID == idB && e.Type == "contradiction_check_skipped" {
+			count++
+		}
+	}
+	for _, e := range eng.Graph().EdgesFrom(idB) {
+		if e.TargetID == idA && e.Type == "contradiction_check_skipped" {
+			count++
+		}
+	}
+	eng.RUnlock()
+	if count != 1 {
+		t.Errorf("found %d contradiction_check_skipped edges between the pair, want 1", count)
+	}
+}
+
+// TestDetectContradictionsLocksOutAtThreshold verifies that after
+// MaxContradictionAttempts consecutive failures, the soft-fail edge
+// becomes a hard skip and the pair is excluded from future
+// candidate pools (no further LLM calls).
+func TestDetectContradictionsLocksOutAtThreshold(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLMCuration.MaxContradictionAttempts = 3
+
+	addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
+	addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
+
+	// Three consecutive failures: attempts goes 1 -> 2 -> 3.
+	for i := 0; i < 3; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("cycle %d failure", i)}}
+		detectContradictions(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	// Fourth cycle: pair should be hard-skipped at the read-phase
+	// hasEdge guard. No LLM call.
+	llm := &mockLLM{errors: []error{fmt.Errorf("should not fire")}}
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.LLMCalls != 0 {
+		t.Errorf("at-threshold pair was re-attempted: LLMCalls=%d, want 0", result.LLMCalls)
+	}
+}
+
+// TestDetectContradictionsMaxAttemptsZeroDisables verifies legacy
+// behavior: when MaxContradictionAttempts=0, no soft-fail edges are
+// written and pairs re-enter the candidate pool every cycle (the
+// pre-fix bug, intentionally preserved as an opt-out).
+func TestDetectContradictionsMaxAttemptsZeroDisables(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.5
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLMCuration.MaxContradictionAttempts = 0
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("error")}}
+	detectContradictions(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	if edge := findContradictionCheckSkippedEdge(t, eng, idA, idB); edge != nil {
+		t.Error("contradiction_check_skipped edge was written when MaxContradictionAttempts=0")
+	}
+}
+
+// TestDetectContradictionsBatchFailureMarksAllPairs verifies that a
+// whole-batch LLM error in batched mode writes a
+// contradiction_check_skipped edge for every pair in the batch (not
+// just one).
+func TestDetectContradictionsBatchFailureMarksAllPairs(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxContradictionChecks = 10
+	cfg.LLMCuration.ContradictionMinSim = 0.3
+	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLMCuration.ContradictionBatchSize = 5
+	cfg.LLMCuration.MaxContradictionAttempts = 3
+
+	// Three records, all mutually similar within the window.
+	idA := addProcessedNodeWithEmbedding(t, eng, "A", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "B", []float32{0.7, 0.7, 0.0})
+	idC := addProcessedNodeWithEmbedding(t, eng, "C", []float32{0.5, 0.5, 0.5})
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("batch API outage")}}
+	detectContradictions(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	// At least one pair from {A,B}, {A,C}, {B,C} should have a
+	// soft-fail edge. The candidate selection is shuffle-seeded and
+	// won't always pick all three pairs, but it should pick at least
+	// the first one it encounters.
+	gotEdge := false
+	for _, pair := range [][2]string{{idA, idB}, {idA, idC}, {idB, idC}} {
+		if e := findContradictionCheckSkippedEdge(t, eng, pair[0], pair[1]); e != nil {
+			gotEdge = true
+			attempts, _ := e.Properties.GetInt64("attempts")
+			if attempts != 1 {
+				t.Errorf("attempts for %s,%s: got %d, want 1", pair[0], pair[1], attempts)
+			}
+			reason, _ := e.Properties.GetString("last_error")
+			if !strings.Contains(reason, "batch API outage") {
+				t.Errorf("last_error for %s,%s: got %q", pair[0], pair[1], reason)
+			}
+		}
+	}
+	if !gotEdge {
+		t.Error("no contradiction_check_skipped edges written despite whole-batch failure")
+	}
+}
+
 func TestManifestCacheHitSkipsLLM(t *testing.T) {
 	eng := setupEngine(t)
 

@@ -95,6 +95,25 @@ const lastSummaryErrorMaxRunes = 200
 // nodes; the cap keeps each individual record-level write bounded.
 const lastSynthesisErrorMaxRunes = 200
 
+// lastContradictionErrorMaxRunes caps the size of the per-edge
+// last_error property on contradiction_check_skipped edges. Same
+// rationale as the per-record counterparts: provider errors may
+// embed prompt fragments or transport URLs, the cap bounds what
+// lands on the edge.
+const lastContradictionErrorMaxRunes = 200
+
+// contradictionCheckSkippedEdge is the edge type written on a pair
+// whose contradiction-check failed (LLM transport error or parse
+// error). The edge carries attempts (Int64), last_error (String),
+// and checked_at (Timestamp) properties. The read-phase hasEdge
+// guard treats this edge as a SOFT skip when attempts <
+// MaxContradictionAttempts (pair stays in candidate pool, retried
+// next time it surfaces) and a HARD skip when attempts >= max
+// (pair locked out until an operator unlinks the edge). Distinct
+// from no_contradiction (which is a real LLM affirmation) because
+// the epistemic state differs: we tried and couldn't determine.
+const contradictionCheckSkippedEdge = "contradiction_check_skipped"
+
 // PlannedChange describes a change that autonomous curation would make.
 // Populated in dry-run mode instead of applying the change.
 type PlannedChange struct {
@@ -1675,16 +1694,37 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			// direction is always checked; the B->A direction is checked
 			// only when ContradictionCheckReverseEdges is true (default)
 			// -- some edges (notably supersedes) are unidirectional.
+			//
+			// A contradiction_check_skipped edge with attempts <
+			// MaxContradictionAttempts is a SOFT skip: the pair stays
+			// in the candidate pool, gets retried until it either
+			// succeeds (edge replaced by a normal contradicts /
+			// supersedes / no_contradiction edge) or hits the threshold
+			// (edge becomes a hard skip). Any other edge type is a
+			// hard skip immediately.
+			maxContradictionAttempts := cfg.LLMCuration.MaxContradictionAttempts
+			isHardSkip := func(edge *graph.Edge) bool {
+				if edge.Type != contradictionCheckSkippedEdge {
+					return true
+				}
+				if maxContradictionAttempts <= 0 {
+					// Counter disabled -> the soft-skip edge effectively
+					// hard-skips at first failure (legacy behavior).
+					return true
+				}
+				attempts, _ := edge.Properties.GetInt64("attempts")
+				return attempts >= int64(maxContradictionAttempts)
+			}
 			hasEdge := false
 			for _, edge := range e.Graph().EdgesFrom(idA) {
-				if edge.TargetID == sr.NodeID {
+				if edge.TargetID == sr.NodeID && isHardSkip(edge) {
 					hasEdge = true
 					break
 				}
 			}
 			if !hasEdge && cfg.LLMCuration.ContradictionCheckReverseEdges {
 				for _, edge := range e.Graph().EdgesFrom(sr.NodeID) {
-					if edge.TargetID == idA {
+					if edge.TargetID == idA && isHardSkip(edge) {
 						hasEdge = true
 						break
 					}
@@ -1736,6 +1776,17 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	type checkedNegative struct{ idA, idB string }
 	var noContradictions []checkedNegative
 
+	// Pairs whose LLM check failed (transport error or parse error).
+	// Each gets a contradiction_check_skipped edge in the write phase
+	// with an attempts counter, which the read-phase hasEdge guard
+	// honors as a soft-skip until the threshold (then hard-skip). See
+	// tracker 01KQ407VR599E2CGAGJ0FBVGJZ.
+	type checkedFailure struct {
+		idA, idB string
+		reason   string
+	}
+	var failedChecks []checkedFailure
+
 	batchSize := cfg.LLMCuration.ContradictionBatchSize
 	if batchSize < 1 {
 		batchSize = 1
@@ -1770,6 +1821,10 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			if err != nil {
 				result.Errors++
 				logger.Warn("contradiction LLM error", "component", "curation", "err", err)
+				failedChecks = append(failedChecks, checkedFailure{
+					idA: c.idA, idB: c.idB,
+					reason: strutil.TruncateRunes(err.Error(), lastContradictionErrorMaxRunes),
+				})
 				continue
 			}
 
@@ -1777,6 +1832,10 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			if err != nil {
 				result.Errors++
 				logger.Warn("contradiction parse error", "component", "curation", "err", err)
+				failedChecks = append(failedChecks, checkedFailure{
+					idA: c.idA, idB: c.idB,
+					reason: strutil.TruncateRunes("parse: "+err.Error(), lastContradictionErrorMaxRunes),
+				})
 				continue
 			}
 
@@ -1836,6 +1895,14 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			if err != nil {
 				result.Errors++
 				logger.Warn("contradiction batch LLM error", "component", "curation", "batch_size", len(batch), "err", err)
+				// Whole batch failed -- every pair in this batch counts
+				// as a failed check, sharing the same reason.
+				reason := strutil.TruncateRunes(err.Error(), lastContradictionErrorMaxRunes)
+				for _, c := range batch {
+					failedChecks = append(failedChecks, checkedFailure{
+						idA: c.idA, idB: c.idB, reason: reason,
+					})
+				}
 				continue
 			}
 
@@ -1843,6 +1910,12 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			if err != nil {
 				result.Errors++
 				logger.Warn("contradiction batch parse error", "component", "curation", "batch_size", len(batch), "err", err)
+				reason := strutil.TruncateRunes("parse: "+err.Error(), lastContradictionErrorMaxRunes)
+				for _, c := range batch {
+					failedChecks = append(failedChecks, checkedFailure{
+						idA: c.idA, idB: c.idB, reason: reason,
+					})
+				}
 				continue
 			}
 
@@ -1870,7 +1943,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		}
 	}
 
-	if len(findings) == 0 && len(noContradictions) == 0 {
+	if len(findings) == 0 && len(noContradictions) == 0 && len(failedChecks) == 0 {
 		return
 	}
 
@@ -1958,7 +2031,82 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		result.NoContradictionEdges++
 	}
 
-	if result.ContradictionsDetected > 0 || result.NoContradictionEdges > 0 {
+	// Failed-check pairs: increment-or-create a contradiction_check_skipped
+	// edge with the attempts counter. The read-phase hasEdge guard above
+	// treats this edge as a soft skip until attempts reach the threshold,
+	// then a hard skip. Skipped when MaxContradictionAttempts is 0
+	// (legacy behavior: pairs re-enter the pool until they succeed).
+	maxContradictionAttempts := cfg.LLMCuration.MaxContradictionAttempts
+	for _, fc := range failedChecks {
+		if maxContradictionAttempts <= 0 {
+			break
+		}
+		if _, ok := e.Graph().GetNode(fc.idA); !ok {
+			continue
+		}
+		if _, ok := e.Graph().GetNode(fc.idB); !ok {
+			continue
+		}
+		// Look for an existing soft-fail edge between this pair so we
+		// can increment its counter rather than stacking duplicate
+		// edges. Walk both directions because the hasEdge guard above
+		// allowed the pair through if no hard-skip edge existed in
+		// EITHER direction; a soft-fail edge could live on A->B or
+		// B->A from a prior cycle where the candidate-iteration order
+		// happened to land the other way.
+		var existingEdge *graph.Edge
+		for _, edge := range e.Graph().EdgesFrom(fc.idA) {
+			if edge.TargetID == fc.idB && edge.Type == contradictionCheckSkippedEdge {
+				existingEdge = edge
+				break
+			}
+		}
+		if existingEdge == nil {
+			for _, edge := range e.Graph().EdgesFrom(fc.idB) {
+				if edge.TargetID == fc.idA && edge.Type == contradictionCheckSkippedEdge {
+					existingEdge = edge
+					break
+				}
+			}
+		}
+
+		if existingEdge != nil {
+			// Increment attempts on the existing edge.
+			attempts, _ := existingEdge.Properties.GetInt64("attempts")
+			attempts++
+			if err := e.Graph().SetEdgeProperty(existingEdge.ID, "attempts", graph.Int64Property(attempts)); err != nil {
+				logger.Error("contradiction_check_skipped: SetEdgeProperty attempts",
+					"component", "curation", "edge", existingEdge.ID, "err", err)
+				continue
+			}
+			_ = e.Graph().SetEdgeProperty(existingEdge.ID, "last_error", graph.StringProperty(fc.reason))
+			_ = e.Graph().SetEdgeProperty(existingEdge.ID, "checked_at", graph.TimestampProperty(checkedAt))
+			if attempts >= int64(maxContradictionAttempts) {
+				logger.Warn("contradiction: pair locked out after repeated check failures",
+					"component", "curation",
+					"from", fc.idA, "to", fc.idB,
+					"attempts", attempts,
+					"max_attempts", maxContradictionAttempts,
+					"last_error", fc.reason)
+			}
+			continue
+		}
+
+		// First failure for this pair: create the soft-fail edge.
+		props := graph.Properties{
+			"attempts":   graph.Int64Property(1),
+			"last_error": graph.StringProperty(fc.reason),
+			"checked_at": graph.TimestampProperty(checkedAt),
+		}
+		if _, err := e.Graph().AddEdge(fc.idA, fc.idB, contradictionCheckSkippedEdge, 1.0, props); err != nil {
+			logger.Error("failed to add contradiction_check_skipped edge",
+				"component", "curation", "from", fc.idA, "to", fc.idB, "err", err)
+			continue
+		}
+	}
+
+	if result.ContradictionsDetected > 0 || result.NoContradictionEdges > 0 ||
+		(maxContradictionAttempts > 0 && len(failedChecks) > 0) {
 		e.SaveOrLog("curation: contradictions")
 	}
 	e.Unlock()

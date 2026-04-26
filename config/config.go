@@ -411,6 +411,18 @@ type LLMCurationConfig struct {
 	// 3. Zero disables (legacy infinite-retry on the same failing hash).
 	MaxManifestAttempts int `yaml:"max_manifest_attempts"`
 
+	// MaxContradictionAttempts caps how many times a single pair will
+	// be retried by detectContradictions before being permanently
+	// excluded. Per-pair state lives on a `contradiction_check_skipped`
+	// edge between the pair (the unit is a PAIR, not a record, so a
+	// per-record counter wouldn't capture the right state). The edge
+	// carries an `attempts` Int64 property; the read-phase hasEdge
+	// guard treats this edge as a SOFT skip (pair stays in candidate
+	// pool) when attempts < this threshold, and a HARD skip when
+	// attempts >= threshold. Default: 3. Zero disables (failed pairs
+	// re-enter every cycle, legacy behavior).
+	MaxContradictionAttempts int `yaml:"max_contradiction_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -1023,6 +1035,7 @@ func Defaults() Config {
 			MaxSummaryAttempts:          3,
 			MaxSynthesisAttempts:        3,
 			MaxManifestAttempts:         3,
+			MaxContradictionAttempts:    3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,

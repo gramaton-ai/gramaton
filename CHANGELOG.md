@@ -108,6 +108,48 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Contradiction-check failures no longer re-ask the same pairs every cycle.**
+  `detectContradictions` (curation/autonomous.go) was patched in D38 to
+  drain the candidate pool by writing `no_contradiction` edges on
+  positive-LLM-affirmation no-conflicts. Failure paths (LLM transport
+  error, JSON parse error, batch-level failures in batched mode) were
+  missed: they did `continue` and produced no persistent state, so
+  the random-shuffle of the next read phase re-selected the same pair
+  and re-asked. Same cost-bleed shape as the bug D38 documented. The
+  unit here is a *pair*, not a record, so the per-record retry
+  pattern (classify_attempts, summary_attempts, ...) doesn't apply
+  directly — per-pair state has to live on an edge between the pair.
+  Caught in the codebase-wide pathological-retry sweep.
+  Fix: a new edge type `contradiction_check_skipped` is written
+  on failed checks, carrying `attempts` (Int64), `last_error`
+  (String, max 200 runes), and `checked_at` (Timestamp) properties.
+  The read-phase `hasEdge` guard at autonomous.go:1678 was reworked
+  to be type-aware: a `contradiction_check_skipped` edge with
+  `attempts < MaxContradictionAttempts` is a *soft skip* (pair
+  stays in the candidate pool and gets retried next cycle); the
+  same edge with `attempts >= max`, or any other edge type, is a
+  *hard skip*. Subsequent failures on a pair increment the existing
+  edge's `attempts` rather than creating duplicate edges. Both
+  single-pair and batched LLM paths capture failures; in batched
+  mode a whole-batch failure marks every pair in the batch with
+  the shared reason. New config: `LLMCurationConfig.
+  MaxContradictionAttempts` (yaml: `llm_curation.
+  max_contradiction_attempts`, default 3, 0 disables → legacy
+  infinite-retry).
+  Decision deferred (filed as `01KQ46QQ7ESC4ADW1PJZQ1ZQ0A`):
+  no first-class operator API to discover and bulk-reset stuck
+  contradiction pairs. Today's triage flow is `gramaton_explore`
+  from one record → find `contradiction_check_skipped` edges →
+  `gramaton_unlink` per pair. Mediocre UX; matches the alpha-
+  software bar. Will revisit if a real workflow emerges.
+  Tests in `curation/autonomous_test.go`: failure creates soft-fail
+  edge; subsequent failures increment the same edge in place
+  (no duplicates); attempts hit threshold → pair locked out;
+  MaxContradictionAttempts=0 disables; whole-batch LLM error in
+  batched mode marks all pairs. data-model.md gained a "Curation
+  markers" edge category covering `no_contradiction` and the new
+  `contradiction_check_skipped`. Tracker `01KQ407VR599E2CGAGJ0FBVGJZ`.
+
 - **Manifest summary no longer recomputes on the same failing fingerprint.**
   `generateManifestSummary` (curation/autonomous.go) maintains a
   positive cache (`ManifestCache.Hash` + `Summary`) keyed by a
