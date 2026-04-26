@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -279,8 +280,11 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	// -> HTTP localhost) is unaffected.
 	mux.Handle("/mcp", loopbackOnly(s.MCPHandler()))
 
-	// Wrap REST routes with security headers. MCP handler is already
-	// mounted before the wrapper, so it won't be affected.
+	// Wrap the mux with security headers + panic-recover. /mcp passes
+	// through this wrapper too: securityHeaders skips JSON Content-Type
+	// for /mcp (MCP negotiates its own), but the panic-recover defer
+	// still applies so a tool-handler panic surfaces as a structured
+	// 500 instead of a connection reset.
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
 		Handler:      s.securityHeaders(mux),
@@ -679,9 +683,13 @@ type requestIDKey struct{}
 // requestCounter generates monotonically increasing request IDs.
 var requestCounter atomic.Uint64
 
-// securityHeaders wraps a handler with security response headers
-// and request logging. Skips the /mcp path since MCP has its own
-// content types.
+// securityHeaders wraps a handler with security response headers,
+// request logging, and panic recovery. Skips JSON content-type for
+// the /mcp path since MCP negotiates its own. Panics in downstream
+// handlers are converted to a structured 500 ErrorResponse when no
+// body has started; otherwise the stack is logged and the partial
+// response is left in place. http.ErrAbortHandler is re-panicked so
+// net/http's intentional-abort semantics survive the wrapper.
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.recordActivity()
@@ -700,29 +708,70 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}
 
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
-		next.ServeHTTP(rec, r)
 
-		dur := time.Since(start)
-		s.log.Info("request",
-			"component", "http",
-			"req_id", reqID,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration_ms", dur.Milliseconds(),
-			"remote", r.RemoteAddr)
+		// Request-log defer runs LAST (deferred FIRST) so the line
+		// fires whether next.ServeHTTP returns normally, panics, or
+		// is recovered. status reflects the final outcome (e.g. 500
+		// after the recover defer rewrites it).
+		defer func() {
+			s.log.Info("request",
+				"component", "http",
+				"req_id", reqID,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", rec.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"remote", r.RemoteAddr)
+		}()
+
+		// Recover-defer runs FIRST (deferred LAST). Catches panics
+		// from downstream handlers, logs the stack at Warn, and
+		// emits a structured 500 if the response hasn't started.
+		// Re-panics http.ErrAbortHandler so stdlib's intentional-
+		// abort path is preserved.
+		defer func() {
+			p := recover()
+			if p == nil {
+				return
+			}
+			if p == http.ErrAbortHandler {
+				panic(p)
+			}
+			s.log.Warn("panic in handler",
+				"component", "http",
+				"req_id", reqID,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"panic", fmt.Sprintf("%v", p),
+				"stack", string(debug.Stack()))
+			if !rec.wroteHeader {
+				s.writeError(rec, http.StatusInternalServerError, "internal", "internal error", false)
+			}
+		}()
+
+		next.ServeHTTP(rec, r)
 	})
 }
 
-// statusRecorder wraps http.ResponseWriter to capture the status code.
+// statusRecorder wraps http.ResponseWriter to capture the status code
+// and whether any response output has been started. wroteHeader lets
+// the panic-recover defer in securityHeaders decide if it can still
+// write a structured 500 (only safe before headers/body have begun).
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
+	r.wroteHeader = true
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.wroteHeader = true
+	return r.ResponseWriter.Write(b)
 }
 
 // writeJSON writes a JSON response with the standard envelope. Safe
@@ -789,7 +838,15 @@ func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curat
 // envelope so agents see the same backlog signals on a 4xx/5xx as
 // they do on a 2xx -- without it, an agent hammering an erroring
 // endpoint never learns the store has work pending.
+//
+// Sets Content-Type idempotently. Most REST callsites rely on
+// securityHeaders to have set it, but the /mcp path skips that step
+// (MCP negotiates its own type) -- a panic-recover 500 on /mcp would
+// otherwise emit a JSON body with no Content-Type header.
 func (s *Server) writeError(w http.ResponseWriter, status int, code, message string, retryable bool) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

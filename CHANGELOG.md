@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Panic-recover at the HTTP transport boundary; structured 500 instead
+  of broken-pipe.** Pre-fix, a panic in any api/ method (unchecked type
+  assertion, nil deref, unforeseen graph state) propagated past
+  `securityHeaders` to net/http's stdlib recover, which logs the stack
+  and closes the connection mid-response. Clients saw broken-pipe / EOF
+  with no parseable error envelope; agents calling MCP tools saw
+  transport-level errors with no retryable hint. `securityHeaders` now
+  installs two ordered defers: a recover-defer (deferred LAST → runs
+  FIRST) catches panics, logs the stack at Warn with req_id/method/path,
+  and writes a structured `{code:"internal", message:"internal error",
+  retryable:false}` 500 envelope when the response hasn't started; a
+  request-log defer (deferred FIRST → runs LAST) ensures the standard
+  request line still fires whether the handler returned normally or
+  panicked. `http.ErrAbortHandler` is re-panicked so net/http's
+  intentional-abort semantics survive. `statusRecorder` gained a
+  `wroteHeader` flag (also flipped on first `Write`) so the recover
+  defer can tell whether it's still safe to emit the structured body
+  vs. log only. `writeError` now sets `Content-Type: application/json`
+  idempotently — `securityHeaders` skips that header for the `/mcp`
+  path (MCP negotiates its own type), so a panic-recover 500 on `/mcp`
+  would otherwise emit a JSON body with no Content-Type. Covers REST
+  and MCP-over-HTTP equally (panic in an MCP tool surfaces as HTTP 500
+  with parseable body rather than reset connection; per-tool JSON-RPC
+  error envelope is a possible follow-up if MCP UX warrants it).
+  (P2: panic-recover middleware.)
+
 - **LLM provider inconsistencies: pricing prefixes, ignored-override
   warnings, configurable Anthropic max_tokens.** P2-18 named seven
   issues; addressed four:
