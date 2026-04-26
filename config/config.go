@@ -936,6 +936,16 @@ type ConceptsConfig struct {
 	// fraction of records (0-1.0). Ubiquitous keywords don't make
 	// meaningful concepts.
 	MaxKeywordPct float64 `yaml:"max_keyword_pct"`
+
+	// MemberOverlapThreshold: Jaccard similarity above which a new
+	// candidate is treated as an alias for an existing concept (or a
+	// peer candidate emitted earlier in the same cycle) rather than
+	// emitted as a separate concept node. Each member record carries
+	// 5-6 content_keywords; without this gate, several keywords that
+	// happen to cluster on the same evidence set each spawn their own
+	// concept, producing duplicate clusters wearing different keyword
+	// hats. Default 0.6. Setting 0 disables the gate (legacy behavior).
+	MemberOverlapThreshold float64 `yaml:"member_overlap_threshold"`
 }
 
 // DedupConfig controls auto-supersession of near-duplicate records.
@@ -1181,6 +1191,7 @@ func Defaults() Config {
 			EmergenceThreshold:     3,
 			MaxKeywordPct:          0.2,
 			MinContentLengthDirect: 50,
+			MemberOverlapThreshold: 0.6,
 		},
 
 		Dedup: DedupConfig{

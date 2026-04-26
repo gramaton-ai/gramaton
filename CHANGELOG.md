@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Member-set overlap gate at concept emergence.** New
+  `concepts.member_overlap_threshold` config (default 0.6,
+  `ConceptsConfig.MemberOverlapThreshold`) suppresses duplicate concept
+  emergence when a candidate keyword's member set Jaccard-overlaps an
+  existing or peer-pending concept above the threshold. Each member
+  record carries 5-6 `content_keywords`; pre-fix, several keywords that
+  happened to cluster on the same evidence set each spawned their own
+  concept — sample data showed at least 12 burst clusters in a 2-week
+  window producing 40+ near-duplicate concepts (e.g. `TZ-fragile tests`
+  / `parseDateArg UTC midnight` / `test timezone bugs` were three
+  separate concepts about the same bug). Post-fix, peer keywords are
+  folded into a single concept's `content_keywords` as aliases. New
+  `DeterministicResult.ConceptsAliased` counter and a `concept alias
+  added` log line surface the merge. Setting the threshold to 0 reverts
+  to legacy behavior. Lives in `curation/deterministic.go`; tests at
+  `curation/emerge_concepts_test.go`. Tracker
+  01KQ5JVCMB4C9H4Z1BPME2E4P7.
+
 - **`gramaton_search` and `gramaton search` CLI gain a
   `processing_status` filter.** New `SearchRequest.ProcessingStatus`
   field (api/search.go) and matching `--processing-status` CLI flag.

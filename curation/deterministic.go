@@ -34,6 +34,7 @@ type DeterministicResult struct {
 	SectionsLinked       int
 	ObservationsCreated  int // observation child nodes extracted (D18, D23)
 	ConceptsCreated      int // new concept nodes created (template content)
+	ConceptsAliased      int // candidate keywords merged into existing concepts as aliases (Phase F)
 	GCCollected          int
 	GCDryRun             bool
 	QualityRepairs       int // deterministic quality fixes applied
@@ -108,6 +109,12 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	var qualityIssues []qualityIssue
 	existingConcepts := make(map[string]struct{})
+	// existingConceptMembers maps each concept's node ID to the set of
+	// member record IDs (collected via inbound instance_of edges). Used
+	// by Phase F's member-set overlap gate to suppress emergence of
+	// near-duplicate concepts whose evidence sets substantially overlap
+	// existing concepts.
+	existingConceptMembers := make(map[string][]string)
 
 	it := g.NodeIterator()
 	for it.Next() {
@@ -148,6 +155,29 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					})
 					rule1Fired = true
 				}
+			}
+			// Phase F: also add every keyword in the concept's
+			// content_keywords list to existingConcepts. Aliases added
+			// by the member-set overlap gate live here, and we want
+			// future cycles to short-circuit on them just like primary
+			// keywords.
+			if kws, ok := n.Properties.GetStringList("content_keywords"); ok {
+				for _, kw := range kws {
+					existingConcepts[kw] = struct{}{}
+				}
+			}
+			// Phase F: collect member IDs for this concept (inbound
+			// instance_of edges). Cheap walk; concepts typically have
+			// 3-20 inbound edges. The candidate-emission loop below
+			// computes Jaccard against each concept's member set.
+			var members []string
+			for _, edge := range g.EdgesTo(id) {
+				if edge.Type == "instance_of" {
+					members = append(members, edge.SourceID)
+				}
+			}
+			if len(members) > 0 {
+				existingConceptMembers[id] = members
 			}
 		}
 
@@ -349,15 +379,73 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// and `cnIt` blocks have been folded in.
 
 	var newConcepts []ConceptCandidate
+	// newConceptAliases is parallel to newConcepts: extra keywords that
+	// candidates with overlapping member sets contributed via Phase F's
+	// gate. Folded into the emitted concept's content_keywords by the
+	// write phase below.
+	var newConceptAliases [][]string
+	// aliasMerges captures candidates that overlap an *existing* concept
+	// (one already in the store) above the Jaccard threshold. The write
+	// phase appends each keyword to that concept's content_keywords.
+	type aliasMerge struct {
+		conceptID string
+		keyword   string
+	}
+	var aliasMerges []aliasMerge
+
 	maxNewConcepts := cfg.LLMCuration.MaxConceptsPerRun // reuse as deterministic budget
 	if maxNewConcepts <= 0 {
 		maxNewConcepts = 5
 	}
+	overlapThreshold := cfg.Concepts.MemberOverlapThreshold
 	for _, c := range candidates {
 		if _, exists := existingConcepts[c.Keyword]; exists {
 			continue
 		}
+
+		// Phase F: member-set overlap gate. Without this, each
+		// content_keyword on a shared evidence set spawns its own
+		// concept node (TZ-fragile / parseDateArg / test timezone bugs
+		// were three separate concepts about the same bug). Compute
+		// Jaccard against both already-stored concepts AND concepts
+		// being emitted earlier in this same cycle, and treat
+		// high-overlap matches as alias contributions instead of new
+		// emissions.
+		if overlapThreshold > 0 {
+			var bestExistingID string
+			bestExistingJ := 0.0
+			for conceptID, members := range existingConceptMembers {
+				if j := index.JaccardSimilarity(c.NodeIDs, members); j > bestExistingJ {
+					bestExistingJ = j
+					bestExistingID = conceptID
+				}
+			}
+			bestPendingIdx := -1
+			bestPendingJ := 0.0
+			for i, nc := range newConcepts {
+				if j := index.JaccardSimilarity(c.NodeIDs, nc.NodeIDs); j > bestPendingJ {
+					bestPendingJ = j
+					bestPendingIdx = i
+				}
+			}
+			if bestExistingJ > overlapThreshold && bestExistingJ >= bestPendingJ {
+				aliasMerges = append(aliasMerges, aliasMerge{
+					conceptID: bestExistingID,
+					keyword:   c.Keyword,
+				})
+				existingConcepts[c.Keyword] = struct{}{}
+				continue
+			}
+			if bestPendingJ > overlapThreshold {
+				newConceptAliases[bestPendingIdx] = append(newConceptAliases[bestPendingIdx], c.Keyword)
+				existingConcepts[c.Keyword] = struct{}{}
+				continue
+			}
+		}
+
 		newConcepts = append(newConcepts, c)
+		newConceptAliases = append(newConceptAliases, nil)
+		existingConcepts[c.Keyword] = struct{}{}
 		if len(newConcepts) >= maxNewConcepts {
 			break
 		}
@@ -372,7 +460,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// mutations serialised hundreds of disk syncs under the write
 	// lock). The helper also handles the "only Save if something
 	// actually changed" gate and wraps errors with the phase label.
-	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts)
+	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts) + len(aliasMerges)
 	if mutations > 0 {
 		err := e.WithWriteBatch("curation: deterministic", func(ws *core.WriteSession) (bool, error) {
 
@@ -484,7 +572,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// Deterministic concept creation: create concept nodes with
 			// template content and computed metadata. LLM synthesis is
 			// deferred to the autonomous enrichment phase.
-			for _, c := range newConcepts {
+			for ci, c := range newConcepts {
+				aliases := newConceptAliases[ci]
 				// Compute metadata from member records.
 				var confSum float64
 				var confCount int
@@ -561,7 +650,24 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					templateShort = templateShort[:200]
 				}
 
-				allKeywords := append([]string{c.Keyword}, coKeywords...)
+				// Phase F: aliases are keywords from peer candidates that
+				// the overlap gate folded into this concept. Surface them
+				// in content_keywords so future emergence cycles short
+				// circuit on the keyword-already-known check (and so the
+				// concept is discoverable via either alias).
+				allKeywords := append([]string{c.Keyword}, aliases...)
+				allKeywords = append(allKeywords, coKeywords...)
+				// Dedup; coKeywords can collide with aliases.
+				seen := make(map[string]struct{}, len(allKeywords))
+				deduped := allKeywords[:0]
+				for _, kw := range allKeywords {
+					if _, ok := seen[kw]; ok {
+						continue
+					}
+					seen[kw] = struct{}{}
+					deduped = append(deduped, kw)
+				}
+				allKeywords = deduped
 
 				props := graph.Properties{
 					"content_full":      graph.StringProperty(templateFull),
@@ -598,7 +704,47 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				result.ConceptsCreated++
 			}
 
-			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated
+			// Phase F: apply alias merges to existing concepts. Each
+			// candidate that overlapped an existing concept's member
+			// set above the threshold contributed its keyword here;
+			// fold all such keywords into the concept's content_keywords
+			// (deduped) so search and future emergence cycles see the
+			// alias.
+			aliasesByConcept := make(map[string][]string)
+			for _, m := range aliasMerges {
+				aliasesByConcept[m.conceptID] = append(aliasesByConcept[m.conceptID], m.keyword)
+			}
+			for conceptID, addKws := range aliasesByConcept {
+				cn, ok := ws.Graph().GetNode(conceptID)
+				if !ok {
+					continue
+				}
+				existing, _ := cn.Properties.GetStringList("content_keywords")
+				seen := make(map[string]struct{}, len(existing)+len(addKws))
+				for _, kw := range existing {
+					seen[kw] = struct{}{}
+				}
+				merged := append([]string{}, existing...)
+				added := false
+				for _, kw := range addKws {
+					if _, dup := seen[kw]; dup {
+						continue
+					}
+					seen[kw] = struct{}{}
+					merged = append(merged, kw)
+					added = true
+				}
+				if added {
+					ws.SetProp(conceptID, "content_keywords", graph.StringListProperty(merged))
+					result.ConceptsAliased++
+					logger.Info("concept alias added",
+						"component", "curation",
+						"concept", conceptID,
+						"added_keywords", addKws)
+				}
+			}
+
+			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated + result.ConceptsAliased
 			return changed > 0, nil
 		})
 		if err != nil {
@@ -643,6 +789,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"quality_flags", result.QualityFlags,
 			"gc_collected", result.GCCollected,
 			"concepts_created", result.ConceptsCreated,
+			"concepts_aliased", result.ConceptsAliased,
 			"concept_candidates", len(candidates),
 			"duration_ms", time.Since(start).Milliseconds())
 	}
