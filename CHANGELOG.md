@@ -108,6 +108,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Manifest summary no longer recomputes on the same failing fingerprint.**
+  `generateManifestSummary` (curation/autonomous.go) maintains a
+  positive cache (`ManifestCache.Hash` + `Summary`) keyed by a
+  content-derived store-state fingerprint. The cache only updated on
+  success — so a fingerprint that consistently failed (LLM error,
+  schema drift on the manifest prompt, content-policy refusal,
+  empty-after-trim) recomputed the same hash next cycle, hit "cache
+  miss" again, and re-called the LLM. Same loop. Caught in the
+  codebase-wide sweep on 2026-04-25.
+  Fix: a negative cache. `ManifestCache` gains `LastFailedHash` and
+  `FailedAttempts`. On failure (LLM error OR empty-after-trim — the
+  second was a separate latent bug since empty `cache.Summary` fails
+  the positive-cache guard), the negative-cache fields advance. On
+  the next cycle, if `LastFailedHash == currentHash &&
+  FailedAttempts >= MaxManifestAttempts`, the LLM call is skipped
+  with an Info log line. The negative cache clears automatically
+  when (a) the fingerprint changes (store state moved -- operator
+  gets a free retry), or (b) any later success lands (model behavior
+  likely improved). New config: `LLMCurationConfig.MaxManifestAttempts`
+  (yaml: `llm_curation.max_manifest_attempts`, default 3, 0 disables).
+  No on-disk persistence — a server restart with the same store
+  may retry once before re-tripping the negative cache, which is
+  fine (manifest is a single LLM call, not expensive bundle work).
+  Tests in `curation/autonomous_test.go` cover four cases: bounds
+  retries on persistent failure, clears on success, clears on hash
+  change (fresh budget per distinct store state), empty-after-trim
+  treated identically to LLM error. Tracker
+  `01KQ4089VFQBE2T47H5GGKB5VC`.
+
 - **Anthropic batch classification path inherits the per-record retry
   bound.** `RunBatchClassification` (curation/batch.go) submits all
   pending records as one Anthropic Message Batch and applies results

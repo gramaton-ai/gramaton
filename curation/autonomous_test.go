@@ -1384,6 +1384,162 @@ func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
 	}
 }
 
+// TestManifestNegativeCacheBoundsRetries pins the negative-cache fix
+// for tracker 01KQ4089VFQBE2T47H5GGKB5VC. Pre-fix, generateManifestSummary's
+// LLM-error path returned without updating the cache, so the next
+// cycle (with the same store-state fingerprint) recomputed the same
+// hash, hit "cache miss" again, and re-called the LLM. Post-fix, the
+// negative-cache counter advances and skips the LLM after the threshold.
+func TestManifestNegativeCacheBoundsRetries(t *testing.T) {
+	eng := setupEngine(t)
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	cfg := config.Defaults()
+	cfg.LLMCuration.MaxManifestAttempts = 3
+	cache := &ManifestCache{}
+
+	// Three consecutive failures: each call hits the LLM.
+	for cycle := 1; cycle <= 3; cycle++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("cycle %d failure", cycle)}}
+		result := &AutonomousResult{}
+		generateManifestSummary(context.Background(), eng, llm, cfg, result, cache, nil)
+		if result.LLMCalls != 1 {
+			t.Fatalf("cycle %d: LLMCalls=%d, want 1", cycle, result.LLMCalls)
+		}
+	}
+	if cache.FailedAttempts != 3 {
+		t.Errorf("cache.FailedAttempts after 3 failures: got %d, want 3", cache.FailedAttempts)
+	}
+	if cache.LastFailedHash == "" {
+		t.Error("cache.LastFailedHash empty after failures; should be set")
+	}
+
+	// Fourth cycle: same fingerprint, same failure -- but the negative
+	// cache now skips the LLM call.
+	llm := &mockLLM{errors: []error{fmt.Errorf("should not fire")}}
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, cfg, result, cache, nil)
+	if result.LLMCalls != 0 {
+		t.Errorf("at-threshold negative cache: LLMCalls=%d, want 0 (skip)", result.LLMCalls)
+	}
+}
+
+// TestManifestNegativeCacheClearedOnSuccess verifies that a successful
+// manifest synthesis clears the negative cache so future failures get
+// a fresh retry budget.
+func TestManifestNegativeCacheClearedOnSuccess(t *testing.T) {
+	eng := setupEngine(t)
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	cfg := config.Defaults()
+	cfg.LLMCuration.MaxManifestAttempts = 3
+	cache := &ManifestCache{}
+
+	// Fail twice.
+	for i := 0; i < 2; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("err %d", i)}}
+		generateManifestSummary(context.Background(), eng, llm, cfg, &AutonomousResult{}, cache, nil)
+	}
+	if cache.FailedAttempts != 2 {
+		t.Fatalf("intermediate FailedAttempts: got %d, want 2", cache.FailedAttempts)
+	}
+
+	// Now succeed.
+	llm := &mockLLM{responses: []string{"a real manifest summary"}}
+	generateManifestSummary(context.Background(), eng, llm, cfg, &AutonomousResult{}, cache, nil)
+
+	if cache.FailedAttempts != 0 {
+		t.Errorf("FailedAttempts after success: got %d, want 0", cache.FailedAttempts)
+	}
+	if cache.LastFailedHash != "" {
+		t.Errorf("LastFailedHash after success: got %q, want empty", cache.LastFailedHash)
+	}
+	if cache.Summary != "a real manifest summary" {
+		t.Errorf("Summary after success: got %q, want %q", cache.Summary, "a real manifest summary")
+	}
+}
+
+// TestManifestNegativeCacheClearedOnHashChange verifies that when the
+// store fingerprint changes (records added/removed), the negative
+// cache resets even though the new hash is also failing -- operator
+// gets a fresh retry budget per distinct store state.
+func TestManifestNegativeCacheClearedOnHashChange(t *testing.T) {
+	eng := setupEngine(t)
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	cfg := config.Defaults()
+	cfg.LLMCuration.MaxManifestAttempts = 3
+	cache := &ManifestCache{}
+
+	// Three failures on initial fingerprint A.
+	for i := 0; i < 3; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("hash A failure %d", i)}}
+		generateManifestSummary(context.Background(), eng, llm, cfg, &AutonomousResult{}, cache, nil)
+	}
+	hashA := cache.LastFailedHash
+	if cache.FailedAttempts != 3 {
+		t.Fatalf("FailedAttempts on hash A: got %d, want 3", cache.FailedAttempts)
+	}
+
+	// Change the store: add a new record. Fingerprint shifts to B.
+	addProcessedNodeWithEmbedding(t, eng, "new record forcing hash change", []float32{0.9, 0.0, 0.1})
+
+	// Same failure mode on the new fingerprint.
+	llm := &mockLLM{errors: []error{fmt.Errorf("hash B failure")}}
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, cfg, result, cache, nil)
+
+	if result.LLMCalls != 1 {
+		t.Errorf("hash B should NOT be skipped: LLMCalls=%d, want 1", result.LLMCalls)
+	}
+	if cache.FailedAttempts != 1 {
+		t.Errorf("FailedAttempts on hash B: got %d, want 1 (fresh budget)", cache.FailedAttempts)
+	}
+	if cache.LastFailedHash == hashA {
+		t.Error("LastFailedHash should have shifted to the new fingerprint")
+	}
+}
+
+// TestManifestNegativeCacheEmptySummaryCounts pins the second
+// failure mode: an LLM that returns an empty string after trim
+// (whitespace-only response, or response stripped to nothing).
+// Pre-fix the empty result was cached as Summary="" which fails the
+// cache-hit guard at line 1047 and re-runs the LLM next cycle. Same
+// loop. Post-fix it advances the negative-cache counter.
+func TestManifestNegativeCacheEmptySummaryCounts(t *testing.T) {
+	eng := setupEngine(t)
+	for i := 0; i < 6; i++ {
+		addProcessedNodeWithEmbedding(t, eng, fmt.Sprintf("Record %d", i), []float32{float32(i) * 0.1, 0.5, 0.3})
+	}
+
+	cfg := config.Defaults()
+	cfg.LLMCuration.MaxManifestAttempts = 3
+	cache := &ManifestCache{}
+
+	// LLM returns whitespace -- trims to empty.
+	for i := 0; i < 3; i++ {
+		llm := &mockLLM{responses: []string{"   "}}
+		generateManifestSummary(context.Background(), eng, llm, cfg, &AutonomousResult{}, cache, nil)
+	}
+	if cache.FailedAttempts != 3 {
+		t.Errorf("FailedAttempts on empty-after-trim: got %d, want 3", cache.FailedAttempts)
+	}
+
+	// Fourth cycle: skipped.
+	llm := &mockLLM{responses: []string{"should not be called"}}
+	result := &AutonomousResult{}
+	generateManifestSummary(context.Background(), eng, llm, cfg, result, cache, nil)
+	if result.LLMCalls != 0 {
+		t.Errorf("at threshold: LLMCalls=%d, want 0", result.LLMCalls)
+	}
+}
+
 func TestParseContradictionResult(t *testing.T) {
 	input := `{"relationship":"contradicts","confidence":0.8,"explanation":"Direct conflict"}`
 	r, err := parseContradictionResult(input)

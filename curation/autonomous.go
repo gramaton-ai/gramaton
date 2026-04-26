@@ -62,9 +62,18 @@ type AutonomousResult struct {
 // and the associated qualitative summary. Passed by pointer into
 // RunAutonomous so the cache persists across cycles. Empty fields mean
 // "no cached value"; the next call populates them.
+//
+// LastFailedHash + FailedAttempts implement a negative cache: a
+// fingerprint that consistently fails to produce a usable summary
+// stops calling the LLM after MaxManifestAttempts cycles. The
+// negative cache clears automatically when (a) the fingerprint
+// changes (store state moved), or (b) a successful synthesis lands
+// for any fingerprint (model behavior likely improved).
 type ManifestCache struct {
-	Hash    string
-	Summary string
+	Hash           string
+	Summary        string
+	LastFailedHash string
+	FailedAttempts int
 }
 
 // lastClassifyErrorMaxRunes caps the size of the per-record
@@ -1056,6 +1065,37 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		return
 	}
 
+	// Negative cache: skip the LLM call when this exact fingerprint
+	// has already failed MaxManifestAttempts consecutive cycles. The
+	// negative cache clears automatically when the fingerprint
+	// changes (store state moved) or when any later success lands.
+	maxAttempts := cfg.LLMCuration.MaxManifestAttempts
+	if cacheEnabled && cache != nil && maxAttempts > 0 &&
+		cache.LastFailedHash == currentHash && cache.FailedAttempts >= maxAttempts {
+		logger.Info("manifest summary skipped: prior failures on same fingerprint",
+			"component", "curation",
+			"hash", currentHash[:8],
+			"attempts", cache.FailedAttempts,
+			"max_attempts", maxAttempts,
+		)
+		return
+	}
+
+	// recordManifestFailure increments the negative-cache counter for
+	// `currentHash`. If the previous failure was on a different hash,
+	// reset the counter to 1 (fresh budget for the new state).
+	recordManifestFailure := func() {
+		if !cacheEnabled || cache == nil || maxAttempts <= 0 {
+			return
+		}
+		if cache.LastFailedHash == currentHash {
+			cache.FailedAttempts++
+			return
+		}
+		cache.LastFailedHash = currentHash
+		cache.FailedAttempts = 1
+	}
+
 	// Cache the invariant summarize-the-store instructions.
 	userPromptTemplate := manifestSummaryPrompt
 	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
@@ -1079,6 +1119,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	if err != nil {
 		result.Errors++
 		logger.Warn("manifest summary LLM error", "component", "curation", "err", err)
+		recordManifestFailure()
 		return
 	}
 
@@ -1088,13 +1129,27 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	if len(runes) > 500 {
 		summary = string(runes[:500])
 	}
+	if summary == "" {
+		// Empty-after-trim is a failure mode of its own: caching an
+		// empty summary fails the cache-hit guard at line 1047
+		// (`cache.Summary != ""`), so the LLM would be called again
+		// next cycle on the same fingerprint. Treat it identically to
+		// an LLM error and advance the negative-cache counter.
+		result.Errors++
+		logger.Warn("manifest summary empty after trim", "component", "curation")
+		recordManifestFailure()
+		return
+	}
 	result.ManifestSummary = summary
 
 	// Update the cache so the next cycle with the same fingerprint can
-	// skip the LLM call.
+	// skip the LLM call. Clear the negative cache too -- a success on
+	// any fingerprint signals the model behaviour is healthy.
 	if cacheEnabled && cache != nil {
 		cache.Hash = currentHash
 		cache.Summary = summary
+		cache.LastFailedHash = ""
+		cache.FailedAttempts = 0
 	}
 
 	logger.Info("manifest summary",

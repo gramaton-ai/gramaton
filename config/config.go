@@ -400,6 +400,17 @@ type LLMCurationConfig struct {
 	// the entire batch's tokens. Default: 3. Zero disables.
 	MaxSynthesisAttempts int `yaml:"max_synthesis_attempts"`
 
+	// MaxManifestAttempts caps consecutive failures of
+	// generateManifestSummary on the SAME store-state fingerprint.
+	// The manifest-summary path is keyed by a content hash, not by a
+	// record, so the failure-tracking lives on the in-memory
+	// ManifestCache (LastFailedHash + FailedAttempts). When the
+	// counter reaches this threshold, the LLM call is skipped on
+	// subsequent cycles -- until the hash changes (store state moves)
+	// or a successful manifest call clears the negative cache. Default:
+	// 3. Zero disables (legacy infinite-retry on the same failing hash).
+	MaxManifestAttempts int `yaml:"max_manifest_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -1011,6 +1022,7 @@ func Defaults() Config {
 			MaxClassifyAttempts:         3,
 			MaxSummaryAttempts:          3,
 			MaxSynthesisAttempts:        3,
+			MaxManifestAttempts:         3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,
