@@ -9,6 +9,7 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/llm/anthropic"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
@@ -226,9 +227,24 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		}
 	}
 
+	type batchFailure struct {
+		id     string
+		reason string
+	}
+	var failedBatch []batchFailure
+
 	e.Lock()
 	for _, br := range batchResults {
 		if br.Result.Type != "succeeded" || br.Result.Message == nil {
+			// Sub-request failed at the API layer (errored / expired /
+			// canceled / unknown type). Capture per-record so the retry
+			// counter advances; the batch-level counters in `result`
+			// already capture totals.
+			reason := "batch result type: " + br.Result.Type
+			if br.Result.Type == "" {
+				reason = "batch result missing type"
+			}
+			failedBatch = append(failedBatch, batchFailure{id: br.CustomID, reason: reason})
 			continue
 		}
 
@@ -243,6 +259,10 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		classification, err := parseClassification(text)
 		if err != nil {
 			logger.Warn("batch: parse error", "record", br.CustomID, "err", err)
+			failedBatch = append(failedBatch, batchFailure{
+				id:     br.CustomID,
+				reason: strutil.TruncateRunes("parse: "+err.Error(), lastClassifyErrorMaxRunes),
+			})
 			continue
 		}
 
@@ -253,7 +273,26 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		applyClassification(e, br.CustomID, classification, shortModel, longModel, longThreshold)
 		result.Applied++
 	}
-	if result.Applied > 0 {
+
+	// Per-record failure tracking. Inherits the same MaxClassifyAttempts
+	// budget as the autonomous classifyPending path: a record that
+	// consistently errors in batch mode flips processing_status="stuck"
+	// at threshold, the same as if it had failed in the inline cycle.
+	// The selection at line 44 already excludes stuck records, so we
+	// don't need a pre-flight skip. Tracker 01KQ40AA1C1C95JG5VETFR20M7.
+	classifyRetry := taskRetryPolicy{
+		AttemptsKey:      "classify_attempts",
+		ErrorKey:         "last_classify_error",
+		StatusKey:        "processing_status",
+		StatusValueAtMax: "stuck",
+		Max:              cfg.LLMCuration.MaxClassifyAttempts,
+		TaskName:         "classify",
+	}
+	for _, f := range failedBatch {
+		recordTaskFailure(e, classifyRetry, f.id, f.reason, logger)
+	}
+
+	if result.Applied > 0 || (classifyRetry.Max > 0 && len(failedBatch) > 0) {
 		e.SaveOrLog("curation: batch classify")
 	}
 	e.Unlock()
@@ -357,6 +396,17 @@ func applyClassification(e *core.Engine, id string, data *classificationResult, 
 	}
 
 	e.SetProp(id, "processing_status", graph.StringProperty("processed"))
+
+	// Successful classification clears any prior failure tracking so
+	// an operator-fixed record can pass cleanly. Mirrors the
+	// classifyPending success path in autonomous.go; without this, a
+	// record that previously failed N-1 times in autonomous mode and
+	// then succeeds via batch mode keeps a stale classify_attempts
+	// counter that would (incorrectly) push it to "stuck" on its next
+	// autonomous failure.
+	if n, ok := e.Graph().GetNode(id); ok {
+		recordTaskSuccess(e, n, "classify_attempts")
+	}
 }
 
 // extractAnthropicClient unwraps metered, rate-limited, or other

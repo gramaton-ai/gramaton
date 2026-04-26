@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/llm"
 )
 
@@ -61,5 +62,58 @@ func TestFindMeteredRawProviderReturnsNil(t *testing.T) {
 	got := findMetered(stubLLM{})
 	if got != nil {
 		t.Errorf("findMetered(raw) = %v, want nil", got)
+	}
+}
+
+// TestApplyClassificationClearsAttempts pins the success-clear branch
+// in applyClassification (called by the Anthropic batch path). Without
+// this clear, a record that failed N-1 times in autonomous mode and
+// then succeeded via batch mode would keep a stale classify_attempts
+// counter and (incorrectly) push to "stuck" on its next autonomous
+// failure.
+//
+// Regression guard for tracker 01KQ40AA1C1C95JG5VETFR20M7.
+func TestApplyClassificationClearsAttempts(t *testing.T) {
+	eng := setupEngine(t)
+
+	// Seed a record with classify_attempts=2 (simulating two prior
+	// failures via the autonomous path) and a captured-status state.
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":         graph.StringProperty("content needing classification"),
+		"processing_status":    graph.StringProperty("captured"),
+		"classify_attempts":    graph.Int64Property(2),
+		"last_classify_error":  graph.StringProperty("transient API timeout"),
+		"created_at":           graph.TimestampProperty(time.Now().UTC()),
+	})
+	for k, v := range n.Properties {
+		eng.PropIdx().Add(n.ID, k, v)
+	}
+	eng.Save("seed")
+	eng.Unlock()
+
+	// Apply a successful classification (mimicking what the batch path
+	// does after parsing an Anthropic batch result).
+	classification := &classificationResult{
+		Temporality:     "durable",
+		Confidence:      0.85,
+		KnowledgeType:   "semantic",
+		EpistemicStatus: "well_established",
+	}
+	eng.Lock()
+	applyClassification(eng, n.ID, classification, "haiku", "sonnet", 2000)
+	eng.Unlock()
+
+	eng.RLock()
+	defer eng.RUnlock()
+	got, _ := eng.Graph().GetNode(n.ID)
+	attempts, _ := got.Properties.GetInt64("classify_attempts")
+	status, _ := got.Properties.GetString("processing_status")
+
+	if attempts != 0 {
+		t.Errorf("classify_attempts after success: got %d, want 0 (cleared)", attempts)
+	}
+	if status != "processed" {
+		t.Errorf("processing_status: got %q, want %q", status, "processed")
 	}
 }

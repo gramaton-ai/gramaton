@@ -108,6 +108,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Anthropic batch classification path inherits the per-record retry
+  bound.** `RunBatchClassification` (curation/batch.go) submits all
+  pending records as one Anthropic Message Batch and applies results
+  when the batch ends. Pre-fix the result handler had two failure
+  paths that didn't write per-record state: the non-succeeded
+  sub-result branch (line 231 area, errored/expired/canceled
+  sub-requests) and the JSON-parse-error branch (line 244 area). Both
+  did `continue` without bumping `classify_attempts` -- so a record
+  that consistently failed in batch mode kept `processing_status =
+  "captured"` forever and re-entered every batch invocation. The
+  sequential-mode fallback path (`runSequentialBatch` →
+  `runAutonomousInner` → `classifyPending`) was already protected by
+  commit 1b16b80, but the Anthropic-specific batch path was
+  missed. Same failure shape, different code path. Caught in the
+  codebase-wide sweep.
+  Fix: both failure paths now push to a `failedBatch` slice; after
+  the apply loop, a single pass calls `recordTaskFailure` (the
+  helper factored in commit 5126aff) with the same `classify_attempts`
+  / `last_classify_error` / `processing_status="stuck"` policy used
+  by the autonomous path. Records past `MaxClassifyAttempts` flip
+  to `"stuck"` and are excluded from future batch invocations (the
+  selection at the top of `RunBatchClassification` already filters
+  by `processing_status="captured"`).
+  Also fixed: `applyClassification` now calls `recordTaskSuccess` on
+  the just-classified record to clear `classify_attempts`, mirroring
+  the autonomous-success path. Without this, a record that failed
+  N-1 times in autonomous mode and then succeeded via batch mode
+  would keep a stale counter and incorrectly push to stuck on its
+  next autonomous failure.
+  Regression test: `TestApplyClassificationClearsAttempts` in
+  `curation/batch_test.go` seeds a record with `classify_attempts=2`,
+  calls `applyClassification`, asserts the counter cleared to 0 and
+  status flipped to `processed`. Tracker
+  `01KQ40AA1C1C95JG5VETFR20M7`.
+
 - **Concept synthesis no longer infinite-retries on persistent failure;
   `recordTaskFailure` / `recordTaskSuccess` helpers factored out.**
   `enrichConceptSyntheses` selects concept nodes with
