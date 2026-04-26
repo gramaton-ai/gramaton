@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os/signal"
+	"syscall"
 
 	"github.com/gramaton-ai/gramaton/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,5 +42,11 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	registerProxyTools(mcpServer)
 
-	return mcpServer.Run(context.Background(), &mcp.StdioTransport{})
+	// Cancel the SDK Run loop on SIGINT/SIGTERM so manual interruption
+	// (Ctrl-C in a foreground invocation, or a parent process sending
+	// SIGTERM) returns cleanly instead of being trapped inside the SDK
+	// stdio loop until stdin closes.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return mcpServer.Run(ctx, &mcp.StdioTransport{})
 }

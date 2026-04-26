@@ -139,7 +139,17 @@ func startBackground() error {
 	setSysProcAttr(child)
 
 	if err := child.Start(); err != nil {
+		if stderrFile != nil {
+			stderrFile.Close()
+		}
 		return fmt.Errorf("start server: %w", err)
+	}
+	// Once Start succeeds the child has its own dup'd fd; the parent's
+	// reference can be closed without affecting the child's writes.
+	// Without this the file handle lived until GC, leaking an fd per
+	// foreground spawn.
+	if stderrFile != nil {
+		stderrFile.Close()
 	}
 
 	// Wait for the server to be ready.
@@ -215,7 +225,13 @@ func tailServerStderr(path string, maxBytes int64) string {
 	return out
 }
 
-// waitForServer polls the status endpoint until the server is ready.
+// waitForServer polls the lock-free /v1/health endpoint until the
+// server is ready. Matches the endpoint the rest of the CLI uses for
+// liveness probes (cli/client.go::pingServer) -- /v1/status takes an
+// engine RLock, so on a busy server with a long-held write lock the
+// status endpoint queues behind it while /v1/health responds promptly.
+// Using /v1/health here avoids artificial startup-wait timeouts when
+// the child is mid-init.
 func waitForServer(cfgDir string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -224,7 +240,7 @@ func waitForServer(cfgDir string, timeout time.Duration) error {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		url := fmt.Sprintf("http://%s:%d/v1/status", info.Bind, info.Port)
+		url := fmt.Sprintf("http://%s:%d/v1/health", info.Bind, info.Port)
 		resp, err := httpGet(url)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)

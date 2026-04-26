@@ -7,6 +7,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLI server-spawn fd leak; lock-free liveness probe; clean Ctrl-C
+  on the MCP transport.** P2-16 named six issues; three were real
+  production bugs:
+  (1) `cli/serve.go::startBackground` opened
+  `gramaton.stderr` for the spawned child but never closed the
+  parent's reference. The fd lived until GC, leaking one per
+  foreground spawn. Now closed explicitly after `child.Start()`
+  succeeds (the child has its own dup'd fd via fork/exec).
+  (2) `cli/serve.go::waitForServer` polled `/v1/status` (engine
+  RLock) while the rest of the CLI uses `/v1/health` (lock-free).
+  On a busy server with a long-held write lock, the status probe
+  would queue behind it and the foreground spawn could time out
+  even when the child was healthy. Switched to `/v1/health`.
+  (3) `cli/mcp_cmd.go::runMCP` had no signal handling. Ctrl-C in a
+  foreground invocation (or a parent sending SIGTERM) was trapped
+  inside the SDK stdio loop until stdin closed. Wrapped the run
+  with `signal.NotifyContext(SIGINT, SIGTERM)` so cancellation
+  propagates cleanly.
+  Skipped: the three test-fragility sub-fixes (parallel-unsafe
+  global state, one-level flag reset, brittle SDK-shape assertion)
+  -- they affect test infrastructure rigor, not production
+  correctness, and the existing tests pass under the current
+  parallel constraints. (P2-16.)
+
 ### Changed
 
 - **CLI error handling unified: single output stream, structured codes
