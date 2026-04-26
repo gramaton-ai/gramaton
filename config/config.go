@@ -240,6 +240,20 @@ type CurationConfig struct {
 	// Lower values create observations on short records that are
 	// essentially duplicates of their parent. Default 1500.
 	ObservationMinContentLength int `yaml:"observation_min_content_length"`
+
+	// MaxObservationAttempts caps how many cycles re-extract
+	// observations on a parent whose embedding kept failing. Per-parent
+	// state lives on `observation_extract_attempts` (Int64) +
+	// `last_observation_extract_error` (String). At threshold, the
+	// parent is skipped at the candidate-selection guard. Higher
+	// default than the LLM-cost counters because embedding failures
+	// are typically transient (timeout, OOM, rate limit) -- 5 gives
+	// transient errors more headroom before locking out. Zero
+	// disables (legacy infinite-retry behavior). Embedding cost is
+	// CPU/GPU only on local providers (bert/ollama) but billed input
+	// tokens on paid providers, so the counter prevents quiet token
+	// burn even though no LLM is involved.
+	MaxObservationAttempts int `yaml:"max_observation_attempts"`
 }
 
 // LLMConfig configures the LLM provider and cost/rate caps. Model
@@ -1032,6 +1046,7 @@ func Defaults() Config {
 			SectionLinkMin:        0.75,
 			MaxSectionLinksPerRun: 30,
 			ObservationBatchSize:        0, // auto: 500 for local providers, 20 for external
+			MaxObservationAttempts:      5,
 			ObservationMinContentLength: 1500,
 		},
 

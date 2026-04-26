@@ -9,7 +9,14 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/strutil"
 )
+
+// lastObservationExtractErrorMaxRunes caps the size of the per-parent
+// last_observation_extract_error property. Same rationale as the
+// LLM-cost counterparts: provider errors may embed prompt fragments;
+// the cap bounds what lands on a record visible through gramaton_inspect.
+const lastObservationExtractErrorMaxRunes = 200
 
 // extractAndCreateObservations finds processed records >500 chars that
 // don't yet have observation children, extracts key sentences via TF-IDF,
@@ -74,6 +81,18 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		if _, done := hasObservations[n.ID]; done {
 			continue
 		}
+		// Skip parents that have exhausted their observation-extraction
+		// retry budget. Without this guard, a parent whose embedding
+		// consistently fails (oversized, content-policy refusal, model
+		// dimension change without reembed) gets re-extracted every
+		// cycle, paying the embedding cost forever. Tracker
+		// 01KQ409W2XDSSWBTZ66WBTFVD1.
+		maxObsAttempts := cfg.Curation.MaxObservationAttempts
+		if maxObsAttempts > 0 {
+			if attempts, ok := n.Properties.GetInt64("observation_extract_attempts"); ok && attempts >= int64(maxObsAttempts) {
+				continue
+			}
+		}
 		// Copy properties for metadata inheritance.
 		candidates = append(candidates, candidate{
 			id:      n.ID,
@@ -122,7 +141,12 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		text     string
 		vec      []float32
 	}
+	type failedParent struct {
+		id     string
+		reason string
+	}
 	var allObs []obsNode
+	var failedParents []failedParent
 	embedStart := time.Now()
 	embedErrors := 0
 
@@ -139,18 +163,18 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		}
 
 		var vecs [][]float32
+		var embedErr error
 		embedFailed := false
 		haveEmbedder := e.Embedder() != nil
 		if haveEmbedder && len(texts) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			var err error
-			vecs, err = e.Embedder().Embed(ctx, texts)
+			vecs, embedErr = e.Embedder().Embed(ctx, texts)
 			cancel()
-			if err != nil {
+			if embedErr != nil {
 				logger.Warn("observation embedding failed, skipping parent this cycle",
 					"component", "curation",
 					"parent", c.id,
-					"err", err)
+					"err", embedErr)
 				vecs = nil
 				embedFailed = true
 				embedErrors++
@@ -160,12 +184,17 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		// If the embedder is configured but failed, skip this parent's
 		// observations for this cycle. Creating vector-less nodes in
 		// an embedding-enabled store produces orphans that duplicate
-		// detection and vector search silently miss. Observations are
-		// re-extracted on the next curation tick when the embedder
-		// recovers, so no data is lost. Stores running without an
-		// embedder at all (haveEmbedder=false) still create nodes --
-		// vector-less is the only option there.
+		// detection and vector search silently miss. The parent is
+		// recorded for retry-bound tracking so a persistent failure
+		// gets locked out at threshold rather than re-extracting
+		// forever. Stores running without an embedder at all
+		// (haveEmbedder=false) still create nodes -- vector-less is
+		// the only option there.
 		if embedFailed {
+			failedParents = append(failedParents, failedParent{
+				id:     c.id,
+				reason: strutil.TruncateRunes(embedErr.Error(), lastObservationExtractErrorMaxRunes),
+			})
 			continue
 		}
 
@@ -200,7 +229,8 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		"embed_ms", embedDur.Milliseconds(),
 		"errors", embedErrors)
 
-	if len(allObs) == 0 {
+	maxObsAttempts := cfg.Curation.MaxObservationAttempts
+	if len(allObs) == 0 && (maxObsAttempts <= 0 || len(failedParents) == 0) {
 		return 0
 	}
 
@@ -214,6 +244,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	created := 0
 
 	err := e.WithWriteBatch("curation: observation extraction", func(ws *core.WriteSession) (bool, error) {
+		successfulParents := make(map[string]bool)
 		for _, o := range allObs {
 			parent, ok := ws.Graph().GetNode(o.parentID)
 			if !ok {
@@ -256,9 +287,53 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			// Index the node (properties + BM25 + vector).
 			ws.IndexNode(n.ID, o.text, o.vec)
 
+			successfulParents[o.parentID] = true
 			created++
 		}
-		return created > 0, nil
+
+		// Clear the per-parent retry counter for parents that
+		// successfully produced observations this cycle.
+		if maxObsAttempts > 0 {
+			for parentID := range successfulParents {
+				parent, ok := ws.Graph().GetNode(parentID)
+				if !ok {
+					continue
+				}
+				if _, has := parent.Properties.GetInt64("observation_extract_attempts"); has {
+					ws.SetProp(parentID, "observation_extract_attempts", graph.Int64Property(0))
+				}
+			}
+		}
+
+		// Bump the per-parent retry counter for parents whose
+		// observations failed to embed this cycle. At threshold the
+		// candidate-selection guard above excludes them on subsequent
+		// cycles. Skipped when MaxObservationAttempts is 0 (legacy).
+		if maxObsAttempts > 0 {
+			for _, fp := range failedParents {
+				parent, ok := ws.Graph().GetNode(fp.id)
+				if !ok {
+					continue
+				}
+				var attempts int64
+				if v, ok := parent.Properties.GetInt64("observation_extract_attempts"); ok {
+					attempts = v
+				}
+				attempts++
+				ws.SetProp(fp.id, "observation_extract_attempts", graph.Int64Property(attempts))
+				ws.SetProp(fp.id, "last_observation_extract_error", graph.StringProperty(fp.reason))
+				if attempts >= int64(maxObsAttempts) {
+					logger.Warn("observation extract: parent will be skipped after repeated embed failures",
+						"component", "curation",
+						"parent", fp.id,
+						"attempts", attempts,
+						"max_attempts", maxObsAttempts,
+						"last_error", fp.reason)
+				}
+			}
+		}
+
+		return created > 0 || (maxObsAttempts > 0 && len(failedParents) > 0), nil
 	})
 	if err != nil {
 		logger.Error("observation write batch failed",

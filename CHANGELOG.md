@@ -108,6 +108,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Observation extractor no longer re-embeds parents on persistent
+  embed failure.** `extractAndCreateObservations` (curation/observe.go)
+  selects parents with `processing_status="processed"` AND no
+  `observation_of` outbound edge AND content over the min length;
+  success writes an observation node + edge per extracted sentence.
+  Pre-fix: an embed failure (line 168 area) skipped the parent
+  without writing any state, so the next deterministic curation tick
+  re-extracted the same parent and re-paid the embedding cost (up to
+  20 sentence embeddings per parent). Same shape as the LLM-cost
+  retry bugs but a different cost class -- embedding is CPU/GPU on
+  local providers (bert/ollama) and billed input tokens on paid
+  providers, so the counter prevents quiet token burn even though
+  no LLM is involved. Tracker `01KQ409W2XDSSWBTZ66WBTFVD1`.
+  Fix: a new `Curation.MaxObservationAttempts` field (yaml:
+  `curation.max_observation_attempts`, default 5, 0 disables).
+  Default is higher than the LLM-cost counters (3) because
+  embedding failures are typically transient (timeout, OOM, rate
+  limit). Failed cycles now write `observation_extract_attempts`
+  (Int64) and the truncated reason in `last_observation_extract_error`
+  on the parent. The candidate-selection guard skips parents past
+  threshold. A successful cycle clears the counter back to 0.
+  Failure-tracking writes happen inside the existing
+  `WithWriteBatch` transaction so they share the same lock and
+  bbolt commit.
+  Tests in `curation/observe_test.go` (new file with a
+  `configurableObsEmbedder` test double): failure increments the
+  counter, threshold excludes the parent at selection (embedder not
+  called), `MaxObservationAttempts=0` disables, success clears the
+  counter. data-model.md gained two new property rows for the
+  observation-tracking pair. configuration.md documents the new
+  knob.
+
 - **gramaton_reembed no longer re-pays for the same failing records on
   every invocation; session-commit promotion now writes
   embedding_model on success.** Two coupled fixes for tracker

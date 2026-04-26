@@ -150,6 +150,7 @@ curation:
   max_section_links_per_run: 30
   observation_batch_size: 0          # 0 = auto (500 for local providers, 20 for external)
   observation_min_content_length: 1500
+  max_observation_attempts: 5        # exclude a parent from extraction after N consecutive embed failures (0 = legacy infinite-retry; 5 because embed failures are usually transient)
   task_timeout: 90s                  # wall-clock cap on a single curation task; 0 disables
 ```
 

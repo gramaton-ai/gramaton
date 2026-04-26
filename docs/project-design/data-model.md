@@ -127,6 +127,8 @@ All Vector properties are independently searchable via the vector index.
 | `last_synthesis_error` | String | (Concept nodes only.) Truncated reason (max 200 runes) for the most recent synthesis failure. Same redaction guidance as `last_classify_error`. |
 | `embed_attempts` | Int64 | How many times gramaton_reembed has failed to produce an embedding for this record. Reset to 0 on successful re-embed. At `llm_curation.max_embed_attempts` (default 3), the record is excluded from reembed candidate selection. |
 | `last_embed_error` | String | Truncated reason (max 200 runes) for the most recent embed failure. Same redaction guidance as `last_classify_error`. |
+| `observation_extract_attempts` | Int64 | How many cycles the deterministic observation extractor has failed to embed observations for this parent. Reset to 0 on successful extraction. At `curation.max_observation_attempts` (default 5), the parent is skipped at observation-extraction selection time. |
+| `last_observation_extract_error` | String | Truncated reason (max 200 runes) for the most recent observation-extract failure. Same redaction guidance as `last_classify_error`. |
 
 ### Provenance
 
