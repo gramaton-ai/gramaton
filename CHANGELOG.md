@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Concept-match telemetry: structured `concept_match` slog events
+  on every search where a concept embedding scores above threshold.**
+  New `search.ScanConceptMatches` walks all `node_type=concept` nodes,
+  computes cosine against the query embedding, and returns matches
+  with their live member IDs (inbound `instance_of` edges, filtered
+  for non-historical source nodes). Wired into `api/search.go` after
+  search returns; emits via `a.log.Info("concept_match", ...)` with
+  fields: `query`, `top_k`, `matches` (each match: id, keyword,
+  cosine, live_members). New `TelemetryConfig.ConceptMatchEnabled`
+  (default true) and `ConceptMatchThreshold` (default 0.7) gate the
+  emission. No behavior change beyond observability — concepts are
+  excluded from results (Phase A-minimal); the telemetry simply
+  records what would have been there. Used to gather data on whether
+  concept-based query expansion (PRF) would actually help on real
+  queries before committing to ship it. Cost is bounded (~1ms per
+  query at <100 concepts) and events only fire on matches. Tests at
+  `search/concept_telemetry_test.go` pin threshold gating, live-vs-
+  historical member filtering, dimension mismatch fail-silent. Tracker
+  01KQ5JVY5DY7B0WNGBMKG1C3ND.
+
 - **Default search now excludes concept nodes; opt-in via
   `include_concepts=true`.** New `SearchRequest.IncludeConcepts` field
   (api/search.go) and matching `--include-concepts` CLI flag flip the

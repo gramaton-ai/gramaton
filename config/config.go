@@ -53,6 +53,7 @@ type Config struct {
 	Graph      GraphConfig      `yaml:"graph"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Merge      MergeConfig      `yaml:"merge"`
+	Telemetry  TelemetryConfig  `yaml:"telemetry"`
 }
 
 // =============================================================================
@@ -948,6 +949,28 @@ type ConceptsConfig struct {
 	MemberOverlapThreshold float64 `yaml:"member_overlap_threshold"`
 }
 
+// TelemetryConfig controls observability events emitted for design-
+// or quality-decision investigation. These are structured slog events
+// at INFO level intended for sampled review, not user-facing logging.
+type TelemetryConfig struct {
+	// ConceptMatchEnabled emits a "concept_match" event whenever a
+	// query's embedding scores above the threshold against any
+	// existing concept embedding. The event captures the query, every
+	// matched concept (id, keyword, cosine), the concept's live member
+	// IDs, and the records that surfaced in top-K. Used to gather data
+	// on whether concept-based query expansion (PRF) would help before
+	// committing to ship it. Default true: cost is bounded (~1ms per
+	// query at <100 concepts) and the events only fire when concepts
+	// match. Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+	ConceptMatchEnabled bool `yaml:"concept_match_enabled"`
+
+	// ConceptMatchThreshold sets the cosine threshold above which
+	// concept matches are logged. Default 0.7. Lower threshold = more
+	// matches logged (noisier, but catches weaker would-have-PRF
+	// effects); higher threshold = only strong matches (less noise).
+	ConceptMatchThreshold float64 `yaml:"concept_match_threshold"`
+}
+
 // DedupConfig controls auto-supersession of near-duplicate records.
 // The similarity threshold is carefully calibrated; changing it can
 // either miss true duplicates or incorrectly supersede distinct records.
@@ -1192,6 +1215,11 @@ func Defaults() Config {
 			MaxKeywordPct:          0.2,
 			MinContentLengthDirect: 50,
 			MemberOverlapThreshold: 0.6,
+		},
+
+		Telemetry: TelemetryConfig{
+			ConceptMatchEnabled:   true,
+			ConceptMatchThreshold: 0.7,
 		},
 
 		Dedup: DedupConfig{

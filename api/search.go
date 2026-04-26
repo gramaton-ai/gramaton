@@ -270,6 +270,35 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		a.retrieval.Track(ids...)
 	}
 
+	// Phase 1 concept telemetry: emit a structured event when any
+	// concept embedding scores above the threshold against the query.
+	// No behavior change -- the matched concepts are NOT injected into
+	// results (records mode excludes them). The telemetry exists to
+	// gather data on whether concept-based query expansion (PRF) would
+	// help before committing to ship it. Sampled review by the
+	// operator over weeks of real usage answers "are concepts earning
+	// their slot." Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+	if queryVec != nil {
+		cfg := a.engine.Config()
+		if cfg.Telemetry.ConceptMatchEnabled {
+			a.engine.RLock()
+			matches := search.ScanConceptMatches(a.engine.Graph(), queryVec, cfg.Telemetry.ConceptMatchThreshold)
+			a.engine.RUnlock()
+			if len(matches) > 0 {
+				topIDs := make([]string, 0, len(results))
+				for _, r := range results {
+					topIDs = append(topIDs, r.ID)
+				}
+				a.log.Info("concept_match",
+					"component", "telemetry",
+					"query", req.Text,
+					"top_k", topIDs,
+					"matches", matches,
+				)
+			}
+		}
+	}
+
 	resp := SearchResponse{
 		Results:  results,
 		Facets:   search.ComputeFacets(results),
