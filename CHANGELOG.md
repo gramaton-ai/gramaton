@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gramaton_search` and `gramaton search` CLI gain a
+  `processing_status` filter.** New `SearchRequest.ProcessingStatus`
+  field (api/search.go) and matching `--processing-status` CLI flag.
+  Wired into `search.Query` + the existing `enumFilter` machinery in
+  `search.Tool.filterCandidates`, so the property index does the
+  lookup and `!value` negation works the same as the other enum
+  filters. Surfaced specifically by the operator-triage flow for
+  records marked `processing_status="stuck"` (records that exhausted
+  classify retries — see commit 1b16b80). Test coverage:
+  `TestSearchFilterByProcessingStatus` in `search/search_test.go`
+  pins both exact match and `!stuck` negation. Pre-fix the docs
+  advertised this filter but it didn't exist; caught by the
+  semantic-drift lens of gramaton-review.
+
 ### Changed
 
 - **Curation per-task timeout default raised from 30s to 90s.**
@@ -91,6 +107,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     SECURITY.md disclosure pointer (file landed in commit 6563d80).
 
 ### Fixed
+
+- **`docs/project-design/data-model.md` `processing_status`
+  enumeration corrected.** Pre-fix listed `captured | processed |
+  pending` — but no code writes `pending` as a `processing_status`
+  value (`pending` is a `synthesis_status` value at
+  `curation/deterministic.go:571`, a different field), and the table
+  was missing `deleted` (set by `api/delete_record.go:42`) and the
+  newly-added `stuck` (commit 1b16b80). Updated to the canonical set:
+  `captured | processed | stuck | deleted`. Caught by the semantic-
+  drift lens of gramaton-review.
 
 - **Pathological records can no longer infinite-retry through curation.**
   `classifyPending` previously had no per-record retry bound. Records

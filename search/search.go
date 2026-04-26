@@ -114,10 +114,11 @@ type Query struct {
 	ConfidenceMax   *float64
 	ImportanceMin   *float64
 	ImportanceMax   *float64
-	Temporality     string // exact match, or "!value" for negation
-	KnowledgeType   string // exact match, or "!value" for negation
-	EpistemicStatus string // exact match, or "!value" for negation
-	Resolution      string // exact match, "!value" for negation, or "unresolved" (no resolution set)
+	Temporality      string // exact match, or "!value" for negation
+	KnowledgeType    string // exact match, or "!value" for negation
+	EpistemicStatus  string // exact match, or "!value" for negation
+	Resolution       string // exact match, "!value" for negation, or "unresolved" (no resolution set)
+	ProcessingStatus string // exact match, or "!value" for negation. Values: captured | processed | stuck | deleted.
 	Missing         []string // field names that must not be set
 	Keywords          []string   // exact keyword match (all must be present)
 	AccessCountMin    *int64     // minimum access count
@@ -766,6 +767,7 @@ func (t *Tool) filterCandidates(q Query) map[string]struct{} {
 	enumFilter("temporality", q.Temporality)
 	enumFilter("knowledge_type", q.KnowledgeType)
 	enumFilter("epistemic_status", q.EpistemicStatus)
+	enumFilter("processing_status", q.ProcessingStatus)
 
 	// Resolution filter: "unresolved" is special -- means no resolution
 	// property set. Other values use the standard enum filter.

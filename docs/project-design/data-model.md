@@ -118,7 +118,7 @@ All Vector properties are independently searchable via the vector index.
 | `activation_boost` | Float64 | Accumulated indirect activation from neighboring node access. Decays over time. Updated by spreading activation, never by direct access. See [Retrieval — Scoring Model](retrieval.md#scoring-model). |
 | `valid_from` | Timestamp | When this knowledge became true in the world (bitemporal). |
 | `valid_until` | Timestamp | When this knowledge stopped being true. Absent if still valid. |
-| `processing_status` | String | Values: `captured` (raw, unclassified), `processed` (LLM-enriched), `pending` (queued for enrichment). |
+| `processing_status` | String | Values: `captured` (raw, awaiting classification), `processed` (LLM-enriched), `stuck` (exhausted classify retries — see `classify_attempts` and `last_classify_error` for triage), `deleted` (soft-deleted, retained for provenance). |
 
 ### Provenance
 

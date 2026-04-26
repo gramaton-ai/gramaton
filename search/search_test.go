@@ -183,6 +183,76 @@ func TestSearchFilterByKnowledgeType(t *testing.T) {
 	}
 }
 
+// TestSearchFilterByProcessingStatus verifies the processing_status
+// enum filter, which surfaces records in non-default lifecycle states
+// (notably stuck — records that exhausted classify retries — and
+// captured — records pending classification). The operator triage
+// flow in docs/configuration.md depends on this filter actually
+// working, not just being advertised.
+func TestSearchFilterByProcessingStatus(t *testing.T) {
+	g := graph.New()
+	propIdx := index.NewPropertyIndex()
+	vecIdx := index.NewFlatIndex()
+	now := time.Now().UTC()
+
+	// Three nodes, three different processing_status values.
+	processed := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Processed record"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.9),
+		"created_at":        graph.TimestampProperty(now.Add(-1 * time.Hour)),
+	})
+	stuck := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Stuck record"),
+		"processing_status": graph.StringProperty("stuck"),
+		"temporality":       graph.StringProperty("durable"),
+		"confidence":        graph.Float64Property(0.5),
+		"created_at":        graph.TimestampProperty(now.Add(-2 * time.Hour)),
+	})
+	captured := g.AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Captured record"),
+		"processing_status": graph.StringProperty("captured"),
+		"created_at":        graph.TimestampProperty(now.Add(-3 * time.Hour)),
+	})
+	for _, n := range []*graph.Node{processed, stuck, captured} {
+		for k, v := range n.Properties {
+			propIdx.Add(n.ID, k, v)
+		}
+	}
+
+	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())
+
+	// Exact match: only stuck.
+	results, err := tool.Execute(context.Background(), Query{
+		ProcessingStatus: "stuck",
+		Top:              10,
+	})
+	if err != nil {
+		t.Fatalf("Execute stuck: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("processing_status=stuck: got %d results, want 1", len(results))
+	}
+	if results[0].ID != stuck.ID {
+		t.Errorf("processing_status=stuck: got id %q, want %q", results[0].ID, stuck.ID)
+	}
+
+	// Negation: !stuck excludes the stuck record.
+	results, err = tool.Execute(context.Background(), Query{
+		ProcessingStatus: "!stuck",
+		Top:              10,
+	})
+	if err != nil {
+		t.Fatalf("Execute !stuck: %v", err)
+	}
+	for _, r := range results {
+		if r.ID == stuck.ID {
+			t.Errorf("processing_status=!stuck returned the stuck record")
+		}
+	}
+}
+
 func TestSearchCombinedFilters(t *testing.T) {
 	g, propIdx, vecIdx := setupTestGraph()
 	tool := New(g, propIdx, vecIdx, nil, nil, defaultCfg())

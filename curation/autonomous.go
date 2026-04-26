@@ -67,6 +67,12 @@ type ManifestCache struct {
 	Summary string
 }
 
+// lastClassifyErrorMaxRunes caps the size of the per-record
+// last_classify_error property. Provider errors occasionally embed
+// echoed prompt fragments or transport URLs; the cap bounds how much
+// of that lands on a record visible through gramaton_inspect.
+const lastClassifyErrorMaxRunes = 200
+
 // PlannedChange describes a change that autonomous curation would make.
 // Populated in dry-run mode instead of applying the change.
 type PlannedChange struct {
@@ -508,7 +514,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 				logger.Warn("classify LLM error", "component", "curation", "record", sub[i].id, "err", lr.err)
 				out.failed = append(out.failed, failedClassify{
 					id:     sub[i].id,
-					reason: strutil.TruncateRunes(lr.err.Error(), 200),
+					reason: strutil.TruncateRunes(lr.err.Error(), lastClassifyErrorMaxRunes),
 				})
 				continue
 			}
@@ -519,7 +525,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 				logger.Warn("classify parse error", "component", "curation", "record", sub[i].id, "err", err)
 				out.failed = append(out.failed, failedClassify{
 					id:     sub[i].id,
-					reason: strutil.TruncateRunes("parse: "+err.Error(), 200),
+					reason: strutil.TruncateRunes("parse: "+err.Error(), lastClassifyErrorMaxRunes),
 				})
 				continue
 			}

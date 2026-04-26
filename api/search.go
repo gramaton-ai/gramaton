@@ -19,6 +19,7 @@ type SearchRequest struct {
 	KnowledgeType      string            `json:"knowledge_type,omitempty" jsonschema:"filter: episodic|semantic|procedural|conceptual|reference (prefix with ! to exclude)"`
 	EpistemicStatus    string            `json:"epistemic_status,omitempty" jsonschema:"filter: well_established|probable|speculative|contested|refuted (prefix with ! to exclude)"`
 	Resolution         string            `json:"resolution,omitempty" jsonschema:"filter: completed|superseded|abandoned|obsolete|unresolved (unresolved = no resolution set)"`
+	ProcessingStatus   string            `json:"processing_status,omitempty" jsonschema:"filter: captured|processed|stuck|deleted (prefix with ! to exclude). Operator triage uses processing_status=stuck to surface records that exhausted classify retries."`
 	ConfidenceMin      *float64          `json:"confidence_min,omitempty" jsonschema:"0.0-1.0"`
 	ConfidenceMax      *float64          `json:"confidence_max,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMin      *float64          `json:"importance_min,omitempty" jsonschema:"0.0-1.0"`
@@ -144,6 +145,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		KnowledgeType:     req.KnowledgeType,
 		EpistemicStatus:   req.EpistemicStatus,
 		Resolution:        req.Resolution,
+		ProcessingStatus:  req.ProcessingStatus,
 		IncludeHistorical: req.IncludeHistorical,
 		ConfidenceMin:     req.ConfidenceMin,
 		ConfidenceMax:     req.ConfidenceMax,
