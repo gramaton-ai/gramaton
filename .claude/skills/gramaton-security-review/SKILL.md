@@ -1,6 +1,6 @@
 ---
 name: gramaton-security-review
-description: Use for security review of Gramaton changes. Checks Gramaton-specific vulnerability classes: path traversal in user-supplied filesystem paths, loopback gates on destructive endpoints, input validation at the api layer, APIError.Message information leakage, optional-body parse sentinels, SwapGraph + edge-store sharing, MCP tool arg bounds. Triggers include "security review this branch", "security review this PR", "audit for security issues", or when the diff touches filesystem paths/auth gates/user identifiers/error surfaces. Extends the generic /security-review with Gramaton-specific checks.
+description: Use for security review of Gramaton changes. Checks Gramaton-specific vulnerability classes: path traversal in user-supplied filesystem paths, loopback gates on destructive endpoints, input validation at the api layer, APIError.Message information leakage, optional-body parse sentinels, SwapGraph + edge-store sharing, MCP tool arg bounds, and public-repo hygiene (maintainer PII, employer name, third-party attribution, reputational tone). Triggers include "security review this branch", "security review this PR", "audit for security issues", or when the diff touches filesystem paths/auth gates/user identifiers/error surfaces/prose-bearing files. Extends the generic /security-review with Gramaton-specific checks.
 ---
 
 # gramaton-security-review
@@ -19,6 +19,7 @@ Classify the diff:
 - Touches user-controlled identifiers (branch names, session ids, collection names)? → run section 4
 - Touches error construction or error-return paths? → run section 5
 - Touches `SwapGraph` or graph replacement? → run section 6
+- Touches any prose-bearing file (comments, docs, README, CHANGELOG, fixtures, sample configs, test names, commit message body)? → run section 9
 
 Run all sections anyway if the diff is substantial.
 
@@ -122,6 +123,30 @@ Graph replacement ops have unique invariants:
 
 **Severity: HIGH** if violated.
 
+## 9. Public-repo hygiene (maintainer PII / employer / attribution / tone)
+
+This repo is public. Source, tests, fixtures, README, CHANGELOG, and commit-message bodies are all visible. The diff must not introduce content the maintainer would not be comfortable publishing.
+
+**Hot-button identifiers — resolve at runtime, do NOT spell out here.** This skill is itself committed; hardcoding the strings would defeat the check. Pull the actual values from the maintainer's global CLAUDE.md and auto-memory entries (notably `feedback_employer_privacy`, `feedback_legal_attribution`, `feedback_api_key_safety`, and the user-profile entry for personal contact info). If you can't access those, ask the maintainer for the grep list before proceeding.
+
+Grep the diff (across code, tests, fixtures, docs, README, CHANGELOG, and the pending commit-message body) for:
+- [ ] Maintainer's employer name(s) or any product/team name attributable to that employer. Bright-line: must not land in this repo.
+- [ ] Maintainer's personal email or other contact identifiers.
+- [ ] Absolute home-directory paths (`/Users/<name>/...`, `/home/<name>/...`) in fixtures, sample configs, comments, or test data. Replace with `$HOME` or a stub.
+- [ ] Machine names, hostnames, or LAN identifiers leaked from logs or screenshots.
+
+**Third-party / external project names** (judgment, not grep):
+- [ ] Newly-introduced names of companies, products, models, or projects that did not previously appear in the repo. Per `feedback_legal_attribution`, named references should be cleared with the maintainer when there's any trademark, comparative-claim, or license-implied attribution question.
+- [ ] Comparative or evaluative claims about named third parties ("X is slow", "Y gets this wrong"). Either remove the name, soften to neutral phrasing, or escalate.
+
+**Reputational tone** (read added prose, not grep):
+- [ ] Comments, doc prose, error messages, test names, CHANGELOG entries, and commit-message bodies contain no snark, ad hominem, or named-party criticism. CHANGELOG entries are public release notes — same bar as docs.
+
+**Fixture / sample-data hygiene:**
+- [ ] Capture examples, session transcripts, README walkthroughs, and test fixtures contain only synthetic content. Real conversations or records from the maintainer's personal store must not be copied in.
+
+**Severity: HIGH** for any maintainer-PII, employer-name, or API-key leak (bright-line). **MEDIUM** for unvetted third-party references and reputational-tone issues — flag and ask, don't silently proceed.
+
 ## Output
 
 Group findings by severity (CRITICAL / HIGH / MEDIUM / LOW), file:line, one-line summary, remediation. Explicitly state "no findings" if nothing turned up — don't invent issues.
@@ -130,4 +155,4 @@ End with a recommendation: safe to merge / requires fixes / requires design disc
 
 ## Boundary with `gramaton-review`
 
-This skill goes deep on vulnerability classes. General code-quality review (test coverage, description drift, hardcoded caps, lock-across-I/O as a correctness-not-security issue) lives in `gramaton-review`. Run both for destructive or auth-sensitive PRs.
+This skill goes deep on vulnerability classes (including public-repo hygiene). General code-quality review (test coverage, description drift, hardcoded caps, lock-across-I/O as a correctness-not-security issue) lives in `gramaton-review`. Run both for destructive or auth-sensitive PRs.
