@@ -73,6 +73,12 @@ type ManifestCache struct {
 // of that lands on a record visible through gramaton_inspect.
 const lastClassifyErrorMaxRunes = 200
 
+// lastSummaryErrorMaxRunes caps the size of the per-record
+// last_summary_error property. Same rationale as
+// lastClassifyErrorMaxRunes; kept as a distinct constant in case the
+// summary-failure error shapes diverge from classify in future.
+const lastSummaryErrorMaxRunes = 200
+
 // PlannedChange describes a change that autonomous curation would make.
 // Populated in dry-run mode instead of applying the change.
 type PlannedChange struct {
@@ -683,6 +689,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	var batch []needsSummary
 	var sectionCandidates []needsSummary
 
+	maxSummaryAttempts := cfg.LLMCuration.MaxSummaryAttempts
 	sumIt := g.NodeIterator()
 	for sumIt.Next() {
 		n := sumIt.Node()
@@ -694,6 +701,17 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		summary, hasSummary := n.Properties.GetString("content_short")
 		if !hasContent || content == "" {
 			continue
+		}
+		// Skip records that have exhausted their summary retry budget.
+		// The selection here is "needs a summary" -- without this guard,
+		// a record whose content the LLM consistently can't summarize
+		// (oversized, content-policy refusal, persistent empty-after-trim)
+		// re-enters every cycle and bills input tokens forever.
+		// Tracker 01KQ406Z12VKRGRT3HEER0ZT1A.
+		if maxSummaryAttempts > 0 {
+			if attempts, ok := n.Properties.GetInt64("summary_attempts"); ok && attempts >= int64(maxSummaryAttempts) {
+				continue
+			}
 		}
 
 		// Single edge walk per node (was: two — once in isChunkNode for
@@ -758,7 +776,12 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		content string
 		summary string
 	}
+	type summaryFailure struct {
+		id     string
+		reason string
+	}
 	var readySummaries []summarized
+	var failedSummaries []summaryFailure
 
 	summModel := cfg.ModelForTask(config.TaskSummarization)
 	work := make([]llmWork, len(batch))
@@ -778,6 +801,10 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		if lr.err != nil {
 			result.Errors++
 			logger.Warn("summarize LLM error", "component", "curation", "record", batch[i].id, "err", lr.err)
+			failedSummaries = append(failedSummaries, summaryFailure{
+				id:     batch[i].id,
+				reason: strutil.TruncateRunes(lr.err.Error(), lastSummaryErrorMaxRunes),
+			})
 			continue
 		}
 
@@ -788,13 +815,17 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		}
 		if summary == "" {
 			result.Errors++
+			failedSummaries = append(failedSummaries, summaryFailure{
+				id:     batch[i].id,
+				reason: "empty summary after trim",
+			})
 			continue
 		}
 
 		readySummaries = append(readySummaries, summarized{id: batch[i].id, content: batch[i].content, summary: summary})
 	}
 
-	if len(readySummaries) == 0 {
+	if len(readySummaries) == 0 && len(failedSummaries) == 0 {
 		return
 	}
 
@@ -817,14 +848,53 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 
 	e.Lock()
 	for _, s := range readySummaries {
-		if _, ok := e.Graph().GetNode(s.id); !ok {
+		n, ok := e.Graph().GetNode(s.id)
+		if !ok {
 			logger.Debug("summarize node gone", "component", "curation", "record", s.id)
 			continue
 		}
 		e.SetContentProp(s.id, "content_short", s.summary)
+		// Successful summary clears any prior failure tracking so an
+		// operator-fixed record can pass cleanly. Skip the SetProp when
+		// the property was never present so we don't churn the index
+		// for happy-path records.
+		if _, has := n.Properties.GetInt64("summary_attempts"); has {
+			e.SetProp(s.id, "summary_attempts", graph.Int64Property(0))
+		}
 		result.SummariesGenerated++
 	}
-	if result.SummariesGenerated > 0 {
+
+	// Failed records: bump attempts counter and capture the reason for
+	// triage. Records past MaxSummaryAttempts are skipped at selection
+	// time (above) -- no separate "stuck" status flip because the
+	// selection guard handles exclusion. Skipped when MaxSummaryAttempts
+	// is 0 (legacy infinite-retry behavior).
+	if maxSummaryAttempts > 0 {
+		for _, f := range failedSummaries {
+			n, ok := e.Graph().GetNode(f.id)
+			if !ok {
+				logger.Debug("summarize failure: node gone", "component", "curation", "record", f.id)
+				continue
+			}
+			var attempts int64
+			if v, ok := n.Properties.GetInt64("summary_attempts"); ok {
+				attempts = v
+			}
+			attempts++
+			e.SetProp(f.id, "summary_attempts", graph.Int64Property(attempts))
+			e.SetProp(f.id, "last_summary_error", graph.StringProperty(f.reason))
+			if attempts >= int64(maxSummaryAttempts) {
+				logger.Warn("summarize: record will be skipped after repeated failures",
+					"component", "curation",
+					"record", f.id,
+					"attempts", attempts,
+					"max_attempts", maxSummaryAttempts,
+					"last_error", f.reason)
+			}
+		}
+	}
+
+	if result.SummariesGenerated > 0 || (maxSummaryAttempts > 0 && len(failedSummaries) > 0) {
 		e.SaveOrLog("curation: summarize")
 	}
 	e.Unlock()

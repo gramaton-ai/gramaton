@@ -108,6 +108,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Summary generation no longer infinite-retries on persistent failure.**
+  `generateSummaries` selects records with `content_full` and no
+  `content_short` (or section nodes with truncated summaries) and
+  asks the LLM to produce a summary. Pre-fix: LLM errors and
+  empty-after-trim outputs took the `continue` path without writing
+  any per-record state, so a pathological record (oversized content,
+  policy refusal, output that always trims to empty) re-entered the
+  candidate set every cycle and billed input tokens forever. Same
+  failure shape as the classify retry bug fixed in commit 1b16b80;
+  caught in the codebase-wide sweep on 2026-04-25.
+  Fix: a new `LLMCurationConfig.MaxSummaryAttempts` field (yaml:
+  `llm_curation.max_summary_attempts`, default 3) caps consecutive
+  failures per record. Failed summary attempts now write a
+  `summary_attempts` counter (Int64) and the truncated error reason
+  in `last_summary_error` (200 runes). Records at threshold are
+  skipped at selection time on subsequent cycles — no separate
+  "stuck" status flip, since the selection guard already excludes
+  them. A successful summary (autonomous or via any path that writes
+  `content_short`) resets the counter to 0.
+  Operator triage: surface skipped records via
+  `gramaton_search(missing=["content_short"])` and inspect
+  `last_summary_error`. Setting `MaxSummaryAttempts: 0` reverts to
+  the legacy infinite-retry behavior. Tests in
+  `curation/autonomous_test.go` cover failure-bumps,
+  skips-at-threshold, max-zero-disables, success-clears-attempts.
+  Tracker `01KQ406Z12VKRGRT3HEER0ZT1A`.
+
 - **Auto-backup no longer retries every curation cycle on failure.**
   `runAutoBackup` runs as a post-curation-cycle hook (default ~1 min
   cadence) and gates its work behind `time.Since(s.lastBackup) >=

@@ -165,6 +165,7 @@ llm_curation:
   max_calls_per_run: 20                 # max LLM calls per curation cycle (count cap)
   max_cost_usd_per_run: 0               # USD cap per curation cycle (0 = disabled)
   max_classify_attempts: 3              # mark a record stuck after N consecutive classify failures (0 = legacy infinite-retry)
+  max_summary_attempts: 3               # skip a record after N consecutive summary failures (0 = legacy infinite-retry)
 
   # Contradiction detection.
   max_contradiction_checks: 5
@@ -204,6 +205,8 @@ The effort dials are the primary cost/quality knob. Short classification, summar
 `max_classify_attempts` bounds the worst case for a *single* pathological record. Without it, a record whose content the LLM consistently can't classify (oversized content, content-policy refusal, persistent malformed-output, mid-call timeouts) sits at the front of the FIFO pending queue and re-attempts every cycle forever — billing input tokens on each retry. After `max_classify_attempts` consecutive failures, the record's `processing_status` flips to `"stuck"`, which excludes it from future cycles. The last failure reason is captured in `last_classify_error` (truncated to 200 runes) for triage. Surface stuck records via `gramaton_search(processing_status="stuck")`, inspect, then either fix the underlying record (`gramaton_update`) and let curation pick it up again, or `gramaton_classify` it manually (which clears the stuck state and the attempts counter). Setting `max_classify_attempts: 0` reverts to the legacy infinite-retry behavior.
 
 `last_classify_error` may include provider-side error fragments (HTTP status messages, request IDs, occasional echoed prompt snippets, transport URLs). It's stored on the record as a normal property — surfaced through `gramaton_inspect` and any property-filtered `gramaton_search`. If you share an export or backup, redact stuck records' `last_classify_error` first if any of them sit on sensitive content.
+
+`max_summary_attempts` does the equivalent for summary generation. After N consecutive failures (LLM error or empty-after-trim), the record is skipped at selection time on subsequent cycles; the failure reason is captured in `last_summary_error`. The summary phase doesn't flip `processing_status` to `"stuck"` (that's the classify phase's terminal state) — instead the selection guard skips records with `summary_attempts >= max`. Both counters reset to 0 on a successful classify or summary respectively, so an operator-fixed record passes cleanly.
 
 ## Observe
 

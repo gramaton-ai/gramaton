@@ -377,6 +377,18 @@ type LLMCurationConfig struct {
 	// infinite-retry behavior).
 	MaxClassifyAttempts int `yaml:"max_classify_attempts"`
 
+	// MaxSummaryAttempts caps how many times generateSummaries will
+	// retry a single record. Same failure-class as MaxClassifyAttempts:
+	// content the LLM consistently can't summarize (oversized, returns
+	// empty after trim, content-policy issues) re-enters the summary
+	// candidate set every cycle. The selection in generateSummaries
+	// skips records where summary_attempts >= this threshold; the
+	// last failure reason is captured in last_summary_error. Default:
+	// 3. Zero disables. A separate counter from MaxClassifyAttempts
+	// because the failures are independent: a record can classify
+	// cleanly but produce an unusable summary (e.g. empty after trim).
+	MaxSummaryAttempts int `yaml:"max_summary_attempts"`
+
 	// TaskTimeout is the wall-clock cap on a single curation task
 	// (classify, summarize, enrich, contradict, manifest). When a
 	// task hits the timeout, its in-flight LLM call is cancelled and
@@ -986,6 +998,7 @@ func Defaults() Config {
 			BatchSize:                   10,
 			MaxCallsPerRun:              20,
 			MaxClassifyAttempts:         3,
+			MaxSummaryAttempts:          3,
 			TaskTimeout:                 90 * time.Second,
 			MaxContradictionChecks:      5,
 			ContradictionMinSim:         0.5,

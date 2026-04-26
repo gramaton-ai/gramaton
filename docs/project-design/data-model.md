@@ -119,6 +119,10 @@ All Vector properties are independently searchable via the vector index.
 | `valid_from` | Timestamp | When this knowledge became true in the world (bitemporal). |
 | `valid_until` | Timestamp | When this knowledge stopped being true. Absent if still valid. |
 | `processing_status` | String | Values: `captured` (raw, awaiting classification), `processed` (LLM-enriched), `stuck` (exhausted classify retries — see `classify_attempts` and `last_classify_error` for triage), `deleted` (soft-deleted, retained for provenance). |
+| `classify_attempts` | Int64 | How many times autonomous classification has failed on this record. Reset to 0 on successful classify. At `llm_curation.max_classify_attempts` (default 3), `processing_status` flips to `stuck`. |
+| `last_classify_error` | String | Truncated reason (max 200 runes) for the most recent classify failure. Captured for operator triage. May contain provider error fragments — redact before sharing exports. |
+| `summary_attempts` | Int64 | How many times summary generation has failed on this record. Reset to 0 on successful summary. At `llm_curation.max_summary_attempts` (default 3), the record is skipped at summary selection time on subsequent cycles. |
+| `last_summary_error` | String | Truncated reason (max 200 runes) for the most recent summary failure. Same redaction guidance as `last_classify_error`. |
 
 ### Provenance
 

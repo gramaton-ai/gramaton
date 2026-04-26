@@ -632,6 +632,131 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 	}
 }
 
+// TestSummarizeFailureBumpsAttemptCounter verifies that a single
+// failed summary call writes summary_attempts=1 and last_summary_error
+// without skipping the record yet.
+//
+// Regression guard for tracker 01KQ406Z12VKRGRT3HEER0ZT1A: without this
+// counter, a record the LLM consistently can't summarize re-enters the
+// summary candidate set every cycle and bills input tokens forever.
+func TestSummarizeFailureBumpsAttemptCounter(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSummaryAttempts = 3
+
+	id := addProcessedNodeNoSummary(t, eng, "Content that fails")
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("API timeout")}}
+
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("summary_attempts")
+	if attempts != 1 {
+		t.Errorf("summary_attempts: got %d, want 1", attempts)
+	}
+	reason, _ := n.Properties.GetString("last_summary_error")
+	if !strings.Contains(reason, "API timeout") {
+		t.Errorf("last_summary_error: got %q, want contains %q", reason, "API timeout")
+	}
+}
+
+// TestSummarizeSkipsRecordsAtThreshold verifies that after
+// MaxSummaryAttempts consecutive failures, the record is excluded from
+// the next cycle's selection (no LLM call attempted).
+func TestSummarizeSkipsRecordsAtThreshold(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSummaryAttempts = 3
+
+	addProcessedNodeNoSummary(t, eng, "Pathological content")
+
+	// Three consecutive cycles, each one failure.
+	for cycle := 1; cycle <= 3; cycle++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("cycle %d failure", cycle)}}
+		generateSummaries(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	// Next cycle: no attempt should be made on this record (selection
+	// guard skips records where summary_attempts >= max).
+	llm := &mockLLM{errors: []error{fmt.Errorf("should not fire")}}
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.LLMCalls != 0 {
+		t.Errorf("at-threshold record was re-attempted: LLMCalls=%d, want 0", result.LLMCalls)
+	}
+}
+
+// TestSummarizeMaxAttemptsZeroDisables verifies legacy behavior:
+// when MaxSummaryAttempts=0, the counter feature is disabled and
+// failed records are not annotated.
+func TestSummarizeMaxAttemptsZeroDisables(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSummaryAttempts = 0
+
+	id := addProcessedNodeNoSummary(t, eng, "Content")
+
+	llm := &mockLLM{errors: []error{fmt.Errorf("error")}}
+	result := &AutonomousResult{}
+	generateSummaries(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(id)
+	if _, ok := n.Properties.GetInt64("summary_attempts"); ok {
+		t.Error("summary_attempts was written when MaxSummaryAttempts=0")
+	}
+	if _, ok := n.Properties.GetString("last_summary_error"); ok {
+		t.Error("last_summary_error was written when MaxSummaryAttempts=0")
+	}
+}
+
+// TestSummarizeSuccessClearsAttempts verifies that a successful
+// summary on a record that previously failed resets the
+// summary_attempts counter so an operator-fixed record passes
+// cleanly on its next attempt.
+func TestSummarizeSuccessClearsAttempts(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLMCuration.MaxSummaryAttempts = 3
+
+	id := addProcessedNodeNoSummary(t, eng, "Initially failing content")
+
+	// Fail twice -- attempts now 2, still selectable.
+	for i := 0; i < 2; i++ {
+		llm := &mockLLM{errors: []error{fmt.Errorf("err %d", i)}}
+		generateSummaries(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+	}
+
+	// Verify intermediate state.
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	if a, _ := n.Properties.GetInt64("summary_attempts"); a != 2 {
+		eng.RUnlock()
+		t.Fatalf("intermediate summary_attempts: got %d, want 2", a)
+	}
+	eng.RUnlock()
+
+	// Now succeed -- counter must reset, summary written.
+	llm := &mockLLM{responses: []string{"a successful summary"}}
+	generateSummaries(context.Background(), eng, llm, cfg, &AutonomousResult{}, 20, 0, nil, false)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ = eng.Graph().GetNode(id)
+	attempts, _ := n.Properties.GetInt64("summary_attempts")
+	if attempts != 0 {
+		t.Errorf("summary_attempts after success: got %d, want 0", attempts)
+	}
+	if v, _ := n.Properties.GetString("content_short"); v != "a successful summary" {
+		t.Errorf("content_short after success: got %q, want %q", v, "a successful summary")
+	}
+}
+
 func TestGenerateSummariesLLMError(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
