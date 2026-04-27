@@ -34,6 +34,17 @@ Sessions are how Gramaton harvests memory automatically from
 conversation, without you asking. You don't have to think about
 sessions much — your agent triggers them at natural breakpoints.
 
+If you want one *now* (before context compaction, before switching
+topics, or just because you want a checkpoint), say so:
+
+- "Run a session prepare and commit."
+- "Wrap up this session — capture what we did."
+- "Do a session checkpoint before we move on."
+
+The agent runs `gramaton_session_prepare` then
+`gramaton_session_commit` and the conversation so far gets extracted
+into Session segments and Memory records.
+
 ## Capturing knowledge
 
 ### When to ask explicitly
