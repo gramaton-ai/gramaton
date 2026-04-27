@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/awscfg"
 	"github.com/gramaton-ai/gramaton/llm/anthropic"
 )
 
@@ -374,30 +378,96 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 	return w.cfgCapsPrompt(ctx)
 }
 
-// llmBedrock handles AWS Bedrock with Anthropic models. Asks for
-// profile and region; sets up the config to use Bedrock's
-// Anthropic-on-Bedrock model IDs (different format from the direct
-// API).
-func (w *Wizard) llmBedrock(ctx context.Context) error {
-	w.writer.Blank()
-	w.writer.Paragraph(
-		"Which AWS profile should Gramaton use?",
-		"(Leave blank to use the default credential chain -- env vars, IMDS, SSO, etc.)",
-	)
-	w.writer.Prompt(">")
-	profile, err := w.prompter.Text("")
-	if err != nil {
-		return err
-	}
+// awsVerifier is the contract verifyAWSProfile satisfies. Hoisted
+// to a function-typed field on Wizard so tests can stub it without
+// touching real AWS state. Returns (resolvedIdentity, nil) on
+// success or (zero, err) on any failure during config load or the
+// STS round-trip.
+type awsVerifier func(ctx context.Context, region, profile string) (callerIdentity, error)
 
-	w.writer.Paragraph(
-		"Which AWS region? (Anthropic models are available in us-east-1,",
-		"us-west-2, eu-central-1, ap-northeast-1, ap-south-1.)",
-	)
-	w.writer.Prompt(">")
-	region, err := w.prompter.Text("us-west-2")
-	if err != nil {
-		return err
+// llmBedrock handles AWS Bedrock with Anthropic models. Asks for
+// profile and region, then verifies the credentials via
+// sts.GetCallerIdentity so the user sees exactly which AWS principal
+// Gramaton will use before the config gets persisted. The verify-and-
+// display step is the load-bearing trust signal: SSO sessions
+// expire, profiles get renamed, regions get typo'd. Catching those
+// at wizard time (with a clear retry path) is much better than
+// curation cycles later silently logging credential errors.
+func (w *Wizard) llmBedrock(ctx context.Context) error {
+	var profile, region string
+	for {
+		w.writer.Blank()
+		w.writer.Paragraph(
+			"Which AWS profile should Gramaton use?",
+			"(Leave blank to use the default credential chain -- env vars, IMDS, SSO, etc.)",
+		)
+		w.writer.Prompt(">")
+		p, err := w.prompter.Text("")
+		if err != nil {
+			return err
+		}
+		profile = p
+
+		w.writer.Paragraph(
+			"Which AWS region? (Anthropic models are available in us-east-1,",
+			"us-west-2, eu-central-1, ap-northeast-1, ap-south-1.)",
+		)
+		w.writer.Prompt(">")
+		r, err := w.prompter.Text("us-west-2")
+		if err != nil {
+			return err
+		}
+		region = r
+
+		// Verify credentials via STS GetCallerIdentity. Every IAM
+		// principal has sts:GetCallerIdentity by default, so this
+		// works even when the caller's role has zero attached
+		// policies beyond its assume-role trust.
+		w.writer.Blank()
+		w.writer.Raw("    Verifying AWS credentials...")
+		slog.Debug("wizard: verifying bedrock credentials",
+			"component", "setup",
+			"profile_set", profile != "",
+			"region", region)
+		identity, vErr := w.awsVerifier(ctx, region, profile)
+		if vErr != nil {
+			slog.Warn("wizard: bedrock credential verification failed",
+				"component", "setup",
+				"profile_set", profile != "",
+				"region", region,
+				"err", vErr)
+			w.writer.Blank()
+			w.writer.Warn(fmt.Sprintf("Could not verify AWS credentials: %v", vErr))
+			w.writer.Paragraph(
+				"Common fixes:",
+				"  - SSO session expired: run `aws sso login --profile <profile>`",
+				"  - Profile not found: check `~/.aws/config` and `~/.aws/credentials`",
+				"  - Region mismatch: confirm the profile has access in this region",
+			)
+			retry, err := w.askRetryAWS()
+			if err != nil {
+				return err
+			}
+			if retry {
+				continue
+			}
+			// User chose not to retry; fall through and persist the
+			// config with what they entered. Curation cycles will
+			// log credential errors when they hit them.
+			break
+		}
+		slog.Info("wizard: bedrock credentials verified",
+			"component", "setup",
+			"account", identity.account,
+			"principal", identity.arn,
+			"region", region,
+			"profile_set", profile != "")
+		w.writer.Blank()
+		w.writer.Check("AWS credentials verified.")
+		w.writer.Raw(fmt.Sprintf("    Account:    %s", identity.account))
+		w.writer.Raw(fmt.Sprintf("    Principal:  %s", identity.arn))
+		w.writer.Raw(fmt.Sprintf("    Region:     %s", region))
+		break
 	}
 
 	w.cfg.LLM.Provider = "bedrock"
@@ -410,12 +480,58 @@ func (w *Wizard) llmBedrock(ctx context.Context) error {
 	w.cfg.LLM.Models.Medium = "anthropic.claude-sonnet-4-6-20250514-v1:0"
 	w.cfg.LLM.Models.High = "anthropic.claude-opus-4-7-20250514-v1:0"
 
+	w.writer.Blank()
 	w.writer.Check("Bedrock with Anthropic models configured.")
 	if profile != "" {
 		w.writer.Check(fmt.Sprintf("  AWS profile: %s", profile))
 	}
 	w.writer.Check(fmt.Sprintf("  Region: %s", region))
 	return w.cfgCapsPrompt(ctx)
+}
+
+// callerIdentity is the small subset of sts.GetCallerIdentityOutput
+// the wizard cares about. Pulling it out keeps verifyAWSProfile
+// independent of the SDK type system at the call site.
+type callerIdentity struct {
+	account string
+	arn     string
+}
+
+// verifyAWSProfile loads the AWS config for (region, profile) and
+// calls sts:GetCallerIdentity. Returns the resolved account + ARN
+// on success. The default awsVerifier on every Wizard; tests
+// replace it via the awsVerifier field on Wizard.
+func verifyAWSProfile(ctx context.Context, region, profile string) (callerIdentity, error) {
+	slog.Debug("aws: loading config for verification",
+		"component", "awscfg",
+		"region", region,
+		"profile_set", profile != "")
+	cfg, err := awscfg.Load(ctx, region, profile, "", "")
+	if err != nil {
+		return callerIdentity{}, fmt.Errorf("load AWS config: %w", err)
+	}
+	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return callerIdentity{}, err
+	}
+	id := callerIdentity{}
+	if out.Account != nil {
+		id.account = *out.Account
+	}
+	if out.Arn != nil {
+		id.arn = *out.Arn
+	}
+	return id, nil
+}
+
+// askRetryAWS asks the user whether to re-enter the profile/region
+// after a credential verification failure. Defaults to yes; on no,
+// the wizard persists whatever the user entered and continues.
+func (w *Wizard) askRetryAWS() (bool, error) {
+	w.writer.Blank()
+	w.writer.Paragraph("Re-enter profile and region?")
+	w.writer.Prompt("[Y/n] >")
+	return w.prompter.YesNo(true)
 }
 
 // llmSkip sets the config to no-LLM mode. Curation will run in

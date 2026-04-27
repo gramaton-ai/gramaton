@@ -30,6 +30,13 @@ type Client struct {
 }
 
 // New creates a Bedrock LLM client from the LLM config.
+//
+// Logs at Info on successful construction with the resolved
+// (region, profile, model) -- one line per provider lifetime, so
+// the daemon log carries an audit trail of which AWS principal
+// surface this process is using. Credential values themselves are
+// never logged; per-call refresh / retry diagnostics flow through
+// the awscfg slog adapter at Debug.
 func New(cfg config.LLMConfig) (*Client, error) {
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("bedrock llm: model is required")
@@ -40,6 +47,12 @@ func New(cfg config.LLMConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bedrock llm: load AWS config: %w", err)
 	}
+
+	slog.Info("bedrock llm: client initialized",
+		"component", "llm",
+		"region", cfg.Region,
+		"profile_set", cfg.AWSProfile != "",
+		"model", cfg.Model)
 
 	return &Client{
 		client: bedrockruntime.NewFromConfig(awsCfg),

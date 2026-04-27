@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -30,6 +31,9 @@ const (
 )
 
 // New creates a Bedrock embedding client from the embedding config.
+// Mirrors the LLM client's logging contract: one Info on
+// construction with (region, profile-set, model, family); per-call
+// refresh / retry diagnostics flow through awscfg's slog adapter.
 func New(cfg config.EmbeddingConfig) (*Client, error) {
 	family, err := detectFamily(cfg.Model)
 	if err != nil {
@@ -41,6 +45,17 @@ func New(cfg config.EmbeddingConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bedrock embed: load AWS config: %w", err)
 	}
+
+	familyName := "titan"
+	if family == familyCohere {
+		familyName = "cohere"
+	}
+	slog.Info("bedrock embed: client initialized",
+		"component", "embed",
+		"region", cfg.Region,
+		"profile_set", cfg.AWSProfile != "",
+		"model", cfg.Model,
+		"family", familyName)
 
 	return &Client{
 		client: bedrockruntime.NewFromConfig(awsCfg),

@@ -9,6 +9,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Setup wizard now verifies and displays the resolved AWS
+  identity for the Bedrock branch.** After collecting profile +
+  region, the wizard calls `sts:GetCallerIdentity` and shows the
+  user the account, principal ARN, and region Gramaton will use.
+  On failure (expired SSO session, missing profile, region
+  mismatch, etc.) the wizard surfaces the SDK error, names the
+  three most common fixes (`aws sso login`, `~/.aws/config`
+  inspection, region check), and offers a retry. Catches
+  credential issues at config-write time instead of letting them
+  fail silently in the first curation cycle. Verification is
+  injected through a `Wizard.awsVerifier` field; production wires
+  the real `verifyAWSProfile` impl, tests use a stub returning a
+  synthetic identity. Tracker
+  01KPYDE45Q7T91DNTQNMEGTX74 (partial -- model-access-error
+  detection + docs are follow-ups).
+
+### Added
+
+- **AWS SDK observability through slog.** `internal/awscfg.Load`
+  now wires the SDK's smithy logger into slog (Debug for
+  retries / signing / credential refresh, Warn for SDK warnings),
+  enables `aws.LogRetries | aws.LogDeprecatedUsage` in client log
+  mode, and emits a Debug line with the resolved config knobs
+  (region, whether a profile was named, whether explicit env-var
+  creds resolved) -- never the credential values themselves.
+  `llm/bedrock` and `embed/bedrock` log Info on client
+  construction with `(region, profile_set, model[, family])` so
+  the daemon log carries an audit trail of which AWS principal
+  surface each process is using. Wizard's verification path also
+  logs Info on success and Warn on failure.
+
 - **`gramaton_resolve` now auto-flips the collection-item `status`
   field when the schema has one.** Previously, closing a collection
   item (a backlog ticket, a todo, a reading-list entry) required

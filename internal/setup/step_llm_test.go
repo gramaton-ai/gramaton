@@ -108,6 +108,15 @@ func newWizardForLLMTest(t *testing.T, llmAnswers ...string) (*Wizard, *bytes.Bu
 
 	wiz := New(prompter, NewWriter(&buf), &cfg, filepath.Join(tmpDir, "config.yaml"), tmpDir)
 	wiz.mcpBackend = &fakeMCPBackend{}
+	// Stub the AWS verifier so the Bedrock branch doesn't dial AWS
+	// during scripted runs. Real verification is exercised by the
+	// dedicated test for verifyAWSProfile.
+	wiz.awsVerifier = func(ctx context.Context, region, profile string) (callerIdentity, error) {
+		return callerIdentity{
+			account: "111122223333",
+			arn:     "arn:aws:sts::111122223333:assumed-role/test-role/session",
+		}, nil
+	}
 	return wiz, &buf, tmpDir
 }
 

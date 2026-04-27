@@ -54,6 +54,13 @@ type Wizard struct {
 	// patching). Tests swap it for a fake.
 	hookBackend HookBackend
 
+	// awsVerifier verifies AWS credentials at wizard time by calling
+	// sts:GetCallerIdentity through the loaded profile. Defaulted in
+	// New to verifyAWSProfile (the production impl). Tests override
+	// with a fake that doesn't dial AWS so scripted runs can
+	// exercise the Bedrock branch without real credentials.
+	awsVerifier awsVerifier
+
 	// cleanups holds undo-actions registered by steps that wrote
 	// persistent state before the final Step 5 commit. On success,
 	// the list is discarded. On interrupt (Ctrl+C, panic, or
@@ -89,6 +96,7 @@ func New(prompter Prompter, writer Writer, cfg *config.Config, cfgPath, configDi
 		configDir:   configDir,
 		mcpBackend:  DefaultMCPBackend{},
 		hookBackend: DefaultHookBackend{},
+		awsVerifier: verifyAWSProfile,
 	}
 }
 
