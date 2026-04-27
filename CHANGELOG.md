@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Observations are no longer treated as orphans by curation.**
+  Observation nodes carry an `observation_of` edge to their parent,
+  but observation_of is filtered out of `SemanticEdgeCount` as
+  structural — so observations look 0-semantic-edge. Pre-fix, every
+  curation cycle added them to `orphanIDs` and the orphan-linking
+  pass added weak `related_to` edges from observations to similar
+  real records (and observations also showed up as link _targets_ for
+  real-record orphans). Both directions were inferred-edge pollution.
+  Now observations are skipped from the orphan candidate set in
+  `RunDeterministic` and excluded as link targets in the orphan
+  similarity search. `Manifest.OrphanCount` no longer over-counts.
+  Regression test at
+  `curation/runner_test.go:TestOrphanLinkerSkipsObservations`.
+  Tracker 01KQ62SRYP2ZKYR40JKSHJAC69.
+
 - **Concepts are now embedded inline during LLM synthesis instead of
   waiting for `gramaton reembed` to catch up.**
   `enrichConceptSyntheses` previously wrote `content_full`,

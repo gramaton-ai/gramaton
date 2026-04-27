@@ -225,12 +225,20 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 			}
 
-			ec := nonChunkEdgeCount(g, id)
-			if ec == 0 {
-				conf, hasConf := n.Properties.GetFloat64("confidence")
-				ps, _ := n.Properties.GetString("processing_status")
-				if ps != "captured" && (!hasConf || conf >= 0.3) {
-					orphanIDs = append(orphanIDs, id)
+			// Observations are sub-records (always have an observation_of
+			// edge to their parent, filtered out of SemanticEdgeCount as
+			// structural). Treating them as orphans makes the linking
+			// pass below add weak related_to edges against arbitrary
+			// similar records every cycle, polluting the graph.
+			// Tracker 01KQ62SRYP2ZKYR40JKSHJAC69.
+			if nodeType != "observation" {
+				ec := nonChunkEdgeCount(g, id)
+				if ec == 0 {
+					conf, hasConf := n.Properties.GetFloat64("confidence")
+					ps, _ := n.Properties.GetString("processing_status")
+					if ps != "captured" && (!hasConf || conf >= 0.3) {
+						orphanIDs = append(orphanIDs, id)
+					}
 				}
 			}
 		}
@@ -362,6 +370,14 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		for _, r := range results {
 			if r.NodeID == oid {
 				continue
+			}
+			// Skip observations as link targets too: they're sub-records
+			// and should not appear as the partner end of a related_to
+			// edge from a real record.
+			if tn, ok := g.GetNode(r.NodeID); ok {
+				if nt, _ := tn.Properties.GetString("node_type"); nt == "observation" {
+					continue
+				}
 			}
 			if float64(r.Similarity) >= cfg.Curation.OrphanSimilarityMin {
 				orphanLinks = append(orphanLinks, orphanLink{

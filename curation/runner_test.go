@@ -246,6 +246,101 @@ func TestDeterministicOrphanLinking(t *testing.T) {
 	}
 }
 
+// TestOrphanLinkerSkipsObservations pins the fix for
+// 01KQ62SRYP2ZKYR40JKSHJAC69: observation nodes have an
+// observation_of edge to a parent, but observation_of is filtered
+// from SemanticEdgeCount as structural -- so they look orphaned.
+// Pre-fix, the orphan-linking pass added a `related_to` edge from
+// each observation to a similar real record every cycle (and also
+// chose observations as link TARGETS), polluting the graph.
+// Post-fix, observations are excluded from BOTH the orphan
+// candidate set and the link-target candidate set.
+func TestOrphanLinkerSkipsObservations(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Curation.OrphanSimilarityMin = 0.5
+
+	now := time.Now().UTC()
+
+	eng.Lock()
+	// Two real records linked via related_to so neither is an orphan
+	// candidate. Their embeddings sit close enough that an observation
+	// pointed at the same vector space would similarity-match either.
+	a := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Real record A about kafka"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range a.Properties {
+		eng.PropIdx().Add(a.ID, k, v)
+	}
+	eng.VecIdx().Add(a.ID, []float32{0.85, 0.15, 0.0})
+	eng.Graph().SetNodeProperty(a.ID, "embedding_full",
+		graph.VectorProperty([]float32{0.85, 0.15, 0.0}))
+
+	b := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Real record B about kafka"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range b.Properties {
+		eng.PropIdx().Add(b.ID, k, v)
+	}
+	eng.VecIdx().Add(b.ID, []float32{0.83, 0.17, 0.0})
+	eng.Graph().SetNodeProperty(b.ID, "embedding_full",
+		graph.VectorProperty([]float32{0.83, 0.17, 0.0}))
+	// related_to edge so neither A nor B is an orphan candidate.
+	eng.Graph().AddEdge(a.ID, b.ID, "related_to", 0.9, nil)
+
+	// Observation attached to A via observation_of. Pre-fix this
+	// shows up as a 0-semantic-edge node and would be treated as an
+	// orphan; post-fix it is skipped.
+	obs := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Observation about kafka"),
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("observation"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range obs.Properties {
+		eng.PropIdx().Add(obs.ID, k, v)
+	}
+	eng.VecIdx().Add(obs.ID, []float32{0.9, 0.1, 0.0})
+	eng.Graph().SetNodeProperty(obs.ID, "embedding_full",
+		graph.VectorProperty([]float32{0.9, 0.1, 0.0}))
+	eng.Graph().AddEdge(obs.ID, a.ID, "observation_of", 1.0, nil)
+
+	eng.Save("test")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	if result.OrphansLinked != 0 {
+		t.Errorf("OrphansLinked = %d, want 0 (observations must not be orphan candidates)", result.OrphansLinked)
+	}
+	if got := result.Manifest.OrphanCount; got != 0 {
+		t.Errorf("Manifest.OrphanCount = %d, want 0", got)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, e := range eng.Graph().EdgesFrom(obs.ID) {
+		if e.Type == "related_to" {
+			t.Errorf("observation got an outbound related_to edge added (the bug): %+v", e)
+		}
+	}
+	for _, e := range eng.Graph().EdgesTo(obs.ID) {
+		if e.Type == "related_to" {
+			t.Errorf("observation got an inbound related_to edge added (link-target bug): %+v", e)
+		}
+	}
+}
+
 func TestOrphanLinkerSkipsLowQuality(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
