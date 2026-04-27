@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Doc cross-refs updated for the new `llm:` schema.**
+  `docs/configuration.md` rewrites the LLM and curation sections to
+  match the new shape; `docs/benchmarks.md` updates the
+  benchmark-store contradiction-disable example;
+  `docs/project-design/data-model.md` retargets the four
+  `*_attempts` retry-cap references; `docs/project-design/design-decisions.md`
+  updates D36 (tiered LLM models) and D39 (cost caps) for the new
+  field paths and adds a one-paragraph note recording that the
+  consolidation kept behavior identical.
+
 - **`config.Save()` now emits section banners + per-field comments**
   in the rendered `config.yaml` for the `llm:` block. The renderer
   walks an encoded `yaml.Node` tree and attaches `HeadComment`s from

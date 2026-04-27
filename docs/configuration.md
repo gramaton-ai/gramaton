@@ -63,43 +63,69 @@ Pure-Go BERT is the default — no external runtime; the model (~130MB) download
 
 ## LLM
 
-Used for autonomous curation (classification, contradiction detection, manifest summary, LLM reranking). Optional — omit the `llm:` section to disable.
+Used for autonomous curation (classification, contradiction detection, manifest summary), search-time LLM reranking, and query decomposition. Optional — omit the `llm:` section to disable. Every LLM-touching dial lives under this single block.
 
 ```yaml
 llm:
-  provider: ""                    # anthropic, openai, bedrock, or "" (disabled)
-  model: claude-sonnet-4-6        # default model for general calls
-  api_key_env: ""                 # env var name for API key
+  # Provider + auth
+  provider: ""                    # anthropic, openai, bedrock, or "" (disabled).
+                                  #   claude-cli / kiro-cli are also accepted but
+                                  #   UNSUPPORTED (TOS risk; see docs/providers.md).
+  api_key_file: ""                # path to a file holding the key (preferred)
+  api_key_env: ""                 # env var name (used if api_key_file empty)
   base_url: ""                    # custom endpoint (OpenAI-compatible)
   region: ""                      # AWS region (Bedrock)
   aws_profile: ""                 # AWS named profile (Bedrock)
 
-  # Per-call output ceiling. Anthropic clamps responses to this many
-  # tokens; raise if concept synthesis on large stores truncates.
-  max_response_tokens: 4096
+  # Search-time LLM reranking.
+  rerank:
+    enabled: false                # send retrieval candidates back through the LLM
+    candidates: 50                # how many to feed the reranker
 
-  # Safety caps. 0 = disabled.
-  max_calls_per_day: 0            # hard cap on LLM calls per calendar day
-  max_calls_per_session: 0        # hard cap per server lifetime
-  max_cost_usd_per_day: 0         # USD cap per calendar day (see below)
-
-  # Tiered models — used by llm_curation effort dials below.
+  # Tiered models + per-task tier assignments. Every code path that
+  # calls an LLM picks a tier; each tier maps to a model name.
   models:
-    low:    claude-haiku-4-5
-    medium: claude-sonnet-4-6
-    high:   claude-opus-4-7
+    low:    claude-haiku-4-5      # cheap, fast (high-volume / easy tasks)
+    medium: claude-sonnet-4-6     # balanced (real reasoning)
+    high:   claude-opus-4-7       # premium (use sparingly)
+    tasks:                        # which tier each task uses
+      classification_short: low
+      classification_long:  medium
+      summarization:        low
+      contradiction:        medium
+      concept:              medium
+      manifest:             low
+      rerank:               low
+      decompose:            low
+
+  # Caps that apply to ALL LLM calls. 0 = disabled.
+  cost_limits:
+    max_calls_per_day: 0          # hard cap per calendar day
+    max_calls_per_session: 0      # hard cap per server lifetime
+    max_cost_usd_per_day: 0       # USD cap per calendar day (see below)
+    max_cost_usd_per_run: 0       # USD cap per curation cycle
+    rate_limit_interval: 0s       # min gap between successive calls
+    max_response_tokens: 0        # 0 = provider default (Anthropic only)
+
+  # Curation-cycle tuning -- these are NOT operator dials. See
+  # "LLM curation" below for what each knob does and the warning
+  # about touching them.
+  curation:
+    # ... see "LLM curation" section below
 ```
 
-The tiered `models` block lets `llm_curation` route different curation tasks at different cost/quality points (see `llm_curation` below). If you omit the `models` block, all tasks use `model`.
+The `models.tasks` map is the primary cost/quality knob. Lower a task's tier to save cost; raise it for quality. Removing a key falls back to the baked-in default (`defaultEffortForTask` in `config/config.go`). Default assignments are Haiku-grade for short classification, summarization, manifest rollup, and search-time tasks; Sonnet-grade for long classification, contradiction detection, and concept synthesis.
 
 ### Cost and call caps
 
-Two independent safety nets, both checked before every LLM call:
+Two independent safety nets under `cost_limits`, both checked before every LLM call:
 
 - **`max_calls_per_day`** / **`max_calls_per_session`** — simple count caps. Fire on exact hit. Use for "never exceed N calls" guarantees.
 - **`max_cost_usd_per_day`** — USD cap computed from reported token counts × pricing table (`llm/pricing.go`). Fires when accumulated cost exceeds the threshold.
 
 **Both live in config deliberately.** The USD cap is the primary signal for cost control, but it only works for models in the pricing table. Keep `max_calls_per_day` set as a backstop: if a new or custom model has no pricing entry, `EstimateCost` returns 0 and the USD cap will never trip. CLI providers (claude-cli, kiro-cli) don't report tokens yet, so they always read 0 — the count cap is the only safety net for those.
+
+`max_cost_usd_per_run` (per cycle) is independent of `max_cost_usd_per_day` (across all cycles). The per-cycle cap bounds a single cycle's damage; the per-day cap bounds the aggregate. Both complement the count caps rather than replacing them.
 
 When any cap trips, curation pauses and subsequent LLM calls return `llm.ErrCapped` until the daily boundary rolls over (automatic) or an operator manually unpauses.
 
@@ -158,68 +184,58 @@ A hung LLM call (or stalled embedding) on a single task can otherwise starve a w
 
 ## LLM curation
 
-Controls the autonomous (LLM-requiring) phase of curation. Only runs if `llm:` is configured.
+Controls the autonomous (LLM-requiring) phase of curation. Lives under `llm.curation` in the new shape; only runs if `llm.provider` is set. **WARNING:** these values control algorithmic behavior that has been carefully tuned. Do not edit unless you have a specific reason and have read the relevant code path. Wrong values silently degrade store quality (missed contradictions, generic concepts, runaway cost).
 
 ```yaml
-llm_curation:
-  batch_size: 10                        # records per LLM classification batch
-  max_calls_per_run: 20                 # max LLM calls per curation cycle (count cap)
-  max_cost_usd_per_run: 0               # USD cap per curation cycle (0 = disabled)
-  max_classify_attempts: 3              # mark a record stuck after N consecutive classify failures (0 = legacy infinite-retry)
-  max_summary_attempts: 3               # skip a record after N consecutive summary failures (0 = legacy infinite-retry)
-  max_synthesis_attempts: 3             # mark a concept stuck after N consecutive synthesis failures (0 = legacy infinite-retry)
-  max_manifest_attempts: 3              # negative-cache the manifest LLM call after N consecutive failures on the same store fingerprint (0 = legacy infinite-retry)
-  max_contradiction_attempts: 3         # lock out a contradiction-check pair after N consecutive failures via a contradiction_check_skipped edge (0 = legacy infinite-retry)
-  max_embed_attempts: 3                 # exclude a record from gramaton_reembed after N consecutive embed failures (0 = legacy infinite-retry)
+llm:
+  curation:
+    batch_size: 10                          # records per LLM classification batch
+    max_calls_per_run: 20                   # max LLM calls per curation cycle
+    long_classification_threshold: 2000     # short vs long classification prompt cutoff
+    task_timeout: 90s                       # wall-clock cap per task; 0 disables
 
-  # Contradiction detection.
-  max_contradiction_checks: 5
-  contradiction_min_similarity: 0.5
-  contradiction_max_similarity: 0.85
-  contradiction_batch_size: 5           # pairs per LLM call (~5x call reduction at saturation)
+    # Cost-reduction optimizations (on by default).
+    prompt_caching_enabled: true
+    manifest_cache_enabled: true
+    classify_short_prompt_compressed: true
 
-  # Concept synthesis.
-  max_concepts_per_run: 5
-  synthesis_batch_size: 5
-  synthesis_max_input_tokens: 8000
-  concept_coherence_min: 0.6            # skip synthesis when member cluster has mean cosine < this
+    contradiction:
+      max_checks: 5
+      min_similarity: 0.5
+      max_similarity: 0.85
+      batch_size: 5                         # pairs per LLM call (~5x call reduction at saturation)
+      check_reverse_edges: true
 
-  # Classification length split — short vs long classification prompts.
-  long_classification_threshold: 2000
+    concept:
+      max_per_run: 5
+      synthesis_batch_size: 5
+      synthesis_max_input_tokens: 8000
+      coherence_min: 0.6                    # skip synthesis when member cluster has mean cosine < this
 
-  # Cost-reduction optimizations (on by default).
-  prompt_caching_enabled: true
-  manifest_cache_enabled: true
-  contradiction_check_reverse_edges: true
-  classify_short_prompt_compressed: true
-
-  # Effort dials — pick the model tier from llm.models per task.
-  # Low = haiku-grade; medium = sonnet-grade; high = opus-grade.
-  classification_short_effort: low
-  classification_long_effort:  medium
-  summarization_effort:        low
-  contradiction_effort:        medium
-  concept_effort:              medium
-  manifest_effort:             low
+    retries:
+      max_classify_attempts: 3              # mark a record stuck after N consecutive classify failures (0 = legacy infinite-retry)
+      max_summary_attempts: 3               # skip a record after N consecutive summary failures
+      max_synthesis_attempts: 3             # mark a concept stuck after N consecutive synthesis failures
+      max_manifest_attempts: 3              # negative-cache the manifest LLM call after N consecutive failures on the same store fingerprint
+      max_contradiction_attempts: 3         # lock out a contradiction-check pair after N consecutive failures
+      max_embed_attempts: 3                 # exclude a record from gramaton_reembed after N consecutive embed failures
 ```
 
-The effort dials are the primary cost/quality knob. Short classification, summarization, and manifest rollup are Haiku-grade (clear-signal work, enum picks, distilled summaries). Contradiction detection, concept synthesis, and long-content classification benefit from Sonnet-grade reasoning. Opus is rarely needed — reserved for particularly nuanced tasks if you want to set one.
+Per-task model selection lives in the `llm.models.tasks` map (see "LLM" above), not under `llm.curation`. That keeps every model-selection dial in one place.
 
-`max_cost_usd_per_run` (per cycle) and `llm.max_cost_usd_per_day` (across the day) are independent — the per-cycle cap bounds a single cycle's damage, the per-day cap bounds the aggregate across many cycles. Both complement `max_calls_per_run` / `max_calls_per_day` rather than replacing them; see "Cost and call caps" under the LLM section above for why keeping the count caps set is important.
-
-`max_classify_attempts` bounds the worst case for a *single* pathological record. Without it, a record whose content the LLM consistently can't classify (oversized content, content-policy refusal, persistent malformed-output, mid-call timeouts) sits at the front of the FIFO pending queue and re-attempts every cycle forever — billing input tokens on each retry. After `max_classify_attempts` consecutive failures, the record's `processing_status` flips to `"stuck"`, which excludes it from future cycles. The last failure reason is captured in `last_classify_error` (truncated to 200 runes) for triage. Surface stuck records via `gramaton_search(processing_status="stuck")`, inspect, then either fix the underlying record (`gramaton_update`) and let curation pick it up again, or `gramaton_classify` it manually (which clears the stuck state and the attempts counter). Setting `max_classify_attempts: 0` reverts to the legacy infinite-retry behavior.
+`retries.max_classify_attempts` bounds the worst case for a *single* pathological record. Without it, a record whose content the LLM consistently can't classify (oversized content, content-policy refusal, persistent malformed-output, mid-call timeouts) sits at the front of the FIFO pending queue and re-attempts every cycle forever — billing input tokens on each retry. After `max_classify_attempts` consecutive failures, the record's `processing_status` flips to `"stuck"`, which excludes it from future cycles. The last failure reason is captured in `last_classify_error` (truncated to 200 runes) for triage. Surface stuck records via `gramaton_search(processing_status="stuck")`, inspect, then either fix the underlying record (`gramaton_update`) and let curation pick it up again, or `gramaton_classify` it manually (which clears the stuck state and the attempts counter). Setting `max_classify_attempts: 0` reverts to the legacy infinite-retry behavior.
 
 `last_classify_error` may include provider-side error fragments (HTTP status messages, request IDs, occasional echoed prompt snippets, transport URLs). It's stored on the record as a normal property — surfaced through `gramaton_inspect` and any property-filtered `gramaton_search`. If you share an export or backup, redact stuck records' `last_classify_error` first if any of them sit on sensitive content.
 
-`max_summary_attempts` does the equivalent for summary generation. After N consecutive failures (LLM error or empty-after-trim), the record is skipped at selection time on subsequent cycles; the failure reason is captured in `last_summary_error`. The summary phase doesn't flip `processing_status` to `"stuck"` (that's the classify phase's terminal state) — instead the selection guard skips records with `summary_attempts >= max`. Both counters reset to 0 on a successful classify or summary respectively, so an operator-fixed record passes cleanly.
+`retries.max_summary_attempts` does the equivalent for summary generation. After N consecutive failures (LLM error or empty-after-trim), the record is skipped at selection time on subsequent cycles; the failure reason is captured in `last_summary_error`. The summary phase doesn't flip `processing_status` to `"stuck"` (that's the classify phase's terminal state) — instead the selection guard skips records with `summary_attempts >= max`. Both counters reset to 0 on a successful classify or summary respectively, so an operator-fixed record passes cleanly.
 
-`max_synthesis_attempts` does the equivalent for concept synthesis. Concept syntheses bundle multiple records' member summaries per LLM call, so a single failure (LLM error, JSON parse error, short response, empty synthesis at a position) rebills the entire batch's input tokens. After N consecutive failures, the concept's `synthesis_status` flips to `"stuck"` — the existing selection guard (`synthesis_status="pending"`) auto-excludes stuck concepts from future cycles. Failure reason captured in `last_synthesis_error`. Operator triage: surface stuck concepts via `gramaton_search(processing_status="processed", missing=["content_full"])` with `synthesis_status="stuck"` (concepts have processing_status=processed regardless of synthesis state).
+`retries.max_synthesis_attempts` does the equivalent for concept synthesis. Concept syntheses bundle multiple records' member summaries per LLM call, so a single failure (LLM error, JSON parse error, short response, empty synthesis at a position) rebills the entire batch's input tokens. After N consecutive failures, the concept's `synthesis_status` flips to `"stuck"` — the existing selection guard (`synthesis_status="pending"`) auto-excludes stuck concepts from future cycles. Failure reason captured in `last_synthesis_error`. Operator triage: surface stuck concepts via `gramaton_search(processing_status="processed", missing=["content_full"])` with `synthesis_status="stuck"` (concepts have processing_status=processed regardless of synthesis state).
 
-`max_manifest_attempts` is shaped differently because the manifest summary is keyed by a content-derived store-state fingerprint, not by a record. After N consecutive failures on the same fingerprint, the in-memory `ManifestCache` flips into a "negative cache" mode and the LLM call is skipped on subsequent cycles. The negative cache clears automatically when the fingerprint changes (records added, removed, or modified) or when any later success lands. No on-disk state — a server restart with the same store gets the same fingerprint and may retry once before re-tripping the negative cache.
+`retries.max_manifest_attempts` is shaped differently because the manifest summary is keyed by a content-derived store-state fingerprint, not by a record. After N consecutive failures on the same fingerprint, the in-memory `ManifestCache` flips into a "negative cache" mode and the LLM call is skipped on subsequent cycles. The negative cache clears automatically when the fingerprint changes (records added, removed, or modified) or when any later success lands. No on-disk state — a server restart with the same store gets the same fingerprint and may retry once before re-tripping the negative cache.
 
-`max_contradiction_attempts` covers the contradiction-detection pipeline, where the unit is a *pair* of records, not a single record. Per-pair failure state lives on a `contradiction_check_skipped` edge between the pair, which carries `attempts` (Int64), `last_error` (String, max 200 runes), and `checked_at` (Timestamp) properties. While `attempts < max`, the read-phase guard treats the edge as a *soft skip* — the pair stays in the candidate pool and gets retried next time the random shuffle surfaces it. At `attempts >= max`, the edge becomes a *hard skip* — the pair is locked out of future cycles. Operator triage: find stuck pairs via `gramaton_explore` from one of the records (looking for `contradiction_check_skipped` outbound edges), then `gramaton_unlink` to retry. Setting `max_contradiction_attempts: 0` reverts to legacy behavior: failed pairs never get a marker, just re-enter every cycle. Distinct from `no_contradiction` (which is a real LLM affirmation of no conflict) — the epistemic state is "we tried and couldn't determine," not "we determined no conflict."
+`retries.max_contradiction_attempts` covers the contradiction-detection pipeline, where the unit is a *pair* of records, not a single record. Per-pair failure state lives on a `contradiction_check_skipped` edge between the pair, which carries `attempts` (Int64), `last_error` (String, max 200 runes), and `checked_at` (Timestamp) properties. While `attempts < max`, the read-phase guard treats the edge as a *soft skip* — the pair stays in the candidate pool and gets retried next time the random shuffle surfaces it. At `attempts >= max`, the edge becomes a *hard skip* — the pair is locked out of future cycles. Operator triage: find stuck pairs via `gramaton_explore` from one of the records (looking for `contradiction_check_skipped` outbound edges), then `gramaton_unlink` to retry. Setting `max_contradiction_attempts: 0` reverts to legacy behavior: failed pairs never get a marker, just re-enter every cycle. Distinct from `no_contradiction` (which is a real LLM affirmation of no conflict) — the epistemic state is "we tried and couldn't determine," not "we determined no conflict."
 
-`max_embed_attempts` covers `gramaton_reembed`. The reembed candidate selection picks records whose `embedding_model` is missing or differs from the configured embedder. After N consecutive embed failures, the record is excluded from selection on subsequent invocations; failure reason captured in `last_embed_error`. A successful re-embed clears the counter. Reembed is manual-only (CLI / MCP tool / HTTP endpoint), so the per-call cost is bounded by operator cadence — but each invocation still re-paid for the same failures pre-fix. Operator triage: surface stuck records via `gramaton_search(missing=["embedding_model"])` filtered by `embed_attempts >= 3`, inspect `last_embed_error`, then either fix the underlying record or let the next reembed try after `gramaton_update` clears the counter.
+`retries.max_embed_attempts` covers `gramaton_reembed`. The reembed candidate selection picks records whose `embedding_model` is missing or differs from the configured embedder. After N consecutive embed failures, the record is excluded from selection on subsequent invocations; failure reason captured in `last_embed_error`. A successful re-embed clears the counter. Reembed is manual-only (CLI / MCP tool / HTTP endpoint), so the per-call cost is bounded by operator cadence — but each invocation still re-paid for the same failures pre-fix. Operator triage: surface stuck records via `gramaton_search(missing=["embedding_model"])` filtered by `embed_attempts >= 3`, inspect `last_embed_error`, then either fix the underlying record or let the next reembed try after `gramaton_update` clears the counter.
 
 ## Observe
 
@@ -255,9 +271,8 @@ Only the limits with active enforcement points are listed. Previous versions adv
 search:
   # User-facing dials
   retrieval_candidates: 200          # candidates pulled from vector + BM25 before reranking
-  rerank_enabled: false              # LLM reranking of candidates
-  rerank_candidates: 50              # how many candidates sent to LLM when rerank_enabled
   session_dedup_enabled: true        # suppress Session segments when their extracted Memory record is in results
+  # Note: rerank_enabled / rerank_candidates moved to llm.rerank.{enabled,candidates}.
 
   # Internal scoring / index parameters (rarely adjust)
   bm25_k1: 1.2                       # BM25 term frequency saturation
