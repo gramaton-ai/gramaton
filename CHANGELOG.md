@@ -9,6 +9,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Observations no longer inflate concept emergence clusters and
+  evidence_count.**
+  Observations inherit `content_keywords` verbatim from their
+  parent (`curation/observe.go`), so
+  `LookupKeyword("content_keywords", kw)` returned both the parent
+  record and each observation child. Two follow-on effects:
+  emergence cluster size double-counted siblings (a parent with N
+  observations registered as 1+N members), and `enrichConcepts`
+  counted every inbound non-structural edge so observation->concept
+  `instance_of` edges added by the same emergence pass also counted
+  toward `evidence_count`. The audit on this store flagged
+  concepts with evidence_count = parents + observations rather than
+  parents alone (tracker 01KQ62W3EPCRM4ARQG85AQP94S). Now the
+  emergence candidate filter and the evidence_count audit both
+  skip nodes with `node_type=="observation"`. Existing observation
+  instance_of edges become unused (still in the graph, but
+  excluded from the count); the next `enrichConcepts` cycle
+  recomputes the corrected count. Regression tests at
+  `curation/curation_test.go:TestEmergeFiltersObservations` and
+  `curation/enrich_concepts_test.go:TestEnrichConceptsExcludesObservationSources`.
+
 - **Observations are no longer treated as orphans by curation.**
   Observation nodes carry an `observation_of` edge to their parent,
   but observation_of is filtered out of `SemanticEdgeCount` as

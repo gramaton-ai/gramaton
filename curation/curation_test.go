@@ -131,6 +131,62 @@ func TestDeterministicConceptCandidates(t *testing.T) {
 	}
 }
 
+// TestEmergeFiltersObservations pins that concept-emergence
+// candidate detection does not pull observation nodes into the
+// candidate NodeIDs / Count. Pre-fix, observations inherited the
+// parent's content_keywords (curation/observe.go) and
+// `LookupKeyword("content_keywords", kw)` returned both the parent
+// and each observation child -- inflating the cluster size and the
+// resulting concept's evidence_count.
+// Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
+func TestEmergeFiltersObservations(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
+
+	now := time.Now().UTC()
+
+	addNode(t, eng, "Redis record A", "durable", 0.9,
+		[]string{"redis", "cache"}, now)
+	addNode(t, eng, "Redis record B", "durable", 0.9,
+		[]string{"redis", "session"}, now)
+	addNode(t, eng, "Redis record C", "durable", 0.9,
+		[]string{"redis", "ttl"}, now)
+
+	eng.Lock()
+	for i := 0; i < 2; i++ {
+		obs := eng.Graph().AddNode(graph.Properties{
+			"content_full":      graph.StringProperty("Observation about redis"),
+			"content_keywords":  graph.StringListProperty([]string{"redis"}),
+			"processing_status": graph.StringProperty("processed"),
+			"node_type":         graph.StringProperty("observation"),
+			"temporality":       graph.StringProperty("durable"),
+			"created_at":        graph.TimestampProperty(now),
+		})
+		for k, v := range obs.Properties {
+			eng.PropIdx().Add(obs.ID, k, v)
+		}
+	}
+	eng.Save("seed obs")
+	eng.Unlock()
+
+	result := RunDeterministic(eng, cfg, nil)
+
+	for _, c := range result.ConceptCandidates {
+		if c.Keyword != "redis" {
+			continue
+		}
+		if c.Count != 3 {
+			t.Errorf("redis candidate Count = %d, want 3 (observations should not inflate)", c.Count)
+		}
+		if got := len(c.NodeIDs); got != 3 {
+			t.Errorf("redis candidate NodeIDs = %d, want 3", got)
+		}
+		return
+	}
+	t.Error("redis concept candidate not found in result")
+}
+
 func TestDeterministicManifest(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

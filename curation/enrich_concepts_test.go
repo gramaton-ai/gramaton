@@ -171,6 +171,78 @@ func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 	}
 }
 
+// TestEnrichConceptsExcludesObservationSources pins the
+// observation-vs-parent double-counting fix
+// (01KQ62W3EPCRM4ARQG85AQP94S). Pre-fix, evidence_count counted
+// every inbound non-structural edge -- including instance_of
+// edges sourced from observations (which inherit their parent's
+// content_keywords and so get pulled into the same emergence
+// cluster). The audit on this store flagged concepts where
+// evidence_count = parent_count + observation_count rather than
+// parent_count alone. Post-fix, enrichConcepts skips edges whose
+// source is an observation node.
+func TestEnrichConceptsExcludesObservationSources(t *testing.T) {
+	eng := setupEngine(t)
+
+	now := time.Now().UTC()
+
+	eng.Lock()
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Auth concept synthesis"),
+		"content_short":     graph.StringProperty("auth concept synthesis content"),
+		"processing_status": graph.StringProperty("processed"),
+		"knowledge_type":    graph.StringProperty("conceptual"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("auth"),
+		"synthesis_status":  graph.StringProperty("complete"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+
+	parent := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Parent record about auth"),
+		"processing_status": graph.StringProperty("processed"),
+		"temporality":       graph.StringProperty("durable"),
+		"created_at":        graph.TimestampProperty(now.Add(-1 * time.Hour)),
+	})
+	for k, v := range parent.Properties {
+		eng.PropIdx().Add(parent.ID, k, v)
+	}
+	eng.Graph().AddEdge(parent.ID, concept.ID, "instance_of", 1.0, nil)
+
+	for i := 0; i < 2; i++ {
+		obs := eng.Graph().AddNode(graph.Properties{
+			"content_full":      graph.StringProperty("Observation excerpt about auth"),
+			"processing_status": graph.StringProperty("processed"),
+			"node_type":         graph.StringProperty("observation"),
+			"temporality":       graph.StringProperty("durable"),
+			"created_at":        graph.TimestampProperty(now.Add(-30 * time.Minute)),
+		})
+		for k, v := range obs.Properties {
+			eng.PropIdx().Add(obs.ID, k, v)
+		}
+		eng.Graph().AddEdge(obs.ID, parent.ID, "observation_of", 1.0, nil)
+		eng.Graph().AddEdge(obs.ID, concept.ID, "instance_of", 1.0, nil)
+	}
+
+	eng.Save("seed")
+	eng.Unlock()
+
+	enrichConcepts(eng, nil)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	c, _ := eng.Graph().GetNode(concept.ID)
+	ec, _ := c.Properties.GetInt64("evidence_count")
+	if ec != 1 {
+		t.Errorf("evidence_count = %d, want 1 (parent only; observations excluded)", ec)
+	}
+}
+
 // TestEnrichConceptsUpdatesWhenLatestEvidenceDrifts pins the
 // secondary trigger: even if count is unchanged, a new edge from a
 // source with a created_at later than last_evidence_at should still

@@ -315,10 +315,30 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			continue
 		}
 
-		ids := e.PropIdx().LookupKeyword("content_keywords", kw)
+		// Filter out observation nodes: observations inherit the
+		// parent's content_keywords verbatim (curation/observe.go), so
+		// LookupKeyword returns BOTH the parent and each of its
+		// observation children. Counting both would inflate the
+		// concept's evidence_count and add redundant instance_of edges
+		// from sub-records. Observations are projections of their
+		// parent; the parent is the canonical instance.
+		// Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
+		rawIDs := e.PropIdx().LookupKeyword("content_keywords", kw)
+		ids := rawIDs[:0]
+		for _, id := range rawIDs {
+			if n, ok := g.GetNode(id); ok {
+				if nt, _ := n.Properties.GetString("node_type"); nt == "observation" {
+					continue
+				}
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) < threshold {
+			continue
+		}
 		candidates = append(candidates, ConceptCandidate{
 			Keyword: kw,
-			Count:   count,
+			Count:   len(ids),
 			NodeIDs: ids,
 		})
 	}
@@ -973,6 +993,10 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		}
 
 		// Count inbound edges (evidence pointing to this concept).
+		// Observations are excluded: they're sub-records of their
+		// parent and the parent is the canonical evidence; counting
+		// both inflates evidence_count by the per-parent observation
+		// fan-out. Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
 		inbound := e.Graph().EdgesTo(id)
 		count := 0
 		var latestEvidence time.Time
@@ -980,13 +1004,17 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 			if graph.IsStructuralEdge(edge.Type) {
 				continue
 			}
+			src, ok := e.Graph().GetNode(edge.SourceID)
+			if !ok {
+				continue
+			}
+			if nt, _ := src.Properties.GetString("node_type"); nt == "observation" {
+				continue
+			}
 			count++
-			// Check the source node's created_at for last_evidence_at.
-			if src, ok := e.Graph().GetNode(edge.SourceID); ok {
-				if ca, ok := src.Properties.GetTimestamp("created_at"); ok {
-					if ca.After(latestEvidence) {
-						latestEvidence = ca
-					}
+			if ca, ok := src.Properties.GetTimestamp("created_at"); ok {
+				if ca.After(latestEvidence) {
+					latestEvidence = ca
 				}
 			}
 		}
