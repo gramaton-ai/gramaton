@@ -47,6 +47,13 @@ type Engine struct {
 	// but not yet persisted to disk. The server flushes this
 	// periodically rather than saving on every read.
 	accessDirty bool
+
+	// accessFlushFailures counts consecutive FlushAccess save
+	// failures. Reset to 0 on the next successful flush. Used to
+	// dedup log noise when a stuck disk causes the 30s flusher to
+	// retry indefinitely; we log the first failure at Warn and then
+	// every 10th attempt at Error rather than every attempt.
+	accessFlushFailures int
 }
 
 // EngineOption configures an engine at construction time. Options are
@@ -490,6 +497,12 @@ func (e *Engine) SaveOrLog(message string) {
 // FlushAccess saves the current graph state if access metadata is
 // dirty. Acquires the write lock internally. Safe to call from a
 // background goroutine.
+//
+// Save failures are counted and logged with dedup: first failure at
+// Warn, suppressed at Debug for runs 2-9, every 10th failure at
+// Error with the consecutive count. A stuck disk under the 30s
+// flusher would otherwise emit one Error log + full err every 30s
+// indefinitely. Counter resets on the next success.
 func (e *Engine) FlushAccess() {
 	// Lifecycle steps stay at DEBUG -- this fires every 30s under
 	// normal operation. The end-of-flush INFO captures the only
@@ -503,7 +516,32 @@ func (e *Engine) FlushAccess() {
 	}
 	slog.Debug("access flush: saving", "component", "engine")
 	start := time.Now()
-	e.SaveOrLog("access_flush")
+	if _, err := e.Save("access_flush"); err != nil {
+		e.accessFlushFailures++
+		switch {
+		case e.accessFlushFailures == 1:
+			slog.Warn("access flush: save failed",
+				"component", "engine",
+				"err", err)
+		case e.accessFlushFailures%10 == 0:
+			slog.Error("access flush: save still failing",
+				"component", "engine",
+				"consecutive_failures", e.accessFlushFailures,
+				"err", err)
+		default:
+			slog.Debug("access flush: save failed (suppressed)",
+				"component", "engine",
+				"consecutive_failures", e.accessFlushFailures,
+				"err", err)
+		}
+		return
+	}
+	if e.accessFlushFailures > 0 {
+		slog.Info("access flush: save recovered",
+			"component", "engine",
+			"prior_failures", e.accessFlushFailures)
+		e.accessFlushFailures = 0
+	}
 	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
 }
 

@@ -6,14 +6,17 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -88,6 +91,63 @@ type Server struct {
 	curationCache    CurationStatus
 	curationCacheAt  time.Time
 	curationCacheTTL time.Duration
+
+	// panicDedup suppresses repeated panic-stack log spam when the
+	// same panic recurs within panicDedupTTL. Without it a single
+	// buggy client retrying a panic-trigger floods the log with
+	// kilobyte stack dumps every request.
+	panicDedup *panicLogDedup
+}
+
+// panicLogDedup tracks recently-logged panic fingerprints so the
+// securityHeaders defer can suppress repeated dumps. Fingerprint =
+// FNV64(panic value + first stack frame); collisions are acceptable
+// (suppressing a different panic for one TTL window matches the
+// failure mode the dedup was added for).
+type panicLogDedup struct {
+	mu      sync.Mutex
+	seen    map[string]time.Time
+	ttl     time.Duration
+	maxSize int
+}
+
+func newPanicLogDedup(ttl time.Duration) *panicLogDedup {
+	return &panicLogDedup{
+		seen:    make(map[string]time.Time),
+		ttl:     ttl,
+		maxSize: 1024,
+	}
+}
+
+// shouldLog returns true when fingerprint has not been logged within
+// ttl. Records the timestamp on first-log so subsequent calls within
+// the window suppress. Prunes expired entries on each call; on
+// overflow past maxSize, drops the oldest entry to bound memory
+// against a flood of unique panics.
+func (d *panicLogDedup) shouldLog(fingerprint string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := time.Now()
+	for k, t := range d.seen {
+		if now.Sub(t) > d.ttl {
+			delete(d.seen, k)
+		}
+	}
+	if _, ok := d.seen[fingerprint]; ok {
+		return false
+	}
+	if len(d.seen) >= d.maxSize {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, t := range d.seen {
+			if oldestKey == "" || t.Before(oldestTime) {
+				oldestKey, oldestTime = k, t
+			}
+		}
+		delete(d.seen, oldestKey)
+	}
+	d.seen[fingerprint] = now
+	return true
 }
 
 // retrievalTracker records which node IDs were served to agents via
@@ -245,6 +305,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		usageTracker:     usageTracker,
 		shutdownCh:       make(chan string, 1),
 		curationCacheTTL: 5 * time.Second,
+		panicDedup:       newPanicLogDedup(time.Minute),
 	}
 	// Construct the canonical API surface. As operations migrate into
 	// the api package (T-02), transports will call s.api.X instead of
@@ -736,10 +797,11 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		}()
 
 		// Recover-defer runs FIRST (deferred LAST). Catches panics
-		// from downstream handlers, logs the stack at Warn, and
-		// emits a structured 500 if the response hasn't started.
-		// Re-panics http.ErrAbortHandler so stdlib's intentional-
-		// abort path is preserved.
+		// from downstream handlers, logs the stack at Warn (deduped
+		// by fingerprint to bound log volume on a panic-trigger
+		// flood), and emits a structured 500 if the response hasn't
+		// started. Re-panics http.ErrAbortHandler so stdlib's
+		// intentional-abort path is preserved.
 		defer func() {
 			p := recover()
 			if p == nil {
@@ -748,13 +810,24 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 			if p == http.ErrAbortHandler {
 				panic(p)
 			}
-			s.log.Warn("panic in handler",
-				"component", "http",
-				"req_id", reqID,
-				"method", r.Method,
-				"path", r.URL.Path,
-				"panic", fmt.Sprintf("%v", p),
-				"stack", string(debug.Stack()))
+			stack := string(debug.Stack())
+			panicValue := fmt.Sprintf("%v", p)
+			if s.panicDedup.shouldLog(panicFingerprint(panicValue, stack)) {
+				s.log.Warn("panic in handler",
+					"component", "http",
+					"req_id", reqID,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", panicValue,
+					"stack", stack)
+			} else {
+				s.log.Debug("panic in handler (deduped)",
+					"component", "http",
+					"req_id", reqID,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", panicValue)
+			}
 			if !rec.wroteHeader {
 				s.writeError(rec, http.StatusInternalServerError, "internal", "internal error", false)
 			}
@@ -762,6 +835,35 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rec, r)
 	})
+}
+
+// panicFingerprint produces a small dedup key from a panic value and
+// stack. Uses the panic value plus the first stack line that names
+// the actual panic site -- skipping the "goroutine N [running]"
+// header (varies per-goroutine), the runtime/debug.Stack frame, and
+// any other runtime/* frames so the fingerprint stays stable across
+// repeated occurrences from different goroutines.
+func panicFingerprint(panicValue, stack string) string {
+	siteLine := ""
+	for _, line := range strings.Split(stack, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "goroutine ") {
+			continue
+		}
+		if strings.Contains(trimmed, "runtime/") || strings.Contains(trimmed, "runtime.") {
+			continue
+		}
+		siteLine = trimmed
+		break
+	}
+	h := fnv.New64a()
+	h.Write([]byte(panicValue))
+	h.Write([]byte{0})
+	h.Write([]byte(siteLine))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code

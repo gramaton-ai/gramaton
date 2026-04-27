@@ -9,6 +9,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Self-heal cascade short-circuits when a record was already
+  Tier-4 flagged against the same `content_short`.** Pre-fix,
+  every server boot re-walked all flagged records through the
+  sanitize+sentence-split cascade and re-wrote `repair_needed_llm`,
+  `repaired_at`, `repair_method` even though no tier could salvage
+  the record (the input was unchanged). The cascade now stores a
+  16-char FNV64 hash of `content_short` at flag time
+  (`repair_input_hash`) and returns `outcomeClean` early on
+  re-entry when the flag is set and the hash matches. Cost saving
+  is bounded by Tier-4 record count × 3 SetProp/boot. Regression
+  test at
+  `curation/self_heal_test.go:TestDetectAndRepairSummarySkipsRedundantFlag`.
+  Tracker 01KQ40B2KEF8P6JK6SDB00FWQ3.
+
+- **`Engine.FlushAccess` dedups consecutive Save-failure logs.**
+  Pre-fix, a stuck disk would emit one Error log + full err
+  detail every 30s indefinitely under the access-flusher tick.
+  Now the first failure logs at Warn, failures 2-9 (and 11-19,
+  etc.) drop to Debug, and every 10th consecutive failure escalates
+  to Error with the running count. A subsequent successful flush
+  emits a one-line "save recovered" Info and resets the counter.
+  Counter is per-engine (not per-process); guarded by the existing
+  engine write lock that FlushAccess already holds. Regression test
+  at `core/engine_test.go:TestFlushAccessResetsFailureCounterOnSuccess`.
+  Tracker 01KQ40ANMHK7JQH66D0RXR44GW.
+
+- **`securityHeaders` panic-recover dedups repeated stack dumps.**
+  Pre-fix, a buggy client retrying a panic-trigger flooded the
+  log with kilobyte stack dumps at Warn on every request. Now the
+  recover defer fingerprints (FNV64 of panic value + first
+  non-runtime stack frame) and suppresses identical fingerprints
+  within a 1-minute TTL, dropping duplicates to Debug. The
+  fingerprint cache is bounded at 1024 entries with oldest-evict
+  on overflow to bound memory under a flood of unique panics.
+  Regression tests at
+  `server/middleware_test.go:TestSecurityHeadersDedupsRepeatedPanics`
+  + unit tests on the dedup struct. Tracker 01KQ3PBFR9MNAMAAD6JSX5F9TG.
+
 - **Manifest qualitative_summary no longer cites record counts.**
   The LLM-generated `manifest_summary` text occasionally cited
   numbers ("...with 285 conceptual records...") that didn't match

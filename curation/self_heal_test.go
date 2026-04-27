@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
@@ -142,6 +143,55 @@ func TestDetectAndRepairSummaryFlagForLLM(t *testing.T) {
 	}
 	if m, _ := n.Properties.GetString("repair_method"); m != "flagged" {
 		t.Errorf("repair_method = %q, want 'flagged'", m)
+	}
+}
+
+// TestDetectAndRepairSummarySkipsRedundantFlag pins the fix for
+// 01KQ40B2KEF8P6JK6SDB00FWQ3: once a record is Tier-4 flagged, a
+// re-run of the cascade against the SAME content_short must
+// short-circuit and not re-write repair_needed_llm / repaired_at /
+// repair_method. Pre-fix the cascade ran every server boot, churning
+// three properties per Tier-4 record. Stored hash detects the
+// already-flagged state.
+func TestDetectAndRepairSummarySkipsRedundantFlag(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	id := seedContaminated(t, eng, "Tiny.", "no punctuation here just words")
+
+	// First pass: flag it.
+	eng.Lock()
+	first := DetectAndRepairSummary(eng, id, slog.Default())
+	eng.Unlock()
+	if first != outcomeFlagged {
+		t.Fatalf("first pass outcome = %v, want %v", first, outcomeFlagged)
+	}
+
+	eng.RLock()
+	n, _ := eng.Graph().GetNode(id)
+	flaggedTimestamp, hasTS := n.Properties.GetTimestamp("repaired_at")
+	storedHash, _ := n.Properties.GetString(repairInputHashKey)
+	eng.RUnlock()
+	if !hasTS {
+		t.Fatal("repaired_at not set after first flag")
+	}
+	if storedHash == "" {
+		t.Fatal("repair_input_hash not set after first flag")
+	}
+
+	// Second pass against unchanged content_short.
+	time.Sleep(2 * time.Millisecond) // ensure any clock-driven write would shift the timestamp
+	eng.Lock()
+	second := DetectAndRepairSummary(eng, id, slog.Default())
+	eng.Unlock()
+	if second != outcomeClean {
+		t.Errorf("second pass outcome = %v, want %v (already-flagged record should short-circuit)", second, outcomeClean)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n2, _ := eng.Graph().GetNode(id)
+	gotTS, _ := n2.Properties.GetTimestamp("repaired_at")
+	if !gotTS.Equal(flaggedTimestamp) {
+		t.Errorf("repaired_at advanced on second pass; first=%v second=%v (the re-flag wasn't skipped)", flaggedTimestamp, gotTS)
 	}
 }
 

@@ -1,6 +1,8 @@
 package curation
 
 import (
+	"encoding/hex"
+	"hash/fnv"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -10,6 +12,13 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
+
+// repairInputHashKey records the hash of the content_short value that
+// produced the most recent Tier-4 flag. The cascade short-circuits
+// when the property is set, repair_needed_llm is true, and the hash
+// matches the current content_short -- avoiding the redundant
+// sanitize + 3 SetProp writes per Tier-4 record on every server boot.
+const repairInputHashKey = "repair_input_hash"
 
 // SelfHealResult summarizes one self-heal pass over the store.
 // Repaired counts records where a stored summary was rewritten;
@@ -87,6 +96,16 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 		return outcomeClean
 	}
 
+	// Short-circuit when this record was already Tier-4 flagged
+	// against the same content_short. The deterministic cascade is
+	// pure on input -- re-running it would re-write the same three
+	// properties every server boot.
+	if flagged, _ := n.Properties.GetBool("repair_needed_llm"); flagged {
+		if h, _ := n.Properties.GetString(repairInputHashKey); h != "" && h == hashContentShort(orig) {
+			return outcomeClean
+		}
+	}
+
 	// Contamination detected. Apply repair cascade.
 
 	if len(cleaned) >= minSummaryAfterStrip {
@@ -126,6 +145,7 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 	e.SetProp(nodeID, "repair_needed_llm", graph.BoolProperty(true))
 	e.SetProp(nodeID, "repaired_at", graph.TimestampProperty(time.Now().UTC()))
 	e.SetProp(nodeID, "repair_method", graph.StringProperty(string(outcomeFlagged)))
+	e.SetProp(nodeID, repairInputHashKey, graph.StringProperty(hashContentShort(orig)))
 	logger.Warn("self-heal: summary unsalvageable by deterministic tiers, flagged for LLM",
 		"component", "curation", "record", nodeID, "len_before", len(orig))
 	return outcomeFlagged
@@ -241,6 +261,17 @@ func firstSentences(s string, maxSentences, maxChars int) string {
 		}
 	}
 	return out
+}
+
+// hashContentShort returns a 16-char hex-FNV64 of s. Used to detect
+// whether content_short has changed since a prior Tier-4 flag so the
+// cascade can skip redundant work on every boot. Collision risk is
+// acceptable: a collision wastes one cycle of cascade work, identical
+// to the pre-fix behavior.
+func hashContentShort(s string) string {
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // invalidateEmbedding marks a record's embedding as stale so the
