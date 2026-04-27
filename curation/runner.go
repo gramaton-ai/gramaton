@@ -53,6 +53,19 @@ type State struct {
 }
 
 // EnhancedStatus is the curation info included in the response envelope.
+//
+// PendingCount and ConceptCandidates answer different questions and
+// must not be conflated:
+//
+//   - PendingCount: records awaiting classification
+//     (processing_status="captured"). A backlog of work the curation
+//     loop will drain.
+//   - ConceptCandidates: keywords above the emergence threshold (and
+//     below the specificity ceiling). A telemetry signal showing how
+//     much candidate-detection work the deterministic phase is
+//     producing; not work to be drained.
+//
+// Tracker 01KQ62W8M80K6H6DGBJ4F4DE3F.
 type EnhancedStatus struct {
 	PendingCount      int        `json:"pending_count"`
 	Overdue           bool       `json:"overdue"`

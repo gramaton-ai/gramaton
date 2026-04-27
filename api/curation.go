@@ -60,7 +60,7 @@ type CurationDrainResponse struct {
 // Description constants are shared by HTTP, MCP, and CLI proxy
 // transports so the surface text never drifts between them.
 const (
-	CurationStatusDescription  = "Get the current curation runner status and latest store manifest. Returns immediately."
+	CurationStatusDescription  = "Get the current curation runner status and latest store manifest. Returns immediately. pending_count = records awaiting classification (work to do); concept_candidates = keywords above emergence threshold (telemetry signal, not a backlog)."
 	CurationTriggerDescription = "Run a curation cycle now. Returns triggered=false (with the prior status) when a cycle is already in progress."
 	CurationDryRunDescription  = "Preview what an autonomous curation cycle would do without applying changes. The deterministic phase still runs (it is always safe)."
 	CurationBatchDescription   = "Classify every pending record in one call (LLM required). Use when piggyback curation has fallen behind."

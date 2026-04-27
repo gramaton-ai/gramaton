@@ -243,7 +243,7 @@ Summary:`
 
 // ManifestSystemPrompt is the stable instructions for the store manifest
 // rollup. Invariant across cycles; cached by providers that support it.
-const ManifestSystemPrompt = `Summarize the strengths and gaps of a knowledge store in 2-3 sentences. Be specific about what domains and topics are well-covered and what is missing or weak. No preamble, no quotes.`
+const ManifestSystemPrompt = `Summarize the strengths and gaps of a knowledge store in 2-3 sentences. Be specific about what domains and topics are well-covered and what is missing or weak. Describe shape qualitatively; do NOT include record counts, percentages, or any numeric values in the summary -- caller surfaces numeric stats separately. No preamble, no quotes.`
 
 // manifestSummaryPrompt is the per-cycle user message. Contains only the
 // variable store statistics.

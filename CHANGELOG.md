@@ -7,6 +7,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Manifest qualitative_summary no longer cites record counts.**
+  The LLM-generated `manifest_summary` text occasionally cited
+  numbers ("...with 285 conceptual records...") that didn't match
+  any field in the surrounding response (the actual counts on the
+  same store were 38 and 416 under different scopes). Most plausibly
+  inferred or paraphrased rather than copied. Updated the system
+  prompt to instruct: describe shape qualitatively, do not include
+  record counts, percentages, or numeric values; numeric stats are
+  surfaced separately. Tracker 01KQ62TXCZ7T3N8WR2C766E5F8.
+
+- **`StatsResponse` and `EnhancedStatus` now document the
+  conceptual-count and pending-vs-candidates distinctions inline.**
+  `gramaton_stats.knowledge_type.conceptual` counts every record
+  with that type, including derived concept nodes; the curation
+  manifest's `records_by_type.conceptual` counts only user-captured
+  records. Both are correct under their own semantics; the docstring
+  explains the difference. Likewise `pending_count` (work to do --
+  records awaiting classification) and `concept_candidates`
+  (telemetry signal -- keywords above emergence threshold) answer
+  different questions and the docstring on `EnhancedStatus` calls
+  that out. Tool descriptions for `gramaton_stats` and
+  `gramaton_curation` updated correspondingly.
+  Trackers 01KQ62TP9F80G580MH9BRRK4CD, 01KQ62W8M80K6H6DGBJ4F4DE3F.
+
 ### Fixed
 
 - **Observations no longer inflate concept emergence clusters and

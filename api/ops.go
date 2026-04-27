@@ -8,6 +8,13 @@ import (
 )
 
 // StatsResponse summarises the knowledge store's composition.
+//
+// Counts include ALL non-deleted, non-structural-child nodes: user
+// records AND derived concept nodes. The manifest produced by
+// curation (`records_by_type` etc.) deliberately excludes concept
+// nodes since concepts are derived from clusters rather than
+// captured by the user; both counts are correct under their own
+// semantics. See tracker 01KQ62TP9F80G580MH9BRRK4CD.
 type StatsResponse struct {
 	TotalRecords    int            `json:"total_records"`
 	Temporality     map[string]int `json:"temporality"`
@@ -26,7 +33,7 @@ type ConfidenceDist struct {
 }
 
 // StatsDescription is the MCP tool description for gramaton_stats.
-const StatsDescription = "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution, and LLM usage."
+const StatsDescription = "Get aggregate statistics: counts by temporality, knowledge_type, epistemic_status, confidence distribution, and LLM usage. Counts every non-deleted record including derived concept nodes (knowledge_type=conceptual aggregates user-captured records AND emergent concepts; the curation manifest reports user-only counts under records_by_type)."
 
 // Stats iterates the graph under a read lock and counts records by
 // key metadata fields. Excludes chunk nodes and deleted records.
