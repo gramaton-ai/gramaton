@@ -1030,9 +1030,21 @@ func Defaults() Config {
 				Low:    "claude-haiku-4-5",
 				Medium: "claude-sonnet-4-6",
 				High:   "claude-opus-4-7",
-				// Tasks left empty -- defaultEffortForTask kicks in
-				// for any unset key. Users add entries here to
-				// override per-task tier without editing code.
+				// Tasks: explicit defaults so the rendered config
+				// shows the affordance. Removing a key reverts to
+				// defaultEffortForTask. Mirrors that function's
+				// internal mapping; both must be updated together
+				// if the canonical assignments change.
+				Tasks: map[string]string{
+					string(TaskClassificationShort): string(EffortLow),
+					string(TaskClassificationLong):  string(EffortMedium),
+					string(TaskSummarization):       string(EffortLow),
+					string(TaskContradiction):       string(EffortMedium),
+					string(TaskConcept):             string(EffortMedium),
+					string(TaskManifest):            string(EffortLow),
+					string(TaskRerank):              string(EffortLow),
+					string(TaskDecompose):           string(EffortLow),
+				},
 			},
 			CostLimits: LLMCostLimitsConfig{
 				// All caps off by default. Operators set these per
@@ -1445,9 +1457,9 @@ func Save(cfg Config, path string) error {
 		return fmt.Errorf("config: create dir %s: %w", dir, err)
 	}
 
-	data, err := yaml.Marshal(&cfg)
+	data, err := renderConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("config: marshal: %w", err)
+		return err
 	}
 
 	if err := os.WriteFile(path, data, 0o600); err != nil {

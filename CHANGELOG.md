@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`config.Save()` now emits section banners + per-field comments**
+  in the rendered `config.yaml` for the `llm:` block. The renderer
+  walks an encoded `yaml.Node` tree and attaches `HeadComment`s from
+  a path-keyed registry (`config/comments.go`); the `tasks:` map is
+  re-sorted to the canonical `LLMTask` order so save output is
+  deterministic across runs. Operators opening
+  `~/.gramaton/config.yaml` get inline guidance for every dial under
+  `llm:` -- including a CLI-shim TOS warning on `provider:`, a
+  pointer to provider model-catalog URLs above the `llm:` block, and
+  a "do not edit" warning above `llm.curation:`. Tests:
+  `config/render_test.go`. Other top-level sections render without
+  comments today; future passes can extend the registry.
+- `Defaults()` now pre-populates `llm.models.tasks` with the
+  canonical task -> tier mapping so the rendered file shows the
+  affordance explicitly. Removing a key still falls back to
+  `defaultEffortForTask`; the in-code default and the `Defaults()`
+  map mirror each other and must be updated together.
+
 - **LLM configuration consolidated under a single `llm:` block.** The
   prior top-level `llm_curation:` block and the `search.rerank_*`
   fields are folded into `llm:`. New shape:
