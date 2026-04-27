@@ -293,8 +293,15 @@ Gramaton stores three layers of compression: `content_full`
 (unbounded), `content_short` (~750 char embedded anchor),
 `keywords` (3-8 terms). When the agent's reading from search
 results, it sees `content_short` first. If you want the full
-content, ask the agent to `gramaton_inspect` a specific record —
-that returns `content_full`.
+content, just ask:
+
+- "Give me the full record."
+- "Show me everything on the Postgres decision."
+- "Expand that one — I want the original reasoning."
+- "Open record 01KZZZ..."
+
+The agent calls `gramaton_inspect` and gets back `content_full`
+plus the record's edges. You don't need to know the tool name.
 
 **"Why is this old decision still ranking high?"**
 
