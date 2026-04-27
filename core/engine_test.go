@@ -445,6 +445,44 @@ func TestRebuildAllIndexes(t *testing.T) {
 	}
 }
 
+// TestRebuildPrimaryIfMissingAlwaysRebuildsProp pins the fix for the
+// partial-load bug at core/indexes.go: the original
+// `propLoaded := s.propIdx.Count() > 0` short-circuit skipped rebuild
+// whenever the index had ANY data, leaving newly-added or previously-
+// unindexed keys missing forever. The test simulates that state by
+// indexing only one of two fields on a node and then re-running
+// rebuildPrimaryIfMissing; both fields must appear in the index.
+func TestRebuildPrimaryIfMissingAlwaysRebuildsProp(t *testing.T) {
+	eng := setupTestEngine(t)
+	eng.Lock()
+	defer eng.Unlock()
+
+	g := eng.Graph()
+	propIdx := eng.PropIdx()
+
+	n := g.AddNode(graph.Properties{
+		"temporality":    graph.StringProperty("durable"),
+		"knowledge_type": graph.StringProperty("semantic"),
+	})
+	// Index only one of the two fields, mimicking a partial load
+	// where temporality was indexed but knowledge_type predates the
+	// indexing change for that key.
+	propIdx.Add(n.ID, "temporality", graph.StringProperty("durable"))
+
+	if got := propIdx.Lookup("knowledge_type", graph.StringProperty("semantic")); len(got) != 0 {
+		t.Fatalf("precondition: knowledge_type should be unindexed, got %v", got)
+	}
+
+	eng.indexes.rebuildPrimaryIfMissing(g)
+
+	if got := propIdx.Lookup("temporality", graph.StringProperty("durable")); len(got) != 1 {
+		t.Fatalf("temporality not indexed after rebuild, got %v", got)
+	}
+	if got := propIdx.Lookup("knowledge_type", graph.StringProperty("semantic")); len(got) != 1 {
+		t.Fatalf("knowledge_type not indexed after rebuild (the bug), got %v", got)
+	}
+}
+
 func TestConfig(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()

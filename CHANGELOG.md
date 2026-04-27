@@ -9,6 +9,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`propIdx` now always rebuilds from graph at engine startup.**
+  The previous gate (`propLoaded := s.propIdx.Count() > 0` in
+  `core/indexes.go`) skipped rebuild whenever the index had any
+  data — but when the bbolt-backed index was partial (some keys
+  present from earlier indexing, others missing for newer-keyed
+  records), that short-circuit left the missing keys unindexed
+  forever. Concrete impact: `gramaton_search(missing=["confidence"])`
+  silently dropped records that had confidence set; the new
+  Phase A-minimal `ExcludeConcepts` filter passed concepts through
+  on the first deploy because `propIdx.Lookup("node_type", "concept")`
+  returned empty despite 378 concepts in the graph (workaround was
+  commit 91a6f9a's direct graph walk; this commit is the underlying
+  fix). `propIdx.AddTx` is idempotent via the dedup in `addToIDSet`,
+  so re-walking is cheap when the index is already complete.
+  Regression test at `core/engine_test.go:TestRebuildPrimaryIfMissingAlwaysRebuildsProp`.
+  Tracker 01KQ60MQMFSKTW2Z9PV4Z4W8T3.
+
 - **`ExcludeConcepts` filter now reads `node_type` directly off graph
   nodes instead of going through `propIdx.Lookup`.** The property
   index has a load-path issue where rebuild is skipped when

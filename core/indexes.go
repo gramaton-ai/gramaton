@@ -265,15 +265,21 @@ func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 }
 
 // rebuildPrimaryIfMissing populates the primary indexes (prop, bm25,
-// vec) from the graph for any index that is empty, and skips those
-// that already loaded from a persisted snapshot. Used by LoadEngine
-// where a slow secondary rebuild is unnecessary -- secondary indexes
-// persist independently in bbolt and are queried lazily.
+// vec) from the graph at startup. bm25 and vec are skipped when their
+// persisted snapshot is non-empty; propIdx always rebuilds.
+//
+// Why propIdx always rebuilds: Count() > 0 is a partial-load trap.
+// When a new property is added to DefaultIndexedFields, or when an
+// older record predates an indexing change, the bbolt-backed index
+// has data for some keys but not others. Count() > 0 short-circuits
+// the rebuild, leaving the missing keys un-indexed forever -- so
+// queries like Missing[X] silently return wrong results. Always
+// rebuilding fixes this. AddTx is idempotent (addToIDSet dedups), so
+// the re-walk is cheap when the index is already complete.
 func (s *indexSet) rebuildPrimaryIfMissing(g *graph.Graph) {
 	bm25FullLoaded := s.bm25Full.Len() > 0
 	vecLoaded := s.vecIdx.Len() > 0
-	propLoaded := s.propIdx.Count() > 0
-	rebuildIndexes(s.boltDB, g, s.propIdx, s.vecIdx, s.bm25Full, bm25FullLoaded, vecLoaded, propLoaded)
+	rebuildIndexes(s.boltDB, g, s.propIdx, s.vecIdx, s.bm25Full, bm25FullLoaded, vecLoaded)
 }
 
 // rebuildAll force-rebuilds every index (primary + secondary) from
@@ -281,7 +287,7 @@ func (s *indexSet) rebuildPrimaryIfMissing(g *graph.Graph) {
 // may have mutated graph state out from under the index (branch
 // checkout/merge, restore). Caller must hold the engine write lock.
 func (s *indexSet) rebuildAll(g *graph.Graph) {
-	rebuildIndexes(s.boltDB, g, s.propIdx, s.vecIdx, s.bm25Full, false, false, false)
+	rebuildIndexes(s.boltDB, g, s.propIdx, s.vecIdx, s.bm25Full, false, false)
 	if s.secIdx != nil {
 		s.rebuildSecondary(g)
 	}
@@ -339,35 +345,26 @@ func (s *indexSet) close() error {
 // rebuildIndexes batches the rebuild across the bbolt-backed indexes
 // in a single write transaction. propIdx and bm25Full share the same
 // bbolt DB; opening separate write transactions for each would
-// deadlock. When all three flags are true the rebuild is a no-op.
+// deadlock. propIdx is always rebuilt (see rebuildPrimaryIfMissing
+// for the partial-load rationale); bm25 and vec are skipped when
+// their persisted data is non-empty.
 //
 // Uses the Tx-suffixed Add variants directly, threading tx through the
 // bbolt-backed impls; in-memory impls accept and ignore the tx. This
 // replaces the old SetBatch type-assertion dance.
-func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded, propLoaded bool) {
-	if bm25FullLoaded && vecLoaded && propLoaded {
-		slog.Debug("indexes already populated, skipping rebuild",
-			"component", "engine",
-			"bm25", bm25Full.Len(),
-			"vec", vecIdx.Len(),
-			"prop", propIdx.Count())
-		return
-	}
+func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex, vecIdx index.VectorIndex, bm25Full index.BM25Index, bm25FullLoaded, vecLoaded bool) {
 	slog.Info("rebuilding indexes from graph",
 		"component", "engine",
 		"bm25_loaded", bm25FullLoaded,
-		"vec_loaded", vecLoaded,
-		"prop_loaded", propLoaded)
+		"vec_loaded", vecLoaded)
 
 	doRebuild := func(tx *bolt.Tx, bm25Batch *index.BM25Batch) {
 		it := g.NodeIterator()
 		defer it.Close()
 		for it.Next() {
 			n := it.Node()
-			if !propLoaded {
-				for k, v := range n.Properties {
-					propIdx.AddTx(tx, n.ID, k, v)
-				}
+			for k, v := range n.Properties {
+				propIdx.AddTx(tx, n.ID, k, v)
 			}
 			if !vecLoaded {
 				for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {
@@ -385,10 +382,9 @@ func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex
 		}
 	}
 
-	// Only open a bbolt tx when at least one bbolt-backed index needs
-	// rebuilding; in-memory-only test setups skip the outer Update.
-	needsTx := (!propLoaded) || (!bm25FullLoaded)
-	if needsTx && db != nil {
+	// Always need a tx because propIdx always rebuilds; in-memory-only
+	// test setups skip the outer Update.
+	if db != nil {
 		db.Update(func(tx *bolt.Tx) error {
 			bm25Batch := index.NewBM25Batch()
 			doRebuild(tx, bm25Batch)
