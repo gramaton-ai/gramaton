@@ -4,7 +4,7 @@
 <p align="center"><b>gram·a·ton</b> <i>/ˈɡramətɒn/</i> — from Greek <i>gramma</i> (writing) + <i>automaton</i> (self-acting). A thing that writes and remembers by itself.</p>
 
 <p align="center">
-  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
@@ -41,6 +41,8 @@ What Gramaton isn't:
 
 ## Quick Start
 
+**Requires:** Go 1.26+ — see [go.dev/doc/install](https://go.dev/doc/install).
+
 ```bash
 # Install
 go install github.com/gramaton-ai/gramaton@latest
@@ -49,13 +51,15 @@ go install github.com/gramaton-ai/gramaton@latest
 gramaton init
 ```
 
-The wizard (when run in a terminal) walks five steps:
+The wizard (when run in a terminal) walks five numbered steps plus a verification wrap-up:
 
-1. **Bootstrap** — choose an embedding provider. BERT is the default (pure-Go, local, no API cost) and downloads the 130MB model on first use. Ollama, OpenAI-compatible, and AWS Bedrock are also available, as is `skip` for memory-only / air-gapped setups.
-2. **LLM** — optionally configure an LLM provider for curation, reranking, and session extraction. Anthropic (Claude Haiku default), OpenAI-compatible, and AWS Bedrock are supported; skipping is fine — Gramaton runs with a deterministic-only curator otherwise.
-3. **MCP client registration** — auto-detects `claude` and `kiro` CLIs and registers the `gramaton` MCP entry in each.
-4. **Hooks** — installs Gramaton's session-capture hook scripts into your Claude Code / kiro-cli configs.
-5. **Verify** — writes `~/.gramaton/config.yaml`, probes perms + writability, and summarizes what's configured.
+1. **Knowledge store** — choose an embedding provider. BERT is the default (pure-Go, local, no API cost) and downloads the 130MB model on first use. Ollama, OpenAI-compatible, and AWS Bedrock are also available, as is `skip` for memory-only / air-gapped setups.
+2. **Autonomous curation** — optionally configure an LLM provider for curation, reranking, and session extraction. Anthropic (Claude Haiku default), OpenAI-compatible, and AWS Bedrock are supported; skipping is fine — Gramaton runs with a deterministic-only curator otherwise.
+3. **Connecting to your AI tools** — auto-detects `claude` and `kiro` CLIs and registers the `gramaton` MCP entry in each.
+4. **Agent usage instructions** — offers to install Gramaton's CLAUDE.md / kiro instructions into each detected client so the agent knows how to use the store. Per-client opt-in.
+5. **Automatic knowledge capture** — installs Gramaton's session-capture hook scripts into your Claude Code / kiro-cli configs (pre-compact, post-compact, session-start, stop).
+
+After Step 5, the wizard runs a verification pass: writes `~/.gramaton/config.yaml`, probes perms + writability, and summarizes what's configured.
 
 The whole flow is idempotent: re-running won't double-register MCP entries or clobber existing hooks. Pass `--non-interactive` to run the legacy scripted path that defaults everything without prompting (useful for CI or automated provisioning).
 
