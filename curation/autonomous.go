@@ -1432,46 +1432,95 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			TaskName:         "synthesize",
 		}
 
-		// Apply syntheses (or failure tracking) to concept nodes.
-		e.Lock()
-		hadFailures := false
+		// Phase 1: classify each concept's outcome (success / failReason)
+		// without touching the engine. Build the list of texts to embed.
+		type conceptApply struct {
+			id         string
+			keyword    string
+			synthesis  string
+			shortSum   string
+			failReason string
+		}
+		applies := make([]conceptApply, 0, len(batch.concepts))
+		var embedTexts []string
+		var embedTargets []int // index into applies for each text
 		for i, pc := range batch.concepts {
-			var failReason string
+			a := conceptApply{id: pc.id, keyword: pc.keyword}
 			switch {
 			case batchFailReason != "":
-				failReason = batchFailReason
+				a.failReason = batchFailReason
 			case i >= len(syntheses):
-				failReason = "short response: missing synthesis at position"
+				a.failReason = "short response: missing synthesis at position"
 			case syntheses[i] == "":
-				failReason = "empty synthesis"
+				a.failReason = "empty synthesis"
 			}
+			if a.failReason == "" {
+				synthesis := syntheses[i]
+				runes := []rune(synthesis)
+				if len(runes) > 500 {
+					synthesis = string(runes[:500])
+				}
+				a.synthesis = synthesis
+				a.shortSum = conceptShortSummary(synthesis, 200)
+				embedTargets = append(embedTargets, len(applies))
+				embedTexts = append(embedTexts, synthesis)
+			}
+			applies = append(applies, a)
+		}
 
-			if failReason != "" {
-				recordTaskFailure(e, synthesisRetry, pc.id, failReason, logger)
+		// Phase 2: embed syntheses outside the engine lock so I/O does
+		// not stall writers. Concepts otherwise have no embedding until
+		// `gramaton reembed` catches up, leaving concept-embedding
+		// telemetry and PRF blind. Tracker 01KQ60N4ZCCQDKM17XWQMZAX9C.
+		var vecs [][]float32
+		var modelID string
+		if emb := e.Embedder(); emb != nil && len(embedTexts) > 0 {
+			modelID = emb.ModelID()
+			embedCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			var embedErr error
+			vecs, embedErr = emb.Embed(embedCtx, embedTexts)
+			cancel()
+			if embedErr != nil {
+				logger.Warn("concept synthesis embedding failed; concepts will be back-filled by reembed",
+					"component", "curation",
+					"batch_size", len(embedTexts),
+					"err", embedErr)
+				vecs = nil
+			}
+		}
+
+		// Phase 3: apply syntheses (and embeddings when available)
+		// under the engine lock.
+		e.Lock()
+		hadFailures := false
+		for ai, a := range applies {
+			if a.failReason != "" {
+				recordTaskFailure(e, synthesisRetry, a.id, a.failReason, logger)
 				hadFailures = true
 				continue
 			}
-
-			// Truncate.
-			synthesis := syntheses[i]
-			runes := []rune(synthesis)
-			if len(runes) > 500 {
-				synthesis = string(runes[:500])
+			e.SetContentProp(a.id, "content_full", a.synthesis)
+			e.SetContentProp(a.id, "content_short", a.shortSum)
+			e.SetProp(a.id, "synthesis_status", graph.StringProperty("complete"))
+			if vecs != nil {
+				for ti, target := range embedTargets {
+					if target == ai && ti < len(vecs) {
+						vec := vecs[ti]
+						e.SetProp(a.id, "embedding_full", graph.VectorProperty(vec))
+						e.SetProp(a.id, "embedding_model", graph.StringProperty(modelID))
+						e.VecIdx().Add(a.id, vec)
+						break
+					}
+				}
 			}
-
-			shortSummary := conceptShortSummary(synthesis, 200)
-
-			e.SetContentProp(pc.id, "content_full", synthesis)
-			e.SetContentProp(pc.id, "content_short", shortSummary)
-			e.SetProp(pc.id, "synthesis_status", graph.StringProperty("complete"))
-			n, _ := e.Graph().GetNode(pc.id)
+			n, _ := e.Graph().GetNode(a.id)
 			recordTaskSuccess(e, n, "synthesis_attempts")
 			result.ConceptsCreated++
 
 			logger.Info("concept enriched",
 				"component", "curation",
-				"keyword", pc.keyword,
-				"node_id", pc.id)
+				"keyword", a.keyword,
+				"node_id", a.id)
 		}
 		if result.ConceptsCreated > 0 || (synthesisRetry.Max > 0 && hadFailures) {
 			e.SaveOrLog("curation: enrich concepts")

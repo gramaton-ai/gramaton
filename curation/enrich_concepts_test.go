@@ -1,10 +1,14 @@
 package curation
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // TestEnrichConceptsSkipsRedundantUpdates is the load-bearing
@@ -78,6 +82,92 @@ func TestEnrichConceptsSkipsRedundantUpdates(t *testing.T) {
 	ec, _ := c.Properties.GetInt64("evidence_count")
 	if ec != 1 {
 		t.Errorf("evidence_count = %d, want 1", ec)
+	}
+}
+
+// TestEnrichConceptSynthesesEmbedsConcept pins the fix for
+// 01KQ60N4ZCCQDKM17XWQMZAX9C: concept nodes were created during
+// emergence with nil vectors and only got embeddings when
+// `gramaton reembed` caught up. Concept telemetry and PRF were
+// blind for any concept the reembed pipeline had not yet processed.
+// The synthesis flow now embeds each completed concept inline and
+// registers it in the vec index.
+func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
+	emb := &configurableObsEmbedder{dim: 3}
+
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithEmbedder(emb),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+	t.Cleanup(func() { eng.Close() })
+
+	now := time.Now().UTC()
+	cfg = eng.Config()
+
+	eng.Lock()
+	concept := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("(template) kafka concept"),
+		"content_short":     graph.StringProperty("kafka concept"),
+		"processing_status": graph.StringProperty("processed"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("kafka"),
+		"synthesis_status":  graph.StringProperty("pending"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range concept.Properties {
+		eng.PropIdx().Add(concept.ID, k, v)
+	}
+	member := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Kafka member discussing pub-sub semantics"),
+		"content_short":     graph.StringProperty("Kafka pub-sub member"),
+		"processing_status": graph.StringProperty("processed"),
+		"epistemic_status":  graph.StringProperty("well_established"),
+		"created_at":        graph.TimestampProperty(now),
+	})
+	for k, v := range member.Properties {
+		eng.PropIdx().Add(member.ID, k, v)
+	}
+	eng.Graph().AddEdge(member.ID, concept.ID, "instance_of", 1.0, nil)
+	eng.Save("seed")
+	eng.Unlock()
+
+	llm := &mockLLM{responses: []string{
+		`[{"keyword":"kafka","synthesis":"Kafka is the backbone of our event pipeline."}]`,
+	}}
+	result := &AutonomousResult{}
+	enrichConceptSyntheses(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+
+	if result.ConceptsCreated != 1 {
+		t.Fatalf("ConceptsCreated = %d, want 1 (synthesis should have applied)", result.ConceptsCreated)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	c, _ := eng.Graph().GetNode(concept.ID)
+	vec, ok := c.Properties.GetVector("embedding_full")
+	if !ok {
+		t.Fatal("embedding_full not set on concept after enrichment (the bug)")
+	}
+	if len(vec) != 3 {
+		t.Errorf("embedding_full dim = %d, want 3", len(vec))
+	}
+	model, _ := c.Properties.GetString("embedding_model")
+	if model != "configurable-obs-embedder" {
+		t.Errorf("embedding_model = %q, want configurable-obs-embedder", model)
+	}
+	if eng.VecIdx().Len() == 0 {
+		t.Error("vec index empty after enrichment; concept not registered")
 	}
 }
 

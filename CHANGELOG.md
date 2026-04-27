@@ -9,6 +9,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Concepts are now embedded inline during LLM synthesis instead of
+  waiting for `gramaton reembed` to catch up.**
+  `enrichConceptSyntheses` previously wrote `content_full`,
+  `content_short`, and `synthesis_status` but left the concept
+  vectorless — concepts only got embeddings when the operator ran
+  `gramaton reembed` (which has no autonomous trigger). Concept-match
+  telemetry and any concept-based PRF were silently blind for any
+  concept the reembed pipeline had not yet processed; on this store,
+  378 concepts existed without embeddings before today's manual
+  reembed sweep. The synthesis flow now batches each successful
+  synthesis through the embedder outside the engine lock (three-phase
+  pattern, mirroring observation extraction), then registers the
+  vector + `embedding_model` under the engine write lock and adds the
+  concept to the vec index. Embed failure is logged-and-skipped so
+  reembed remains the back-fill safety net. Regression test at
+  `curation/enrich_concepts_test.go:TestEnrichConceptSynthesesEmbedsConcept`.
+  Tracker 01KQ60N4ZCCQDKM17XWQMZAX9C.
+
 - **`propIdx` now always rebuilds from graph at engine startup.**
   The previous gate (`propLoaded := s.propIdx.Count() > 0` in
   `core/indexes.go`) skipped rebuild whenever the index had any
