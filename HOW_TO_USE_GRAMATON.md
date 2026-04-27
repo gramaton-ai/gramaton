@@ -170,6 +170,41 @@ anything where missing one is a failure. Common patterns:
 - **A packing list**, shopping list, etc. — small, exhaustive,
   status-tracked.
 
+### Seeing what collections you have
+
+Just ask:
+
+- "List my collections."
+- "What collections exist?"
+- "Show all collections with their item counts."
+
+The agent calls `gramaton_collection_list` and you see every
+collection in the store with its name, item count, and whether it
+has a schema attached.
+
+### Creating a new collection
+
+Ask the agent to create one and describe what it's for. The agent
+picks an appropriate schema (or none) based on your description:
+
+- "Create a backlog collection called 'mobile-app-bugs'."
+- "Make a reading list for AI papers."
+- "Set up a packing list for the Tokyo trip."
+- "New collection: 'design-decisions' — items have a title, a
+  status (proposed / accepted / rejected / superseded), and a
+  decision date."
+
+For common shapes there are starter **templates** — `backlog`,
+`todo`, `reading-list`, `shopping-list`, `packing-list` — each with
+a sensible default schema. The agent picks one when your phrasing
+matches; you can also ask for a specific template by name ("create
+a backlog template called X"). For unique shapes, describe the
+fields and the agent builds the schema.
+
+If you skip the schema entirely, the collection accepts arbitrary
+fields per item — fine for ad-hoc lists, less helpful when you want
+exhaustive filtered views later.
+
 ### Filing items
 
 The agent files via `gramaton_collection_add`:
