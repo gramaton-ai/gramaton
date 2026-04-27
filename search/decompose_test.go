@@ -14,6 +14,36 @@ func (m *mockDecomposer) CompleteWithModel(_ context.Context, _ string, _ string
 	return m.response, m.err
 }
 
+// modelRecordingDecomposer captures the model arg passed to
+// CompleteWithModel so tests can assert the caller routed the
+// right tier. Mirror of modelRecordingReranker in rerank_test.go.
+type modelRecordingDecomposer struct {
+	gotModel string
+	response string
+}
+
+func (m *modelRecordingDecomposer) CompleteWithModel(_ context.Context, model, _ string) (string, error) {
+	m.gotModel = model
+	return m.response, nil
+}
+
+// TestDecomposeQueryThreadsModelArgToLLM pins the contract that
+// the model arg passed to DecomposeQuery (resolved by callers via
+// cfg.ModelForTask(TaskDecompose)) actually reaches the LLM. The
+// decompose function takes the model as an explicit parameter, so
+// the failure mode is "caller forgets to pass the resolved model"
+// rather than "function ignores the parameter" -- but a test that
+// asserts the value flows through guards both. Pre-Layer-1 the
+// signature was DecomposeQuery(ctx, llm, query) and the LLM used
+// its construction-time model.
+func TestDecomposeQueryThreadsModelArgToLLM(t *testing.T) {
+	rec := &modelRecordingDecomposer{response: `{"sub_queries": ["a", "b"]}`}
+	DecomposeQuery(context.Background(), rec, "test-decompose-model", "topic A and topic B")
+	if rec.gotModel != "test-decompose-model" {
+		t.Errorf("decompose used model %q, want %q", rec.gotModel, "test-decompose-model")
+	}
+}
+
 func TestDecomposeQuerySimple(t *testing.T) {
 	llm := &mockDecomposer{
 		response: `{"sub_queries": []}`,

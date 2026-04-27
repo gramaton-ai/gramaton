@@ -191,8 +191,8 @@ type GCConfig struct {
 // synthesis / manifest rollup.
 type CurationConfig struct {
 	// Enabled turns the curation loop on. When false, none of the
-	// cost-reduction knobs in LLMCurationConfig have any effect and
-	// the store loses free deterministic maintenance too.
+	// cost-reduction knobs in llm.curation have any effect and the
+	// store loses free deterministic maintenance too.
 	Enabled bool `yaml:"enabled"`
 
 	// Interval is the cadence of the curation tick. Shorter intervals

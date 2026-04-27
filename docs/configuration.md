@@ -116,6 +116,15 @@ llm:
 
 The `models.tasks` map is the primary cost/quality knob. Lower a task's tier to save cost; raise it for quality. Removing a key falls back to the baked-in default (`defaultEffortForTask` in `config/config.go`). Default assignments are Haiku-grade for short classification, summarization, manifest rollup, and search-time tasks; Sonnet-grade for long classification, contradiction detection, and concept synthesis.
 
+### Provider asymmetry: per-task tiers on OpenAI / Bedrock
+
+The `models.tasks` map is fully honored by the **anthropic** provider. The **openai** and **bedrock** providers fix the model at client-construction time (the SDKs need it baked into the client), so per-call `CompleteWithModel` overrides are ignored — both providers log a warning and use the construction-time model. In practice this means:
+
+- On Anthropic: every task uses the model resolved through its tier (`ModelForTask(task)` -> `Models.{Low,Medium,High}`). Setting `tasks.rerank: low` and `tasks.contradiction: high` actually picks two different models.
+- On OpenAI / Bedrock: every task uses `models.medium` (the construction-time default). The `tasks` map and `models.{low,high}` entries are dead weight — they're written, validated, and even resolved internally, but the provider call ignores them.
+
+If you're on OpenAI or Bedrock and want per-task tiering, that's a provider-level limitation we'd have to fix by reconstructing the client per call (rejected today: ~10x latency overhead at LLM-call rates curation hits). For now, set `models.medium` to whatever model you want all tasks to use, and ignore the tier dials.
+
 ### Cost and call caps
 
 Two independent safety nets under `cost_limits`, both checked before every LLM call:

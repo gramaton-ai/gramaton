@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Pin the rerank/decompose model-flow with end-to-end tests + doc the
+  provider asymmetry.** Closes the gap from the post-Layer-1 review:
+  prior tests asserted (a) `cfg.ModelForTask(...)` returned the right
+  string and (b) `DecomposeQuery` invoked `CompleteWithModel`, but no
+  test pinned that the resolved model string actually flowed through
+  to the LLM. New `search/rerank_test.go` adds a `modelRecordingReranker`
+  and two tests covering default-tier resolution and tier-override
+  pickup; `search/decompose_test.go` gains
+  `TestDecomposeQueryThreadsModelArgToLLM` with the equivalent
+  recording mock. Also adds a "Provider asymmetry" section under
+  `docs/configuration.md` LLM block noting that OpenAI and Bedrock
+  ignore the per-call model override and use their construction-time
+  model — meaning per-task tier dials are anthropic-only in practice.
+
 - **Doc cross-refs updated for the new `llm:` schema.**
   `docs/configuration.md` rewrites the LLM and curation sections to
   match the new shape; `docs/benchmarks.md` updates the
