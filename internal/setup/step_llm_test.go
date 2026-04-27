@@ -133,7 +133,7 @@ func TestStepLLMSkipBranch(t *testing.T) {
 	if wiz.cfg.LLM.Provider != "" {
 		t.Errorf("LLM.Provider: got %q, want empty", wiz.cfg.LLM.Provider)
 	}
-	if wiz.cfg.Search.RerankEnabled {
+	if wiz.cfg.LLM.Rerank.Enabled {
 		t.Errorf("Search.RerankEnabled: should stay false when LLM is skipped")
 	}
 	if !strings.Contains(out, "deterministic-only mode") {
@@ -238,13 +238,13 @@ func TestStepLLMBedrockBranch(t *testing.T) {
 	if wiz.cfg.LLM.Region != "us-west-2" {
 		t.Errorf("Region: got %q, want us-west-2 (default)", wiz.cfg.LLM.Region)
 	}
-	if !strings.HasPrefix(wiz.cfg.LLM.Model, "anthropic.claude-") {
-		t.Errorf("LLM.Model: got %q, want anthropic.claude-* Bedrock ID", wiz.cfg.LLM.Model)
+	if !strings.HasPrefix(wiz.cfg.LLM.Models.Medium, "anthropic.claude-") {
+		t.Errorf("LLM.Models.Medium: got %q, want anthropic.claude-* Bedrock ID", wiz.cfg.LLM.Models.Medium)
 	}
 	if wiz.cfg.LLM.Models.Low == "" || wiz.cfg.LLM.Models.Medium == "" || wiz.cfg.LLM.Models.High == "" {
 		t.Errorf("Models tier map should be populated with Bedrock IDs, got: %+v", wiz.cfg.LLM.Models)
 	}
-	if !wiz.cfg.Search.RerankEnabled {
+	if !wiz.cfg.LLM.Rerank.Enabled {
 		t.Errorf("Search.RerankEnabled: should flip to true when LLM is configured")
 	}
 	if !strings.Contains(out, "Bedrock with Anthropic models configured") {
@@ -273,14 +273,14 @@ func TestStepLLMBedrockCustomCapsWithBadInputs(t *testing.T) {
 	out := buf.String()
 
 	// Defaults must survive.
-	if wiz.cfg.LLM.MaxCostUSDPerDay != 5.00 {
-		t.Errorf("MaxCostUSDPerDay: got %v, want 5.00 (default preserved)", wiz.cfg.LLM.MaxCostUSDPerDay)
+	if wiz.cfg.LLM.CostLimits.MaxCostUSDPerDay != 5.00 {
+		t.Errorf("MaxCostUSDPerDay: got %v, want 5.00 (default preserved)", wiz.cfg.LLM.CostLimits.MaxCostUSDPerDay)
 	}
-	if wiz.cfg.LLM.MaxCallsPerDay != 500 {
-		t.Errorf("MaxCallsPerDay: got %d, want 500 (default preserved)", wiz.cfg.LLM.MaxCallsPerDay)
+	if wiz.cfg.LLM.CostLimits.MaxCallsPerDay != 500 {
+		t.Errorf("MaxCallsPerDay: got %d, want 500 (default preserved)", wiz.cfg.LLM.CostLimits.MaxCallsPerDay)
 	}
-	if wiz.cfg.LLMCuration.MaxCostUSDPerRun != 1.00 {
-		t.Errorf("MaxCostUSDPerRun: got %v, want 1.00 (default preserved)", wiz.cfg.LLMCuration.MaxCostUSDPerRun)
+	if wiz.cfg.LLM.CostLimits.MaxCostUSDPerRun != 1.00 {
+		t.Errorf("MaxCostUSDPerRun: got %v, want 1.00 (default preserved)", wiz.cfg.LLM.CostLimits.MaxCostUSDPerRun)
 	}
 	// User-visible warns should name the invalid inputs (one per bad
 	// field). Anything silently ignored would leave the user thinking

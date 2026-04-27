@@ -176,7 +176,7 @@ func (w *Wizard) verifyLLM() {
 		w.writer.Check(fmt.Sprintf("LLM: %s (custom provider -- config review recommended)", w.cfg.LLM.Provider))
 	}
 
-	if w.cfg.Search.RerankEnabled {
+	if w.cfg.LLM.Rerank.Enabled {
 		w.writer.Check("Search reranking: enabled (uses LLM for better top-N)")
 	}
 }

@@ -104,9 +104,9 @@ func New(cfg config.LLMConfig) (Provider, error) {
 	case "openai":
 		return openai.New(cfg)
 	case "kiro-cli":
-		p, err = kirocli.New(cfg.Model)
+		p, err = kirocli.New(cfg.Models.Medium)
 	case "claude-cli":
-		p, err = claudecli.New(cfg.Model)
+		p, err = claudecli.New(cfg.Models.Medium)
 	case "":
 		return nil, nil
 	default:
@@ -119,8 +119,8 @@ func New(cfg config.LLMConfig) (Provider, error) {
 	// Wrap CLI providers with rate limiting.
 	if isCLIProvider(cfg.Provider) {
 		interval := defaultCLIRateInterval
-		if cfg.RateLimitInterval > 0 {
-			interval = cfg.RateLimitInterval
+		if cfg.CostLimits.RateLimitInterval > 0 {
+			interval = cfg.CostLimits.RateLimitInterval
 		}
 		p = NewRateLimited(p, interval)
 	}

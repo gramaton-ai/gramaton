@@ -202,7 +202,7 @@ func TestReembedMaxAttemptsZeroDisables(t *testing.T) {
 		dim:    4,
 	}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), func(cfg *config.Config) {
-		cfg.LLMCuration.MaxEmbedAttempts = 0
+		cfg.LLM.Curation.Retries.MaxEmbedAttempts = 0
 	})
 
 	id := addReembedCandidate(t, eng, "content")

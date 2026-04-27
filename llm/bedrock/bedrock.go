@@ -86,8 +86,12 @@ type Client struct {
 // never logged; per-call refresh / retry diagnostics flow through
 // the awscfg slog adapter at Debug.
 func New(cfg config.LLMConfig) (*Client, error) {
-	if cfg.Model == "" {
-		return nil, fmt.Errorf("bedrock llm: model is required")
+	// Default model used by Complete() (no explicit model). Most call
+	// sites pass a model via CompleteWithModel resolved through
+	// cfg.ModelForTask; this only fires for callers that don't.
+	model := cfg.Models.Medium
+	if model == "" {
+		return nil, fmt.Errorf("bedrock llm: cfg.LLM.Models.Medium is required")
 	}
 
 	awsCfg, err := awscfg.Load(context.Background(), cfg.Region, cfg.AWSProfile,
@@ -100,11 +104,11 @@ func New(cfg config.LLMConfig) (*Client, error) {
 		"component", "llm",
 		"region", cfg.Region,
 		"profile_set", cfg.AWSProfile != "",
-		"model", cfg.Model)
+		"model", model)
 
 	return &Client{
 		client: bedrockruntime.NewFromConfig(awsCfg),
-		model:  cfg.Model,
+		model:  model,
 	}, nil
 }
 

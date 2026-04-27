@@ -10,13 +10,16 @@ import (
 )
 
 // Decomposer splits complex queries into sub-queries using an LLM.
+// Uses CompleteWithModel so the caller can pass the decompose-tier
+// model resolved via cfg.ModelForTask(TaskDecompose).
 type Decomposer interface {
-	Complete(ctx context.Context, prompt string) (string, error)
+	CompleteWithModel(ctx context.Context, model, prompt string) (string, error)
 }
 
 // DecomposeQuery splits a complex query into sub-queries using an LLM.
 // Returns nil if the query doesn't need decomposition (single concept).
-func DecomposeQuery(ctx context.Context, llm Decomposer, query string) []string {
+// model is the decompose-tier model name (cfg.ModelForTask(TaskDecompose)).
+func DecomposeQuery(ctx context.Context, llm Decomposer, model, query string) []string {
 	if llm == nil || query == "" {
 		return nil
 	}
@@ -29,7 +32,7 @@ Respond with JSON only: {"sub_queries": ["query1", "query2"]}
 If no decomposition needed: {"sub_queries": []}`
 
 	ctx = telemetry.WithTask(ctx, "decompose")
-	resp, err := llm.Complete(ctx, prompt)
+	resp, err := llm.CompleteWithModel(ctx, model, prompt)
 	if err != nil {
 		return nil
 	}

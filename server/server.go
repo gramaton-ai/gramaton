@@ -270,17 +270,16 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		if len(emptyTiers) > 0 {
 			logger.Warn("llm.models tier(s) empty; curation tasks mapped to those tiers will use the provider default",
 				"component", "server",
-				"empty_tiers", emptyTiers,
-				"default_model", engineCfg.LLM.Model)
+				"empty_tiers", emptyTiers)
 		}
 	}
 
 
 	usageTracker := llm.NewUsageTracker(
 		cfg.ConfigDir,
-		engineCfg.LLM.MaxCallsPerDay,
-		engineCfg.LLM.MaxCallsPerSession,
-		engineCfg.LLM.MaxCostUSDPerDay,
+		engineCfg.LLM.CostLimits.MaxCallsPerDay,
+		engineCfg.LLM.CostLimits.MaxCallsPerSession,
+		engineCfg.LLM.CostLimits.MaxCostUSDPerDay,
 	)
 
 	// Wrap the engine's LLM with Metered so EVERY consumer (search

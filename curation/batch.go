@@ -76,7 +76,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	// to concrete model names via LLM.Models. No hardcoded model names
 	// in this file -- if the config is incomplete the call will fail
 	// loudly rather than silently pin to an out-of-date default.
-	longThreshold := cfg.LLMCuration.LongClassificationThreshold
+	longThreshold := cfg.LLM.Curation.LongClassificationThreshold
 	if longThreshold <= 0 {
 		longThreshold = 2000
 	}
@@ -285,7 +285,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		ErrorKey:         "last_classify_error",
 		StatusKey:        "processing_status",
 		StatusValueAtMax: "stuck",
-		Max:              cfg.LLMCuration.MaxClassifyAttempts,
+		Max:              cfg.LLM.Curation.Retries.MaxClassifyAttempts,
 		TaskName:         "classify",
 	}
 	for _, f := range failedBatch {
@@ -313,7 +313,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 // non-batch providers (CLI providers, etc.). Uses the same prompts
 // and tiering as batch mode, one call at a time.
 //
-// Bounded by cfg.LLMCuration.MaxCallsPerRun. Earlier versions
+// Bounded by cfg.LLM.Curation.MaxCallsPerRun. Earlier versions
 // silently raised this to 100,000, which bypassed the circuit
 // breaker and let an admin trigger run unbounded LLM calls against
 // a paid provider. Operators who want a larger
@@ -326,20 +326,20 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 // constrain how many records this cycle processes within the cap.
 func runSequentialBatch(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, logger *slog.Logger) (*BatchResult, error) {
 	logger.Info("batch: sequential mode (provider does not support batch API)",
-		"max_calls", cfg.LLMCuration.MaxCallsPerRun)
+		"max_calls", cfg.LLM.Curation.MaxCallsPerRun)
 	start := time.Now()
 
 	// BatchSize raise is safe (sequential processing makes it a
 	// candidate-selection knob, not a per-call batch). MaxCallsPerRun
 	// is honoured as configured.
-	savedBatch := cfg.LLMCuration.BatchSize
-	if cfg.LLMCuration.MaxCallsPerRun > savedBatch {
-		cfg.LLMCuration.BatchSize = cfg.LLMCuration.MaxCallsPerRun
+	savedBatch := cfg.LLM.Curation.BatchSize
+	if cfg.LLM.Curation.MaxCallsPerRun > savedBatch {
+		cfg.LLM.Curation.BatchSize = cfg.LLM.Curation.MaxCallsPerRun
 	}
 
 	ar := runAutonomousInner(ctx, e, llmProv, cfg, nil, logger, false)
 
-	cfg.LLMCuration.BatchSize = savedBatch
+	cfg.LLM.Curation.BatchSize = savedBatch
 
 	return &BatchResult{
 		Submitted:  ar.Classified + ar.Errors,

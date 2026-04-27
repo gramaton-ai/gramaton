@@ -235,11 +235,9 @@ func (w *Wizard) llmAnthropic(ctx context.Context) error {
 	// half-configured files around if the user Ctrl+C'd mid-wizard.
 	w.cfg.LLM.Provider = "anthropic"
 	w.cfg.LLM.APIKeyFile = keyPath
-	// Leave LLM.Model at the default ("claude-sonnet-4-6") so code
-	// paths that call Complete() without a tier (search rerank,
-	// decompose, observe) use a solid default. Curation uses the
-	// tier-based Models map, which already defaults to Haiku for
-	// the frequent-task tier. See config.Defaults().
+	// Leave Models triple at the Defaults() values (low=haiku,
+	// medium=sonnet, high=opus). All call sites resolve the model via
+	// cfg.ModelForTask, which keys on the Tasks map (also at default).
 
 	// Test the key with a minimal completion. 5-second deadline
 	// keeps the wizard from hanging on a slow network; a failed
@@ -263,8 +261,10 @@ func (w *Wizard) validateAnthropicKey(ctx context.Context, keyPath string) error
 	// purely a test of the key.
 	testCfg := config.LLMConfig{
 		Provider:   "anthropic",
-		Model:      "claude-haiku-4-5", // cheapest model for the test call
 		APIKeyFile: keyPath,
+		Models: config.LLMModels{
+			Medium: "claude-haiku-4-5", // cheapest model for the test call
+		},
 	}
 	client, err := anthropic.New(testCfg)
 	if err != nil {
@@ -333,9 +333,10 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 		if keep {
 			w.cfg.LLM.Provider = "openai"
 			w.cfg.LLM.APIKeyFile = keyPath
-			w.cfg.LLM.Model = "gpt-4o-mini"
+			w.cfg.LLM.Models.Low = "gpt-4o-mini"
+			w.cfg.LLM.Models.Medium = "gpt-4o-mini"
+			w.cfg.LLM.Models.High = "gpt-4o"
 			w.writer.Check(fmt.Sprintf("Using existing key: %s", keyPath))
-			w.writer.Warn("Note: curation tier models still point at Anthropic names. Edit config.yaml's llm.models map to use OpenAI model names (e.g., gpt-4o-mini, gpt-4o).")
 			return w.cfgCapsPrompt(ctx)
 		}
 	}
@@ -363,18 +364,12 @@ func (w *Wizard) llmOpenAI(ctx context.Context) error {
 
 	w.cfg.LLM.Provider = "openai"
 	w.cfg.LLM.APIKeyFile = keyPath
-	w.cfg.LLM.Model = "gpt-4o-mini"
-	// Note: Models tier map still holds Anthropic defaults, which are
-	// Anthropic-specific names. Curation will fail on task-tier calls
-	// against OpenAI unless Models is re-populated with OpenAI names.
-	// TODO(post-OSS, for a follow-up): override Models.{Low, Medium,
-	// High} with OpenAI equivalents when provider is openai. For now,
-	// this path leaves a latent-but-surviveable misconfig: the
-	// fallback LLM.Model works for rerank/decompose, but curation
-	// tasks will error on tier-specific calls until Models is edited.
-	// This is a known gap surfaced in the config.yaml comments.
-
-	w.writer.Warn("Note: curation tier models still point at Anthropic names. Edit config.yaml's llm.models map to use OpenAI model names (e.g., gpt-4o-mini, gpt-4o).")
+	// Replace the Anthropic-named tier defaults with OpenAI ones so
+	// every call site (rerank, decompose, curation tasks) resolves to
+	// a model the OpenAI API recognizes.
+	w.cfg.LLM.Models.Low = "gpt-4o-mini"
+	w.cfg.LLM.Models.Medium = "gpt-4o-mini"
+	w.cfg.LLM.Models.High = "gpt-4o"
 	return w.cfgCapsPrompt(ctx)
 }
 
@@ -473,9 +468,8 @@ func (w *Wizard) llmBedrock(ctx context.Context) error {
 	w.cfg.LLM.Provider = "bedrock"
 	w.cfg.LLM.Region = region
 	w.cfg.LLM.AWSProfile = profile
-	// Bedrock model IDs use the anthropic.claude-<tier>-<version>-<date>-v<n>:0 format.
-	// These values track current Bedrock catalog for Anthropic.
-	w.cfg.LLM.Model = "anthropic.claude-sonnet-4-6-20250514-v1:0"
+	// Bedrock model IDs use the anthropic.claude-<tier>-<version>-<date>-v<n>:0
+	// format. These values track current Bedrock catalog for Anthropic.
 	w.cfg.LLM.Models.Low = "anthropic.claude-haiku-4-5-20250514-v1:0"
 	w.cfg.LLM.Models.Medium = "anthropic.claude-sonnet-4-6-20250514-v1:0"
 	w.cfg.LLM.Models.High = "anthropic.claude-opus-4-7-20250514-v1:0"
@@ -564,16 +558,16 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	// Also flip rerank on here: the user has committed to an LLM, so
 	// they should get the search-quality benefit. Rerank gracefully
 	// no-ops if the provider becomes unreachable.
-	w.cfg.Search.RerankEnabled = true
+	w.cfg.LLM.Rerank.Enabled = true
 
 	// Set the defaults. These values are chosen to be "safety net, not
 	// budget" -- most users will spend far less at typical usage.
 	// Anchors derived from: Haiku @ ~$0.005/call x 20 calls/cycle max
 	// x 60 cycles/hour = ~$6/hour absolute worst case, which is well
 	// below $5/day because most cycles are idle.
-	w.cfg.LLM.MaxCostUSDPerDay = 5.00
-	w.cfg.LLM.MaxCallsPerDay = 500
-	w.cfg.LLMCuration.MaxCostUSDPerRun = 1.00
+	w.cfg.LLM.CostLimits.MaxCostUSDPerDay = 5.00
+	w.cfg.LLM.CostLimits.MaxCallsPerDay = 500
+	w.cfg.LLM.CostLimits.MaxCostUSDPerRun = 1.00
 
 	w.writer.Blank()
 	w.writer.Paragraph(
@@ -623,8 +617,8 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	// that confuses users. Editing config.yaml is the escape hatch
 	// for advanced tuning.
 	w.writer.Blank()
-	w.writer.Prompt(fmt.Sprintf("Max USD per day (default $%.2f):", w.cfg.LLM.MaxCostUSDPerDay))
-	day, err := w.prompter.Text(fmt.Sprintf("%.2f", w.cfg.LLM.MaxCostUSDPerDay))
+	w.writer.Prompt(fmt.Sprintf("Max USD per day (default $%.2f):", w.cfg.LLM.CostLimits.MaxCostUSDPerDay))
+	day, err := w.prompter.Text(fmt.Sprintf("%.2f", w.cfg.LLM.CostLimits.MaxCostUSDPerDay))
 	if err != nil {
 		return err
 	}
@@ -632,38 +626,38 @@ func (w *Wizard) cfgCapsPrompt(ctx context.Context) error {
 	// user-visible warn explaining why we kept the default. Silent
 	// fallback would leave users thinking their value took effect.
 	if v, parseErr := parseMoneyUSD(day); parseErr == nil && v > 0 {
-		w.cfg.LLM.MaxCostUSDPerDay = v
-	} else if day != fmt.Sprintf("%.2f", w.cfg.LLM.MaxCostUSDPerDay) && parseErr != nil {
-		w.writer.Warn(fmt.Sprintf("Invalid USD/day value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLM.MaxCostUSDPerDay))
+		w.cfg.LLM.CostLimits.MaxCostUSDPerDay = v
+	} else if day != fmt.Sprintf("%.2f", w.cfg.LLM.CostLimits.MaxCostUSDPerDay) && parseErr != nil {
+		w.writer.Warn(fmt.Sprintf("Invalid USD/day value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLM.CostLimits.MaxCostUSDPerDay))
 	}
 
-	w.writer.Prompt(fmt.Sprintf("Max API calls per day (default %d):", w.cfg.LLM.MaxCallsPerDay))
-	calls, err := w.prompter.Text(fmt.Sprintf("%d", w.cfg.LLM.MaxCallsPerDay))
+	w.writer.Prompt(fmt.Sprintf("Max API calls per day (default %d):", w.cfg.LLM.CostLimits.MaxCallsPerDay))
+	calls, err := w.prompter.Text(fmt.Sprintf("%d", w.cfg.LLM.CostLimits.MaxCallsPerDay))
 	if err != nil {
 		return err
 	}
 	if v, parseErr := parseIntAtLeast(calls, 1); parseErr == nil {
-		w.cfg.LLM.MaxCallsPerDay = v
-	} else if calls != fmt.Sprintf("%d", w.cfg.LLM.MaxCallsPerDay) {
-		w.writer.Warn(fmt.Sprintf("Invalid calls/day value: %v. Keeping default %d.", parseErr, w.cfg.LLM.MaxCallsPerDay))
+		w.cfg.LLM.CostLimits.MaxCallsPerDay = v
+	} else if calls != fmt.Sprintf("%d", w.cfg.LLM.CostLimits.MaxCallsPerDay) {
+		w.writer.Warn(fmt.Sprintf("Invalid calls/day value: %v. Keeping default %d.", parseErr, w.cfg.LLM.CostLimits.MaxCallsPerDay))
 	}
 
-	w.writer.Prompt(fmt.Sprintf("Max USD per curation cycle (default $%.2f):", w.cfg.LLMCuration.MaxCostUSDPerRun))
-	run, err := w.prompter.Text(fmt.Sprintf("%.2f", w.cfg.LLMCuration.MaxCostUSDPerRun))
+	w.writer.Prompt(fmt.Sprintf("Max USD per curation cycle (default $%.2f):", w.cfg.LLM.CostLimits.MaxCostUSDPerRun))
+	run, err := w.prompter.Text(fmt.Sprintf("%.2f", w.cfg.LLM.CostLimits.MaxCostUSDPerRun))
 	if err != nil {
 		return err
 	}
 	if v, parseErr := parseMoneyUSD(run); parseErr == nil && v > 0 {
-		w.cfg.LLMCuration.MaxCostUSDPerRun = v
-	} else if run != fmt.Sprintf("%.2f", w.cfg.LLMCuration.MaxCostUSDPerRun) && parseErr != nil {
-		w.writer.Warn(fmt.Sprintf("Invalid USD/cycle value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLMCuration.MaxCostUSDPerRun))
+		w.cfg.LLM.CostLimits.MaxCostUSDPerRun = v
+	} else if run != fmt.Sprintf("%.2f", w.cfg.LLM.CostLimits.MaxCostUSDPerRun) && parseErr != nil {
+		w.writer.Warn(fmt.Sprintf("Invalid USD/cycle value: %v. Keeping default $%.2f.", parseErr, w.cfg.LLM.CostLimits.MaxCostUSDPerRun))
 	}
 
 	w.writer.Check(fmt.Sprintf(
 		"Caps set: $%.2f/day, %d calls/day, $%.2f/cycle",
-		w.cfg.LLM.MaxCostUSDPerDay,
-		w.cfg.LLM.MaxCallsPerDay,
-		w.cfg.LLMCuration.MaxCostUSDPerRun,
+		w.cfg.LLM.CostLimits.MaxCostUSDPerDay,
+		w.cfg.LLM.CostLimits.MaxCallsPerDay,
+		w.cfg.LLM.CostLimits.MaxCostUSDPerRun,
 	))
 	return nil
 }

@@ -40,8 +40,10 @@ type queryEmbedder interface {
 }
 
 // reranker is the LLM interface used for search result reranking.
+// Uses CompleteWithModel so the caller can pass the rerank-tier model
+// resolved via cfg.ModelForTask(TaskRerank).
 type reranker interface {
-	Complete(ctx context.Context, prompt string) (string, error)
+	CompleteWithModel(ctx context.Context, model, prompt string) (string, error)
 }
 
 // scored is an intermediate search result with score and sort metadata.
@@ -474,8 +476,8 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	// Step 4b: LLM reranking (optional). Send top-N candidates to
 	// the LLM for relevance scoring. Only runs for text queries when
 	// reranking is enabled and an LLM is available.
-	if q.Text != "" && t.reranker != nil && t.cfg.Search.RerankEnabled {
-		rerankN := t.cfg.Search.RerankCandidates
+	if q.Text != "" && t.reranker != nil && t.cfg.LLM.Rerank.Enabled {
+		rerankN := t.cfg.LLM.Rerank.Candidates
 		if rerankN <= 0 {
 			rerankN = 50
 		}

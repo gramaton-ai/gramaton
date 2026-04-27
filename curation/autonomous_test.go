@@ -228,7 +228,7 @@ func TestClassifyPendingParseError(t *testing.T) {
 func TestClassifyPendingFailureBumpsAttemptCounter(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxClassifyAttempts = 3
+	cfg.LLM.Curation.Retries.MaxClassifyAttempts = 3
 
 	id := addPendingNode(t, eng, "Content that always fails")
 
@@ -260,7 +260,7 @@ func TestClassifyPendingFailureBumpsAttemptCounter(t *testing.T) {
 func TestClassifyPendingMarksStuckAtThreshold(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxClassifyAttempts = 3
+	cfg.LLM.Curation.Retries.MaxClassifyAttempts = 3
 
 	id := addPendingNode(t, eng, "Pathological content")
 
@@ -300,7 +300,7 @@ func TestClassifyPendingMarksStuckAtThreshold(t *testing.T) {
 func TestClassifyPendingMaxAttemptsZeroDisables(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxClassifyAttempts = 0
+	cfg.LLM.Curation.Retries.MaxClassifyAttempts = 0
 
 	id := addPendingNode(t, eng, "Content")
 
@@ -326,7 +326,7 @@ func TestClassifyPendingMaxAttemptsZeroDisables(t *testing.T) {
 func TestClassifyPendingSuccessClearsAttempts(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxClassifyAttempts = 3
+	cfg.LLM.Curation.Retries.MaxClassifyAttempts = 3
 
 	id := addPendingNode(t, eng, "Initially failing content")
 
@@ -365,7 +365,7 @@ func TestClassifyPendingSuccessClearsAttempts(t *testing.T) {
 func TestClassifyPendingMaxCallsLimit(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	// Create 5 pending records.
 	for i := 0; i < 5; i++ {
@@ -391,7 +391,7 @@ func TestClassifyPendingMaxCallsLimit(t *testing.T) {
 func TestClassifyPendingBatchSize(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 2
+	cfg.LLM.Curation.BatchSize = 2
 
 	// Create 5 pending records.
 	for i := 0; i < 5; i++ {
@@ -471,7 +471,7 @@ func TestClassifyPendingModelTiering(t *testing.T) {
 	// for short classification is low, for long is medium.
 	cfg.LLM.Models.Low = "test-low-model"
 	cfg.LLM.Models.Medium = "test-medium-model"
-	cfg.LLMCuration.LongClassificationThreshold = 100
+	cfg.LLM.Curation.LongClassificationThreshold = 100
 
 	// Short content (below threshold) -> low-tier model.
 	shortID := addPendingNode(t, eng, "short fact")
@@ -642,7 +642,7 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 func TestSummarizeFailureBumpsAttemptCounter(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSummaryAttempts = 3
+	cfg.LLM.Curation.Retries.MaxSummaryAttempts = 3
 
 	id := addProcessedNodeNoSummary(t, eng, "Content that fails")
 
@@ -670,7 +670,7 @@ func TestSummarizeFailureBumpsAttemptCounter(t *testing.T) {
 func TestSummarizeSkipsRecordsAtThreshold(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSummaryAttempts = 3
+	cfg.LLM.Curation.Retries.MaxSummaryAttempts = 3
 
 	addProcessedNodeNoSummary(t, eng, "Pathological content")
 
@@ -696,7 +696,7 @@ func TestSummarizeSkipsRecordsAtThreshold(t *testing.T) {
 func TestSummarizeMaxAttemptsZeroDisables(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSummaryAttempts = 0
+	cfg.LLM.Curation.Retries.MaxSummaryAttempts = 0
 
 	id := addProcessedNodeNoSummary(t, eng, "Content")
 
@@ -722,7 +722,7 @@ func TestSummarizeMaxAttemptsZeroDisables(t *testing.T) {
 func TestSummarizeSuccessClearsAttempts(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSummaryAttempts = 3
+	cfg.LLM.Curation.Retries.MaxSummaryAttempts = 3
 
 	id := addProcessedNodeNoSummary(t, eng, "Initially failing content")
 
@@ -930,7 +930,7 @@ func TestGenerateSummariesSkipsExistingSummary(t *testing.T) {
 func TestGenerateSummariesMaxCalls(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	for i := 0; i < 5; i++ {
 		addProcessedNodeNoSummary(t, eng, fmt.Sprintf("Content %d", i))
@@ -957,8 +957,8 @@ func TestGenerateSummariesMaxCalls(t *testing.T) {
 func TestRunAutonomousIntegration(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
-	cfg.LLMCuration.MaxCallsPerRun = 20
+	cfg.LLM.Curation.BatchSize = 10
+	cfg.LLM.Curation.MaxCallsPerRun = 20
 
 	// One pending (needs classify), one processed without summary (needs summarize).
 	addPendingNode(t, eng, "Pending: Kafka event streaming")
@@ -991,7 +991,7 @@ func TestRunAutonomousIntegration(t *testing.T) {
 func TestClassifyPendingDryRun(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	addPendingNode(t, eng, "Kafka event streaming for microservices")
 
@@ -1026,7 +1026,7 @@ func TestClassifyPendingDryRun(t *testing.T) {
 func TestGenerateSummariesDryRun(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	addProcessedNodeNoSummary(t, eng, "OAuth implementation guide")
 
@@ -1061,8 +1061,8 @@ func TestGenerateSummariesDryRun(t *testing.T) {
 func TestRunAutonomousDryRunIntegration(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
-	cfg.LLMCuration.MaxCallsPerRun = 20
+	cfg.LLM.Curation.BatchSize = 10
+	cfg.LLM.Curation.MaxCallsPerRun = 20
 
 	addPendingNode(t, eng, "Pending: Kafka streaming")
 	addProcessedNodeNoSummary(t, eng, "No summary: OAuth guide")
@@ -1128,10 +1128,10 @@ func addProcessedNodeWithEmbedding(t *testing.T, eng *core.Engine, content strin
 func TestDetectContradictions(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1 // exercise single-pair path
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1 // exercise single-pair path
 
 	// Two records with embeddings in the contradiction similarity range (~0.7 cosine).
 	addProcessedNodeWithEmbedding(t, eng, "We use JWT tokens for auth", []float32{1.0, 0.0, 0.0})
@@ -1169,10 +1169,10 @@ func TestDetectContradictions(t *testing.T) {
 func TestDetectContradictionsDryRun(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
 
 	addProcessedNodeWithEmbedding(t, eng, "We use PostgreSQL", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "We migrated to MySQL", []float32{0.7, 0.7, 0.0})
@@ -1211,9 +1211,9 @@ func TestDetectContradictionsDryRun(t *testing.T) {
 func TestDetectContradictionsNoMatch(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
 
 	// Records with very different embeddings (below min similarity).
 	addProcessedNodeWithEmbedding(t, eng, "Auth tokens", []float32{1.0, 0.0, 0.0})
@@ -1244,10 +1244,10 @@ func TestDetectContradictionsNoMatch(t *testing.T) {
 func TestDetectContradictionsWritesNoContradictionEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha observation about caching", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta observation, similar-but-distinct topic", []float32{0.7, 0.7, 0.0})
@@ -1306,10 +1306,10 @@ func TestDetectContradictionsWritesNoContradictionEdge(t *testing.T) {
 func TestDetectContradictionsSkipsPairsWithNoContradictionEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha observation about caching", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta observation, similar-but-distinct topic", []float32{0.7, 0.7, 0.0})
@@ -1397,7 +1397,7 @@ func TestManifestNegativeCacheBoundsRetries(t *testing.T) {
 	}
 
 	cfg := config.Defaults()
-	cfg.LLMCuration.MaxManifestAttempts = 3
+	cfg.LLM.Curation.Retries.MaxManifestAttempts = 3
 	cache := &ManifestCache{}
 
 	// Three consecutive failures: each call hits the LLM.
@@ -1436,7 +1436,7 @@ func TestManifestNegativeCacheClearedOnSuccess(t *testing.T) {
 	}
 
 	cfg := config.Defaults()
-	cfg.LLMCuration.MaxManifestAttempts = 3
+	cfg.LLM.Curation.Retries.MaxManifestAttempts = 3
 	cache := &ManifestCache{}
 
 	// Fail twice.
@@ -1474,7 +1474,7 @@ func TestManifestNegativeCacheClearedOnHashChange(t *testing.T) {
 	}
 
 	cfg := config.Defaults()
-	cfg.LLMCuration.MaxManifestAttempts = 3
+	cfg.LLM.Curation.Retries.MaxManifestAttempts = 3
 	cache := &ManifestCache{}
 
 	// Three failures on initial fingerprint A.
@@ -1519,7 +1519,7 @@ func TestManifestNegativeCacheEmptySummaryCounts(t *testing.T) {
 	}
 
 	cfg := config.Defaults()
-	cfg.LLMCuration.MaxManifestAttempts = 3
+	cfg.LLM.Curation.Retries.MaxManifestAttempts = 3
 	cache := &ManifestCache{}
 
 	// LLM returns whitespace -- trims to empty.
@@ -1579,10 +1579,10 @@ func TestParseContradictionResultConfidenceClamp(t *testing.T) {
 func TestDetectContradictionsSupersedes(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Original API v1 design", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Updated API v2 design", []float32{0.7, 0.7, 0.0})
@@ -1639,9 +1639,9 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 func TestDetectContradictionsLLMError(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
 
 	addProcessedNodeWithEmbedding(t, eng, "Record about auth", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "Another auth record", []float32{0.7, 0.7, 0.0})
@@ -1688,11 +1688,11 @@ func findContradictionCheckSkippedEdge(t *testing.T, eng *core.Engine, idA, idB 
 func TestDetectContradictionsFailureCreatesSoftFailEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
-	cfg.LLMCuration.MaxContradictionAttempts = 3
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+	cfg.LLM.Curation.Retries.MaxContradictionAttempts = 3
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
@@ -1725,11 +1725,11 @@ func TestDetectContradictionsFailureCreatesSoftFailEdge(t *testing.T) {
 func TestDetectContradictionsFailureIncrementsExistingEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
-	cfg.LLMCuration.MaxContradictionAttempts = 5
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+	cfg.LLM.Curation.Retries.MaxContradictionAttempts = 5
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
@@ -1776,11 +1776,11 @@ func TestDetectContradictionsFailureIncrementsExistingEdge(t *testing.T) {
 func TestDetectContradictionsLocksOutAtThreshold(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
-	cfg.LLMCuration.MaxContradictionAttempts = 3
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+	cfg.LLM.Curation.Retries.MaxContradictionAttempts = 3
 
 	addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
@@ -1808,11 +1808,11 @@ func TestDetectContradictionsLocksOutAtThreshold(t *testing.T) {
 func TestDetectContradictionsMaxAttemptsZeroDisables(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1
-	cfg.LLMCuration.MaxContradictionAttempts = 0
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+	cfg.LLM.Curation.Retries.MaxContradictionAttempts = 0
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta", []float32{0.7, 0.7, 0.0})
@@ -1832,11 +1832,11 @@ func TestDetectContradictionsMaxAttemptsZeroDisables(t *testing.T) {
 func TestDetectContradictionsBatchFailureMarksAllPairs(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.3
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 5
-	cfg.LLMCuration.MaxContradictionAttempts = 3
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.3
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 5
+	cfg.LLM.Curation.Retries.MaxContradictionAttempts = 3
 
 	// Three records, all mutually similar within the window.
 	idA := addProcessedNodeWithEmbedding(t, eng, "A", []float32{1.0, 0.0, 0.0})
@@ -2153,13 +2153,16 @@ func TestClassifySystemPromptShortIsSmaller(t *testing.T) {
 func TestClassifyPendingRoutesShortAndLongTiers(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
-	cfg.LLMCuration.MaxCallsPerRun = 10
-	cfg.LLMCuration.LongClassificationThreshold = 100
+	cfg.LLM.Curation.BatchSize = 10
+	cfg.LLM.Curation.MaxCallsPerRun = 10
+	cfg.LLM.Curation.LongClassificationThreshold = 100
 	cfg.LLM.Models.Low = "test-short-model"
 	cfg.LLM.Models.Medium = "test-long-model"
-	cfg.LLMCuration.ClassificationShortEffort = "low"
-	cfg.LLMCuration.ClassificationLongEffort = "medium"
+	if cfg.LLM.Models.Tasks == nil {
+		cfg.LLM.Models.Tasks = map[string]string{}
+	}
+	cfg.LLM.Models.Tasks["classification_short"] = "low"
+	cfg.LLM.Models.Tasks["classification_long"] = "medium"
 
 	// One short record (below 100 chars), one long record.
 	addPendingNode(t, eng, "short content")
@@ -2259,8 +2262,8 @@ func TestMeanCosineToCentroidEmpty(t *testing.T) {
 func TestEnrichConceptSynthesesLogsDimMismatch(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.ConceptCoherenceMin = 0.6 // > 0 forces the cosine check
-	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLM.Curation.Concept.CoherenceMin = 0.6 // > 0 forces the cosine check
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
 
 	now := time.Now().UTC()
 
@@ -2384,9 +2387,9 @@ func addPendingConcept(t *testing.T, eng *core.Engine, keyword string, memberCou
 func TestSynthesizeBatchFailureBumpsAttemptCounter(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSynthesisAttempts = 3
-	cfg.LLMCuration.MaxConceptsPerRun = 5
-	cfg.LLMCuration.SynthesisBatchSize = 5
+	cfg.LLM.Curation.Retries.MaxSynthesisAttempts = 3
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
+	cfg.LLM.Curation.Concept.SynthesisBatchSize = 5
 
 	id := addPendingConcept(t, eng, "kafka", 3)
 
@@ -2420,9 +2423,9 @@ func TestSynthesizeBatchFailureBumpsAttemptCounter(t *testing.T) {
 func TestSynthesizeMarksStuckAtThreshold(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSynthesisAttempts = 3
-	cfg.LLMCuration.MaxConceptsPerRun = 5
-	cfg.LLMCuration.SynthesisBatchSize = 5
+	cfg.LLM.Curation.Retries.MaxSynthesisAttempts = 3
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
+	cfg.LLM.Curation.Concept.SynthesisBatchSize = 5
 
 	id := addPendingConcept(t, eng, "redis", 3)
 
@@ -2459,9 +2462,9 @@ func TestSynthesizeMarksStuckAtThreshold(t *testing.T) {
 func TestSynthesizeMaxAttemptsZeroDisables(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSynthesisAttempts = 0
-	cfg.LLMCuration.MaxConceptsPerRun = 5
-	cfg.LLMCuration.SynthesisBatchSize = 5
+	cfg.LLM.Curation.Retries.MaxSynthesisAttempts = 0
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
+	cfg.LLM.Curation.Concept.SynthesisBatchSize = 5
 
 	id := addPendingConcept(t, eng, "postgres", 3)
 
@@ -2486,9 +2489,9 @@ func TestSynthesizeMaxAttemptsZeroDisables(t *testing.T) {
 func TestSynthesizeSuccessClearsAttempts(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxSynthesisAttempts = 3
-	cfg.LLMCuration.MaxConceptsPerRun = 5
-	cfg.LLMCuration.SynthesisBatchSize = 5
+	cfg.LLM.Curation.Retries.MaxSynthesisAttempts = 3
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
+	cfg.LLM.Curation.Concept.SynthesisBatchSize = 5
 
 	id := addPendingConcept(t, eng, "elasticsearch", 3)
 
@@ -2668,10 +2671,10 @@ func TestParseContradictionBatchResultMalformed(t *testing.T) {
 func TestDetectContradictionsBatched(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 5
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 5
 
 	// Three records pairwise similar (two pairs expected -- the third
 	// record's similarity to the first pair's members falls in the
@@ -2710,10 +2713,10 @@ func TestDetectContradictionsBatched(t *testing.T) {
 func TestDetectContradictionsBatchedFallbackToSingleWhenSize1(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxContradictionChecks = 10
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
-	cfg.LLMCuration.ContradictionBatchSize = 1 // explicit single-pair mode
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1 // explicit single-pair mode
 
 	addProcessedNodeWithEmbedding(t, eng, "We use JWT", []float32{1.0, 0.0, 0.0})
 	addProcessedNodeWithEmbedding(t, eng, "We switched to cookies", []float32{0.7, 0.7, 0.0})
@@ -2959,7 +2962,7 @@ func TestBuildContextSignalsPartial(t *testing.T) {
 func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	// Create a section node with a truncated summary (first 200 chars of content).
 	longContent := "On a theory of this sort, what makes some neural process an instance " +
@@ -3024,7 +3027,7 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 func TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 10
+	cfg.LLM.Curation.BatchSize = 10
 
 	now := time.Now().UTC()
 
@@ -3089,7 +3092,7 @@ func TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural(t *testing.
 func TestCreateConceptNodes(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.MaxConceptsPerRun = 5
+	cfg.LLM.Curation.Concept.MaxPerRun = 5
 
 	now := time.Now().UTC()
 

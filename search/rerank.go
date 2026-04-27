@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
@@ -74,7 +75,7 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 	defer cancel()
 	ctx = telemetry.WithTask(ctx, "rerank")
 
-	resp, err := t.reranker.Complete(ctx, b.String())
+	resp, err := t.reranker.CompleteWithModel(ctx, t.cfg.ModelForTask(config.TaskRerank), b.String())
 	if err != nil {
 		slog.Warn("rerank LLM call failed, using original ranking",
 			"component", "search",

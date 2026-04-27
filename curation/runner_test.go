@@ -394,8 +394,8 @@ func TestOrphanLinkerSkipsLowQuality(t *testing.T) {
 func TestCircuitBreakerTripsOnConsecutiveErrors(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 5
-	cfg.LLMCuration.MaxCallsPerRun = 10
+	cfg.LLM.Curation.BatchSize = 5
+	cfg.LLM.Curation.MaxCallsPerRun = 10
 
 	// Add pending records.
 	for i := 0; i < 5; i++ {
@@ -465,8 +465,8 @@ func TestCircuitBreakerResetOnManualTrigger(t *testing.T) {
 func TestCircuitBreakerResetsOnSuccessfulCycle(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.BatchSize = 1
-	cfg.LLMCuration.MaxCallsPerRun = 5
+	cfg.LLM.Curation.BatchSize = 1
+	cfg.LLM.Curation.MaxCallsPerRun = 5
 
 	addPendingNode(t, eng, "test content")
 

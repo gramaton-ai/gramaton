@@ -332,7 +332,7 @@ func TestNewWithEnvCreds(t *testing.T) {
 
 	cfg := config.LLMConfig{
 		Provider:              "bedrock",
-		Model:                 "anthropic.claude-sonnet-4-6-20250514-v1:0",
+		Models:                 config.LLMModels{Medium:"anthropic.claude-sonnet-4-6-20250514-v1:0"},
 		Region:                "us-east-1",
 		AWSAccessKeyIDEnv:     "TEST_BEDROCK_AKID",
 		AWSSecretAccessKeyEnv: "TEST_BEDROCK_SECRET",
@@ -355,7 +355,7 @@ func TestCompleteIntegration(t *testing.T) {
 
 	cfg := config.LLMConfig{
 		Provider: "bedrock",
-		Model:    "anthropic.claude-sonnet-4-6-20250514-v1:0",
+		Models:    config.LLMModels{Medium:"anthropic.claude-sonnet-4-6-20250514-v1:0"},
 		Region:   "us-west-2",
 	}
 

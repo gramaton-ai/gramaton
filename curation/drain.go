@@ -43,11 +43,11 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 	logger = ensureLogger(logger)
 	start := time.Now()
 
-	minSim := cfg.LLMCuration.ContradictionMinSim
+	minSim := cfg.LLM.Curation.Contradiction.MinSimilarity
 	if minSim <= 0 {
 		minSim = 0.5
 	}
-	maxSim := cfg.LLMCuration.ContradictionMaxSim
+	maxSim := cfg.LLM.Curation.Contradiction.MaxSimilarity
 	if maxSim <= 0 {
 		maxSim = 0.85
 	}

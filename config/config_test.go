@@ -250,12 +250,13 @@ func TestLoadTrimsWhitespaceFromPathsAndIdentifiers(t *testing.T) {
 	yamlBody := "data_dir: /tmp/example   \n" +
 		"llm:\n" +
 		"    provider: anthropic  \n" +
-		"    model: claude-sonnet-4-6   \n" +
 		"    api_key_file: /tmp/key   \n" +
 		"    api_key_env: MY_ENV   \n" +
 		"    region: us-west-2  \n" +
 		"    aws_profile: my-profile   \n" +
 		"    base_url: https://example.com   \n" +
+		"    models:\n" +
+		"        medium: claude-sonnet-4-6   \n" +
 		"embedding:\n" +
 		"    provider: bert   \n" +
 		"    model: bge-small-en-v1.5   \n" +
@@ -279,7 +280,7 @@ func TestLoadTrimsWhitespaceFromPathsAndIdentifiers(t *testing.T) {
 	}{
 		{"DataDir", cfg.DataDir, "/tmp/example"},
 		{"LLM.Provider", cfg.LLM.Provider, "anthropic"},
-		{"LLM.Model", cfg.LLM.Model, "claude-sonnet-4-6"},
+		{"LLM.Models.Medium", cfg.LLM.Models.Medium, "claude-sonnet-4-6"},
 		{"LLM.APIKeyFile", cfg.LLM.APIKeyFile, "/tmp/key"},
 		{"LLM.APIKeyEnv", cfg.LLM.APIKeyEnv, "MY_ENV"},
 		{"LLM.Region", cfg.LLM.Region, "us-west-2"},
@@ -355,16 +356,16 @@ func TestNewConfigDefaults(t *testing.T) {
 	}
 
 	// LLM.
-	if cfg.LLM.Model != "claude-sonnet-4-6" {
-		t.Fatalf("expected claude-sonnet-4-6, got %q", cfg.LLM.Model)
+	if cfg.LLM.Models.Medium != "claude-sonnet-4-6" {
+		t.Fatalf("expected claude-sonnet-4-6, got %q", cfg.LLM.Models.Medium)
 	}
 
 	// LLM Curation.
-	if cfg.LLMCuration.BatchSize != 10 {
-		t.Fatalf("expected batch 10, got %d", cfg.LLMCuration.BatchSize)
+	if cfg.LLM.Curation.BatchSize != 10 {
+		t.Fatalf("expected batch 10, got %d", cfg.LLM.Curation.BatchSize)
 	}
-	if cfg.LLMCuration.MaxCallsPerRun != 20 {
-		t.Fatalf("expected 20 max calls, got %d", cfg.LLMCuration.MaxCallsPerRun)
+	if cfg.LLM.Curation.MaxCallsPerRun != 20 {
+		t.Fatalf("expected 20 max calls, got %d", cfg.LLM.Curation.MaxCallsPerRun)
 	}
 
 	// Backup.
@@ -395,9 +396,10 @@ func TestLoadBoundsEnforcement(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	os.WriteFile(path, []byte(`
-llm_curation:
-  max_calls_per_run: 999999
-  batch_size: 999
+llm:
+  curation:
+    max_calls_per_run: 999999
+    batch_size: 999
 curation:
   max_orphans_per_run: 999
   max_dedup_per_run: 999
@@ -408,11 +410,11 @@ curation:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.LLMCuration.MaxCallsPerRun > 10000 {
-		t.Fatalf("MaxCallsPerRun should be capped at 10000, got %d", cfg.LLMCuration.MaxCallsPerRun)
+	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {
+		t.Fatalf("MaxCallsPerRun should be capped at 10000, got %d", cfg.LLM.Curation.MaxCallsPerRun)
 	}
-	if cfg.LLMCuration.BatchSize > 5000 {
-		t.Fatalf("BatchSize should be capped at 5000, got %d", cfg.LLMCuration.BatchSize)
+	if cfg.LLM.Curation.BatchSize > 5000 {
+		t.Fatalf("BatchSize should be capped at 5000, got %d", cfg.LLM.Curation.BatchSize)
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		t.Fatalf("MaxOrphansPerRun should be capped, got %d", cfg.Curation.MaxOrphansPerRun)
@@ -488,7 +490,7 @@ func TestLoadWithFallbackMergeInheritsFromGlobal(t *testing.T) {
 	// Global sets LLM provider + model + logging. Store only overrides port.
 	global := "" +
 		"server:\n  port: 42982\n" +
-		"llm:\n  provider: anthropic\n  model: claude-haiku-4-5\n" +
+		"llm:\n  provider: anthropic\n  models:\n    medium: claude-haiku-4-5\n" +
 		"logging:\n  level: debug\n"
 	store := "" +
 		"server:\n  port: 7338\n"
@@ -508,8 +510,8 @@ func TestLoadWithFallbackMergeInheritsFromGlobal(t *testing.T) {
 	if cfg.LLM.Provider != "anthropic" {
 		t.Fatalf("expected inherited LLM provider=anthropic, got %q", cfg.LLM.Provider)
 	}
-	if cfg.LLM.Model != "claude-haiku-4-5" {
-		t.Fatalf("expected inherited LLM model, got %q", cfg.LLM.Model)
+	if cfg.LLM.Models.Medium != "claude-haiku-4-5" {
+		t.Fatalf("expected inherited LLM model, got %q", cfg.LLM.Models.Medium)
 	}
 	if cfg.Logging.Level != "debug" {
 		t.Fatalf("expected inherited logging level=debug, got %q", cfg.Logging.Level)
@@ -566,13 +568,16 @@ func TestEffortForTask_DefaultsAndOverrides(t *testing.T) {
 	}
 
 	// Override wins.
-	cfg.LLMCuration.ContradictionEffort = "high"
+	if cfg.LLM.Models.Tasks == nil {
+		cfg.LLM.Models.Tasks = map[string]string{}
+	}
+	cfg.LLM.Models.Tasks["contradiction"] = "high"
 	if got := cfg.EffortForTask(TaskContradiction); got != EffortHigh {
 		t.Errorf("override effort for contradiction = %s, want high", got)
 	}
 
 	// Unknown override string falls back to default.
-	cfg.LLMCuration.ConceptEffort = "extreme"
+	cfg.LLM.Models.Tasks["concept"] = "extreme"
 	if got := cfg.EffortForTask(TaskConcept); got != EffortMedium {
 		t.Errorf("unknown override should fall back, got %s", got)
 	}
@@ -616,7 +621,10 @@ func TestModelForTask_EndToEnd(t *testing.T) {
 		t.Errorf("contradiction model = %q, want claude-sonnet-4-6", got)
 	}
 	// Override effort + override tier model.
-	cfg.LLMCuration.SummarizationEffort = "high"
+	if cfg.LLM.Models.Tasks == nil {
+		cfg.LLM.Models.Tasks = map[string]string{}
+	}
+	cfg.LLM.Models.Tasks["summarization"] = "high"
 	cfg.LLM.Models.High = "premium-summarizer"
 	if got := cfg.ModelForTask(TaskSummarization); got != "premium-summarizer" {
 		t.Errorf("summarization model after effort+tier override = %q, want premium-summarizer", got)
@@ -627,6 +635,66 @@ func TestValidateDefaultsAccepted(t *testing.T) {
 	cfg := Defaults()
 	if err := Validate(&cfg); err != nil {
 		t.Fatalf("Defaults() should validate, got %v", err)
+	}
+}
+
+// TestDefaultsRoundTripYAML verifies the new LLM config schema marshals
+// to YAML and unmarshals back to an equivalent Config. Pin against
+// silent regressions where a field gains a yaml tag mismatch (e.g.
+// rename in struct without rename in marshalled key) and the load path
+// silently drops the value.
+func TestDefaultsRoundTripYAML(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	cfg := Defaults()
+	if err := Save(cfg, path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Spot-check the nested fields most likely to silently drift.
+	if loaded.LLM.Models.Low != cfg.LLM.Models.Low {
+		t.Errorf("Models.Low: round-tripped %q, want %q", loaded.LLM.Models.Low, cfg.LLM.Models.Low)
+	}
+	if loaded.LLM.Curation.Contradiction.MaxChecks != cfg.LLM.Curation.Contradiction.MaxChecks {
+		t.Errorf("Curation.Contradiction.MaxChecks: round-tripped %d, want %d",
+			loaded.LLM.Curation.Contradiction.MaxChecks, cfg.LLM.Curation.Contradiction.MaxChecks)
+	}
+	if loaded.LLM.Curation.Concept.CoherenceMin != cfg.LLM.Curation.Concept.CoherenceMin {
+		t.Errorf("Curation.Concept.CoherenceMin: round-tripped %f, want %f",
+			loaded.LLM.Curation.Concept.CoherenceMin, cfg.LLM.Curation.Concept.CoherenceMin)
+	}
+	if loaded.LLM.Curation.Retries.MaxClassifyAttempts != cfg.LLM.Curation.Retries.MaxClassifyAttempts {
+		t.Errorf("Curation.Retries.MaxClassifyAttempts: round-tripped %d, want %d",
+			loaded.LLM.Curation.Retries.MaxClassifyAttempts, cfg.LLM.Curation.Retries.MaxClassifyAttempts)
+	}
+	if loaded.LLM.Rerank.Enabled != cfg.LLM.Rerank.Enabled {
+		t.Errorf("Rerank.Enabled: round-tripped %v, want %v", loaded.LLM.Rerank.Enabled, cfg.LLM.Rerank.Enabled)
+	}
+}
+
+// TestModelForTaskRerankAndDecompose covers the two new task entries
+// (TaskRerank, TaskDecompose) added in the LLM-config uplift. Both
+// default to low tier; both honor the llm.models.tasks override map.
+func TestModelForTaskRerankAndDecompose(t *testing.T) {
+	cfg := Defaults()
+	if got := cfg.ModelForTask(TaskRerank); got != "claude-haiku-4-5" {
+		t.Errorf("default rerank model = %q, want claude-haiku-4-5", got)
+	}
+	if got := cfg.ModelForTask(TaskDecompose); got != "claude-haiku-4-5" {
+		t.Errorf("default decompose model = %q, want claude-haiku-4-5", got)
+	}
+	cfg.LLM.Models.Tasks = map[string]string{
+		"rerank":    "high",
+		"decompose": "medium",
+	}
+	if got := cfg.ModelForTask(TaskRerank); got != "claude-opus-4-7" {
+		t.Errorf("overridden rerank model = %q, want claude-opus-4-7", got)
+	}
+	if got := cfg.ModelForTask(TaskDecompose); got != "claude-sonnet-4-6" {
+		t.Errorf("overridden decompose model = %q, want claude-sonnet-4-6", got)
 	}
 }
 

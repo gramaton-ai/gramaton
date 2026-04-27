@@ -69,7 +69,7 @@ func TestResolveKeyUnsetEnv(t *testing.T) {
 func TestNewWithoutKey(t *testing.T) {
 	cfg := config.LLMConfig{
 		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-6",
+		Models:     config.LLMModels{Medium:"claude-sonnet-4-6"},
 		APIKeyEnv: "NONEXISTENT_KEY_12345",
 	}
 	_, err := New(cfg)
@@ -81,7 +81,7 @@ func TestNewWithoutKey(t *testing.T) {
 func TestNewWithDirectKey(t *testing.T) {
 	cfg := config.LLMConfig{
 		Provider: "anthropic",
-		Model:    "claude-sonnet-4-6",
+		Models:    config.LLMModels{Medium:"claude-sonnet-4-6"},
 		APIKey:   "sk-ant-test-key",
 	}
 	client, err := New(cfg)

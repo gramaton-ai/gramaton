@@ -15,8 +15,8 @@ import (
 func TestDrainContradictionsNoLLMMarksInWindowPairs(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
 
 	// Two records in the similarity window; no edge between them.
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha observation", []float32{1.0, 0.0, 0.0})
@@ -66,8 +66,8 @@ func TestDrainContradictionsNoLLMMarksInWindowPairs(t *testing.T) {
 func TestDrainContradictionsNoLLMSkipsAlreadyEdgedPairs(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.95
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
 
 	idA := addProcessedNodeWithEmbedding(t, eng, "Alpha", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Beta, similar", []float32{0.7, 0.7, 0.0})
@@ -109,8 +109,8 @@ func TestDrainContradictionsNoLLMSkipsAlreadyEdgedPairs(t *testing.T) {
 func TestDrainContradictionsNoLLMOutOfWindowSkipped(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
-	cfg.LLMCuration.ContradictionMinSim = 0.5
-	cfg.LLMCuration.ContradictionMaxSim = 0.85
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.85
 
 	// Two records so dissimilar they won't hit min_sim.
 	addProcessedNodeWithEmbedding(t, eng, "Auth tokens", []float32{1.0, 0.0, 0.0})

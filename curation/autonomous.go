@@ -141,11 +141,11 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	start := time.Now()
 	logger = ensureLogger(logger)
 	result := &AutonomousResult{DryRun: dryRun}
-	maxCalls := cfg.LLMCuration.MaxCallsPerRun
+	maxCalls := cfg.LLM.Curation.MaxCallsPerRun
 	if maxCalls <= 0 {
 		maxCalls = 20
 	}
-	maxCostUSD := cfg.LLMCuration.MaxCostUSDPerRun // 0 = no cost cap
+	maxCostUSD := cfg.LLM.CostLimits.MaxCostUSDPerRun // 0 = no cost cap
 
 	// Cycle-scoped usage recorder. All LLM calls in this cycle
 	// accumulate tokens + cost here; the "autonomous curation complete"
@@ -154,7 +154,7 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 	cycleUsage := &telemetry.UsageRecorder{}
 	ctx = telemetry.WithUsageRecorder(ctx, cycleUsage)
 
-	taskTimeout := cfg.LLMCuration.TaskTimeout
+	taskTimeout := cfg.LLM.Curation.TaskTimeout
 
 	runTaskWithTimeout(ctx, "classify", taskTimeout, logger, func(c context.Context) {
 		classifyPending(c, e, llmProv, cfg, result, maxCalls, maxCostUSD, logger, dryRun)
@@ -384,7 +384,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	if setter, ok := llmProv.(llm.SystemPromptSetter); ok {
 		defer setter.SetSystemPrompt("")
 	}
-	batchSize := cfg.LLMCuration.BatchSize
+	batchSize := cfg.LLM.Curation.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
 	}
@@ -476,7 +476,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 
 	// Assign model per record: effort-based (short vs long classification).
-	longThreshold := cfg.LLMCuration.LongClassificationThreshold
+	longThreshold := cfg.LLM.Curation.LongClassificationThreshold
 	if longThreshold <= 0 {
 		longThreshold = 2000
 	}
@@ -484,14 +484,14 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	longModel := cfg.ModelForTask(config.TaskClassificationLong)
 
 	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
-	useCache := hasSystemPrompt && cfg.LLMCuration.PromptCachingEnabled
+	useCache := hasSystemPrompt && cfg.LLM.Curation.PromptCachingEnabled
 
 	// Pick the short-tier system prompt. When
 	// ClassifyShortPromptCompressed is true (default), short records
 	// use the condensed ClassifySystemPromptShort; when false, they get
 	// the full ClassifySystemPrompt identical to long-tier records.
 	shortSystemPrompt := ClassifySystemPromptShort
-	if !cfg.LLMCuration.ClassifyShortPromptCompressed {
+	if !cfg.LLM.Curation.ClassifyShortPromptCompressed {
 		shortSystemPrompt = ClassifySystemPrompt
 	}
 
@@ -653,7 +653,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	// Failed records: bump attempts counter, capture the reason for
 	// triage, and mark stuck once the threshold is reached. Skipped
 	// when MaxClassifyAttempts is 0 (legacy infinite-retry behavior).
-	maxAttempts := cfg.LLMCuration.MaxClassifyAttempts
+	maxAttempts := cfg.LLM.Curation.Retries.MaxClassifyAttempts
 	classifyRetry := taskRetryPolicy{
 		AttemptsKey:      "classify_attempts",
 		ErrorKey:         "last_classify_error",
@@ -682,14 +682,14 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	// lacks SystemPromptSetter.
 	userPromptTemplate := summarizePrompt
 	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
-	if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+	if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 		setter.SetSystemPrompt(SummarizeSystemPrompt)
 		defer setter.SetSystemPrompt("")
 	} else {
 		userPromptTemplate = SummarizeSystemPrompt + "\n\n" + summarizePrompt
 	}
 
-	batchSize := cfg.LLMCuration.BatchSize
+	batchSize := cfg.LLM.Curation.BatchSize
 	if batchSize <= 0 {
 		batchSize = 10
 	}
@@ -706,7 +706,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	var batch []needsSummary
 	var sectionCandidates []needsSummary
 
-	maxSummaryAttempts := cfg.LLMCuration.MaxSummaryAttempts
+	maxSummaryAttempts := cfg.LLM.Curation.Retries.MaxSummaryAttempts
 	sumIt := g.NodeIterator()
 	for sumIt.Next() {
 		n := sumIt.Node()
@@ -1071,7 +1071,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	sum := sha256.Sum256([]byte(fp))
 	currentHash := hex.EncodeToString(sum[:])
 
-	cacheEnabled := cfg.LLMCuration.ManifestCacheEnabled
+	cacheEnabled := cfg.LLM.Curation.ManifestCacheEnabled
 	if cacheEnabled && cache != nil && cache.Hash == currentHash && cache.Summary != "" {
 		result.ManifestSummary = cache.Summary
 		result.ManifestCacheHit = true
@@ -1088,7 +1088,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	// has already failed MaxManifestAttempts consecutive cycles. The
 	// negative cache clears automatically when the fingerprint
 	// changes (store state moved) or when any later success lands.
-	maxAttempts := cfg.LLMCuration.MaxManifestAttempts
+	maxAttempts := cfg.LLM.Curation.Retries.MaxManifestAttempts
 	if cacheEnabled && cache != nil && maxAttempts > 0 &&
 		cache.LastFailedHash == currentHash && cache.FailedAttempts >= maxAttempts {
 		logger.Info("manifest summary skipped: prior failures on same fingerprint",
@@ -1118,7 +1118,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	// Cache the invariant summarize-the-store instructions.
 	userPromptTemplate := manifestSummaryPrompt
 	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
-	if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+	if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 		setter.SetSystemPrompt(ManifestSystemPrompt)
 		defer setter.SetSystemPrompt("")
 	} else {
@@ -1190,18 +1190,18 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		return
 	}
 
-	batchSize := cfg.LLMCuration.SynthesisBatchSize
+	batchSize := cfg.LLM.Curation.Concept.SynthesisBatchSize
 	if batchSize <= 0 {
 		batchSize = 5
 	}
-	maxInputTokens := cfg.LLMCuration.SynthesisMaxInputTokens
+	maxInputTokens := cfg.LLM.Curation.Concept.SynthesisMaxInputTokens
 	if maxInputTokens <= 0 {
 		maxInputTokens = 8000
 	}
 
 	// Cap to remaining LLM budget.
 	remaining := maxCalls - result.LLMCalls
-	maxConcepts := cfg.LLMCuration.MaxConceptsPerRun
+	maxConcepts := cfg.LLM.Curation.Concept.MaxPerRun
 	if maxConcepts <= 0 {
 		maxConcepts = 5
 	}
@@ -1264,7 +1264,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	// Cache the invariant synthesis instructions on providers that
 	// support it; otherwise include them at the top of every batch.
 	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
-	useCache := hasSystemPrompt && cfg.LLMCuration.PromptCachingEnabled
+	useCache := hasSystemPrompt && cfg.LLM.Curation.PromptCachingEnabled
 	preamble := ""
 	if !useCache {
 		preamble = ConceptSynthesisSystemPrompt + "\n\n"
@@ -1283,7 +1283,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	currentPrompt.WriteString(preamble)
 	baseTokens := currentPrompt.Len() / 4
 
-	coherenceMin := cfg.LLMCuration.ConceptCoherenceMin
+	coherenceMin := cfg.LLM.Curation.Concept.CoherenceMin
 
 	for _, pc := range pending {
 		// Optional coherence pre-filter: skip clusters whose members
@@ -1428,7 +1428,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			ErrorKey:         "last_synthesis_error",
 			StatusKey:        "synthesis_status",
 			StatusValueAtMax: "stuck",
-			Max:              cfg.LLMCuration.MaxSynthesisAttempts,
+			Max:              cfg.LLM.Curation.Retries.MaxSynthesisAttempts,
 			TaskName:         "synthesize",
 		}
 
@@ -1664,15 +1664,15 @@ func conceptShortSummary(synthesis string, maxRunes int) string {
 // LLM to determine if they contradict or supersede each other.
 func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
-	maxChecks := cfg.LLMCuration.MaxContradictionChecks
+	maxChecks := cfg.LLM.Curation.Contradiction.MaxChecks
 	if maxChecks <= 0 {
 		maxChecks = 5
 	}
-	minSim := cfg.LLMCuration.ContradictionMinSim
+	minSim := cfg.LLM.Curation.Contradiction.MinSimilarity
 	if minSim <= 0 {
 		minSim = 0.5
 	}
-	maxSim := cfg.LLMCuration.ContradictionMaxSim
+	maxSim := cfg.LLM.Curation.Contradiction.MaxSimilarity
 	if maxSim <= 0 {
 		maxSim = 0.85
 	}
@@ -1751,7 +1751,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			// supersedes / no_contradiction edge) or hits the threshold
 			// (edge becomes a hard skip). Any other edge type is a
 			// hard skip immediately.
-			maxContradictionAttempts := cfg.LLMCuration.MaxContradictionAttempts
+			maxContradictionAttempts := cfg.LLM.Curation.Retries.MaxContradictionAttempts
 			isHardSkip := func(edge *graph.Edge) bool {
 				if edge.Type != contradictionCheckSkippedEdge {
 					return true
@@ -1771,7 +1771,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 					break
 				}
 			}
-			if !hasEdge && cfg.LLMCuration.ContradictionCheckReverseEdges {
+			if !hasEdge && cfg.LLM.Curation.Contradiction.CheckReverseEdges {
 				for _, edge := range e.Graph().EdgesFrom(sr.NodeID) {
 					if edge.TargetID == idA && isHardSkip(edge) {
 						hasEdge = true
@@ -1836,7 +1836,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	}
 	var failedChecks []checkedFailure
 
-	batchSize := cfg.LLMCuration.ContradictionBatchSize
+	batchSize := cfg.LLM.Curation.Contradiction.BatchSize
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -1846,7 +1846,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		// Cache the single-pair instructions. User body is the two records.
 		userPromptTemplate := contradictionPrompt
 		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
-		if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+		if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 			setter.SetSystemPrompt(ContradictionSystemPrompt)
 			defer setter.SetSystemPrompt("")
 		} else {
@@ -1906,7 +1906,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		// which instructs the LLM to return a JSON array with pair_id.
 		includeSystemInline := true
 		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
-		if hasSetter && cfg.LLMCuration.PromptCachingEnabled {
+		if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 			setter.SetSystemPrompt(ContradictionBatchSystemPrompt)
 			defer setter.SetSystemPrompt("")
 			includeSystemInline = false
@@ -2085,7 +2085,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	// treats this edge as a soft skip until attempts reach the threshold,
 	// then a hard skip. Skipped when MaxContradictionAttempts is 0
 	// (legacy behavior: pairs re-enter the pool until they succeed).
-	maxContradictionAttempts := cfg.LLMCuration.MaxContradictionAttempts
+	maxContradictionAttempts := cfg.LLM.Curation.Retries.MaxContradictionAttempts
 	for _, fc := range failedChecks {
 		if maxContradictionAttempts <= 0 {
 			break

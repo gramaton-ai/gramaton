@@ -29,17 +29,16 @@ type Config struct {
 
 	// --- User-facing configuration ---
 
-	Server      ServerConfig      `yaml:"server"`
-	Embedding   EmbeddingConfig   `yaml:"embedding"`
-	Logging     LoggingConfig     `yaml:"logging"`
-	Backup      BackupConfig      `yaml:"backup"`
-	GC          GCConfig          `yaml:"gc"`
-	Curation    CurationConfig    `yaml:"curation"`
-	LLM         LLMConfig         `yaml:"llm"`
-	LLMCuration LLMCurationConfig `yaml:"llm_curation"`
-	Observe     ObserveConfig     `yaml:"observe"`
-	Limits      LimitsConfig      `yaml:"limits"`
-	Search      SearchConfig      `yaml:"search"`
+	Server    ServerConfig    `yaml:"server"`
+	Embedding EmbeddingConfig `yaml:"embedding"`
+	Logging   LoggingConfig   `yaml:"logging"`
+	Backup    BackupConfig    `yaml:"backup"`
+	GC        GCConfig        `yaml:"gc"`
+	Curation  CurationConfig  `yaml:"curation"`
+	LLM       LLMConfig       `yaml:"llm"`
+	Observe   ObserveConfig   `yaml:"observe"`
+	Limits    LimitsConfig    `yaml:"limits"`
+	Search    SearchConfig    `yaml:"search"`
 
 	// --- Internal tuning (do not adjust casually) ---
 
@@ -257,32 +256,25 @@ type CurationConfig struct {
 	MaxObservationAttempts int `yaml:"max_observation_attempts"`
 }
 
-// LLMConfig configures the LLM provider and cost/rate caps. Model
-// selection for curation tasks flows through Models (effort tiers);
-// the top-level Model field is only used by a few non-curation code
-// paths (see below).
+// LLMConfig is the single home for every LLM-related dial. Sub-structs
+// keep concerns separated:
+//
+//   - top-level fields: provider + auth (the only fields a typical
+//     operator must touch).
+//   - Rerank: search-time LLM reranking toggle + tuning.
+//   - Models: tier definitions (low/medium/high) and per-task tier
+//     assignments. All model-selection lives here; deleting Tasks
+//     entries falls back to the baked-in defaults.
+//   - CostLimits: caps that apply to ALL llm calls, regardless of
+//     subsystem.
+//   - Curation: knobs for the autonomous LLM-driven cleanup cycle.
+//     Carries the tuning knobs operators are not expected to touch.
 type LLMConfig struct {
 	// Provider: "anthropic", "openai", "bedrock", "claude-cli", "kiro-cli".
+	// claude-cli and kiro-cli shell out to the vendor's interactive CLI;
+	// they are unsupported and may violate the vendor's terms of service
+	// (see docs/providers.md).
 	Provider string `yaml:"provider"`
-
-	// Model is the default used by code paths that call the provider's
-	// Complete() without specifying a model. Current call sites:
-	//   - search/rerank.go     (active when search.rerank_enabled)
-	//   - search/decompose.go  (complex query decomposition)
-	//   - curation/parallel.go (fallback when a task's effort tier
-	//                           resolves to an empty model; should
-	//                           never fire with a properly configured
-	//                           LLM.Models)
-	// Does NOT affect session extraction (done agent-side) or capture-time
-	// classification (no server-side LLM call; deferred to curation).
-	Model string `yaml:"model"`
-
-	// Models maps effort tiers to concrete model names. Curation tasks
-	// declare an effort level (low/medium/high) via LLMCuration.*Effort;
-	// this struct turns that into the actual model to pass to the
-	// provider. Swap versions or providers here without touching
-	// task-level code.
-	Models LLMModels `yaml:"models"`
 
 	// APIKeyFile is the path to a file holding the provider API key.
 	APIKeyFile string `yaml:"api_key_file,omitempty"`
@@ -313,263 +305,221 @@ type LLMConfig struct {
 	// Bedrock-specific: env var name for the secret access key.
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
 
-	// MaxCallsPerDay caps total LLM calls per calendar day. 0 = no cap.
-	// Safety net against runaway cost. Count-based; acts as backstop
-	// when MaxCostUSDPerDay can't compute a cost (unknown model in the
-	// pricing table) and cost therefore reads as 0.
-	MaxCallsPerDay int `yaml:"max_calls_per_day,omitempty"`
+	// Rerank: search-time LLM reranking of retrieval candidates.
+	Rerank LLMRerankConfig `yaml:"rerank"`
 
-	// MaxCallsPerSession caps LLM calls per server session (between
-	// starts). 0 = no cap.
-	MaxCallsPerSession int `yaml:"max_calls_per_session,omitempty"`
+	// Models: tier definitions + per-task tier assignments.
+	Models LLMModels `yaml:"models"`
 
-	// MaxCostUSDPerDay caps total estimated LLM cost per calendar day
-	// in USD. 0 = no cap. Cost is estimated via llm.EstimateCost using
-	// the pricing table; providers or models missing from the table
-	// contribute 0 to this total (MaxCallsPerDay is the backstop for
-	// those). Complements MaxCallsPerDay rather than replacing it: a
-	// count cap is cheap insurance for any model the pricing table
-	// hasn't learned yet.
-	MaxCostUSDPerDay float64 `yaml:"max_cost_usd_per_day,omitempty"`
+	// CostLimits: caps applied to ALL llm calls.
+	CostLimits LLMCostLimitsConfig `yaml:"cost_limits"`
+
+	// Curation: tuning knobs for the autonomous cleanup cycle.
+	// Operators are not expected to edit these.
+	Curation LLMCurationConfig `yaml:"curation"`
+}
+
+// LLMRerankConfig controls the search-time LLM reranker. When enabled,
+// the top Candidates retrieval results are passed to the LLM (at the
+// `rerank` task tier) for relevance reordering. Adds ~1 LLM call per
+// search.
+type LLMRerankConfig struct {
+	// Enabled: send retrieval candidates back through the LLM for
+	// relevance reordering.
+	Enabled bool `yaml:"enabled"`
+
+	// Candidates: number of initial results fed to the reranker.
+	// More = better quality, more cost + latency.
+	Candidates int `yaml:"candidates"`
+}
+
+// LLMCostLimitsConfig is the cost backstop. Caps apply to every llm
+// call regardless of subsystem. Zero disables a given cap.
+type LLMCostLimitsConfig struct {
+	// MaxCallsPerDay caps total LLM calls per calendar day. 0 = no
+	// cap. Backstop when MaxCostUSDPerDay can't compute a cost
+	// (unknown model in the pricing table).
+	MaxCallsPerDay int `yaml:"max_calls_per_day"`
+
+	// MaxCallsPerSession caps LLM calls per server session
+	// (between starts). 0 = no cap.
+	MaxCallsPerSession int `yaml:"max_calls_per_session"`
+
+	// MaxCostUSDPerDay caps total estimated LLM cost per calendar
+	// day in USD. 0 = no cap. Cost is estimated via llm.EstimateCost
+	// using the per-model pricing table; unknown models contribute 0
+	// (MaxCallsPerDay backs that case).
+	MaxCostUSDPerDay float64 `yaml:"max_cost_usd_per_day"`
+
+	// MaxCostUSDPerRun caps estimated LLM cost per curation cycle.
+	// 0 = no cap. Cycle-level twin of MaxCostUSDPerDay.
+	MaxCostUSDPerRun float64 `yaml:"max_cost_usd_per_run"`
 
 	// RateLimitInterval is the minimum gap between successive LLM
 	// calls. 0 = no rate limit.
-	RateLimitInterval time.Duration `yaml:"rate_limit_interval,omitempty"`
+	RateLimitInterval time.Duration `yaml:"rate_limit_interval"`
 
 	// MaxResponseTokens caps the response length the provider is
-	// allowed to generate. Currently honoured only by the Anthropic
-	// provider (the API requires the field on every messages call).
-	// 0 falls back to the per-provider default (4096 for Anthropic),
-	// which silently truncates long responses (e.g. concept syntheses
-	// on large stores). Raise this if you observe truncated curation
-	// output. OpenAI/Bedrock providers don't expose the field today,
-	// so setting this has no effect on them.
-	MaxResponseTokens int `yaml:"max_response_tokens,omitempty"`
+	// allowed to generate. Currently honored only by the Anthropic
+	// provider. 0 falls back to the per-provider default
+	// (4096 for Anthropic).
+	MaxResponseTokens int `yaml:"max_response_tokens"`
 }
 
-// LLMModels maps effort tiers to model names. Every curation task picks
-// its effort level (low/medium/high), and this struct turns that into a
-// concrete model to pass to the provider. Keeping model names off the
-// task-level code means a provider swap or model revision only edits
-// this struct.
+// LLMModels carries the three tier-to-model assignments and the
+// per-task tier overrides. Every code path that calls an LLM has a
+// task name; Tasks[task] picks the tier; the tier picks the model.
+// Keeping model names off the task-level code means a provider swap
+// or model revision only edits this struct.
 type LLMModels struct {
-	// Low: cheap/fast tier (default: claude-haiku-4-5).
+	// Low: cheap, fast tier. Use for high-volume / easy tasks.
 	Low string `yaml:"low"`
 
-	// Medium: balanced tier (default: claude-sonnet-4-6).
+	// Medium: balanced tier. Use for tasks that need real reasoning.
 	Medium string `yaml:"medium"`
 
-	// High: best-quality tier (default: claude-opus-4-7).
+	// High: best-quality tier. Use sparingly -- premium pricing.
 	High string `yaml:"high"`
+
+	// Tasks maps task name -> tier ("low", "medium", "high"). Unset
+	// keys fall back to defaultEffortForTask. Unknown tier strings
+	// also fall back to the default. Recognized task names match the
+	// LLMTask constants below.
+	Tasks map[string]string `yaml:"tasks"`
 }
 
-// LLMCurationConfig controls the autonomous (LLM-driven) part of
-// curation: classification, summarization, contradiction detection,
-// concept synthesis, manifest rollup. Every field is cost- or
-// quality-related and intended for operator tuning.
+// LLMCurationConfig is curation-cycle tuning. WARNING: these values
+// control algorithmic behavior that has been carefully tuned. Do not
+// edit unless you have a specific reason and have read the relevant
+// code path. Wrong values silently degrade store quality (missed
+// contradictions, generic concepts, runaway cost).
 type LLMCurationConfig struct {
-	// BatchSize is the number of records classified per cycle.
+	// BatchSize is the number of records classified per LLM call.
 	BatchSize int `yaml:"batch_size"`
 
 	// MaxCallsPerRun is the hard cap on total LLM calls in one
-	// curation cycle. Protects against a runaway cycle burning budget.
-	// Acts as a backstop when MaxCostUSDPerRun can't compute a cost
-	// (unknown model in the pricing table) -- keep it set even when
-	// cost cap is enabled.
+	// curation cycle. Protects against a runaway cycle. Acts as
+	// backstop when CostLimits.MaxCostUSDPerRun can't compute a cost
+	// (unknown model in pricing table) -- keep set even when cost
+	// cap is enabled.
 	MaxCallsPerRun int `yaml:"max_calls_per_run"`
 
-	// MaxClassifyAttempts caps how many times a single record will be
-	// retried by autonomous classification before being marked
-	// processing_status="stuck". Without this, a pathological record
-	// (oversized content, content-policy refusal, persistent parse
-	// failures) sits at the front of the FIFO pending queue and
-	// re-attempts every cycle forever -- billing input tokens on every
-	// retry. Stuck records are excluded from future cycles; operators
-	// surface them via gramaton_search(processing_status="stuck"),
-	// inspect last_classify_error for triage, and either fix the
-	// underlying record (gramaton_update / gramaton_classify) or
-	// resolve it. Default: 3. Zero disables the counter (legacy
-	// infinite-retry behavior).
-	MaxClassifyAttempts int `yaml:"max_classify_attempts"`
-
-	// MaxSummaryAttempts caps how many times generateSummaries will
-	// retry a single record. Same failure-class as MaxClassifyAttempts:
-	// content the LLM consistently can't summarize (oversized, returns
-	// empty after trim, content-policy issues) re-enters the summary
-	// candidate set every cycle. The selection in generateSummaries
-	// skips records where summary_attempts >= this threshold; the
-	// last failure reason is captured in last_summary_error. Default:
-	// 3. Zero disables. A separate counter from MaxClassifyAttempts
-	// because the failures are independent: a record can classify
-	// cleanly but produce an unusable summary (e.g. empty after trim).
-	MaxSummaryAttempts int `yaml:"max_summary_attempts"`
-
-	// MaxSynthesisAttempts caps how many times enrichConceptSyntheses
-	// will retry a single concept node before flipping its
-	// synthesis_status to "stuck". The selection guard keys on
-	// synthesis_status="pending", so flipping to "stuck" auto-excludes
-	// the concept from future cycles. Failures captured per concept
-	// in synthesis_attempts (Int64) and last_synthesis_error (String,
-	// max 200 runes). Concept synthesis bundles multiple records'
-	// member summaries per call -- a single bad concept can rebill
-	// the entire batch's tokens. Default: 3. Zero disables.
-	MaxSynthesisAttempts int `yaml:"max_synthesis_attempts"`
-
-	// MaxManifestAttempts caps consecutive failures of
-	// generateManifestSummary on the SAME store-state fingerprint.
-	// The manifest-summary path is keyed by a content hash, not by a
-	// record, so the failure-tracking lives on the in-memory
-	// ManifestCache (LastFailedHash + FailedAttempts). When the
-	// counter reaches this threshold, the LLM call is skipped on
-	// subsequent cycles -- until the hash changes (store state moves)
-	// or a successful manifest call clears the negative cache. Default:
-	// 3. Zero disables (legacy infinite-retry on the same failing hash).
-	MaxManifestAttempts int `yaml:"max_manifest_attempts"`
-
-	// MaxContradictionAttempts caps how many times a single pair will
-	// be retried by detectContradictions before being permanently
-	// excluded. Per-pair state lives on a `contradiction_check_skipped`
-	// edge between the pair (the unit is a PAIR, not a record, so a
-	// per-record counter wouldn't capture the right state). The edge
-	// carries an `attempts` Int64 property; the read-phase hasEdge
-	// guard treats this edge as a SOFT skip (pair stays in candidate
-	// pool) when attempts < this threshold, and a HARD skip when
-	// attempts >= threshold. Default: 3. Zero disables (failed pairs
-	// re-enter every cycle, legacy behavior).
-	MaxContradictionAttempts int `yaml:"max_contradiction_attempts"`
-
-	// MaxEmbedAttempts caps how many times gramaton_reembed will
-	// retry a single record before excluding it from the candidate
-	// set. Failed embed calls (oversized content past the model's
-	// context window after halving truncation, content-policy
-	// refusals on paid embedders, persistent dimension mismatch
-	// after a model switch) accumulate `embed_attempts` on the
-	// record; once at threshold the record is skipped at selection
-	// time. Failure reason captured in `last_embed_error` for
-	// triage. Default: 3. Zero disables (failed records re-enter
-	// every reembed invocation -- legacy behaviour). Reembed is
-	// manual-only (gramaton_reembed CLI / MCP tool / HTTP endpoint),
-	// so the per-call cost is bounded by the operator, but each
-	// invocation still re-pays for the same failures without this
-	// counter.
-	MaxEmbedAttempts int `yaml:"max_embed_attempts"`
+	// LongClassificationThreshold is the character cutoff between
+	// short-tier and long-tier classification. Records below this
+	// route to the short tier.
+	LongClassificationThreshold int `yaml:"long_classification_threshold"`
 
 	// TaskTimeout is the wall-clock cap on a single curation task
-	// (classify, summarize, enrich, contradict, manifest). When a
-	// task hits the timeout, its in-flight LLM call is cancelled and
-	// the next task starts with a fresh ctx. Without this, one stuck
-	// LLM call (e.g. a 120s HTTP timeout) could starve every
-	// downstream task in the cycle. Default: 90s -- comfortable for
-	// multi-wave phases (classify/summarize do up to 3 sequential
-	// waves of 4 parallel calls) on slower providers like Bedrock
-	// cross-region while still catching genuine hangs well before the
-	// 5-minute cycle deadline. Zero disables the per-task cap
-	// (entire cycle runs under the parent ctx, legacy behavior).
+	// (classify, summarize, enrich, contradict, manifest). On
+	// timeout, the in-flight LLM call is cancelled and the next task
+	// starts with a fresh ctx. Default: 90s. Zero disables.
 	TaskTimeout time.Duration `yaml:"task_timeout"`
 
-	// MaxCostUSDPerRun caps estimated LLM cost per curation cycle in
-	// USD. 0 = no cost cap; MaxCallsPerRun still applies. Cost is
-	// estimated via llm.EstimateCost from per-task token counts and
-	// the pricing table; unknown models contribute 0. A cost cap
-	// trips when at least one call has landed for a cycle -- the
-	// check is post-call, so the cycle may exceed the cap by one
-	// call's worth of cost before breaking.
-	MaxCostUSDPerRun float64 `yaml:"max_cost_usd_per_run,omitempty"`
-
-	// MaxContradictionChecks is the maximum number of candidate pairs
-	// examined for contradictions per cycle. With
-	// ContradictionBatchSize > 1, multiple pairs share one LLM call.
-	MaxContradictionChecks int `yaml:"max_contradiction_checks"`
-
-	// ContradictionMinSim is the lower bound of the cosine-similarity
-	// band for contradiction candidates. Pairs below this are too
-	// dissimilar to meaningfully contradict.
-	ContradictionMinSim float64 `yaml:"contradiction_min_similarity"`
-
-	// ContradictionMaxSim is the upper bound. Pairs above this are
-	// near-duplicates handled by auto-supersession, not contradiction
-	// detection.
-	ContradictionMaxSim float64 `yaml:"contradiction_max_similarity"`
-
-	// ContradictionBatchSize is the number of pairs packed into a
-	// single LLM call. 1 = single-pair (legacy). 5-10 = batched
-	// (roughly N-fold call reduction at saturation).
-	ContradictionBatchSize int `yaml:"contradiction_batch_size"`
-
-	// MaxConceptsPerRun caps concept syntheses per cycle.
-	MaxConceptsPerRun int `yaml:"max_concepts_per_run"`
-
-	// SynthesisBatchSize is the number of concepts packed into a single
-	// synthesis LLM call.
-	SynthesisBatchSize int `yaml:"synthesis_batch_size"`
-
-	// SynthesisMaxInputTokens is a soft cap on input tokens per
-	// synthesis batch. When exceeded, a new batch starts.
-	SynthesisMaxInputTokens int `yaml:"synthesis_max_input_tokens"`
-
-	// ConceptCoherenceMin is the minimum mean cosine similarity of
-	// member records to their cluster centroid. Concepts below this
-	// are skipped (their members don't coherently represent a single
-	// idea). 0 = no filter.
-	ConceptCoherenceMin float64 `yaml:"concept_coherence_min"`
-
-	// Cost-reduction toggles. All default to true (activated). Flip
-	// to false to revert that individual optimization.
-
-	// PromptCachingEnabled caches invariant system prompts on providers
-	// that support it (e.g., Anthropic). Falls back to inline
+	// PromptCachingEnabled caches invariant system prompts on
+	// providers that support it (Anthropic). Falls back to inline
 	// concatenation when off or unsupported.
 	PromptCachingEnabled bool `yaml:"prompt_caching_enabled"`
 
-	// ManifestCacheEnabled skips the manifest LLM call when the store's
-	// state fingerprint (record counts, top keywords, temporal span)
-	// is unchanged from the previous cycle.
+	// ManifestCacheEnabled skips the manifest LLM call when the
+	// store's state fingerprint is unchanged from the previous cycle.
 	ManifestCacheEnabled bool `yaml:"manifest_cache_enabled"`
-
-	// ContradictionCheckReverseEdges skips candidate pairs that already
-	// have a B->A edge (not just A->B). Reduces redundant work on
-	// previously-linked pairs.
-	ContradictionCheckReverseEdges bool `yaml:"contradiction_check_reverse_edges"`
 
 	// ClassifyShortPromptCompressed routes short-tier records to the
 	// condensed ClassifySystemPromptShort (~60% smaller). Long-tier
 	// records always use the full prompt.
 	ClassifyShortPromptCompressed bool `yaml:"classify_short_prompt_compressed"`
 
-	// Per-task effort assignments. Empty = baked-in default (see
-	// defaultEffortForTask). Set to "low", "medium", or "high" to
-	// override. Resolves to a concrete model via LLM.Models.
+	// Contradiction: tuning for contradiction/supersession detection.
+	Contradiction LLMContradictionConfig `yaml:"contradiction"`
 
-	// ClassificationShortEffort: tier for records below
-	// LongClassificationThreshold. Default: low (Haiku).
-	ClassificationShortEffort string `yaml:"classification_short_effort"`
+	// Concept: tuning for concept synthesis.
+	Concept LLMConceptConfig `yaml:"concept"`
 
-	// ClassificationLongEffort: tier for records at or above
-	// LongClassificationThreshold. Default: medium (Sonnet).
-	ClassificationLongEffort string `yaml:"classification_long_effort"`
+	// Retries: per-record/per-pair retry caps. Without these, a
+	// pathological record (oversized content, content-policy refusal,
+	// persistent parse failure) re-enters every cycle forever and
+	// rebills the same input tokens.
+	Retries LLMRetriesConfig `yaml:"retries"`
+}
 
-	// SummarizationEffort: tier for content_short generation.
-	// Default: low (Haiku).
-	SummarizationEffort string `yaml:"summarization_effort"`
+// LLMContradictionConfig tunes the contradiction/supersession detector.
+type LLMContradictionConfig struct {
+	// MaxChecks is the maximum number of candidate pairs examined
+	// for contradictions per cycle. With BatchSize > 1, multiple
+	// pairs share one LLM call.
+	MaxChecks int `yaml:"max_checks"`
 
-	// ContradictionEffort: tier for contradiction / supersession
-	// detection. Default: medium (Sonnet) because subtle semantic
-	// distinctions benefit from calibrated reasoning.
-	ContradictionEffort string `yaml:"contradiction_effort"`
+	// MinSimilarity is the lower bound of the cosine-similarity band
+	// for contradiction candidates. Pairs below this are too
+	// dissimilar to meaningfully contradict.
+	MinSimilarity float64 `yaml:"min_similarity"`
 
-	// ConceptEffort: tier for concept synthesis. Default: medium
-	// (Sonnet). Bump to high for critical stores where concept
-	// abstraction quality matters.
-	ConceptEffort string `yaml:"concept_effort"`
+	// MaxSimilarity is the upper bound. Pairs above this are
+	// near-duplicates handled by auto-supersession, not contradiction
+	// detection.
+	MaxSimilarity float64 `yaml:"max_similarity"`
 
-	// ManifestEffort: tier for the periodic store manifest rollup.
-	// Default: low (Haiku). Low-nuance summarization.
-	ManifestEffort string `yaml:"manifest_effort"`
+	// BatchSize is the number of pairs packed into a single LLM
+	// call. 1 = single-pair (legacy). 5-10 = batched (~N-fold call
+	// reduction at saturation).
+	BatchSize int `yaml:"batch_size"`
 
-	// LongClassificationThreshold is the character cutoff between
-	// short-tier and long-tier classification. Records below this
-	// length route to the short tier.
-	LongClassificationThreshold int `yaml:"long_classification_threshold"`
+	// CheckReverseEdges skips candidate pairs that already have a
+	// B->A edge (not just A->B). Reduces redundant work on
+	// previously-linked pairs.
+	CheckReverseEdges bool `yaml:"check_reverse_edges"`
+}
+
+// LLMConceptConfig tunes concept synthesis.
+type LLMConceptConfig struct {
+	// MaxPerRun caps concept syntheses per cycle.
+	MaxPerRun int `yaml:"max_per_run"`
+
+	// SynthesisBatchSize is the number of concepts packed into a
+	// single synthesis LLM call.
+	SynthesisBatchSize int `yaml:"synthesis_batch_size"`
+
+	// SynthesisMaxInputTokens is a soft cap on input tokens per
+	// synthesis batch. When exceeded, a new batch starts.
+	SynthesisMaxInputTokens int `yaml:"synthesis_max_input_tokens"`
+
+	// CoherenceMin is the minimum mean cosine similarity of member
+	// records to their cluster centroid. Concepts below this are
+	// skipped. 0 = no filter.
+	CoherenceMin float64 `yaml:"coherence_min"`
+}
+
+// LLMRetriesConfig caps per-record / per-pair retry attempts.
+// Default 3 across the board. Zero disables (legacy infinite retry).
+type LLMRetriesConfig struct {
+	// MaxClassifyAttempts caps how many times a single record will
+	// be retried by autonomous classification before being marked
+	// processing_status="stuck".
+	MaxClassifyAttempts int `yaml:"max_classify_attempts"`
+
+	// MaxSummaryAttempts caps how many times generateSummaries will
+	// retry a single record. Independent of MaxClassifyAttempts: a
+	// record can classify cleanly but produce an unusable summary.
+	MaxSummaryAttempts int `yaml:"max_summary_attempts"`
+
+	// MaxSynthesisAttempts caps how many times enrichConceptSyntheses
+	// will retry a single concept node before flipping its
+	// synthesis_status to "stuck".
+	MaxSynthesisAttempts int `yaml:"max_synthesis_attempts"`
+
+	// MaxManifestAttempts caps consecutive failures of
+	// generateManifestSummary on the SAME store-state fingerprint.
+	MaxManifestAttempts int `yaml:"max_manifest_attempts"`
+
+	// MaxContradictionAttempts caps how many times a single pair
+	// will be retried by detectContradictions before being
+	// permanently excluded.
+	MaxContradictionAttempts int `yaml:"max_contradiction_attempts"`
+
+	// MaxEmbedAttempts caps how many times gramaton_reembed will
+	// retry a single record before excluding it from the candidate
+	// set.
+	MaxEmbedAttempts int `yaml:"max_embed_attempts"`
 }
 
 // EffortLevel names the cost/quality tiers. Each tier maps to a concrete
@@ -582,27 +532,38 @@ const (
 	EffortHigh   EffortLevel = "high"   // best quality (default: opus)
 )
 
-// CurationTask names the curation LLM tasks. Each task has a default
-// effort level; users override via LLMCurationConfig.*Effort fields.
-type CurationTask string
+// LLMTask names every code path that calls an LLM. Each task has a
+// default effort level (defaultEffortForTask); users override via the
+// llm.models.tasks map in config.yaml.
+type LLMTask string
 
 const (
-	TaskClassificationShort CurationTask = "classification_short"
-	TaskClassificationLong  CurationTask = "classification_long"
-	TaskSummarization       CurationTask = "summarization"
-	TaskContradiction       CurationTask = "contradiction"
-	TaskConcept             CurationTask = "concept"
-	TaskManifest            CurationTask = "manifest"
+	TaskClassificationShort LLMTask = "classification_short"
+	TaskClassificationLong  LLMTask = "classification_long"
+	TaskSummarization       LLMTask = "summarization"
+	TaskContradiction       LLMTask = "contradiction"
+	TaskConcept             LLMTask = "concept"
+	TaskManifest            LLMTask = "manifest"
+	TaskRerank              LLMTask = "rerank"
+	TaskDecompose           LLMTask = "decompose"
 )
 
-// defaultEffortForTask returns the out-of-the-box effort level for each
-// curation task. Assignment reflects which tasks benefit from better
-// reasoning: summarization and short classification are Haiku-grade;
-// long-content classification, contradiction detection, and concept
-// synthesis need calibrated reasoning; the manifest rollup is cheap.
-func defaultEffortForTask(task CurationTask) EffortLevel {
+// CurationTask is a deprecated alias for LLMTask retained until call
+// sites migrate. New code should use LLMTask directly.
+//
+// Deprecated: use LLMTask.
+type CurationTask = LLMTask
+
+// defaultEffortForTask returns the out-of-the-box effort level for
+// each task. Assignment reflects which tasks benefit from better
+// reasoning: summarization, short classification, manifest rollup,
+// and search-time tasks (rerank, decompose) are Haiku-grade.
+// Long-content classification, contradiction detection, and concept
+// synthesis need calibrated reasoning -> Sonnet-grade.
+func defaultEffortForTask(task LLMTask) EffortLevel {
 	switch task {
-	case TaskClassificationShort, TaskSummarization, TaskManifest:
+	case TaskClassificationShort, TaskSummarization, TaskManifest,
+		TaskRerank, TaskDecompose:
 		return EffortLow
 	case TaskClassificationLong, TaskContradiction, TaskConcept:
 		return EffortMedium
@@ -611,27 +572,14 @@ func defaultEffortForTask(task CurationTask) EffortLevel {
 }
 
 // EffortForTask resolves a task to its effort level, consulting the
-// user's per-task overrides before falling back to the baked-in default.
-// Unknown effort strings are treated as empty (falls through to default).
-func (c Config) EffortForTask(task CurationTask) EffortLevel {
-	var override string
-	switch task {
-	case TaskClassificationShort:
-		override = c.LLMCuration.ClassificationShortEffort
-	case TaskClassificationLong:
-		override = c.LLMCuration.ClassificationLongEffort
-	case TaskSummarization:
-		override = c.LLMCuration.SummarizationEffort
-	case TaskContradiction:
-		override = c.LLMCuration.ContradictionEffort
-	case TaskConcept:
-		override = c.LLMCuration.ConceptEffort
-	case TaskManifest:
-		override = c.LLMCuration.ManifestEffort
-	}
-	switch EffortLevel(override) {
-	case EffortLow, EffortMedium, EffortHigh:
-		return EffortLevel(override)
+// llm.models.tasks override map before falling back to the baked-in
+// default. Unknown tier strings fall through to the default.
+func (c Config) EffortForTask(task LLMTask) EffortLevel {
+	if override, ok := c.LLM.Models.Tasks[string(task)]; ok {
+		switch EffortLevel(override) {
+		case EffortLow, EffortMedium, EffortHigh:
+			return EffortLevel(override)
+		}
 	}
 	return defaultEffortForTask(task)
 }
@@ -652,9 +600,9 @@ func (c Config) ModelAtEffort(effort EffortLevel) string {
 	return ""
 }
 
-// ModelForTask is the primary entry point for curation model selection:
+// ModelForTask is the primary entry point for task model selection:
 // resolves task -> effort -> model name.
-func (c Config) ModelForTask(task CurationTask) string {
+func (c Config) ModelForTask(task LLMTask) string {
 	return c.ModelAtEffort(c.EffortForTask(task))
 }
 
@@ -717,16 +665,6 @@ type SearchConfig struct {
 	// RetrievalCandidates is the number of candidates pulled from
 	// vector + BM25 before reranking. More = better recall, slower.
 	RetrievalCandidates int `yaml:"retrieval_candidates"`
-
-	// RerankEnabled toggles LLM reranking of retrieval candidates.
-	// When true, the top N candidates are passed to the LLM
-	// (llm.model) for relevance scoring.
-	RerankEnabled bool `yaml:"rerank_enabled"`
-
-	// RerankCandidates is the number of candidates sent to the LLM
-	// reranker when RerankEnabled is true. More = better quality,
-	// slower and more expensive.
-	RerankCandidates int `yaml:"rerank_candidates"`
 
 	// SessionDedupEnabled suppresses Session segments in search results
 	// when the Memory record they were extracted into is also in the
@@ -1084,55 +1022,52 @@ func Defaults() Config {
 		},
 
 		LLM: LLMConfig{
-			Model: "claude-sonnet-4-6", // used by search reranking, query decomposition, observe (if enabled)
+			Rerank: LLMRerankConfig{
+				Enabled:    false,
+				Candidates: 50,
+			},
 			Models: LLMModels{
 				Low:    "claude-haiku-4-5",
 				Medium: "claude-sonnet-4-6",
 				High:   "claude-opus-4-7",
+				// Tasks left empty -- defaultEffortForTask kicks in
+				// for any unset key. Users add entries here to
+				// override per-task tier without editing code.
 			},
-		},
-
-		LLMCuration: LLMCurationConfig{
-			BatchSize:                   10,
-			MaxCallsPerRun:              20,
-			MaxClassifyAttempts:         3,
-			MaxSummaryAttempts:          3,
-			MaxSynthesisAttempts:        3,
-			MaxManifestAttempts:         3,
-			MaxContradictionAttempts:    3,
-			MaxEmbedAttempts:            3,
-			TaskTimeout:                 90 * time.Second,
-			MaxContradictionChecks:      5,
-			ContradictionMinSim:         0.5,
-			ContradictionMaxSim:         0.85,
-			ContradictionBatchSize:      5,   // batched: 5 pairs per LLM call (~5x call reduction at saturation)
-			MaxConceptsPerRun:           5,
-			SynthesisBatchSize:          5,
-			SynthesisMaxInputTokens:     8000,
-			ConceptCoherenceMin:         0.6, // skip concept synthesis when member cluster has mean cosine < 0.6
-			LongClassificationThreshold: 2000,
-
-			// All cost-reduction optimizations activated by default.
-			PromptCachingEnabled:           true,
-			ManifestCacheEnabled:           true,
-			ContradictionCheckReverseEdges: true,
-			ClassifyShortPromptCompressed:  true,
-
-			// Explicit effort assignments per curation task. Users edit
-			// these in config.yaml to retune cost vs quality. Summarization
-			// and short classification are Haiku-grade (clear-signal work,
-			// enum picks, distilled summaries). Contradiction detection,
-			// concept synthesis, and long-content classification benefit
-			// from Sonnet-grade reasoning (subtle semantic + temporal
-			// distinctions, multi-record abstraction, calibrated
-			// confidence/temporality choices). Manifest rollup is
-			// infrequent and low-nuance -> Haiku.
-			ClassificationShortEffort: string(EffortLow),
-			ClassificationLongEffort:  string(EffortMedium),
-			SummarizationEffort:       string(EffortLow),
-			ContradictionEffort:       string(EffortMedium),
-			ConceptEffort:             string(EffortMedium),
-			ManifestEffort:            string(EffortLow),
+			CostLimits: LLMCostLimitsConfig{
+				// All caps off by default. Operators set these per
+				// their cost envelope.
+			},
+			Curation: LLMCurationConfig{
+				BatchSize:                     10,
+				MaxCallsPerRun:                20,
+				LongClassificationThreshold:   2000,
+				TaskTimeout:                   90 * time.Second,
+				PromptCachingEnabled:          true,
+				ManifestCacheEnabled:          true,
+				ClassifyShortPromptCompressed: true,
+				Contradiction: LLMContradictionConfig{
+					MaxChecks:         5,
+					MinSimilarity:     0.5,
+					MaxSimilarity:     0.85,
+					BatchSize:         5, // batched (~5x call reduction at saturation)
+					CheckReverseEdges: true,
+				},
+				Concept: LLMConceptConfig{
+					MaxPerRun:               5,
+					SynthesisBatchSize:      5,
+					SynthesisMaxInputTokens: 8000,
+					CoherenceMin:            0.6, // skip when cluster mean cosine < 0.6
+				},
+				Retries: LLMRetriesConfig{
+					MaxClassifyAttempts:      3,
+					MaxSummaryAttempts:       3,
+					MaxSynthesisAttempts:     3,
+					MaxManifestAttempts:      3,
+					MaxContradictionAttempts: 3,
+					MaxEmbedAttempts:         3,
+				},
+			},
 		},
 
 		Observe: ObserveConfig{
@@ -1161,8 +1096,6 @@ func Defaults() Config {
 			HNSWEfSearch:        100,
 			VectorOnlyPenalty:   0.1,
 			RetrievalCandidates: 200,
-			RerankEnabled:       false,
-			RerankCandidates:    50,
 			SessionDedupEnabled: true,
 		},
 
@@ -1432,7 +1365,6 @@ func trimConfigStrings(cfg *Config) {
 	trim(&cfg.Embedding.AWSSecretAccessKeyEnv)
 
 	trim(&cfg.LLM.Provider)
-	trim(&cfg.LLM.Model)
 	trim(&cfg.LLM.BaseURL)
 	trim(&cfg.LLM.APIKeyFile)
 	trim(&cfg.LLM.APIKeyEnv)
@@ -1473,24 +1405,24 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
 	}
 
-	if cfg.LLMCuration.MaxCallsPerRun > 10000 {
-		cfg.LLMCuration.MaxCallsPerRun = 10000
+	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {
+		cfg.LLM.Curation.MaxCallsPerRun = 10000
 	}
-	if cfg.LLMCuration.BatchSize > 5000 {
-		cfg.LLMCuration.BatchSize = 5000
+	if cfg.LLM.Curation.BatchSize > 5000 {
+		cfg.LLM.Curation.BatchSize = 5000
 	}
-	if cfg.LLMCuration.ContradictionBatchSize < 0 {
-		cfg.LLMCuration.ContradictionBatchSize = 0
+	if cfg.LLM.Curation.Contradiction.BatchSize < 0 {
+		cfg.LLM.Curation.Contradiction.BatchSize = 0
 	}
-	if cfg.LLMCuration.ContradictionBatchSize > 20 {
+	if cfg.LLM.Curation.Contradiction.BatchSize > 20 {
 		// Beyond ~20 pairs the prompt size and parser reliability degrade.
-		cfg.LLMCuration.ContradictionBatchSize = 20
+		cfg.LLM.Curation.Contradiction.BatchSize = 20
 	}
-	if cfg.LLMCuration.ConceptCoherenceMin < 0 {
-		cfg.LLMCuration.ConceptCoherenceMin = 0
+	if cfg.LLM.Curation.Concept.CoherenceMin < 0 {
+		cfg.LLM.Curation.Concept.CoherenceMin = 0
 	}
-	if cfg.LLMCuration.ConceptCoherenceMin > 1 {
-		cfg.LLMCuration.ConceptCoherenceMin = 1
+	if cfg.LLM.Curation.Concept.CoherenceMin > 1 {
+		cfg.LLM.Curation.Concept.CoherenceMin = 1
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		cfg.Curation.MaxOrphansPerRun = 200

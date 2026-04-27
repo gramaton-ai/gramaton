@@ -429,7 +429,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	var aliasMerges []aliasMerge
 
-	maxNewConcepts := cfg.LLMCuration.MaxConceptsPerRun // reuse as deterministic budget
+	maxNewConcepts := cfg.LLM.Curation.Concept.MaxPerRun // reuse as deterministic budget
 	if maxNewConcepts <= 0 {
 		maxNewConcepts = 5
 	}

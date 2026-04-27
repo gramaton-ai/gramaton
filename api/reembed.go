@@ -64,7 +64,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 	}
 
 	currentModel := a.engine.Embedder().ModelID()
-	maxEmbedAttempts := a.engine.Config().LLMCuration.MaxEmbedAttempts
+	maxEmbedAttempts := a.engine.Config().LLM.Curation.Retries.MaxEmbedAttempts
 
 	type reembedTarget struct {
 		nodeID string

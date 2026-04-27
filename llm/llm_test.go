@@ -20,7 +20,7 @@ func TestNewEmptyProvider(t *testing.T) {
 func TestNewAnthropicProvider(t *testing.T) {
 	cfg := config.LLMConfig{
 		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-6",
+		Models:     config.LLMModels{Medium:"claude-sonnet-4-6"},
 		APIKeyEnv: "sk-ant-test-key",
 	}
 	p, err := New(cfg)

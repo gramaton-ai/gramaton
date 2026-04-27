@@ -7,6 +7,43 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **LLM configuration consolidated under a single `llm:` block.** The
+  prior top-level `llm_curation:` block and the `search.rerank_*`
+  fields are folded into `llm:`. New shape:
+  - `llm.rerank.{enabled,candidates}` (was `search.rerank_enabled` /
+    `search.rerank_candidates`).
+  - `llm.models.{low,medium,high}` plus `llm.models.tasks` (a
+    map<task name, tier>) replaces the per-task `*_effort` named
+    fields under `llm_curation`. The existing six task names stay
+    (`classification_short`, `classification_long`, `summarization`,
+    `contradiction`, `concept`, `manifest`) and two new ones land:
+    `rerank` and `decompose`.
+  - `llm.cost_limits.*` collects the caps that previously sat on
+    `LLMConfig` directly (`max_calls_per_day`, `max_calls_per_session`,
+    `max_cost_usd_per_day`, `rate_limit_interval`,
+    `max_response_tokens`) plus the relocated
+    `llm.cost_limits.max_cost_usd_per_run` (was
+    `llm_curation.max_cost_usd_per_run`).
+  - `llm.curation.*` carries the autonomous-cycle tuning knobs that
+    used to live at `llm_curation.*`. Sub-grouped:
+    `llm.curation.contradiction.*`, `llm.curation.concept.*`,
+    `llm.curation.retries.*`.
+  - `search/rerank.go` and `search/decompose.go` now resolve their
+    model via `cfg.ModelForTask(TaskRerank)` /
+    `cfg.ModelForTask(TaskDecompose)` and call `CompleteWithModel`
+    instead of the bare provider default.
+  - `CurationTask` is preserved as a deprecated alias for `LLMTask`.
+
+### Removed
+
+- **`llm.model`.** Every code path now resolves its model via the
+  task tier system. Provider clients fall back to `llm.models.medium`
+  for `Complete()` calls without an explicit model. Wizard paths
+  (OpenAI, Bedrock) populate the full Models triple instead of a
+  single fallback string.
+
 ### Fixed
 
 - **Self-heal cascade clears the stale `repair_needed_llm` flag on

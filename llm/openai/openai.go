@@ -47,9 +47,12 @@ func New(cfg config.LLMConfig) (*Client, error) {
 		baseURL = defaultBaseURL
 	}
 
-	model := cfg.Model
+	// Default model used by Complete() (no explicit model). Most call
+	// sites pass a model via CompleteWithModel resolved through
+	// cfg.ModelForTask; this only fires for callers that don't.
+	model := cfg.Models.Medium
 	if model == "" {
-		return nil, fmt.Errorf("openai llm: model is required")
+		return nil, fmt.Errorf("openai llm: cfg.LLM.Models.Medium is required")
 	}
 
 	return &Client{

@@ -36,7 +36,7 @@ func (s *searcherSubsystem) rebuild(
 	if secIdx != nil {
 		opts = append(opts, search.WithSecondaryIndex(secIdx))
 	}
-	if llmProv != nil && cfg.Search.RerankEnabled {
+	if llmProv != nil && cfg.LLM.Rerank.Enabled {
 		opts = append(opts, search.WithReranker(llmProv))
 	}
 	s.tool = search.New(g, propIdx, vecIdx, bm25Full, embedder, cfg, opts...)

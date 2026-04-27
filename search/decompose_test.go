@@ -10,7 +10,7 @@ type mockDecomposer struct {
 	err      error
 }
 
-func (m *mockDecomposer) Complete(_ context.Context, _ string) (string, error) {
+func (m *mockDecomposer) CompleteWithModel(_ context.Context, _ string, _ string) (string, error) {
 	return m.response, m.err
 }
 
@@ -18,7 +18,7 @@ func TestDecomposeQuerySimple(t *testing.T) {
 	llm := &mockDecomposer{
 		response: `{"sub_queries": []}`,
 	}
-	result := DecomposeQuery(context.Background(), llm, "consciousness")
+	result := DecomposeQuery(context.Background(), llm, "test-model", "consciousness")
 	if result != nil {
 		t.Fatalf("simple query should not decompose, got %v", result)
 	}
@@ -28,7 +28,7 @@ func TestDecomposeQueryMultiConcept(t *testing.T) {
 	llm := &mockDecomposer{
 		response: `{"sub_queries": ["consciousness", "memory role in cognition"]}`,
 	}
-	result := DecomposeQuery(context.Background(), llm, "consciousness and memory's role")
+	result := DecomposeQuery(context.Background(), llm, "test-model", "consciousness and memory's role")
 	if len(result) != 2 {
 		t.Fatalf("expected 2 sub-queries, got %d", len(result))
 	}
@@ -38,7 +38,7 @@ func TestDecomposeQueryMultiConcept(t *testing.T) {
 }
 
 func TestDecomposeQueryNilLLM(t *testing.T) {
-	result := DecomposeQuery(context.Background(), nil, "test query")
+	result := DecomposeQuery(context.Background(), nil, "test-model", "test query")
 	if result != nil {
 		t.Fatal("nil LLM should return nil")
 	}
@@ -46,7 +46,7 @@ func TestDecomposeQueryNilLLM(t *testing.T) {
 
 func TestDecomposeQueryEmptyQuery(t *testing.T) {
 	llm := &mockDecomposer{response: `{"sub_queries": []}`}
-	result := DecomposeQuery(context.Background(), llm, "")
+	result := DecomposeQuery(context.Background(), llm, "test-model", "")
 	if result != nil {
 		t.Fatal("empty query should return nil")
 	}
@@ -56,7 +56,7 @@ func TestDecomposeQueryWithCodeFences(t *testing.T) {
 	llm := &mockDecomposer{
 		response: "```json\n{\"sub_queries\": [\"topic A\", \"topic B\"]}\n```",
 	}
-	result := DecomposeQuery(context.Background(), llm, "topic A and topic B")
+	result := DecomposeQuery(context.Background(), llm, "test-model", "topic A and topic B")
 	if len(result) != 2 {
 		t.Fatalf("expected 2 sub-queries, got %d: %v", len(result), result)
 	}
