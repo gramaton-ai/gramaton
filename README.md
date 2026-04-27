@@ -285,6 +285,7 @@ See [docs/configuration.md](docs/configuration.md) for all fields and [docs/prov
 
 | | |
 |---|---|
+| [How to use Gramaton](HOW_TO_USE_GRAMATON.md) | Practical tips for driving Gramaton through Claude or another agent — what to say, what to expect, common pitfalls |
 | [Integrator Guide](docs/integrator-guide.md) | How to build agents and tools on Gramaton — the three storage paths, retrieval patterns, tool reference |
 | [Architecture](docs/architecture.md) | Package layers, data flow, concurrency model, lock discipline |
 | [Configuration](docs/configuration.md) | All config fields, defaults, examples, named-store model |

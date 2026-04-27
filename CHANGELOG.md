@@ -9,6 +9,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **New top-level `HOW_TO_USE_GRAMATON.md`** for end users driving
+  Gramaton through Claude or another agent. Practical tips on
+  capture, search, backlog management, common pitfalls, and how to
+  verify things landed. All examples synthetic. Calls out the
+  load-bearing fact that session prepare/commit does NOT close
+  collection items — closure is an explicit `gramaton_resolve` call,
+  with the inferred-from-conversation alternative rejected to avoid
+  silent state loss on partial work. README's docs index now
+  surfaces it as the first row.
+- **`docs/integrator-guide.md` gains parallel session-≠-closure notes**
+  in both the Sessions and Collections sections so the agent-author
+  audience hits the rule from either entry point. Includes the
+  recommended close-then-prepare ordering and a pointer at the
+  `auto_close_collection_status` heuristic from `df2ab44` for
+  callers that want the schema status field flipped automatically.
+
 - **Pin the rerank/decompose model-flow with end-to-end tests + doc the
   provider asymmetry.** Closes the gap from the post-Layer-1 review:
   prior tests asserted (a) `cfg.ModelForTask(...)` returned the right

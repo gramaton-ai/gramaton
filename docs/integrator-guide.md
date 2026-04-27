@@ -169,6 +169,10 @@ Segments with `promote_to_memory: false` stay in the Sessions store only. Use th
 
 If the session node has an archived transcript, the prepare response surfaces the archive path. Decompressing and reading it is an option of last resort when the in-session context is missing what you need to extract well.
 
+### Sessions don't close collection items
+
+If the conversation worked through (and finished) a set of collection items — open tickets in a backlog, action items on a checklist — the session captures the *conversation* but does not flip those items' status. Closure is an explicit `gramaton_resolve` call per item; see "Closing items is an explicit action" under Collections below for the agent pattern. Skipping closure is the most common visible-drift bug: post-commit Memory records describe finished work while the underlying collection still lists those items as open.
+
 ## Collections — depth
 
 ### Creating a collection
@@ -237,6 +241,19 @@ This is the post-T-02 behavior — the server rejects the duplicate. The caller 
 - **Kanban**: collections for "Todo", "Doing", "Done". Move items with `_move`.
 - **Named backlogs**: one collection per project or product surface, schema-enforced.
 - **Link items to Memory records**: `gramaton_link` an item to a related decision or research record. Items are graph nodes; edges work across the Memory/Collection boundary.
+
+### Closing items is an explicit action — sessions don't do it
+
+Resolving a collection item (marking it `completed` / `superseded` / `abandoned` / `obsolete`) requires an explicit `gramaton_resolve` call. Session prepare/commit captures the conversation that led to the work being finished but does NOT touch the item — `field.status` stays whatever it was, no `valid_until`, no resolution edge.
+
+This is intentional. Closure is a deliberate state change with audit consequences (write to `valid_until`, `resolution`, optional `resolution_note`, plus an edge for the audit trail). Inferring closure from "the session said we shipped it" produces false positives that silently lose state on partial work.
+
+The pattern for an agent wrapping up a topic:
+
+1. Call `gramaton_resolve` for each completed item explicitly. The system honors heuristic auto-flip of the schema's status field where one exists (see `df2ab44` for the heuristic) — pass `auto_close_collection_status: true` if the caller hasn't already flipped the field.
+2. THEN call `gramaton_session_prepare` + `gramaton_session_commit`.
+
+Order doesn't matter mechanically (independent subgraphs, engine serializes commits), but closure-first gives the session a clean view of the post-state. If you forget closure entirely, the user has visible drift: session-extracted Memory records say the work shipped, the collection still shows the items open.
 
 ## Search and retrieval
 
