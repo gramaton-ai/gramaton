@@ -9,6 +9,31 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`gramaton_resolve` now auto-flips the collection-item `status`
+  field when the schema has one.** Previously, closing a collection
+  item (a backlog ticket, a todo, a reading-list entry) required
+  two tool calls -- `gramaton_collection_update(status=closed)` AND
+  `gramaton_resolve(resolution=completed)` -- because the record
+  layer (resolution + valid_until) and the collection-item layer
+  (schema-defined `status` enum) had no automatic bridge. Easy to
+  forget the second call; stale `status:open` items lingered.
+  Now `Resolve` walks every `member_of` edge, looks up each
+  collection's schema, finds an enum field named `status`
+  (case-insensitive), and writes a closed-equivalent value mapped
+  from the resolution verb (`completed`/`superseded` →
+  `[completed, done, finished, resolved, closed]`;
+  `abandoned`/`obsolete` → `[abandoned, cancelled, canceled, dropped]`;
+  first match in the schema's enum wins). Schemas without an enum
+  `status` field fall through to a refreshed `CollectionWarning`
+  naming only the unflipped collections. Response gains an
+  `auto_closed_status` map (`collection_name → applied value`) so
+  callers see what got flipped. New `auto_close_collection_status`
+  request flag (default `true`; set `false` to skip the
+  collection-layer write while still expiring the record). 11
+  regression tests at `api/resolve_test.go` cover all 5 shipped
+  templates plus the opt-out, multi-collection, and unit cases.
+  Tracker 01KPRZ33EV6X88674S1PVFV928.
+
 - **Self-heal cascade short-circuits when a record was already
   Tier-4 flagged against the same `content_short`.** Pre-fix,
   every server boot re-walked all flagged records through the
