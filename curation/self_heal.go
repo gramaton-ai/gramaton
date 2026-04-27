@@ -93,6 +93,13 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 	// "what we repair post-hoc" stay in lockstep.
 	cleaned := sanitize.Field(orig)
 	if cleaned == orig {
+		// Content is currently clean. If a prior cycle Tier-4 flagged
+		// this record against then-contaminated content, the flag is
+		// now stale -- something (a manual edit, an external repair,
+		// supersession) has rewritten content_short to a clean value.
+		// Clear it so a future LLM-escalation pass doesn't pick up
+		// records that don't actually need repair.
+		clearStaleRepairFlag(e, nodeID, n)
 		return outcomeClean
 	}
 
@@ -115,6 +122,8 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 		e.SetContentProp(nodeID, "content_short", cleaned)
 		e.SetProp(nodeID, "repaired_at", graph.TimestampProperty(time.Now().UTC()))
 		e.SetProp(nodeID, "repair_method", graph.StringProperty(string(outcomeStripped)))
+		// Successful repair supersedes any prior Tier-4 flag.
+		clearStaleRepairFlag(e, nodeID, n)
 		invalidateEmbedding(e, nodeID)
 		logger.Info("self-heal: summary repaired via strip",
 			"component", "curation", "record", nodeID, "len_before", len(orig), "len_after", len(cleaned))
@@ -130,6 +139,8 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 			e.SetContentProp(nodeID, "content_short", fallback)
 			e.SetProp(nodeID, "repaired_at", graph.TimestampProperty(time.Now().UTC()))
 			e.SetProp(nodeID, "repair_method", graph.StringProperty(string(outcomeFallback)))
+			// Successful repair supersedes any prior Tier-4 flag.
+			clearStaleRepairFlag(e, nodeID, n)
 			invalidateEmbedding(e, nodeID)
 			logger.Info("self-heal: summary repaired via content_full fallback",
 				"component", "curation", "record", nodeID, "len_before", len(orig), "len_after", len(fallback))
@@ -272,6 +283,27 @@ func hashContentShort(s string) string {
 	h := fnv.New64a()
 	h.Write([]byte(s))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// clearStaleRepairFlag clears a prior Tier-4 flag (repair_needed_llm
+// + repair_input_hash) when the flag is currently set on the node.
+// Called from every cascade outcome path that represents a successful
+// repair (or a now-clean state) -- Tier-1 clean, Tier-2 stripped,
+// Tier-3 fallback. Tier-4 itself never calls this; the flag is the
+// outcome.
+//
+// Conditioned on the flag being set so we don't churn the bbolt
+// index writing zero values onto records that never had the flag.
+// Tracker 01KQ7WGDN37Y8AYBD2J8A017TY.
+func clearStaleRepairFlag(e *core.Engine, nodeID string, n *graph.Node) {
+	flagged, _ := n.Properties.GetBool("repair_needed_llm")
+	if !flagged {
+		return
+	}
+	e.SetProp(nodeID, "repair_needed_llm", graph.BoolProperty(false))
+	if _, hasHash := n.Properties.GetString(repairInputHashKey); hasHash {
+		e.SetProp(nodeID, repairInputHashKey, graph.StringProperty(""))
+	}
 }
 
 // invalidateEmbedding marks a record's embedding as stale so the

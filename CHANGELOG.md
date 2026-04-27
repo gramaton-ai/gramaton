@@ -7,6 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Self-heal cascade clears the stale `repair_needed_llm` flag on
+  Tier-1/2/3 outcome paths.** Pre-fix, only Tier-4 wrote
+  `repair_needed_llm`; if a record was Tier-4 flagged on cycle N,
+  then content_short was rewritten between cycles (manual edit,
+  external repair, supersession) and cycle N+1 hit Tier-1 clean,
+  Tier-2 strip, or Tier-3 fallback, the flag was left set
+  alongside the new `repair_method` value -- producing
+  contradictory state ("repair_method=stripped + repair_needed_llm=
+  true"). Cosmetic today (no code currently filters on
+  `repair_needed_llm`), but the LLM-escalation pass that pass
+  reads it would pick up records that no longer need repair,
+  wasting LLM budget. The new `clearStaleRepairFlag` helper is
+  called from each successful-repair / now-clean outcome path and
+  only writes when the flag is currently set (no spurious writes
+  on records that were never flagged). Also clears
+  `repair_input_hash` so audit reads stay coherent. Regression
+  tests at
+  `curation/self_heal_test.go:TestDetectAndRepairSummaryClearsStaleFlagOn{Tier1Clean,Tier2Stripped,Tier3Fallback}`
+  plus a no-op-when-not-flagged test that pins the commit chain
+  doesn't advance on clean+unflagged records. Tracker
+  01KQ7WGDN37Y8AYBD2J8A017TY.
+
 ### Added
 
 - **Bedrock clients classify and surface `AccessDeniedException` and

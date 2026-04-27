@@ -223,6 +223,171 @@ func TestDetectAndRepairSummaryCleanIsNoop(t *testing.T) {
 	}
 }
 
+// TestDetectAndRepairSummaryClearsStaleFlagOnTier1Clean pins the
+// fix for 01KQ7WGDN37Y8AYBD2J8A017TY: when a record was previously
+// Tier-4 flagged but content_short has since been rewritten to a
+// clean value (manual edit, supersession, external repair), the
+// stale repair_needed_llm flag must be cleared so a future
+// LLM-escalation pass doesn't pick up records that no longer need
+// repair.
+func TestDetectAndRepairSummaryClearsStaleFlagOnTier1Clean(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":       graph.StringProperty("Body."),
+		"content_short":      graph.StringProperty("Already-clean summary with no contamination."),
+		"repair_needed_llm":  graph.BoolProperty(true),
+		repairInputHashKey:   graph.StringProperty("0123456789abcdef"),
+		"repair_method":      graph.StringProperty("flagged"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeClean {
+		t.Errorf("outcome = %v, want %v", outcome, outcomeClean)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	node, _ := eng.Graph().GetNode(n.ID)
+	if flag, _ := node.Properties.GetBool("repair_needed_llm"); flag {
+		t.Error("repair_needed_llm should be false after Tier-1 clean on a previously-flagged record")
+	}
+	if h, _ := node.Properties.GetString(repairInputHashKey); h != "" {
+		t.Errorf("repair_input_hash should be cleared on Tier-1 clean; got %q", h)
+	}
+}
+
+// TestDetectAndRepairSummaryClearsStaleFlagOnTier2Stripped pins
+// that a successful strip-tier repair clears any prior Tier-4 flag.
+// Pre-fix the strip would write content_short + repair_method=stripped
+// but leave repair_needed_llm=true, producing contradictory state.
+func TestDetectAndRepairSummaryClearsStaleFlagOnTier2Stripped(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	tail := `</summary_short>
+<parameter name="keywords">["leak"]`
+	cleanPrefix := "Setup-wizard language principles for Gramaton: lead with user benefit; one-sentence concept explanations; skip-for-now option on every step."
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":       graph.StringProperty("Full content unused by this test."),
+		"content_short":      graph.StringProperty(cleanPrefix + tail),
+		"repair_needed_llm":  graph.BoolProperty(true),
+		repairInputHashKey:   graph.StringProperty("staleHashFromPriorCycle"),
+		"repair_method":      graph.StringProperty("flagged"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeStripped {
+		t.Errorf("outcome = %v, want %v", outcome, outcomeStripped)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	node, _ := eng.Graph().GetNode(n.ID)
+	if flag, _ := node.Properties.GetBool("repair_needed_llm"); flag {
+		t.Error("repair_needed_llm should be false after a Tier-2 strip succeeds on a previously-flagged record")
+	}
+	if h, _ := node.Properties.GetString(repairInputHashKey); h != "" {
+		t.Errorf("repair_input_hash should be cleared on Tier-2 success; got %q", h)
+	}
+	if m, _ := node.Properties.GetString("repair_method"); m != string(outcomeStripped) {
+		t.Errorf("repair_method = %q, want %q", m, outcomeStripped)
+	}
+}
+
+// TestDetectAndRepairSummaryClearsStaleFlagOnTier3Fallback pins
+// the same clearing behavior on the Tier-3 (firstSentences-from-
+// content_full) success path. Pre-fix this path also left
+// repair_needed_llm stale.
+func TestDetectAndRepairSummaryClearsStaleFlagOnTier3Fallback(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	tail := `</summary_short>
+<parameter name="keywords">["leak"]`
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":       graph.StringProperty("First full sentence here. Second sentence provides context. Third one wraps it up."),
+		"content_short":      graph.StringProperty("Tiny." + tail), // strip yields "Tiny." (5 chars) -> Tier-2 fails (< 50 chars)
+		"repair_needed_llm":  graph.BoolProperty(true),
+		repairInputHashKey:   graph.StringProperty("staleHash"),
+		"repair_method":      graph.StringProperty("flagged"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+
+	if outcome != outcomeFallback {
+		t.Errorf("outcome = %v, want %v (Tier-3 should have fired)", outcome, outcomeFallback)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	node, _ := eng.Graph().GetNode(n.ID)
+	if flag, _ := node.Properties.GetBool("repair_needed_llm"); flag {
+		t.Error("repair_needed_llm should be false after a Tier-3 fallback succeeds on a previously-flagged record")
+	}
+	if h, _ := node.Properties.GetString(repairInputHashKey); h != "" {
+		t.Errorf("repair_input_hash should be cleared on Tier-3 success; got %q", h)
+	}
+}
+
+// TestDetectAndRepairSummaryCleanIsNoopWhenNotFlagged confirms
+// the conditional clear: a clean record without a prior flag does
+// NOT receive a spurious property write. Pre-fix concern was
+// adding three SetProps to every clean record on every boot --
+// the conditional gate prevents that.
+func TestDetectAndRepairSummaryCleanIsNoopWhenNotFlagged(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":  graph.StringProperty("Body."),
+		"content_short": graph.StringProperty("Already-clean summary with no contamination."),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("save: %v", err)
+	}
+	eng.Unlock()
+
+	preHead := eng.HeadHash()
+
+	eng.Lock()
+	outcome := DetectAndRepairSummary(eng, n.ID, slog.Default())
+	eng.Unlock()
+	if outcome != outcomeClean {
+		t.Fatalf("outcome = %v, want %v", outcome, outcomeClean)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	if eng.HeadHash() != preHead {
+		t.Error("clean+unflagged record advanced the commit chain; clearStaleRepairFlag should have been a no-op")
+	}
+	node, _ := eng.Graph().GetNode(n.ID)
+	if _, has := node.Properties["repair_needed_llm"]; has {
+		t.Error("repair_needed_llm property should NOT exist on a record that was never flagged")
+	}
+}
+
 // --- Defensive paths ---
 
 // TestDetectAndRepairSummaryMissingNode covers the defensive
