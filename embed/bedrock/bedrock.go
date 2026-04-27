@@ -3,16 +3,25 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/internal/awscfg"
 )
+
+// modelAccessHint mirrors llm/bedrock's: AccessDeniedException
+// covers both IAM-permission-missing and "model access not granted
+// in console". Surface the docs link so users have a clear next
+// step.
+const modelAccessHint = "AccessDeniedException can mean (1) the IAM principal lacks bedrock:InvokeModel for this model, OR (2) the model has not been enabled in the Bedrock console for this account/region. To enable model access: https://docs.aws.amazon.com/bedrock/latest/userguide/model-access-modify.html"
 
 // Client is an embedding provider that calls Amazon Bedrock's
 // InvokeModel API. Supports Titan Embed and Cohere Embed model
@@ -21,6 +30,44 @@ type Client struct {
 	client *bedrockruntime.Client
 	model  string
 	family modelFamily
+
+	// accessDeniedWarned dedups the per-model AccessDeniedException
+	// hint so a curation reembed loop doesn't repeat the warn line
+	// for every batch on a non-enabled model.
+	accessDeniedWarned sync.Map
+}
+
+// classifyBedrockError mirrors the LLM client's helper. Wraps
+// AccessDeniedException with the model-access hint and
+// ResourceNotFoundException with a model-id / region-availability
+// hint. Logs the AccessDenied case once per model via the dedup
+// map so a tight reembed loop on a non-enabled model doesn't flood
+// the log.
+func (c *Client) classifyBedrockError(err error, model string) error {
+	if err == nil {
+		return nil
+	}
+	var ade *types.AccessDeniedException
+	if errors.As(err, &ade) {
+		c.warnAccessDenied(model)
+		return fmt.Errorf("%w (hint: %s)", err, modelAccessHint)
+	}
+	var rnf *types.ResourceNotFoundException
+	if errors.As(err, &rnf) {
+		return fmt.Errorf("%w (hint: model %q is not available in this region; check region setting and the model-id format)", err, model)
+	}
+	return err
+}
+
+// warnAccessDenied dedup-warns once per model.
+func (c *Client) warnAccessDenied(model string) {
+	if _, loaded := c.accessDeniedWarned.LoadOrStore(model, struct{}{}); loaded {
+		return
+	}
+	slog.Warn("bedrock embed: AccessDeniedException -- check model access + IAM",
+		"component", "embed",
+		"model", model,
+		"hint", modelAccessHint)
 }
 
 type modelFamily int
@@ -151,7 +198,7 @@ func (c *Client) embedTitan(ctx context.Context, texts []string) ([][]float32, e
 			Body:        body,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("bedrock embed: invoke %s: %w", c.model, err)
+			return nil, fmt.Errorf("bedrock embed: invoke %s: %w", c.model, c.classifyBedrockError(err, c.model))
 		}
 
 		var resp titanResponse
@@ -202,7 +249,7 @@ func (c *Client) embedCohere(ctx context.Context, texts []string, inputType stri
 			Body:        body,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("bedrock embed: invoke %s: %w", c.model, err)
+			return nil, fmt.Errorf("bedrock embed: invoke %s: %w", c.model, c.classifyBedrockError(err, c.model))
 		}
 
 		var resp cohereResponse

@@ -3,6 +3,7 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -17,6 +18,48 @@ import (
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
 
+// modelAccessHint is appended to AccessDeniedException errors. The
+// same exception covers two distinct failure modes -- IAM permission
+// missing and "model access not granted in console" -- and the SDK
+// message often reads "AccessDeniedException" with a generic body.
+// Surfacing both possibilities up front saves a long debugging
+// session against AWS console settings.
+const modelAccessHint = "AccessDeniedException can mean (1) the IAM principal lacks bedrock:InvokeModel for this model, OR (2) the model has not been enabled in the Bedrock console for this account/region. To enable model access: https://docs.aws.amazon.com/bedrock/latest/userguide/model-access-modify.html"
+
+// classifyBedrockError wraps SDK errors with hints for the most
+// common Bedrock onboarding failures. AccessDeniedException is by
+// far the loudest one; ResourceNotFoundException usually means a
+// model-ID typo or the model is not available in the configured
+// region. Only logs the hint once per (errType, model) pair via a
+// dedup map so a tight curation loop doesn't repeat the same line.
+func (c *Client) classifyBedrockError(err error, model string) error {
+	if err == nil {
+		return nil
+	}
+	var ade *types.AccessDeniedException
+	if errors.As(err, &ade) {
+		c.warnAccessDenied(model)
+		return fmt.Errorf("%w (hint: %s)", err, modelAccessHint)
+	}
+	var rnf *types.ResourceNotFoundException
+	if errors.As(err, &rnf) {
+		return fmt.Errorf("%w (hint: model %q is not available in this region; check region setting and the model-id format -- inference profiles use prefixes like us.anthropic.…)", err, model)
+	}
+	return err
+}
+
+// warnAccessDenied dedup-warns once per model so a curation loop
+// hammering a non-enabled model doesn't flood the log.
+func (c *Client) warnAccessDenied(model string) {
+	if _, loaded := c.accessDeniedWarned.LoadOrStore(model, struct{}{}); loaded {
+		return
+	}
+	slog.Warn("bedrock: AccessDeniedException -- check model access + IAM",
+		"component", "llm",
+		"model", model,
+		"hint", modelAccessHint)
+}
+
 // Client calls the Bedrock Converse API for LLM completions. The
 // Converse API is model-agnostic -- it works with Claude, Titan,
 // Llama, Mistral, and any other model available on Bedrock.
@@ -27,6 +70,11 @@ type Client struct {
 	// ignoredModelWarned dedups the per-override Warn from
 	// CompleteWithModel so a tight curation loop doesn't flood logs.
 	ignoredModelWarned sync.Map
+
+	// accessDeniedWarned dedups the per-model AccessDeniedException
+	// hint so a curation loop hammering a non-enabled model doesn't
+	// repeat the same line every cycle.
+	accessDeniedWarned sync.Map
 }
 
 // New creates a Bedrock LLM client from the LLM config.
@@ -98,7 +146,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("bedrock llm: converse %s: %w", c.model, err)
+		return "", fmt.Errorf("bedrock llm: converse %s: %w", c.model, c.classifyBedrockError(err, c.model))
 	}
 
 	// Extract text from the response message.
@@ -190,7 +238,7 @@ func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, 
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("bedrock structured: converse %s: %w", c.model, err)
+		return nil, fmt.Errorf("bedrock structured: converse %s: %w", c.model, c.classifyBedrockError(err, c.model))
 	}
 
 	// Record usage identically to Complete.

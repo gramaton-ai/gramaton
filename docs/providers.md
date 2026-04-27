@@ -81,7 +81,7 @@ embedding:
 
 ### AWS Bedrock
 
-Supports Amazon Titan Embed and Cohere Embed model families. Uses the standard AWS SDK credential chain (profile, env vars, IMDS, SSO).
+Supports Amazon Titan Embed and Cohere Embed model families. Uses the standard AWS SDK credential chain — see [AWS auth patterns](#aws-auth-patterns) below for the full picture.
 
 ```yaml
 embedding:
@@ -91,11 +91,6 @@ embedding:
   region: us-west-2
   aws_profile: my-profile               # optional; default chain used if omitted
 ```
-
-**Auth precedence:**
-1. `aws_profile` — named profile from `~/.aws/credentials`
-2. `aws_access_key_id_env` / `aws_secret_access_key_env` — env var names for explicit credentials
-3. Default chain — environment variables, IMDS (EC2), SSO, etc.
 
 **Supported embedding models:**
 
@@ -158,7 +153,69 @@ llm:
   aws_profile: my-profile
 ```
 
-Auth works the same as Bedrock embeddings (profile, env vars, or default credential chain).
+Auth works the same as Bedrock embeddings — see [AWS auth patterns](#aws-auth-patterns) below.
+
+**First-call hint:** if your first Bedrock call returns `AccessDeniedException`, the most common cause is that model access has not been granted in the Bedrock console for the account/region combination. Visit `https://console.aws.amazon.com/bedrock/home#/modelaccess` (in the right region), request access to the model family, and retry. The error wrap surfaces this hint with a docs link.
+
+### AWS auth patterns
+
+Gramaton uses the standard AWS SDK credential chain: whatever your AWS profile already does, the daemon does. The supported patterns:
+
+**1. AWS SSO / IAM Identity Center** (recommended for org users)
+
+```ini
+# ~/.aws/config
+[profile gramaton]
+sso_session = my-org
+sso_account_id = 123456789012
+sso_role_name = BedrockUser
+region = us-west-2
+```
+
+Run `aws sso login --profile gramaton` once a day. The SDK reads the SSO cache file (`~/.aws/sso/cache/<hash>.json`) on each refresh — when you re-login from another terminal, the running Gramaton daemon picks up the new token at the next API call. **No restart needed.**
+
+**2. Profile with role_arn + source_profile**
+
+```ini
+[profile bedrock-role]
+role_arn = arn:aws:iam::123:role/BedrockRole
+source_profile = base
+```
+
+The SDK calls `sts:AssumeRole` itself and auto-refreshes the temporary credentials (default 1h, configurable up to 12h) as long as the source profile is valid.
+
+**3. `credential_process`** (recommended for non-SSO credential managers)
+
+```ini
+[profile dynamic]
+credential_process = my-cred-helper get-credentials --role X --account Y
+region = us-west-2
+```
+
+The SDK calls the subprocess on each refresh and parses its JSON output. **Use this if your org has a custom credential manager that publishes refreshed creds.** It is the cleanest way to keep a long-running daemon in sync with rotating credentials, because the SDK explicitly invokes the subprocess at refresh time rather than caching once at startup.
+
+**4. EC2 instance profile / ECS task role**
+
+No profile needed. The SDK reads from IMDS (EC2) or the ECS task metadata endpoint and auto-refreshes. Just set `region` in the Gramaton config.
+
+**5. Static IAM user keys** (legacy, AWS discourages)
+
+Long-lived `AKIA...` access keys in `~/.aws/credentials` or via the `aws_access_key_id_env` / `aws_secret_access_key_env` config fields. Works, but doesn't auto-rotate.
+
+#### The static-keys-rewrite gotcha
+
+If your credential manager refreshes by **rewriting `~/.aws/credentials` in place** (the Isengard-on-developer-laptop pattern), a long-running Gramaton daemon will **NOT** pick up the new credentials. The SDK reads static credentials from the file once at startup and caches them for the life of the process.
+
+Two clean fixes:
+
+- **Wrap the credential manager as a `credential_process`** (Pattern 3 above). The SDK calls the subprocess on each refresh and gets fresh creds.
+- **Use SSO** (Pattern 1). The SDK reads the SSO cache file on each refresh, so external `aws sso login` invocations are picked up automatically.
+
+If neither fix is feasible, restart Gramaton after each credential refresh.
+
+#### Verification at setup time
+
+`gramaton init` calls `sts:GetCallerIdentity` against your configured profile and displays the resolved account, principal ARN, and region before persisting the config. Catches expired SSO sessions, profile typos, and region mismatches at the moment they're easiest to fix. Runtime credential refreshes (post-setup) are handled by the SDK transparently per the patterns above.
 
 ### CLI shims (unsupported — use at your own risk)
 

@@ -3,6 +3,7 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +12,93 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
+
+// TestClassifyBedrockErrorAccessDenied confirms AccessDeniedException
+// from the SDK is wrapped with the model-access hint so users see
+// the docs URL on first failure. Pre-fix the wrapper just bubbled
+// the SDK message ("AccessDeniedException") with no remediation
+// guidance -- one of the most common Bedrock onboarding pains
+// (per the original release-blocking tracker).
+func TestClassifyBedrockErrorAccessDenied(t *testing.T) {
+	c := &Client{}
+	msg := "User: arn:aws:sts::111122223333:assumed-role/Foo is not authorized to perform: bedrock:InvokeModel"
+	original := &types.AccessDeniedException{Message: &msg}
+
+	wrapped := c.classifyBedrockError(original, "anthropic.claude-test")
+
+	if !strings.Contains(wrapped.Error(), "AccessDeniedException can mean") {
+		t.Errorf("expected wrapped error to include the model-access hint; got: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "https://docs.aws.amazon.com/bedrock") {
+		t.Errorf("expected wrapped error to include the enable-model-access docs URL; got: %v", wrapped)
+	}
+	// errors.Is/As must still find the original SDK error so callers
+	// that pattern-match on it (retries, telemetry) keep working.
+	var ade *types.AccessDeniedException
+	if !errors.As(wrapped, &ade) {
+		t.Errorf("wrapped error must still expose *types.AccessDeniedException via errors.As; got: %v", wrapped)
+	}
+}
+
+// TestClassifyBedrockErrorResourceNotFound confirms model-id /
+// region-mismatch failures are wrapped with a clear hint about
+// region availability + inference-profile prefixes.
+func TestClassifyBedrockErrorResourceNotFound(t *testing.T) {
+	c := &Client{}
+	msg := "Could not resolve the foundation model from model identifier"
+	original := &types.ResourceNotFoundException{Message: &msg}
+
+	wrapped := c.classifyBedrockError(original, "bogus.model")
+
+	if !strings.Contains(wrapped.Error(), "not available in this region") {
+		t.Errorf("expected ResourceNotFound wrap to mention region availability; got: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), `"bogus.model"`) {
+		t.Errorf("expected ResourceNotFound wrap to name the model; got: %v", wrapped)
+	}
+}
+
+// TestClassifyBedrockErrorPassThroughOther confirms unrecognized
+// errors are returned unchanged so the helper doesn't fight existing
+// retry / telemetry behavior on errors it doesn't classify.
+func TestClassifyBedrockErrorPassThroughOther(t *testing.T) {
+	c := &Client{}
+	original := errors.New("totally novel error")
+	wrapped := c.classifyBedrockError(original, "model")
+	if wrapped != original {
+		t.Errorf("unrecognized error should be returned unchanged; got %v", wrapped)
+	}
+}
+
+// TestClassifyBedrockErrorAccessDeniedDedupsWarn confirms that
+// repeated AccessDeniedException wrappings against the same model
+// only emit one Warn log line (the dedup map blocks subsequent
+// emissions). The error wrap itself still applies on every call.
+func TestClassifyBedrockErrorAccessDeniedDedupsWarn(t *testing.T) {
+	c := &Client{}
+	msg := "denied"
+	original := &types.AccessDeniedException{Message: &msg}
+
+	c.classifyBedrockError(original, "model-a")
+	c.classifyBedrockError(original, "model-a")
+	c.classifyBedrockError(original, "model-a")
+
+	// Second model should re-emit a fresh warn (dedup is per-model).
+	c.classifyBedrockError(original, "model-b")
+
+	// Behavior verified by inspecting the dedup map directly.
+	if _, ok := c.accessDeniedWarned.Load("model-a"); !ok {
+		t.Error("model-a should be present in accessDeniedWarned after first call")
+	}
+	if _, ok := c.accessDeniedWarned.Load("model-b"); !ok {
+		t.Error("model-b should be present in accessDeniedWarned after first call")
+	}
+}
 
 func TestNewMissingModel(t *testing.T) {
 	cfg := config.LLMConfig{

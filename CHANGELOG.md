@@ -7,6 +7,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Bedrock clients classify and surface `AccessDeniedException` and
+  `ResourceNotFoundException` with actionable hints.** Pre-fix, a
+  first Bedrock call against a non-enabled model returned the raw
+  SDK `AccessDeniedException` and the user had to know that the
+  *most common* cause is "model access not granted in the Bedrock
+  console." Now both `llm/bedrock` and `embed/bedrock` wrap the SDK
+  error with a hint pointing at
+  `https://docs.aws.amazon.com/bedrock/latest/userguide/model-access-modify.html`
+  and call out both possible causes (IAM permission missing OR
+  model access not granted). `ResourceNotFoundException` similarly
+  gets a region-availability + model-id hint. The original SDK
+  error survives `errors.As`/`errors.Is` so retry and telemetry
+  paths that key on the type keep working. Per-model dedup map
+  prevents a tight curation loop on a non-enabled model from
+  flooding the log. Tests cover the wrap, the dedup, and the
+  pass-through-other-errors path. Tracker
+  01KPYDE45Q7T91DNTQNMEGTX74.
+
+- **`docs/providers.md` documents the five AWS auth patterns +
+  the static-keys-rewrite gotcha.** New "AWS auth patterns"
+  section covers SSO, role_arn-in-profile, `credential_process`
+  (recommended for non-SSO credential managers), EC2/ECS instance
+  roles, and static IAM keys. Calls out the long-running-daemon
+  failure mode where another tool rewrites `~/.aws/credentials`
+  in place and the SDK doesn't see the update — with two clean
+  workarounds (wrap as `credential_process`, or switch to SSO).
+  Notes that `gramaton init` verifies credentials via
+  `sts:GetCallerIdentity` and surfaces the model-access docs link
+  on the first AccessDeniedException.
+
 ### Changed
 
 - **Setup wizard now verifies and displays the resolved AWS

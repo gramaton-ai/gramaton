@@ -3,16 +3,60 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
+
+// TestClassifyBedrockErrorAccessDenied (embed) -- mirrors the LLM
+// client's test. Confirms AccessDeniedException is wrapped with the
+// model-access hint AND the original SDK error survives errors.As.
+func TestClassifyBedrockErrorAccessDenied(t *testing.T) {
+	c := &Client{}
+	msg := "denied"
+	original := &types.AccessDeniedException{Message: &msg}
+	wrapped := c.classifyBedrockError(original, "amazon.titan-embed-text-v2:0")
+
+	if !strings.Contains(wrapped.Error(), "AccessDeniedException can mean") {
+		t.Errorf("expected wrapped error to include the model-access hint; got: %v", wrapped)
+	}
+	var ade *types.AccessDeniedException
+	if !errors.As(wrapped, &ade) {
+		t.Errorf("wrapped error must still expose *types.AccessDeniedException via errors.As; got: %v", wrapped)
+	}
+}
+
+// TestClassifyBedrockErrorResourceNotFound (embed) confirms the
+// region-availability hint surfaces on ResourceNotFoundException.
+func TestClassifyBedrockErrorResourceNotFound(t *testing.T) {
+	c := &Client{}
+	msg := "not found"
+	original := &types.ResourceNotFoundException{Message: &msg}
+	wrapped := c.classifyBedrockError(original, "bogus.embed.model")
+
+	if !strings.Contains(wrapped.Error(), "not available in this region") {
+		t.Errorf("expected wrap to mention region availability; got: %v", wrapped)
+	}
+}
+
+// TestClassifyBedrockErrorPassThroughOther confirms unknown errors
+// pass through untouched.
+func TestClassifyBedrockErrorPassThroughOther(t *testing.T) {
+	c := &Client{}
+	original := errors.New("totally novel error")
+	if got := c.classifyBedrockError(original, "model"); got != original {
+		t.Errorf("unrecognized error should be returned unchanged; got %v", got)
+	}
+}
 
 func TestDetectFamily(t *testing.T) {
 	tests := []struct {
