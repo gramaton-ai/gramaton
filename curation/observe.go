@@ -287,6 +287,12 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			// Index the node (properties + BM25 + vector).
 			ws.IndexNode(n.ID, o.text, o.vec)
 
+			// Action emit per observation: the new observation node and
+			// its parent both have their stream affected (parent gains
+			// an inbound observation_of edge; child is a new record).
+			ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationObservationExtract, RecordID: n.ID})
+			ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationObservationExtract, RecordID: o.parentID})
+
 			successfulParents[o.parentID] = true
 			created++
 		}

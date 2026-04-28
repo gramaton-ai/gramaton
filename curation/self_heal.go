@@ -199,6 +199,7 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 	// block search for minutes on a store with thousands of
 	// contaminated records. Repair decisions are independent per
 	// record — no cross-record invariants to protect.
+	var selfHealActions []graph.CommitAction
 	for _, id := range ids {
 		result.Scanned++
 		e.Lock()
@@ -207,8 +208,14 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 		switch outcome {
 		case outcomeStripped, outcomeFallback:
 			result.Repaired++
+			selfHealActions = append(selfHealActions, graph.CommitAction{
+				Kind: graph.ActionCurationSelfHeal, RecordID: id,
+			})
 		case outcomeFlagged:
 			result.FlaggedForLLM++
+			selfHealActions = append(selfHealActions, graph.CommitAction{
+				Kind: graph.ActionCurationSelfHeal, RecordID: id,
+			})
 		}
 	}
 
@@ -220,7 +227,7 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 	// observe torn state. Take the Lock explicitly.
 	if result.Repaired+result.FlaggedForLLM > 0 {
 		e.Lock()
-		_, err := e.Save("curation: self-heal summary repairs")
+		_, err := e.Save("curation: self-heal summary repairs", selfHealActions...)
 		e.Unlock()
 		if err != nil {
 			logger.Warn("self-heal: save failed", "component", "curation", "err", err)

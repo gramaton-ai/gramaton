@@ -505,6 +505,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				if _, ok := ws.Graph().GetNode(id); ok {
 					ws.SetProp(id, "valid_until", graph.TimestampProperty(now))
 					result.LifecycleTransitions++
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationLifecycle, RecordID: id})
 				}
 			}
 
@@ -519,6 +520,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				_, err := ws.AddEdge(ol.orphanID, ol.targetID, "related_to", ol.similarity, nil)
 				if err == nil {
 					result.OrphansLinked++
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationLink, RecordID: ol.orphanID})
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationLink, RecordID: ol.targetID})
 				}
 			}
 
@@ -585,6 +588,8 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 						"component", "curation", "newer", newerID, "older", olderID, "err", err)
 				}
 				result.DuplicatesSuperseded++
+				ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: olderID})
+				ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: newerID})
 			}
 
 			// Quality repairs: fix deterministic issues, flag others.
@@ -597,6 +602,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					// Deterministic fix: update content_short.
 					ws.SetContentProp(qi.nodeID, "content_short", qi.short)
 					result.QualityRepairs++
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationQualityRepair, RecordID: qi.nodeID})
 				case "flag_embed":
 					// Can't fix deterministically (needs embedder).
 					// Stale count in manifest already captures this;
@@ -728,11 +734,14 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// it here avoids double-adding each property.
 				ws.IndexNode(cn.ID, templateFull, nil)
 
+				ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationConceptEmerge, RecordID: cn.ID})
 				for _, memberID := range c.NodeIDs {
 					if _, ok := ws.Graph().GetNode(memberID); ok {
 						if _, err := ws.AddEdge(memberID, cn.ID, "instance_of", 0.8, nil); err != nil {
 							logger.Error("failed to add instance_of edge",
 								"component", "curation", "member", memberID, "concept", cn.ID, "err", err)
+						} else {
+							ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationConceptEmerge, RecordID: memberID})
 						}
 					}
 				}
@@ -773,6 +782,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				if added {
 					ws.SetProp(conceptID, "content_keywords", graph.StringListProperty(merged))
 					result.ConceptsAliased++
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationConceptEnrich, RecordID: conceptID})
 					logger.Info("concept alias added",
 						"component", "curation",
 						"concept", conceptID,
@@ -926,6 +936,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 	// Write phase: hard delete.
 	e.Lock()
 	deleted := 0
+	var gcActions []graph.CommitAction
 	for _, id := range gcIDs {
 		n, ok := e.Graph().GetNode(id)
 		if !ok {
@@ -939,9 +950,12 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 		}
 		e.Graph().DeleteNode(id)
 		deleted++
+		gcActions = append(gcActions, graph.CommitAction{
+			Kind: graph.ActionCurationGC, RecordID: id,
+		})
 	}
 	if deleted > 0 {
-		e.SaveOrLog("curation: garbage collection")
+		e.SaveOrLog("curation: garbage collection", gcActions...)
 	}
 	e.Unlock()
 
@@ -1048,6 +1062,7 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 	// Write phase.
 	e.Lock()
 	changed := false
+	var enrichActions []graph.CommitAction
 	for _, u := range updates {
 		if _, ok := e.Graph().GetNode(u.id); !ok {
 			continue
@@ -1057,9 +1072,12 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 			e.SetProp(u.id, "last_evidence_at", graph.TimestampProperty(u.lastEvidenceAt))
 		}
 		changed = true
+		enrichActions = append(enrichActions, graph.CommitAction{
+			Kind: graph.ActionCurationConceptEnrich, RecordID: u.id,
+		})
 	}
 	if changed {
-		e.SaveOrLog("curation: concept enrichment")
+		e.SaveOrLog("curation: concept enrichment", enrichActions...)
 	}
 	e.Unlock()
 
@@ -1262,6 +1280,7 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 	defer e.Unlock()
 
 	linked := 0
+	var sectionActions []graph.CommitAction
 	for _, c := range candidates {
 		if _, ok := e.Graph().GetNode(c.sourceID); !ok {
 			continue
@@ -1272,11 +1291,15 @@ func linkSections(e *core.Engine, cfg config.Config, logger *slog.Logger) int {
 		_, err := e.Graph().AddEdge(c.sourceID, c.targetID, "related_to", c.similarity, nil)
 		if err == nil {
 			linked++
+			sectionActions = append(sectionActions,
+				graph.CommitAction{Kind: graph.ActionCurationSectionLink, RecordID: c.sourceID},
+				graph.CommitAction{Kind: graph.ActionCurationSectionLink, RecordID: c.targetID},
+			)
 		}
 	}
 
 	if linked > 0 {
-		e.SaveOrLog("curation: section linking")
+		e.SaveOrLog("curation: section linking", sectionActions...)
 		logger.Info("cross-section linking complete",
 			"component", "curation",
 			"sections_linked", linked)

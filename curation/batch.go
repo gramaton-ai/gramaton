@@ -232,6 +232,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		reason string
 	}
 	var failedBatch []batchFailure
+	var batchClassifyActions []graph.CommitAction
 
 	e.Lock()
 	for _, br := range batchResults {
@@ -272,6 +273,9 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 		applyClassification(e, br.CustomID, classification, shortModel, longModel, longThreshold)
 		result.Applied++
+		batchClassifyActions = append(batchClassifyActions, graph.CommitAction{
+			Kind: graph.ActionCurationClassify, RecordID: br.CustomID,
+		})
 	}
 
 	// Per-record failure tracking. Inherits the same MaxClassifyAttempts
@@ -293,7 +297,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	}
 
 	if result.Applied > 0 || (classifyRetry.Max > 0 && len(failedBatch) > 0) {
-		e.SaveOrLog("curation: batch classify")
+		e.SaveOrLog("curation: batch classify", batchClassifyActions...)
 	}
 	e.Unlock()
 

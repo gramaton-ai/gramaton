@@ -484,9 +484,11 @@ func (e *Engine) MarkAccessDirty() {
 // Callers that CAN handle the error (HTTP handlers returning 5xx,
 // import operations that should abort) MUST use Save directly.
 //
-// Caller must hold the write lock.
-func (e *Engine) SaveOrLog(message string) {
-	if _, err := e.Save(message); err != nil {
+// Caller must hold the write lock. Accepts variadic CommitAction
+// values matching Save's signature so curation passes can emit
+// per-record action descriptors alongside the cycle's batch save.
+func (e *Engine) SaveOrLog(message string, actions ...graph.CommitAction) {
+	if _, err := e.Save(message, actions...); err != nil {
 		slog.Error("save failed",
 			"component", "engine",
 			"message", message,

@@ -78,11 +78,13 @@ const (
 	ActionCurationSupersede          = "curation:supersede"
 	ActionCurationContradictionCheck = "curation:contradiction_check" // covers contradict + no_contradict outcomes
 	ActionCurationConceptEmerge      = "curation:concept_emerge"      // new concept + instance_of edges
-	ActionCurationConceptEnrich      = "curation:concept_enrich"      // LLM concept synthesis
+	ActionCurationConceptEnrich      = "curation:concept_enrich"      // concept node enrichment (LLM synthesis or deterministic alias-merge / evidence-count update)
 	ActionCurationSectionLink        = "curation:section_link"
 	ActionCurationObservationExtract = "curation:observation_extract"
-	ActionCurationGC                 = "curation:gc"
-	ActionCurationSelfHeal           = "curation:self_heal"
+	ActionCurationLifecycle          = "curation:lifecycle"      // valid_until set on stale ephemeral/temporal records
+	ActionCurationQualityRepair      = "curation:quality_repair" // deterministic content_short fix
+	ActionCurationGC                 = "curation:gc"             // hard-delete debris
+	ActionCurationSelfHeal           = "curation:self_heal"      // self-heal repair_method/repair_input_hash recovery (curation/self_heal.go)
 )
 
 // Commit is an immutable snapshot of the graph state.

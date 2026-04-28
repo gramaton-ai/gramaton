@@ -140,6 +140,7 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 	checkedAt := time.Now().UTC()
 	drained := 0
 	e.Lock()
+	var drainActions []graph.CommitAction
 	for _, p := range pairs {
 		if _, ok := e.Graph().GetNode(p.idA); !ok {
 			continue
@@ -157,9 +158,13 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 			continue
 		}
 		drained++
+		drainActions = append(drainActions,
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: p.idA},
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: p.idB},
+		)
 	}
 	if drained > 0 {
-		e.SaveOrLog("curation: drain_contradictions")
+		e.SaveOrLog("curation: drain_contradictions", drainActions...)
 	}
 	e.Unlock()
 

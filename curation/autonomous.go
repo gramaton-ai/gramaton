@@ -609,6 +609,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 
 	// Batch write: one lock acquisition, one commit.
 	e.Lock()
+	var classifyActions []graph.CommitAction
 	for _, r := range ready {
 		if _, ok := e.Graph().GetNode(r.id); !ok {
 			logger.Debug("classify node gone", "component", "curation", "record", r.id)
@@ -648,6 +649,9 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 			result.ModelCounts = make(map[string]int)
 		}
 		result.ModelCounts[r.model]++
+		classifyActions = append(classifyActions, graph.CommitAction{
+			Kind: graph.ActionCurationClassify, RecordID: r.id,
+		})
 	}
 
 	// Failed records: bump attempts counter, capture the reason for
@@ -667,7 +671,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	}
 
 	if result.Classified > 0 || (maxAttempts > 0 && len(failed) > 0) {
-		e.SaveOrLog("curation: classify")
+		e.SaveOrLog("curation: classify", classifyActions...)
 	}
 	e.Unlock()
 }
@@ -864,6 +868,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 
 	e.Lock()
+	var summaryActions []graph.CommitAction
 	for _, s := range readySummaries {
 		n, ok := e.Graph().GetNode(s.id)
 		if !ok {
@@ -873,6 +878,9 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		e.SetContentProp(s.id, "content_short", s.summary)
 		recordTaskSuccess(e, n, "summary_attempts")
 		result.SummariesGenerated++
+		summaryActions = append(summaryActions, graph.CommitAction{
+			Kind: graph.ActionCurationSummary, RecordID: s.id,
+		})
 	}
 
 	// Failed records: bump attempts counter and capture the reason for
@@ -891,7 +899,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	}
 
 	if result.SummariesGenerated > 0 || (maxSummaryAttempts > 0 && len(failedSummaries) > 0) {
-		e.SaveOrLog("curation: summarize")
+		e.SaveOrLog("curation: summarize", summaryActions...)
 	}
 	e.Unlock()
 }
@@ -1493,6 +1501,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		// under the engine lock.
 		e.Lock()
 		hadFailures := false
+		var enrichActions []graph.CommitAction
 		for ai, a := range applies {
 			if a.failReason != "" {
 				recordTaskFailure(e, synthesisRetry, a.id, a.failReason, logger)
@@ -1516,6 +1525,9 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			n, _ := e.Graph().GetNode(a.id)
 			recordTaskSuccess(e, n, "synthesis_attempts")
 			result.ConceptsCreated++
+			enrichActions = append(enrichActions, graph.CommitAction{
+				Kind: graph.ActionCurationConceptEnrich, RecordID: a.id,
+			})
 
 			logger.Info("concept enriched",
 				"component", "curation",
@@ -1523,7 +1535,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 				"node_id", a.id)
 		}
 		if result.ConceptsCreated > 0 || (synthesisRetry.Max > 0 && hadFailures) {
-			e.SaveOrLog("curation: enrich concepts")
+			e.SaveOrLog("curation: enrich concepts", enrichActions...)
 		}
 		e.Unlock()
 	}
@@ -2022,6 +2034,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 	// Write phase: create edges and mark superseded records.
 	e.Lock()
+	var contradictionActions []graph.CommitAction
 	for _, f := range findings {
 		if _, ok := e.Graph().GetNode(f.idA); !ok {
 			continue
@@ -2029,6 +2042,16 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		if _, ok := e.Graph().GetNode(f.idB); !ok {
 			continue
 		}
+
+		// Every checked pair emits two contradiction_check actions
+		// (one per endpoint) so gramaton_log filtering by either
+		// record finds the commit. The supersedes outcome
+		// additionally emits supersede actions so a filter on
+		// curation:supersede finds LLM-driven supersessions too.
+		contradictionActions = append(contradictionActions,
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idA},
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idB},
+		)
 
 		switch f.relationship {
 		case "contradicts":
@@ -2053,6 +2076,10 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			e.SetProp(f.idA, "resolution", graph.StringProperty("superseded"))
 			e.SetProp(f.idA, "resolved_at", graph.TimestampProperty(now))
 			result.ContradictionsDetected++
+			contradictionActions = append(contradictionActions,
+				graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: f.idA},
+				graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: f.idB},
+			)
 		}
 	}
 	// Write no_contradiction edges for pairs the LLM successfully
@@ -2078,6 +2105,10 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			continue
 		}
 		result.NoContradictionEdges++
+		contradictionActions = append(contradictionActions,
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: nc.idA},
+			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: nc.idB},
+		)
 	}
 
 	// Failed-check pairs: increment-or-create a contradiction_check_skipped
@@ -2156,7 +2187,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 	if result.ContradictionsDetected > 0 || result.NoContradictionEdges > 0 ||
 		(maxContradictionAttempts > 0 && len(failedChecks) > 0) {
-		e.SaveOrLog("curation: contradictions")
+		e.SaveOrLog("curation: contradictions", contradictionActions...)
 	}
 	e.Unlock()
 
