@@ -310,6 +310,7 @@ func ImportCSV(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, erro
 	e.Lock()
 	defer e.Unlock()
 
+	var importActions []graph.CommitAction
 	for _, props := range allProps {
 		safeP := buildSafeProps(props)
 		safeP["processing_status"] = graph.StringProperty("captured")
@@ -323,10 +324,13 @@ func ImportCSV(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, erro
 			e.PropIdx().Add(n.ID, k, v)
 		}
 		result.Imported++
+		importActions = append(importActions, graph.CommitAction{
+			Kind: graph.ActionImportCSV, RecordID: n.ID,
+		})
 	}
 
 	if result.Imported > 0 {
-		if _, err := e.Save("import csv"); err != nil {
+		if _, err := e.Save("import csv", importActions...); err != nil {
 			return result, fmt.Errorf("save after csv import: %w", err)
 		}
 	}

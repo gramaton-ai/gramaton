@@ -175,6 +175,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 	defer a.engine.Unlock()
 
 	resp := ReembedResponse{}
+	var reembedActions []graph.CommitAction
 	for _, res := range results {
 		if res.err != nil {
 			resp.Errors++
@@ -236,11 +237,14 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		}
 
 		resp.Reembedded++
+		reembedActions = append(reembedActions, graph.CommitAction{
+			Kind: graph.ActionReembed, RecordID: res.target.nodeID,
+		})
 	}
 	resp.Skipped = len(targets) - resp.Reembedded - resp.Errors
 
 	if resp.Reembedded > 0 {
-		if _, err := a.engine.Save("reembed"); err != nil {
+		if _, err := a.engine.Save("reembed", reembedActions...); err != nil {
 			a.log.Error("reembed save failed", "component", "reembed", "err", err, "reembedded", resp.Reembedded)
 			return ReembedResponse{}, ErrInternal("save after reembed failed")
 		}

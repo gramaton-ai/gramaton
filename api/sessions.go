@@ -285,7 +285,9 @@ func (a *API) SessionStart(ctx context.Context, clientSessionID string, source s
 		}
 	}
 
-	if _, err := a.engine.Save("session_create"); err != nil {
+	if _, err := a.engine.Save("session_create", graph.CommitAction{
+		Kind: graph.ActionSessionCreate, RecordID: n.ID,
+	}); err != nil {
 		a.log.Warn("session save failed", "component", "session", "err", err)
 		return nil, ErrInternal("failed to save session")
 	}
@@ -986,7 +988,9 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		}
 	}
 
-	if _, err := a.engine.Save("session_commit"); err != nil {
+	if _, err := a.engine.Save("session_commit", graph.CommitAction{
+		Kind: graph.ActionSessionCommit, RecordID: sessionID,
+	}); err != nil {
 		a.log.Warn("session commit save failed", "component", "session",
 			"session_id", sessionID, "err", err)
 		return nil, ErrInternal("failed to save session commit")
@@ -1107,7 +1111,9 @@ func (a *API) SessionArchive(ctx context.Context, sessionID string, sourcePath s
 	a.engine.SetProp(sessionID, "archive_original_size", graph.Int64Property(int64(originalSize)))
 	a.engine.SetProp(sessionID, "archived_at", graph.TimestampProperty(now))
 
-	if _, err := a.engine.Save("session_archive"); err != nil {
+	if _, err := a.engine.Save("session_archive", graph.CommitAction{
+		Kind: graph.ActionSessionArchive, RecordID: sessionID,
+	}); err != nil {
 		a.log.Warn("archive save failed", "component", "session",
 			"session_id", sessionID, "err", err)
 		return nil, ErrInternal("failed to save archive metadata")

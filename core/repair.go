@@ -1,6 +1,10 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/gramaton-ai/gramaton/graph"
+)
 
 // RepairResult holds the outcome of a store repair.
 type RepairResult struct {
@@ -125,7 +129,7 @@ func (e *Engine) Repair() *RepairResult {
 
 	// Save if we made changes.
 	if r.DanglingEdgesRemoved > 0 || r.OrphanChunksRemoved > 0 {
-		if _, err := e.Save("repair"); err != nil {
+		if _, err := e.Save("repair", graph.CommitAction{Kind: graph.ActionRepair}); err != nil {
 			r.Messages = append(r.Messages, fmt.Sprintf("save after repair failed: %v", err))
 		}
 	}

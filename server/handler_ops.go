@@ -59,7 +59,9 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 
 	s.engine.RebuildAllIndexes()
 
-	commit, err := s.engine.Save(fmt.Sprintf("revert to %s", core.TruncHash(fullHash)))
+	commit, err := s.engine.Save(fmt.Sprintf("revert to %s", core.TruncHash(fullHash)), graph.CommitAction{
+		Kind: graph.ActionRevert,
+	})
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
 		return
@@ -141,6 +143,7 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 
 	now := time.Now().UTC()
 	ingested := 0
+	var ingestActions []graph.CommitAction
 	for _, p := range prepared {
 		props := graph.Properties{
 			"content_full":      graph.StringProperty(p.file.Content),
@@ -175,10 +178,13 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 		}
 
 		ingested++
+		ingestActions = append(ingestActions, graph.CommitAction{
+			Kind: graph.ActionIngest, RecordID: n.ID,
+		})
 	}
 
 	if ingested > 0 {
-		if _, err := s.engine.Save("ingest"); err != nil {
+		if _, err := s.engine.Save("ingest", ingestActions...); err != nil {
 			s.log.Error("ingest save failed", "component", "ingest", "err", err, "ingested", ingested)
 			s.writeError(w, http.StatusInternalServerError, "save_failed",
 				"failed to persist ingested records", false)
