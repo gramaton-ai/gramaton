@@ -8,7 +8,7 @@ import (
 // helper: create a collection from a template, return its ID.
 func newCollFromTemplate(t *testing.T, a *API, name, template string) string {
 	t.Helper()
-	got, err := a.CollectionCreate(context.Background(), &CollectionCreateRequest{
+	got, err := a.CollectionCreate(context.Background(), CollectionCreateRequest{
 		Name:     name,
 		Template: template,
 	})
@@ -25,7 +25,7 @@ func newCollFromTemplate(t *testing.T, a *API, name, template string) string {
 // helper: add an item to a collection with the given fields, return its ID.
 func newCollItem(t *testing.T, a *API, collID string, fields map[string]any) string {
 	t.Helper()
-	got, err := a.CollectionAdd(context.Background(), collID, &CollectionAddRequest{Fields: fields})
+	got, err := a.CollectionAdd(context.Background(), collID, CollectionAddRequest{Fields: fields})
 	if err != nil {
 		t.Fatalf("CollectionAdd: %v", err)
 	}

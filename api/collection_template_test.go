@@ -58,7 +58,7 @@ func TestCollectionCreateWithTemplate(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	resp, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	resp, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "Weekly Groceries",
 		Template: "shopping-list",
 	})
@@ -104,7 +104,7 @@ func TestCollectionCreateTemplateOverride(t *testing.T) {
 	ctx := context.Background()
 
 	// shopping-list template is minimal curation; override to full.
-	resp, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	resp, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "Notepad Groceries",
 		Template: "shopping-list",
 		Curation: "full",
@@ -126,7 +126,7 @@ func TestCollectionCreateTemplateOverride(t *testing.T) {
 // name fails validation with an ErrInvalid.
 func TestCollectionCreateUnknownTemplateRejected(t *testing.T) {
 	a, _ := setupTestAPI(t)
-	_, apiErr := a.CollectionCreate(context.Background(), &CollectionCreateRequest{
+	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
 		Name:     "X",
 		Template: "does-not-exist",
 	})

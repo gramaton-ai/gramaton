@@ -281,13 +281,17 @@ type CollectionCreateRequest struct {
 	Template string `json:"template,omitempty"`
 }
 
-func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (map[string]any, *APIError) {
 	if err := validateCollectionName(req.Name); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
 	// Apply the template BEFORE validation: the resulting merged
 	// request is what gets validated + stored.
-	if tmplErr := applyTemplate(req); tmplErr != nil {
+	// applyTemplate mutates the request to fill template defaults
+	// for unset fields. Pass the address of the value-param copy so
+	// the in-flight request (validated below) sees the merge; the
+	// caller never sees the mutations.
+	if tmplErr := applyTemplate(&req); tmplErr != nil {
 		return nil, tmplErr
 	}
 	if err := validateSchema(req.Schema); err != nil {
@@ -355,7 +359,7 @@ type CollectionListRequest struct {
 	Offset int
 }
 
-func (a *API) CollectionList(ctx context.Context, req *CollectionListRequest) (map[string]any, *APIError) {
+func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (map[string]any, *APIError) {
 	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
@@ -472,7 +476,7 @@ type CollectionItemsRequest struct {
 // the response reflects the commit at-or-before AsOf (D7 CommitAt), and
 // each member is read at its per-commit state. The response carries
 // `as_of` + `semantics: "point_in_time"` so agents don't have to guess.
-func (a *API) CollectionItems(ctx context.Context, collectionID string, req *CollectionItemsRequest) (map[string]any, *APIError) {
+func (a *API) CollectionItems(ctx context.Context, collectionID string, req CollectionItemsRequest) (map[string]any, *APIError) {
 	_ = ctx
 	asOfT, asOfErr := validateAsOf(req.AsOf, nil)
 	if asOfErr != nil {
@@ -669,7 +673,7 @@ func (a *API) collectionItemsAtCommit(
 	asOfT time.Time,
 	filterMatchers map[string]map[string]struct{},
 	projection map[string]struct{},
-	req *CollectionItemsRequest,
+	req CollectionItemsRequest,
 ) (map[string]any, *APIError) {
 	tsIdx := a.engine.TSIndex()
 	commitHash, ok := tsIdx.CommitAt(asOfT)
@@ -940,7 +944,7 @@ type CollectionAddRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *CollectionAddRequest) (map[string]any, *APIError) {
+func (a *API) CollectionAdd(ctx context.Context, collectionID string, req CollectionAddRequest) (map[string]any, *APIError) {
 	if len(req.Fields) == 0 {
 		return nil, ErrMissing("fields are required")
 	}
@@ -1419,7 +1423,7 @@ type CollectionUpdateRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req *CollectionUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req CollectionUpdateRequest) (map[string]any, *APIError) {
 	_ = ctx
 	if len(req.Fields) == 0 {
 		return nil, ErrMissing("fields are required")
@@ -1474,7 +1478,7 @@ type CollectionMoveRequest struct {
 	TargetCollectionID string `json:"target_collection_id"`
 }
 
-func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req *CollectionMoveRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req CollectionMoveRequest) (map[string]any, *APIError) {
 	_ = ctx
 	if req.TargetCollectionID == "" {
 		return nil, ErrMissing("target_collection_id is required")
@@ -1563,7 +1567,7 @@ type CollectionRenameRequest struct {
 	Name string `json:"name"`
 }
 
-func (a *API) CollectionRename(ctx context.Context, collectionID string, req *CollectionRenameRequest) (map[string]any, *APIError) {
+func (a *API) CollectionRename(ctx context.Context, collectionID string, req CollectionRenameRequest) (map[string]any, *APIError) {
 	_ = ctx
 	if err := validateCollectionName(req.Name); err != nil {
 		return nil, ErrInvalid(err.Error())
@@ -1666,7 +1670,7 @@ type CollectionSchemaUpdateRequest struct {
 	Schema CollectionSchema `json:"schema"`
 }
 
-func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req *CollectionSchemaUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req CollectionSchemaUpdateRequest) (map[string]any, *APIError) {
 	_ = ctx
 	if err := validateSchema(&req.Schema); err != nil {
 		return nil, ErrInvalid(err.Error())
@@ -1738,7 +1742,7 @@ type CollectionMigrateRequest struct {
 	Value any    `json:"value"`
 }
 
-func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req *CollectionMigrateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req CollectionMigrateRequest) (map[string]any, *APIError) {
 	_ = ctx
 	if req.Field == "" {
 		return nil, ErrMissing("field is required")

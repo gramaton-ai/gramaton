@@ -13,7 +13,7 @@ import (
 // test below.
 func makeCollection(t *testing.T, srv *Server, name string) string {
 	t.Helper()
-	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{Name: name})
+	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{Name: name})
 	if apiErr != nil {
 		t.Fatalf("create collection %q: %v", name, apiErr)
 	}
@@ -127,7 +127,7 @@ func TestCollectionAddBatchDedupAgainstExisting(t *testing.T) {
 	collID := makeCollection(t, srv, "Backlog")
 
 	// Seed one existing item.
-	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
+	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, api.CollectionAddRequest{
 		Fields: map[string]any{"title": "already here"},
 	}); apiErr != nil {
 		t.Fatalf("seed add: %v", apiErr)
@@ -203,7 +203,7 @@ func TestCollectionAddBatchIntraBatchDedup(t *testing.T) {
 // different case still collides with the seeded "already".
 func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{
+	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{
 		Name:     "Shopping",
 		Curation: "minimal",
 	})
@@ -213,7 +213,7 @@ func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 	collID := result["id"].(string)
 
 	// Seed an existing item.
-	seed, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
+	seed, apiErr := srv.api.CollectionAdd(context.Background(), collID, api.CollectionAddRequest{
 		Fields: map[string]any{"title": "already"},
 	})
 	if apiErr != nil {
@@ -259,7 +259,7 @@ func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 // Deduplicated=true pointing at the first's generated ID.
 func TestCollectionAddBatchMinimalIntraBatchIdempotent(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	result, apiErr := srv.api.CollectionCreate(context.Background(), &api.CollectionCreateRequest{
+	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{
 		Name:     "Packing",
 		Curation: "minimal",
 	})
@@ -309,7 +309,7 @@ func TestCollectionAddBatchTitleNormalization(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	collID := makeCollection(t, srv, "Backlog")
 
-	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, &api.CollectionAddRequest{
+	if _, apiErr := srv.api.CollectionAdd(context.Background(), collID, api.CollectionAddRequest{
 		Fields: map[string]any{"title": "focus"},
 	}); apiErr != nil {
 		t.Fatalf("seed: %v", apiErr)

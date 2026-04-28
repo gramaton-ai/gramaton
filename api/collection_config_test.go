@@ -16,7 +16,7 @@ func TestCollectionConfigDefaults(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	coll, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "No-Config"})
+	coll, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "No-Config"})
 	if apiErr != nil {
 		t.Fatalf("create: %v", apiErr)
 	}
@@ -43,7 +43,7 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	coll, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	coll, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:         "With-Config",
 		ClearMode:    "unlink",
 		Supersession: "store",
@@ -78,7 +78,7 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 
 func TestCollectionConfigInvalidClearMode(t *testing.T) {
 	a, _ := setupTestAPI(t)
-	_, apiErr := a.CollectionCreate(context.Background(), &CollectionCreateRequest{
+	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
 		Name:      "X",
 		ClearMode: "delete",
 	})
@@ -89,7 +89,7 @@ func TestCollectionConfigInvalidClearMode(t *testing.T) {
 
 func TestCollectionConfigInvalidSupersession(t *testing.T) {
 	a, _ := setupTestAPI(t)
-	_, apiErr := a.CollectionCreate(context.Background(), &CollectionCreateRequest{
+	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
 		Name:         "X",
 		Supersession: "galactic",
 	})
@@ -100,7 +100,7 @@ func TestCollectionConfigInvalidSupersession(t *testing.T) {
 
 func TestCollectionConfigInvalidCuration(t *testing.T) {
 	a, _ := setupTestAPI(t)
-	_, apiErr := a.CollectionCreate(context.Background(), &CollectionCreateRequest{
+	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
 		Name:     "X",
 		Curation: "aggressive",
 	})

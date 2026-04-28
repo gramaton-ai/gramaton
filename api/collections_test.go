@@ -13,7 +13,7 @@ func TestCollectionCreateAndList(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	result, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:        "Sprint 23",
 		Description: "Current sprint backlog",
 	})
@@ -25,7 +25,7 @@ func TestCollectionCreateAndList(t *testing.T) {
 		t.Fatal("expected id in result")
 	}
 
-	list, apiErr := a.CollectionList(ctx, &CollectionListRequest{})
+	list, apiErr := a.CollectionList(ctx, CollectionListRequest{})
 	if apiErr != nil {
 		t.Fatalf("list: %v", apiErr)
 	}
@@ -42,12 +42,12 @@ func TestCollectionNameUniqueness(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	_, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
+	_, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Backlog"})
 	if apiErr != nil {
 		t.Fatalf("first create: %v", apiErr)
 	}
 
-	_, apiErr = a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
+	_, apiErr = a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Backlog"})
 	if apiErr == nil {
 		t.Fatal("expected conflict error for duplicate name")
 	}
@@ -55,7 +55,7 @@ func TestCollectionNameUniqueness(t *testing.T) {
 		t.Errorf("expected conflict code, got %s", apiErr.Code)
 	}
 
-	_, apiErr = a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "backlog"})
+	_, apiErr = a.CollectionCreate(ctx, CollectionCreateRequest{Name: "backlog"})
 	if apiErr == nil {
 		t.Fatal("expected conflict error for case-insensitive duplicate")
 	}
@@ -73,7 +73,7 @@ func TestCollectionWithSchema(t *testing.T) {
 		},
 	}
 
-	result, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	result, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:   "Tasks",
 		Schema: schema,
 	})
@@ -82,7 +82,7 @@ func TestCollectionWithSchema(t *testing.T) {
 	}
 	collID := result["id"].(string)
 
-	addResult, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	addResult, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Do the thing", "status": "open"},
 	})
 	if apiErr != nil {
@@ -92,21 +92,21 @@ func TestCollectionWithSchema(t *testing.T) {
 		t.Fatal("expected item id")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "No status"},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for missing required field")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Bad status", "status": "invalid"},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for invalid enum value")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Extra", "status": "open", "unknown": "value"},
 	})
 	if apiErr == nil {
@@ -120,14 +120,14 @@ func TestCollectionWithSchema(t *testing.T) {
 func TestCollectionItemsAsOfFutureRejected(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "L"})
+	coll, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "L"})
 	collID := coll["id"].(string)
 
 	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight, so a
 	// local-TZ-formatted "tomorrow" can decode to a past UTC time when
 	// the local clock is east of UTC across the day boundary.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{AsOf: tomorrow})
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{AsOf: tomorrow})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error for future as_of, got %+v", apiErr)
 	}
@@ -137,10 +137,10 @@ func TestCollectionItemsAsOfFutureRejected(t *testing.T) {
 func TestCollectionItemsAsOfInvalidDate(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
-	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "L"})
+	coll, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "L"})
 	collID := coll["id"].(string)
 
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{AsOf: "nope"})
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{AsOf: "nope"})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error for bad as_of, got %+v", apiErr)
 	}
@@ -154,15 +154,15 @@ func TestCollectionItemsAsOfPointInTime(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "PIT"})
+	coll, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "PIT"})
 	collID := coll["id"].(string)
 
-	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	if _, err := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "first"},
 	}); err != nil {
 		t.Fatalf("add first: %v", err)
 	}
-	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	if _, err := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "second"},
 	}); err != nil {
 		t.Fatalf("add second: %v", err)
@@ -173,13 +173,13 @@ func TestCollectionItemsAsOfPointInTime(t *testing.T) {
 	midpoint := time.Now().UTC()
 	time.Sleep(15 * time.Millisecond)
 
-	if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	if _, err := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "third"},
 	}); err != nil {
 		t.Fatalf("add third: %v", err)
 	}
 
-	resp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	resp, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		AsOf: midpoint.Format(time.RFC3339Nano),
 	})
 	if apiErr != nil {
@@ -198,7 +198,7 @@ func TestCollectionItemsAsOfPointInTime(t *testing.T) {
 	}
 
 	// Sanity: HEAD read returns all three.
-	headResp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	headResp, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	if apiErr != nil {
 		t.Fatalf("HEAD items: %v", apiErr)
 	}
@@ -218,13 +218,13 @@ func TestCollectionItemsAsOfBeforeCreation(t *testing.T) {
 	// Lock in a "before" timestamp first.
 	before := time.Now().UTC().Add(-time.Hour)
 
-	coll, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "LateBloomer"})
+	coll, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "LateBloomer"})
 	collID := coll["id"].(string)
-	_, _ = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, _ = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "x"},
 	})
 
-	resp, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	resp, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		AsOf: before.Format(time.RFC3339Nano),
 	})
 	if apiErr != nil {
@@ -242,11 +242,11 @@ func TestCollectionItemsExhaustive(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
 	for i := 0; i < 5; i++ {
-		_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 			Fields: map[string]any{"title": fmt.Sprintf("Item %d", i)},
 		})
 		if apiErr != nil {
@@ -254,7 +254,7 @@ func TestCollectionItemsExhaustive(t *testing.T) {
 		}
 	}
 
-	items, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	items, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	if apiErr != nil {
 		t.Fatalf("items: %v", apiErr)
 	}
@@ -277,7 +277,7 @@ func collectionItemsFixture(t *testing.T, a *API) string {
 			{Name: "details", Type: FieldTypeString, Required: false},
 		},
 	}
-	cc, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Bugs", Schema: schema})
+	cc, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Bugs", Schema: schema})
 	if apiErr != nil {
 		t.Fatalf("create: %v", apiErr)
 	}
@@ -289,7 +289,7 @@ func collectionItemsFixture(t *testing.T, a *API) string {
 		{"title": "Taxonomy drift", "status": "open", "severity": "P1", "details": "more notes"},
 	}
 	for _, row := range rows {
-		if _, err := a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: row}); err != nil {
+		if _, err := a.CollectionAdd(ctx, collID, CollectionAddRequest{Fields: row}); err != nil {
 			t.Fatalf("add %q: %v", row["title"], err)
 		}
 	}
@@ -301,7 +301,7 @@ func TestCollectionItemsFieldProjection(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Fields: []string{"title", "status"},
 	})
 	if apiErr != nil {
@@ -341,7 +341,7 @@ func TestCollectionItemsFilterExact(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"status": "closed"},
 	})
 	if apiErr != nil {
@@ -361,7 +361,7 @@ func TestCollectionItemsFilterAnyOf(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"severity": []string{"P1", "P2"}},
 	})
 	if apiErr != nil {
@@ -384,7 +384,7 @@ func TestCollectionItemsFilterAndProjection(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"status": "open", "severity": "P1"},
 		Fields: []string{"title"},
 	})
@@ -411,7 +411,7 @@ func TestCollectionItemsFilterUnknownFieldReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"status": "nonexistent"},
 	})
 	if apiErr != nil {
@@ -427,7 +427,7 @@ func TestCollectionItemsFilterInvalidValueTypeRejected(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"severity": 42},
 	})
 	if apiErr == nil {
@@ -447,7 +447,7 @@ func TestCollectionItemsProjectionCapExceeded(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("f%d", i)
 	}
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Fields: tooMany})
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{Fields: tooMany})
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid for projection cap")
 	}
@@ -465,7 +465,7 @@ func TestCollectionItemsFilterKeyCapExceeded(t *testing.T) {
 	for i := 0; i <= MaxFilterKeys; i++ {
 		filter[fmt.Sprintf("f%d", i)] = "x"
 	}
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Filter: filter})
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{Filter: filter})
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid for filter key cap")
 	}
@@ -483,7 +483,7 @@ func TestCollectionItemsFilterValueCapExceeded(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("v%d", i)
 	}
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Filter: map[string]any{"status": tooMany},
 	})
 	if apiErr == nil {
@@ -499,7 +499,7 @@ func TestCollectionItemsProjectionInvalidFieldNameRejected(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	_, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	_, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Fields: []string{"title", "not a field name"},
 	})
 	if apiErr == nil {
@@ -515,7 +515,7 @@ func TestCollectionItemsSortOnExcludedField(t *testing.T) {
 	ctx := context.Background()
 	collID := collectionItemsFixture(t, a)
 
-	res, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{
+	res, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{
 		Fields: []string{"title"},
 		Sort:   "severity",
 		Order:  "asc",
@@ -539,10 +539,10 @@ func TestCollectionRemovePreservesNode(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	addResult, _ := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Keep me"},
 	})
 	itemID := addResult["id"].(string)
@@ -552,7 +552,7 @@ func TestCollectionRemovePreservesNode(t *testing.T) {
 		t.Fatalf("remove: %v", apiErr)
 	}
 
-	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	if items["count"].(int) != 0 {
 		t.Fatal("expected 0 items after remove")
 	}
@@ -576,29 +576,29 @@ func TestCollectionUpdate(t *testing.T) {
 		},
 	}
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Tasks", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Tasks", Schema: schema})
 	collID := result["id"].(string)
 
-	addResult, _ := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Task 1", "status": "open"},
 	})
 	itemID := addResult["id"].(string)
 
-	_, apiErr := a.CollectionUpdate(ctx, collID, itemID, &CollectionUpdateRequest{
+	_, apiErr := a.CollectionUpdate(ctx, collID, itemID, CollectionUpdateRequest{
 		Fields: map[string]any{"status": "done"},
 	})
 	if apiErr != nil {
 		t.Fatalf("update: %v", apiErr)
 	}
 
-	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	itemList := items["items"].([]map[string]any)
 	fields := itemList[0]["fields"].(map[string]any)
 	if fields["status"] != "done" {
 		t.Errorf("status = %v, want done", fields["status"])
 	}
 
-	_, apiErr = a.CollectionUpdate(ctx, collID, itemID, &CollectionUpdateRequest{
+	_, apiErr = a.CollectionUpdate(ctx, collID, itemID, CollectionUpdateRequest{
 		Fields: map[string]any{"status": "invalid"},
 	})
 	if apiErr == nil {
@@ -610,28 +610,28 @@ func TestCollectionMove(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Backlog"})
-	r2, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Active"})
+	r1, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Backlog"})
+	r2, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Active"})
 	backlogID := r1["id"].(string)
 	activeID := r2["id"].(string)
 
-	addResult, _ := a.CollectionAdd(ctx, backlogID, &CollectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, backlogID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Do it"},
 	})
 	itemID := addResult["id"].(string)
 
-	_, apiErr := a.CollectionMove(ctx, backlogID, itemID, &CollectionMoveRequest{
+	_, apiErr := a.CollectionMove(ctx, backlogID, itemID, CollectionMoveRequest{
 		TargetCollectionID: activeID,
 	})
 	if apiErr != nil {
 		t.Fatalf("move: %v", apiErr)
 	}
 
-	backlogItems, _ := a.CollectionItems(ctx, backlogID, &CollectionItemsRequest{})
+	backlogItems, _ := a.CollectionItems(ctx, backlogID, CollectionItemsRequest{})
 	if backlogItems["count"].(int) != 0 {
 		t.Error("backlog should be empty after move")
 	}
-	activeItems, _ := a.CollectionItems(ctx, activeID, &CollectionItemsRequest{})
+	activeItems, _ := a.CollectionItems(ctx, activeID, CollectionItemsRequest{})
 	if activeItems["count"].(int) != 1 {
 		t.Error("active should have 1 item after move")
 	}
@@ -641,10 +641,10 @@ func TestCollectionRetireUnretire(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Temp"})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Temp"})
 	collID := result["id"].(string)
 
-	a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Item"},
 	})
 
@@ -659,7 +659,7 @@ func TestCollectionRetireUnretire(t *testing.T) {
 		t.Error("expected 1 item preserved")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Nope"},
 	})
 	if apiErr == nil {
@@ -674,7 +674,7 @@ func TestCollectionRetireUnretire(t *testing.T) {
 		t.Fatal("expected unretired=true")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Back in business"},
 	})
 	if apiErr != nil {
@@ -686,12 +686,12 @@ func TestCollectionMultiMembership(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Sprint 23"})
-	r2, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Security"})
+	r1, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Sprint 23"})
+	r2, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Security"})
 	sprintID := r1["id"].(string)
 	securityID := r2["id"].(string)
 
-	addResult, _ := a.CollectionAdd(ctx, sprintID, &CollectionAddRequest{
+	addResult, _ := a.CollectionAdd(ctx, sprintID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Fix auth bug"},
 	})
 	itemID := addResult["id"].(string)
@@ -710,8 +710,8 @@ func TestCollectionMultiMembership(t *testing.T) {
 	}
 	eng.Unlock()
 
-	sprintItems, _ := a.CollectionItems(ctx, sprintID, &CollectionItemsRequest{})
-	securityItems, _ := a.CollectionItems(ctx, securityID, &CollectionItemsRequest{})
+	sprintItems, _ := a.CollectionItems(ctx, sprintID, CollectionItemsRequest{})
+	securityItems, _ := a.CollectionItems(ctx, securityID, CollectionItemsRequest{})
 	if sprintItems["count"].(int) != 1 {
 		t.Error("sprint should have 1 item")
 	}
@@ -720,8 +720,8 @@ func TestCollectionMultiMembership(t *testing.T) {
 	}
 
 	a.CollectionRemove(ctx, sprintID, itemID)
-	sprintItems, _ = a.CollectionItems(ctx, sprintID, &CollectionItemsRequest{})
-	securityItems, _ = a.CollectionItems(ctx, securityID, &CollectionItemsRequest{})
+	sprintItems, _ = a.CollectionItems(ctx, sprintID, CollectionItemsRequest{})
+	securityItems, _ = a.CollectionItems(ctx, securityID, CollectionItemsRequest{})
 	if sprintItems["count"].(int) != 0 {
 		t.Error("sprint should be empty")
 	}
@@ -739,11 +739,11 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 			{Name: "title", Type: FieldTypeString, Required: true},
 		},
 	}
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Tasks", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Tasks", Schema: schema})
 	collID := result["id"].(string)
 
-	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Task A"}})
-	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Task B"}})
+	a.CollectionAdd(ctx, collID, CollectionAddRequest{Fields: map[string]any{"title": "Task A"}})
+	a.CollectionAdd(ctx, collID, CollectionAddRequest{Fields: map[string]any{"title": "Task B"}})
 
 	newSchema := CollectionSchema{
 		Fields: []SchemaField{
@@ -751,7 +751,7 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 			{Name: "priority", Type: FieldTypeEnum, Required: true, Values: []string{"p0", "p1", "p2"}},
 		},
 	}
-	updateResult, apiErr := a.CollectionSchemaUpdate(ctx, collID, &CollectionSchemaUpdateRequest{
+	updateResult, apiErr := a.CollectionSchemaUpdate(ctx, collID, CollectionSchemaUpdateRequest{
 		Schema: newSchema,
 	})
 	if apiErr != nil {
@@ -772,7 +772,7 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		t.Fatalf("unexpected type for total: %T", total)
 	}
 
-	items, _ := a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	items, _ := a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	itemList := items["items"].([]map[string]any)
 	for _, item := range itemList {
 		if item["needs_migration"] == nil {
@@ -780,7 +780,7 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		}
 	}
 
-	migrateResult, apiErr := a.CollectionMigrate(ctx, collID, &CollectionMigrateRequest{
+	migrateResult, apiErr := a.CollectionMigrate(ctx, collID, CollectionMigrateRequest{
 		Field: "priority",
 		Value: "p2",
 	})
@@ -794,7 +794,7 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 		t.Error("expected migration_complete=true")
 	}
 
-	items, _ = a.CollectionItems(ctx, collID, &CollectionItemsRequest{})
+	items, _ = a.CollectionItems(ctx, collID, CollectionItemsRequest{})
 	if items["migration"] != nil {
 		t.Error("expected no migration state after completion")
 	}
@@ -810,13 +810,13 @@ func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "Groceries",
 		Curation: "minimal",
 	})
 	collID := result["id"].(string)
 
-	first, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	first, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "eggs"},
 	})
 	if apiErr != nil {
@@ -825,7 +825,7 @@ func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
 	firstID := first["id"].(string)
 
 	// Second add: same content -> idempotent success with existing ID.
-	second, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	second, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "eggs"},
 	})
 	if apiErr != nil {
@@ -839,7 +839,7 @@ func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
 	}
 
 	// Trim + case-insensitive: " EGGS " matches "eggs".
-	third, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	third, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": " EGGS "},
 	})
 	if apiErr != nil {
@@ -858,12 +858,12 @@ func TestCollectionDedup(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	a.CollectionAdd(ctx, collID, &CollectionAddRequest{Fields: map[string]any{"title": "Buy milk"}})
+	a.CollectionAdd(ctx, collID, CollectionAddRequest{Fields: map[string]any{"title": "Buy milk"}})
 
-	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Buy milk"},
 	})
 	if apiErr == nil {
@@ -881,21 +881,21 @@ func TestCollectionRename(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	r1, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Old Name"})
-	a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Taken"})
+	r1, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Old Name"})
+	a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Taken"})
 	collID := r1["id"].(string)
 
-	_, apiErr := a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "New Name"})
+	_, apiErr := a.CollectionRename(ctx, collID, CollectionRenameRequest{Name: "New Name"})
 	if apiErr != nil {
 		t.Fatalf("rename: %v", apiErr)
 	}
 
-	_, apiErr = a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "Taken"})
+	_, apiErr = a.CollectionRename(ctx, collID, CollectionRenameRequest{Name: "Taken"})
 	if apiErr == nil {
 		t.Fatal("expected conflict error")
 	}
 
-	_, apiErr = a.CollectionRename(ctx, collID, &CollectionRenameRequest{Name: "New Name"})
+	_, apiErr = a.CollectionRename(ctx, collID, CollectionRenameRequest{Name: "New Name"})
 	if apiErr != nil {
 		t.Fatalf("rename to self: %v", apiErr)
 	}
@@ -905,24 +905,24 @@ func TestCollectionFieldNameValidation(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "List"})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "List"})
 	collID := result["id"].(string)
 
-	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title.evil": "injected"},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for field name with dots")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"../escape": "bad"},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for field name with slashes")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"valid_field_name": "good"},
 	})
 	if apiErr != nil {
@@ -939,7 +939,7 @@ func TestCollectionSchemaFieldNameValidation(t *testing.T) {
 			{Name: "field.with.dots", Type: FieldTypeString, Required: true},
 		},
 	}
-	_, apiErr := a.CollectionCreate(ctx, &CollectionCreateRequest{
+	_, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:   "Bad Schema",
 		Schema: schema,
 	})
@@ -957,24 +957,24 @@ func TestCollectionNaNRejection(t *testing.T) {
 			{Name: "score", Type: FieldTypeNumber, Required: true},
 		},
 	}
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Scores", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Scores", Schema: schema})
 	collID := result["id"].(string)
 
-	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"score": math.NaN()},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for NaN value")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"score": math.Inf(1)},
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for Inf value")
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"score": 42.5},
 	})
 	if apiErr != nil {
@@ -996,12 +996,12 @@ func TestCollectionPerformance(t *testing.T) {
 			{Name: "priority", Type: FieldTypeNumber, Required: false},
 		},
 	}
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Perf Test", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Perf Test", Schema: schema})
 	collID := result["id"].(string)
 
 	const numItems = 100
 	for i := 0; i < numItems; i++ {
-		_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+		_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 			Fields: map[string]any{
 				"title":    fmt.Sprintf("Task %d", i),
 				"status":   "open",
@@ -1013,7 +1013,7 @@ func TestCollectionPerformance(t *testing.T) {
 		}
 	}
 
-	items, apiErr := a.CollectionItems(ctx, collID, &CollectionItemsRequest{Sort: "priority"})
+	items, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{Sort: "priority"})
 	if apiErr != nil {
 		t.Fatalf("items: %v", apiErr)
 	}
@@ -1021,7 +1021,7 @@ func TestCollectionPerformance(t *testing.T) {
 		t.Fatalf("expected %d items, got %d", numItems, items["count"])
 	}
 
-	list, apiErr := a.CollectionList(ctx, &CollectionListRequest{})
+	list, apiErr := a.CollectionList(ctx, CollectionListRequest{})
 	if apiErr != nil {
 		t.Fatalf("list: %v", apiErr)
 	}
@@ -1042,17 +1042,17 @@ func TestCollectionEnumSet(t *testing.T) {
 		},
 	}
 
-	result, _ := a.CollectionCreate(ctx, &CollectionCreateRequest{Name: "Issues", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Issues", Schema: schema})
 	collID := result["id"].(string)
 
-	_, apiErr := a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Fix crash", "labels": []any{"bug", "security"}},
 	})
 	if apiErr != nil {
 		t.Fatalf("add with enum[]: %v", apiErr)
 	}
 
-	_, apiErr = a.CollectionAdd(ctx, collID, &CollectionAddRequest{
+	_, apiErr = a.CollectionAdd(ctx, collID, CollectionAddRequest{
 		Fields: map[string]any{"title": "Bad label", "labels": []any{"bug", "invalid"}},
 	})
 	if apiErr == nil {
