@@ -80,12 +80,12 @@ func TestSearchFindsBM25SessionSegments(t *testing.T) {
 	// Verify at least one result has store=session.
 	foundSession := false
 	for _, r := range results {
-		if r.(map[string]any)["store"] == "session" {
+		if r.(map[string]any)["store"] == "sessions" {
 			foundSession = true
 		}
 	}
 	if !foundSession {
-		t.Error("expected at least one result with store=session")
+		t.Error("expected at least one result with store=sessions")
 	}
 }
 
@@ -154,7 +154,7 @@ func TestSearchStoreOriginMetadata(t *testing.T) {
 		switch rec["store"] {
 		case "memory":
 			foundMemory = true
-		case "session":
+		case "sessions":
 			foundSession = true
 		}
 	}
@@ -185,8 +185,8 @@ func TestSearchStoreFilterMemoryOnly(t *testing.T) {
 
 	for _, r := range results {
 		rec := r.(map[string]any)
-		if rec["store"] == "session" {
-			t.Error("store=memory filter should exclude session results")
+		if rec["store"] == "sessions" {
+			t.Error("store=memory filter should exclude sessions results")
 		}
 	}
 }
@@ -293,7 +293,7 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 		if r.Store == "memory" {
 			foundMemory = true
 		}
-		if r.Store == "session" {
+		if r.Store == "sessions" {
 			foundSession = true
 		}
 	}

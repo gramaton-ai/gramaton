@@ -264,7 +264,7 @@ type Result struct {
 	EdgeCount       int      `json:"edge_count,omitempty"`
 	Staleness       float64  `json:"staleness,omitempty"`
 	Collections     []string `json:"collections,omitempty"`
-	Store           string   `json:"store,omitempty"`      // "memory" or "session"
+	Store           string   `json:"store,omitempty"`      // "memory" or "sessions"
 	SessionID       string   `json:"session_id,omitempty"` // for session segments: parent session node ID
 	TopicName       string   `json:"topic_name,omitempty"` // for session segments: parent topic name
 }
@@ -556,7 +556,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		suppressed := 0
 		var kept []Result
 		for _, r := range results {
-			if r.Store == "session" {
+			if r.Store == "sessions" {
 				// Find the segment's extracted memory target. Segments
 				// committed via api.SessionCommit cache the target as
 				// the captured_as property at extraction time, so a
@@ -1133,7 +1133,7 @@ func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 
 	// Infer store origin from knowledge_type.
 	if r.KnowledgeType == "segment" {
-		r.Store = "session"
+		r.Store = "sessions"
 		// Session segments use "content" property, not "content_full".
 		if r.ContentLength == 0 {
 			if v, ok := n.Properties.GetString("content"); ok {

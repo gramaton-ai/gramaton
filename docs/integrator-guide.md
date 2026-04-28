@@ -32,7 +32,7 @@ Per-conversation capture via a two-phase extraction flow. Optionally promotes se
 
 **Use for:** knowledge that emerges during a conversation without the user explicitly asking you to remember it. Architectural decisions that landed while debugging. User preferences stated in passing. Dead ends that should be searchable but shouldn't compete with real decisions.
 
-**Retrieval:** `gramaton_search` returns Session segments alongside Memory records by default. Each result row carries a `store` field whose value is `"memory"` or `"session"` (singular) indicating the origin. To narrow the query, pass the `store` filter with value `"memory"`, `"sessions"` (plural), or `"all"` (default). The filter/result plural-vs-singular mismatch is a known rough edge — the strings you match against in result rows are singular, the string you pass as a filter is plural.
+**Retrieval:** `gramaton_search` returns Session segments alongside Memory records by default. Each result row carries a `store` field whose value is `"memory"` or `"sessions"` indicating the origin. To narrow the query, pass the `store` filter with the same vocabulary -- `"memory"`, `"sessions"`, or `"all"` (default). The filter accepts `"session"` (singular) as a back-compat alias.
 
 **Flow:**
 1. `gramaton_session_start` — begin a session bound to a client session ID. Idempotent if called on an existing session.

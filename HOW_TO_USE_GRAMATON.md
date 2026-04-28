@@ -156,7 +156,7 @@ specifically:
 - "What did we discuss about caching last week?" → searches sessions.
 - "Pull up the conversation where we picked Postgres." → same.
 
-The agent's `gramaton_search` call with `store=sessions` narrows to
+The agent's `gramaton_search` call with `store=sessions` (singular `session` accepted as alias) narrows to
 conversation-derived content.
 
 ## Backlogs, TODOs, and tickets
