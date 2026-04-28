@@ -129,7 +129,7 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 
 	if updated {
 		if _, err := a.engine.Save("update", graph.CommitAction{
-			Kind: "update", RecordID: req.ID,
+			Kind: graph.ActionUpdate, RecordID: req.ID,
 		}); err != nil {
 			return UpdateResponse{}, ErrInternal("failed to save")
 		}

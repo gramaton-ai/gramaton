@@ -180,7 +180,7 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 	}
 
 	if _, err := a.engine.Save("capture", graph.CommitAction{
-		Kind: "capture", RecordID: n.ID,
+		Kind: graph.ActionCapture, RecordID: n.ID,
 	}); err != nil {
 		return CaptureResponse{}, ErrInternal("failed to save")
 	}

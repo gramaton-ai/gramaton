@@ -46,7 +46,7 @@ func (a *API) DeleteRecord(ctx context.Context, req DeleteRecordRequest) (Delete
 	}
 
 	if _, err := a.engine.Save("delete", graph.CommitAction{
-		Kind: "delete", RecordID: req.ID,
+		Kind: graph.ActionDelete, RecordID: req.ID,
 	}); err != nil {
 		return DeleteRecordResponse{}, ErrInternal("failed to save")
 	}

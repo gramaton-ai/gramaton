@@ -22,10 +22,68 @@ import (
 // unchanged and old-binary reads of new commits fall back to
 // Message-based filtering.
 type CommitAction struct {
-	Kind     string `json:"kind"`                // e.g. "resolve", "capture", "collection_update", "curation"
+	Kind     string `json:"kind"`                // canonical Action* constant (see below)
 	RecordID string `json:"record_id,omitempty"` // target record when action is record-scoped
 	Field    string `json:"field,omitempty"`     // target property when action is field-scoped
 }
+
+// Action kind canonical strings. Every emit site references one of
+// these constants; the saveactions lint enforces it. Two namespaces:
+//
+//   - User-driven verbs (no prefix) -- one action per api/ operation.
+//     These are the kinds an operator sees in `gramaton_log` for their
+//     own write activity.
+//   - Curation cycle verbs (`curation:` prefix) -- emitted by the
+//     autonomous + deterministic curation passes. Filterable
+//     separately so an operator asking "what did curation touch this
+//     week" doesn't have to scrape commit messages.
+//
+// Adding a new kind: declare the constant here, reference it at the
+// emit site. Renaming a kind is a breaking change for any persisted
+// commit that carries the old string (commit.Actions is on-disk
+// state); avoid unless there's a real reason.
+const (
+	// User-driven actions (api/ cluster).
+	ActionCapture                = "capture"
+	ActionClassify               = "classify"
+	ActionUpdate                 = "update"
+	ActionResolve                = "resolve"
+	ActionDelete                 = "delete"
+	ActionLink                   = "link"
+	ActionUnlink                 = "unlink"
+	ActionMerge                  = "merge"
+	ActionRevert                 = "revert"
+	ActionIngest                 = "ingest"
+	ActionImportCSV              = "import_csv"
+	ActionReembed                = "reembed"
+	ActionRepair                 = "repair"
+	ActionSessionCreate          = "session_create"
+	ActionSessionCommit          = "session_commit"
+	ActionSessionArchive         = "session_archive"
+	ActionCollectionCreate       = "collection_create"
+	ActionCollectionAdd          = "collection_add"
+	ActionCollectionRemove       = "collection_remove"
+	ActionCollectionUpdate       = "collection_update"
+	ActionCollectionMove         = "collection_move"
+	ActionCollectionRename       = "collection_rename"
+	ActionCollectionRetire       = "collection_retire"
+	ActionCollectionUnretire     = "collection_unretire"
+	ActionCollectionSchemaUpdate = "collection_schema_update"
+	ActionCollectionMigrate      = "collection_migrate"
+
+	// Curation cycle actions (autonomous + deterministic passes).
+	ActionCurationClassify           = "curation:classify"
+	ActionCurationSummary            = "curation:summary"
+	ActionCurationLink               = "curation:link" // orphan linking (related_to edges)
+	ActionCurationSupersede          = "curation:supersede"
+	ActionCurationContradictionCheck = "curation:contradiction_check" // covers contradict + no_contradict outcomes
+	ActionCurationConceptEmerge      = "curation:concept_emerge"      // new concept + instance_of edges
+	ActionCurationConceptEnrich      = "curation:concept_enrich"      // LLM concept synthesis
+	ActionCurationSectionLink        = "curation:section_link"
+	ActionCurationObservationExtract = "curation:observation_extract"
+	ActionCurationGC                 = "curation:gc"
+	ActionCurationSelfHeal           = "curation:self_heal"
+)
 
 // Commit is an immutable snapshot of the graph state.
 type Commit struct {

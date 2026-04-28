@@ -341,7 +341,7 @@ func (a *API) CollectionCreate(_ context.Context, req *CollectionCreateRequest) 
 	a.engine.IndexNode(n.ID, bm25Text, nil)
 
 	if _, err := a.engine.Save("collection_create", graph.CommitAction{
-		Kind: "collection_create", RecordID: n.ID,
+		Kind: graph.ActionCollectionCreate, RecordID: n.ID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "create", "err", err)
 		return nil, ErrInternal("failed to save collection")
@@ -1056,7 +1056,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req *Colle
 	}
 
 	if _, err := a.engine.Save("collection_add", graph.CommitAction{
-		Kind: "collection_add", RecordID: n.ID,
+		Kind: graph.ActionCollectionAdd, RecordID: n.ID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "add", "err", err)
 		return nil, ErrInternal("failed to save collection item")
@@ -1369,7 +1369,7 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			continue
 		}
 		batchActions = append(batchActions, graph.CommitAction{
-			Kind: "collection_add", RecordID: r.ID,
+			Kind: graph.ActionCollectionAdd, RecordID: r.ID,
 		})
 	}
 	if len(batchActions) > 0 {
@@ -1406,7 +1406,7 @@ func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string)
 	}
 
 	if _, err := a.engine.Save("collection_remove", graph.CommitAction{
-		Kind: "collection_remove", RecordID: itemID,
+		Kind: graph.ActionCollectionRemove, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "remove", "err", err)
 		return nil, ErrInternal("failed to save collection removal")
@@ -1461,7 +1461,7 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	a.setFieldProps(itemID, req.Fields)
 
 	if _, err := a.engine.Save("collection_update", graph.CommitAction{
-		Kind: "collection_update", RecordID: itemID,
+		Kind: graph.ActionCollectionUpdate, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "update", "err", err)
 		return nil, ErrInternal("failed to save collection update")
@@ -1545,7 +1545,7 @@ func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, r
 	}
 
 	if _, err := a.engine.Save("collection_move", graph.CommitAction{
-		Kind: "collection_move", RecordID: itemID,
+		Kind: graph.ActionCollectionMove, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "move", "err", err)
 		return nil, ErrInternal("failed to save collection move")
@@ -1584,7 +1584,7 @@ func (a *API) CollectionRename(ctx context.Context, collectionID string, req *Co
 	a.engine.SetProp(collectionID, "collection_name", graph.StringProperty(req.Name))
 
 	if _, err := a.engine.Save("collection_rename", graph.CommitAction{
-		Kind: "collection_rename", RecordID: collectionID,
+		Kind: graph.ActionCollectionRename, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "rename", "err", err)
 		return nil, ErrInternal("failed to save rename")
@@ -1607,7 +1607,7 @@ func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[st
 		// Already retired -- unretire.
 		a.engine.Graph().RemoveNodeProperty(collectionID, "valid_until")
 		if _, err := a.engine.Save("collection_unretire", graph.CommitAction{
-			Kind: "collection_unretire", RecordID: collectionID,
+			Kind: graph.ActionCollectionUnretire, RecordID: collectionID,
 		}); err != nil {
 			a.log.Warn("collection save failed", "component", "collection", "op", "unretire", "err", err)
 			return nil, ErrInternal("failed to save unretire")
@@ -1619,7 +1619,7 @@ func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[st
 	a.engine.SetProp(collectionID, "valid_until", graph.TimestampProperty(time.Now().UTC()))
 
 	if _, err := a.engine.Save("collection_retire", graph.CommitAction{
-		Kind: "collection_retire", RecordID: collectionID,
+		Kind: graph.ActionCollectionRetire, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "retire", "err", err)
 		return nil, ErrInternal("failed to save retire")
@@ -1724,7 +1724,7 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 	}
 
 	if _, err := a.engine.Save("collection_schema_update", graph.CommitAction{
-		Kind: "collection_schema_update", RecordID: collectionID,
+		Kind: graph.ActionCollectionSchemaUpdate, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "schema_update", "err", err)
 		return nil, ErrInternal("failed to save schema update")
@@ -1819,7 +1819,7 @@ func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req *C
 	}
 
 	if _, err := a.engine.Save("collection_migrate", graph.CommitAction{
-		Kind: "collection_migrate", RecordID: collectionID,
+		Kind: graph.ActionCollectionMigrate, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "migrate", "err", err)
 		return nil, ErrInternal("failed to save migration")

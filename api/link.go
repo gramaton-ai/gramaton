@@ -75,7 +75,7 @@ func (a *API) Link(ctx context.Context, req LinkRequest) (LinkResponse, *APIErro
 	}
 
 	if _, err := a.engine.Save("link", graph.CommitAction{
-		Kind: "link", RecordID: req.SourceID,
+		Kind: graph.ActionLink, RecordID: req.SourceID,
 	}); err != nil {
 		return LinkResponse{}, ErrInternal("failed to save")
 	}
@@ -112,7 +112,7 @@ func (a *API) Unlink(ctx context.Context, req UnlinkRequest) (UnlinkResponse, *A
 	}
 
 	if _, err := a.engine.Save("unlink", graph.CommitAction{
-		Kind: "unlink",
+		Kind: graph.ActionUnlink,
 	}); err != nil {
 		return UnlinkResponse{}, ErrInternal("failed to save")
 	}

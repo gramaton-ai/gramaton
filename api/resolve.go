@@ -192,7 +192,7 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 	}
 
 	if _, err := a.engine.Save("resolve", graph.CommitAction{
-		Kind: "resolve", RecordID: req.ID,
+		Kind: graph.ActionResolve, RecordID: req.ID,
 	}); err != nil {
 		return ResolveResponse{}, ErrInternal("failed to save")
 	}

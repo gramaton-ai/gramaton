@@ -174,8 +174,8 @@ func TestSaveWithActionsRoundTrip(t *testing.T) {
 	s := tempStorage(t)
 
 	actions := []CommitAction{
-		{Kind: "resolve", RecordID: "01ABC"},
-		{Kind: "collection_update", RecordID: "01DEF", Field: "status"},
+		{Kind: ActionResolve, RecordID: "01ABC"},
+		{Kind: ActionCollectionUpdate, RecordID: "01DEF", Field: "status"},
 	}
 	commit, err := g.SaveWithActions(s, "", "mixed batch", actions)
 	if err != nil {
