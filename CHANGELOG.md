@@ -9,6 +9,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Phase 3 follow-on landed: every Save site now emits structured
+  `graph.CommitAction` descriptors, enforced by a CI lint.** Three
+  layers:
+
+  - 1a (`42bbef4`): all CommitAction kinds extracted as named
+    constants in `graph/commit.go` (~25 of them across user-driven
+    api/ verbs and curation cycle verbs). Existing api/ inline
+    string literals refactored to reference the constants. No
+    behavior change -- every kind value is byte-identical to the
+    prior literal so existing commits parse unchanged.
+  - 1b (`d477c3b`): the 8 Save sites that previously emitted no
+    action at all (api branch merge / session_create+commit+archive
+    / reembed, core repair, server revert+ingest, backup CSV import)
+    now carry the appropriate Action* constant. `gramaton_log`
+    filtering by these kinds works for the first time.
+  - 1c (`ae7aa08`): every curation pass emits per-record
+    CommitActions. 13 curation kinds total: `curation:classify`,
+    `curation:summary`, `curation:link`, `curation:supersede`,
+    `curation:contradiction_check`, `curation:concept_emerge`,
+    `curation:concept_enrich`, `curation:section_link`,
+    `curation:observation_extract`, `curation:lifecycle`,
+    `curation:quality_repair`, `curation:gc`, `curation:self_heal`.
+    Multi-record events (linking, supersession, contradiction
+    pairs, section linking, concept emergence) emit one action per
+    affected record so `gramaton_log(record_id=X)` finds the
+    commit regardless of which side X was on. New tests in
+    `curation/actions_test.go` pin the kinds to canonical strings
+    + verify classify and summarize emit the expected actions.
+  - 2: new `tools/lint/saveactions/` AST tool enforces the rule for
+    new Save sites. Walks every non-test Go file, fails on
+    `Save(...)` / `SaveOrLog(...)` call sites lacking a
+    CommitAction. Pragma exemption `//gramaton:saveactions:exempt`
+    immediately above the call. Skips `*_test.go` files and
+    `testutil/` directories. Wired into the `pre-merge-check`
+    skill as step 9.
+
+  Phase 3 follow-on tracker `01KPY32VFEQAH0TMCTEK7DWH5C`. Two
+  in-flight design questions resolved (Q1 fine-grained
+  colon-separated taxonomy, Q2 emit one action per affected
+  record, Q3 pragma + skip-tests + hard-error).
+
 - **New top-level `HOW_TO_USE_GRAMATON.md`** for end users driving
   Gramaton through Claude or another agent. Practical tips on
   capture, search, backlog management, common pitfalls, and how to

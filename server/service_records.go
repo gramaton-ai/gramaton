@@ -167,7 +167,9 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 		}
 	}
 
-	if _, err := s.engine.Save("capture"); err != nil {
+	if _, err := s.engine.Save("capture", graph.CommitAction{
+		Kind: graph.ActionCapture, RecordID: n.ID,
+	}); err != nil {
 		return nil, errInternal("failed to save")
 	}
 

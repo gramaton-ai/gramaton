@@ -1,0 +1,26 @@
+// Fixture for the saveactions lint: every Save call carries an action.
+// Should produce zero findings.
+//
+// Stored as .go.txt so `go test` and `go build` skip it -- only the
+// lint reads it via parser.ParseFile against the .go content.
+package fixtures
+
+import "github.com/gramaton-ai/gramaton/graph"
+
+type engineLike struct{}
+
+func (e *engineLike) Save(message string, actions ...graph.CommitAction) error { return nil }
+func (e *engineLike) SaveOrLog(message string, actions ...graph.CommitAction)  {}
+
+func WithAction(e *engineLike) {
+	_ = e.Save("op", graph.CommitAction{Kind: "x", RecordID: "1"})
+}
+
+func WithSaveOrLog(e *engineLike) {
+	e.SaveOrLog("op", graph.CommitAction{Kind: "x", RecordID: "1"})
+}
+
+func WithVariadicSpread(e *engineLike) {
+	actions := []graph.CommitAction{{Kind: "x"}}
+	_ = e.Save("op", actions...)
+}

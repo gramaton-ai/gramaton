@@ -518,6 +518,13 @@ func (e *Engine) FlushAccess() {
 	}
 	slog.Debug("access flush: saving", "component", "engine")
 	start := time.Now()
+	// access_flush is a periodic background save of dirty access
+	// metadata (last_accessed, access_count). It's not a logical
+	// mutation -- the records were already mutated; this just
+	// persists the in-memory state. Emitting an action would be
+	// noise: every record touched by any read would generate a
+	// curation-shaped log entry.
+	//gramaton:saveactions:exempt
 	if _, err := e.Save("access_flush"); err != nil {
 		e.accessFlushFailures++
 		switch {

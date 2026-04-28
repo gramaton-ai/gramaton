@@ -79,7 +79,16 @@ Scan the diff for:
 - `a.engine.RLock()` or `a.engine.Lock()` followed by any of: `os.Open`, `os.Create`, `io.Copy`, `http.`, `.Embed(`, `.Generate(`, `tar.`, `gzip.`
 - If found, the op is holding the lock across I/O. Fix with the three-phase pattern before merging.
 
-### 9. Commit shape (only if about to commit)
+### 9. saveactions lint
+
+```bash
+go run ./tools/lint/saveactions
+```
+Must exit 0. The lint enforces that every non-test `engine.Save(`, `e.Save(`, `ws.Save(`, `e.SaveOrLog(`, etc. call site in production code passes at least one `graph.CommitAction` -- without it, `gramaton_log(actions=[...])` filtering misses the new mutation surface silently. Pragma `//gramaton:saveactions:exempt` immediately above the call exempts a site (use sparingly; intended for periodic background flushes that don't represent a logical mutation).
+
+Skips `*_test.go` files and `testutil/` directories by default.
+
+### 10. Commit shape (only if about to commit)
 
 Multi-paragraph commit message. Subject = imperative, ≤70 chars. Body explains *why*, not just *what*. Headers (`Critical:`, `High:`, etc.) for multi-issue commits. Model: commits `16f7693` and `df5ef52`.
 

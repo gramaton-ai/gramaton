@@ -1,0 +1,26 @@
+// Fixture for the saveactions lint: Save calls without actions.
+// Should produce 2 findings (the pragma'd one is exempted).
+//
+// Stored as .go.txt so the lint reads it as raw source via
+// parser.ParseFile but `go build` doesn't try to compile it.
+package fixtures
+
+import "github.com/gramaton-ai/gramaton/graph"
+
+type engineLike struct{}
+
+func (e *engineLike) Save(message string, actions ...graph.CommitAction) error { return nil }
+func (e *engineLike) SaveOrLog(message string, actions ...graph.CommitAction)  {}
+
+func MissingAction(e *engineLike) {
+	_ = e.Save("op")
+}
+
+func MissingActionSaveOrLog(e *engineLike) {
+	e.SaveOrLog("op")
+}
+
+func PragmaExempted(e *engineLike) {
+	//gramaton:saveactions:exempt
+	_ = e.Save("op")
+}
