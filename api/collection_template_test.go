@@ -65,7 +65,7 @@ func TestCollectionCreateWithTemplate(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("CollectionCreate: %v", apiErr)
 	}
-	n, ok := eng.Graph().GetNode(resp["id"].(string))
+	n, ok := eng.Graph().GetNode(resp.ID)
 	if !ok {
 		t.Fatal("collection node missing")
 	}
@@ -112,7 +112,7 @@ func TestCollectionCreateTemplateOverride(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("CollectionCreate: %v", apiErr)
 	}
-	n, _ := eng.Graph().GetNode(resp["id"].(string))
+	n, _ := eng.Graph().GetNode(resp.ID)
 	if got := CollectionCuration(n); got != CurationFull {
 		t.Errorf("override failed: Curation = %q, want full", got)
 	}

@@ -20,7 +20,7 @@ func TestCollectionConfigDefaults(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("create: %v", apiErr)
 	}
-	n, ok := eng.Graph().GetNode(coll["id"].(string))
+	n, ok := eng.Graph().GetNode(coll.ID)
 	if !ok {
 		t.Fatal("collection node not found")
 	}
@@ -52,7 +52,7 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("create: %v", apiErr)
 	}
-	n, _ := eng.Graph().GetNode(coll["id"].(string))
+	n, _ := eng.Graph().GetNode(coll.ID)
 
 	if got := CollectionClearMode(n); got != ClearModeUnlink {
 		t.Errorf("ClearMode: got %q, want unlink", got)

@@ -281,9 +281,9 @@ type CollectionCreateRequest struct {
 	Template string `json:"template,omitempty"`
 }
 
-func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (CollectionCreateResponse, *APIError) {
 	if err := validateCollectionName(req.Name); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
 	// Apply the template BEFORE validation: the resulting merged
 	// request is what gets validated + stored.
@@ -292,13 +292,13 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	// the in-flight request (validated below) sees the merge; the
 	// caller never sees the mutations.
 	if tmplErr := applyTemplate(&req); tmplErr != nil {
-		return nil, tmplErr
+		return CollectionCreateResponse{}, tmplErr
 	}
 	if err := validateSchema(req.Schema); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
 	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
 
 	a.engine.Lock()
@@ -306,7 +306,7 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 
 	// Enforce name uniqueness.
 	if _, exists := a.collectionByName(req.Name); exists {
-		return nil, ErrConflict(fmt.Sprintf("collection %q already exists", req.Name))
+		return CollectionCreateResponse{}, ErrConflict(fmt.Sprintf("collection %q already exists", req.Name))
 	}
 
 	props := graph.Properties{
@@ -323,7 +323,7 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 		raw, err := serializeCollectionSchema(req.Schema)
 		if err != nil {
 			a.log.Warn("collection schema serialize failed", "component", "collection", "err", err)
-			return nil, ErrInternal("failed to serialize schema")
+			return CollectionCreateResponse{}, ErrInternal("failed to serialize schema")
 		}
 		props["collection_schema"] = graph.StringProperty(raw)
 	}
@@ -348,10 +348,10 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 		Kind: graph.ActionCollectionCreate, RecordID: n.ID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "create", "err", err)
-		return nil, ErrInternal("failed to save collection")
+		return CollectionCreateResponse{}, ErrInternal("failed to save collection")
 	}
 
-	return map[string]any{"id": n.ID, "name": req.Name}, nil
+	return CollectionCreateResponse{ID: n.ID, Name: req.Name}, nil
 }
 
 type CollectionListRequest struct {
@@ -359,7 +359,7 @@ type CollectionListRequest struct {
 	Offset int
 }
 
-func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (map[string]any, *APIError) {
+func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (CollectionListResponse, *APIError) {
 	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
@@ -377,7 +377,7 @@ func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (ma
 	}
 
 	ids := a.engine.PropIdx().Lookup("knowledge_type", graph.StringProperty("collection"))
-	all := make([]map[string]any, 0, len(ids))
+	all := make([]CollectionListEntry, 0, len(ids))
 
 	for _, id := range ids {
 		n, ok := a.engine.Graph().GetNode(id)
@@ -389,23 +389,22 @@ func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (ma
 			continue
 		}
 
-		entry := map[string]any{
-			"id":   id,
-			"name": name,
+		entry := CollectionListEntry{
+			ID:        id,
+			Name:      name,
+			ItemCount: len(a.collectionItemEdges(id)),
 		}
 		if desc, ok := n.Properties.GetString("collection_description"); ok {
-			entry["description"] = desc
+			entry.Description = desc
 		}
 		if _, ok := n.Properties.GetString("collection_schema"); ok {
-			entry["has_schema"] = true
+			entry.HasSchema = true
 		}
-		entry["item_count"] = len(a.collectionItemEdges(id))
-
 		if isRetired(n) {
-			entry["retired"] = true
+			entry.Retired = true
 		}
 		if ca, ok := n.Properties.GetTimestamp("created_at"); ok {
-			entry["created_at"] = ca.Format(time.RFC3339)
+			entry.CreatedAt = ca.Format(time.RFC3339)
 		}
 
 		all = append(all, entry)
@@ -421,16 +420,16 @@ func (a *API) CollectionList(ctx context.Context, req CollectionListRequest) (ma
 	}
 	page := all[offset:end]
 
-	result := map[string]any{
-		"collections": page,
-		"showing":     len(page),
-		"total":       total,
+	resp := CollectionListResponse{
+		Collections: page,
+		Showing:     len(page),
+		Total:       total,
 	}
 	if end < total {
-		result["has_more"] = true
-		result["next_offset"] = end
+		resp.HasMore = true
+		resp.NextOffset = end
 	}
-	return result, nil
+	return resp, nil
 }
 
 type CollectionItemsRequest struct {
@@ -476,19 +475,19 @@ type CollectionItemsRequest struct {
 // the response reflects the commit at-or-before AsOf (D7 CommitAt), and
 // each member is read at its per-commit state. The response carries
 // `as_of` + `semantics: "point_in_time"` so agents don't have to guess.
-func (a *API) CollectionItems(ctx context.Context, collectionID string, req CollectionItemsRequest) (map[string]any, *APIError) {
+func (a *API) CollectionItems(ctx context.Context, collectionID string, req CollectionItemsRequest) (CollectionItemsResponse, *APIError) {
 	_ = ctx
 	asOfT, asOfErr := validateAsOf(req.AsOf, nil)
 	if asOfErr != nil {
-		return nil, ErrInvalid(asOfErr.Error())
+		return CollectionItemsResponse{}, ErrInvalid(asOfErr.Error())
 	}
 	filterMatchers, filterErr := buildFilterMatchers(req.Filter)
 	if filterErr != nil {
-		return nil, ErrInvalid(filterErr.Error())
+		return CollectionItemsResponse{}, ErrInvalid(filterErr.Error())
 	}
 	projection, projErr := normalizeProjection(req.Fields)
 	if projErr != nil {
-		return nil, ErrInvalid(projErr.Error())
+		return CollectionItemsResponse{}, ErrInvalid(projErr.Error())
 	}
 
 	a.engine.RLock()
@@ -504,10 +503,10 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req Coll
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionItemsResponse{}, svcErr
 	}
 	if !req.IncludeRetired && isRetired(coll) {
-		return nil, ErrNotFound("collection is retired")
+		return CollectionItemsResponse{}, ErrNotFound("collection is retired")
 	}
 
 	// Check migration state.
@@ -646,18 +645,45 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req Coll
 		}
 	}
 
-	result := map[string]any{
-		"collection_id": collectionID,
-		"items":         items,
-		"count":         len(items),
-	}
-	if migration != nil {
-		migration["done"] = migDone
-		migration["remaining"] = migRemaining
-		result["migration"] = migration
+	// Convert the internal []map[string]any items to []CollectionItem
+	// for the typed response. The internal map shape is kept through
+	// the sort logic above (which accesses dynamic field keys via map
+	// indexing) and converted in one pass here.
+	out := make([]CollectionItem, 0, len(items))
+	for _, m := range items {
+		ci := CollectionItem{}
+		if id, ok := m["id"].(string); ok {
+			ci.ID = id
+		}
+		if ca, ok := m["created_at"].(string); ok {
+			ci.CreatedAt = ca
+		}
+		if f, ok := m["fields"].(map[string]any); ok {
+			ci.Fields = f
+		}
+		if nm, ok := m["needs_migration"].([]string); ok {
+			ci.NeedsMigration = nm
+		}
+		out = append(out, ci)
 	}
 
-	return result, nil
+	resp := CollectionItemsResponse{
+		CollectionID: collectionID,
+		Items:        out,
+		Count:        len(out),
+	}
+	if migration != nil {
+		state := &CollectionMigrationState{Done: migDone, Remaining: migRemaining}
+		if mf, ok := migration["fields"].([]string); ok {
+			state.Fields = mf
+		}
+		if total, ok := migration["total"].(int64); ok {
+			state.Total = total
+		}
+		resp.Migration = state
+	}
+
+	return resp, nil
 }
 
 // collectionItemsAtCommit answers "what members did this collection
@@ -674,7 +700,7 @@ func (a *API) collectionItemsAtCommit(
 	filterMatchers map[string]map[string]struct{},
 	projection map[string]struct{},
 	req CollectionItemsRequest,
-) (map[string]any, *APIError) {
+) (CollectionItemsResponse, *APIError) {
 	tsIdx := a.engine.TSIndex()
 	commitHash, ok := tsIdx.CommitAt(asOfT)
 	if !ok {
@@ -686,7 +712,7 @@ func (a *API) collectionItemsAtCommit(
 	if err != nil {
 		a.log.Warn("collection_items as_of: load commit",
 			"component", "collections", "commit", commitHash, "err", err)
-		return nil, ErrInternal("failed to load historical commit")
+		return CollectionItemsResponse{}, ErrInternal("failed to load historical commit")
 	}
 
 	// The collection itself must exist at this commit; otherwise the
@@ -694,26 +720,26 @@ func (a *API) collectionItemsAtCommit(
 	// created (or after it was hard-deleted -- no such path today).
 	collHash, collFound, err := graph.NodeHashInCommit(store, commitHash, collectionID)
 	if err != nil {
-		return nil, ErrInternal("failed to resolve collection at commit")
+		return CollectionItemsResponse{}, ErrInternal("failed to resolve collection at commit")
 	}
 	if !collFound {
 		return emptyHistoricalResponse(collectionID, asOfT), nil
 	}
 	collData, err := store.Read(collHash)
 	if err != nil {
-		return nil, ErrInternal("failed to read collection node")
+		return CollectionItemsResponse{}, ErrInternal("failed to read collection node")
 	}
 	collNode, err := graph.UnmarshalNode(collData)
 	if err != nil {
-		return nil, ErrInternal("failed to unmarshal collection node")
+		return CollectionItemsResponse{}, ErrInternal("failed to unmarshal collection node")
 	}
 	kt, _ := collNode.Properties.GetString("knowledge_type")
 	if kt != "collection" {
-		return nil, ErrNotFound("not a collection")
+		return CollectionItemsResponse{}, ErrNotFound("not a collection")
 	}
 	if !req.IncludeRetired {
 		if vu, ok := collNode.Properties.GetTimestamp("valid_until"); ok && vu.Before(asOfT) {
-			return nil, ErrNotFound("collection is retired")
+			return CollectionItemsResponse{}, ErrNotFound("collection is retired")
 		}
 	}
 
@@ -726,7 +752,7 @@ func (a *API) collectionItemsAtCommit(
 	edgeTree := storage.LoadProllyTree(store, commit.EdgeTreeRoot)
 	edgeEntries, err := edgeTree.AllEntries()
 	if err != nil {
-		return nil, ErrInternal("failed to read edge tree at commit")
+		return CollectionItemsResponse{}, ErrInternal("failed to read edge tree at commit")
 	}
 
 	var memberIDs []string
@@ -810,14 +836,27 @@ func (a *API) collectionItemsAtCommit(
 		return less
 	})
 
-	resp := map[string]any{
-		"collection_id": collectionID,
-		"items":         items,
-		"count":         len(items),
-		"as_of":         asOfT.Format(time.RFC3339),
-		"semantics":     "point_in_time",
+	out := make([]CollectionItem, 0, len(items))
+	for _, m := range items {
+		ci := CollectionItem{}
+		if id, ok := m["id"].(string); ok {
+			ci.ID = id
+		}
+		if ca, ok := m["created_at"].(string); ok {
+			ci.CreatedAt = ca
+		}
+		if f, ok := m["fields"].(map[string]any); ok {
+			ci.Fields = f
+		}
+		out = append(out, ci)
 	}
-	return resp, nil
+	return CollectionItemsResponse{
+		CollectionID: collectionID,
+		Items:        out,
+		Count:        len(out),
+		AsOf:         asOfT.Format(time.RFC3339),
+		Semantics:    "point_in_time",
+	}, nil
 }
 
 // emptyHistoricalResponse returns the empty-result shape for an as_of
@@ -825,13 +864,13 @@ func (a *API) collectionItemsAtCommit(
 // has no commit at-or-before the requested time. Keeps the semantic-
 // naming contract (`as_of` + `semantics`) consistent whether or not
 // data was found.
-func emptyHistoricalResponse(collectionID string, asOfT time.Time) map[string]any {
-	return map[string]any{
-		"collection_id": collectionID,
-		"items":         []map[string]any{},
-		"count":         0,
-		"as_of":         asOfT.Format(time.RFC3339),
-		"semantics":     "point_in_time",
+func emptyHistoricalResponse(collectionID string, asOfT time.Time) CollectionItemsResponse {
+	return CollectionItemsResponse{
+		CollectionID: collectionID,
+		Items:        []CollectionItem{},
+		Count:        0,
+		AsOf:         asOfT.Format(time.RFC3339),
+		Semantics:    "point_in_time",
 	}
 }
 
@@ -944,9 +983,9 @@ type CollectionAddRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionAdd(ctx context.Context, collectionID string, req CollectionAddRequest) (map[string]any, *APIError) {
+func (a *API) CollectionAdd(ctx context.Context, collectionID string, req CollectionAddRequest) (CollectionAddResponse, *APIError) {
 	if len(req.Fields) == 0 {
-		return nil, ErrMissing("fields are required")
+		return CollectionAddResponse{}, ErrMissing("fields are required")
 	}
 
 	// Pre-embed field text for graph connectivity (outside lock).
@@ -971,20 +1010,20 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionAddResponse{}, svcErr
 	}
 	if isRetired(coll) {
-		return nil, ErrInvalid("cannot add to retired collection")
+		return CollectionAddResponse{}, ErrInvalid("cannot add to retired collection")
 	}
 
 	// Schema validation.
 	schema, err := loadSchema(coll)
 	if err != nil {
 		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
-		return nil, ErrInternal("failed to load schema")
+		return CollectionAddResponse{}, ErrInternal("failed to load schema")
 	}
 	if err := validateItemFields(schema, req.Fields); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionAddResponse{}, ErrInvalid(err.Error())
 	}
 
 	// Dedup check: look for existing item with the same title
@@ -1017,13 +1056,13 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 						continue
 					}
 					if CollectionCuration(coll) == CurationMinimal {
-						return map[string]any{
-							"id":             e.SourceID,
-							"collection_id":  collectionID,
-							"deduplicated":   true,
+						return CollectionAddResponse{
+							ID:           e.SourceID,
+							CollectionID: collectionID,
+							Deduplicated: true,
 						}, nil
 					}
-					return nil, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
+					return CollectionAddResponse{}, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
 				}
 			}
 		}
@@ -1053,7 +1092,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	if _, err := a.engine.Graph().AddEdge(n.ID, collectionID, "member_of", 1.0, nil); err != nil {
 		a.log.Warn("member_of edge create failed", "component", "collection",
 			"collection_id", collectionID, "item_id", n.ID, "err", err)
-		return nil, ErrInternal("failed to add item to collection")
+		return CollectionAddResponse{}, ErrInternal("failed to add item to collection")
 	}
 	if cc := a.engine.CollCache(); cc != nil {
 		cc.AddMember(collectionID, n.ID)
@@ -1063,10 +1102,10 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		Kind: graph.ActionCollectionAdd, RecordID: n.ID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "add", "err", err)
-		return nil, ErrInternal("failed to save collection item")
+		return CollectionAddResponse{}, ErrInternal("failed to save collection item")
 	}
 
-	return map[string]any{"id": n.ID, "collection_id": collectionID}, nil
+	return CollectionAddResponse{ID: n.ID, CollectionID: collectionID}, nil
 }
 
 // CollectionAddItem is one item inside a CollectionAddBatchRequest.
@@ -1390,18 +1429,18 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	}, nil
 }
 
-func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string) (map[string]any, *APIError) {
+func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string) (CollectionRemoveResponse, *APIError) {
 	_ = ctx
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
 	if _, svcErr := a.isCollection(collectionID); svcErr != nil {
-		return nil, svcErr
+		return CollectionRemoveResponse{}, svcErr
 	}
 
 	edge, ok := a.isMemberOf(itemID, collectionID)
 	if !ok {
-		return nil, ErrNotFound("item is not a member of this collection")
+		return CollectionRemoveResponse{}, ErrNotFound("item is not a member of this collection")
 	}
 
 	a.engine.Graph().DeleteEdge(edge.ID)
@@ -1413,20 +1452,20 @@ func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string)
 		Kind: graph.ActionCollectionRemove, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "remove", "err", err)
-		return nil, ErrInternal("failed to save collection removal")
+		return CollectionRemoveResponse{}, ErrInternal("failed to save collection removal")
 	}
 
-	return map[string]any{"removed": true, "item_id": itemID, "collection_id": collectionID}, nil
+	return CollectionRemoveResponse{Removed: true, ItemID: itemID, CollectionID: collectionID}, nil
 }
 
 type CollectionUpdateRequest struct {
 	Fields map[string]any `json:"fields"`
 }
 
-func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req CollectionUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req CollectionUpdateRequest) (CollectionUpdateResponse, *APIError) {
 	_ = ctx
 	if len(req.Fields) == 0 {
-		return nil, ErrMissing("fields are required")
+		return CollectionUpdateResponse{}, ErrMissing("fields are required")
 	}
 
 	a.engine.Lock()
@@ -1434,11 +1473,11 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionUpdateResponse{}, svcErr
 	}
 
 	if _, ok := a.isMemberOf(itemID, collectionID); !ok {
-		return nil, ErrNotFound("item is not a member of this collection")
+		return CollectionUpdateResponse{}, ErrNotFound("item is not a member of this collection")
 	}
 
 	// Validate against schema. Merge existing fields with updates for
@@ -1446,19 +1485,19 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	schema, err := loadSchema(coll)
 	if err != nil {
 		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
-		return nil, ErrInternal("failed to load schema")
+		return CollectionUpdateResponse{}, ErrInternal("failed to load schema")
 	}
 	if schema != nil {
 		n, ok := a.engine.Graph().GetNode(itemID)
 		if !ok {
-			return nil, ErrNotFound("item not found")
+			return CollectionUpdateResponse{}, ErrNotFound("item not found")
 		}
 		merged := extractFields(n)
 		for k, v := range req.Fields {
 			merged[k] = v
 		}
 		if err := validateItemFields(schema, merged); err != nil {
-			return nil, ErrInvalid(err.Error())
+			return CollectionUpdateResponse{}, ErrInvalid(err.Error())
 		}
 	}
 
@@ -1468,23 +1507,23 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 		Kind: graph.ActionCollectionUpdate, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "update", "err", err)
-		return nil, ErrInternal("failed to save collection update")
+		return CollectionUpdateResponse{}, ErrInternal("failed to save collection update")
 	}
 
-	return map[string]any{"updated": true, "item_id": itemID}, nil
+	return CollectionUpdateResponse{Updated: true, ItemID: itemID}, nil
 }
 
 type CollectionMoveRequest struct {
 	TargetCollectionID string `json:"target_collection_id"`
 }
 
-func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req CollectionMoveRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req CollectionMoveRequest) (CollectionMoveResponse, *APIError) {
 	_ = ctx
 	if req.TargetCollectionID == "" {
-		return nil, ErrMissing("target_collection_id is required")
+		return CollectionMoveResponse{}, ErrMissing("target_collection_id is required")
 	}
 	if req.TargetCollectionID == collectionID {
-		return nil, ErrInvalid("target collection is the same as source")
+		return CollectionMoveResponse{}, ErrInvalid("target collection is the same as source")
 	}
 
 	a.engine.Lock()
@@ -1492,36 +1531,36 @@ func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, r
 
 	// Verify source.
 	if _, svcErr := a.isCollection(collectionID); svcErr != nil {
-		return nil, svcErr
+		return CollectionMoveResponse{}, svcErr
 	}
 	edge, ok := a.isMemberOf(itemID, collectionID)
 	if !ok {
-		return nil, ErrNotFound("item is not a member of source collection")
+		return CollectionMoveResponse{}, ErrNotFound("item is not a member of source collection")
 	}
 
 	// Verify target.
 	targetColl, svcErr := a.isCollection(req.TargetCollectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionMoveResponse{}, svcErr
 	}
 	if isRetired(targetColl) {
-		return nil, ErrInvalid("target collection is retired")
+		return CollectionMoveResponse{}, ErrInvalid("target collection is retired")
 	}
 
 	// Validate item fields against target schema.
 	targetSchema, err := loadSchema(targetColl)
 	if err != nil {
 		a.log.Warn("target schema load failed", "component", "collection", "err", err)
-		return nil, ErrInternal("failed to load target schema")
+		return CollectionMoveResponse{}, ErrInternal("failed to load target schema")
 	}
 	if targetSchema != nil {
 		n, ok := a.engine.Graph().GetNode(itemID)
 		if !ok {
-			return nil, ErrNotFound("item not found")
+			return CollectionMoveResponse{}, ErrNotFound("item not found")
 		}
 		fields := extractFields(n)
 		if err := validateItemFields(targetSchema, fields); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("item does not satisfy target schema: %s", err))
+			return CollectionMoveResponse{}, ErrInvalid(fmt.Sprintf("item does not satisfy target schema: %s", err))
 		}
 	}
 
@@ -1533,15 +1572,15 @@ func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, r
 	if err := a.engine.Graph().DeleteEdge(edge.ID); err != nil && !errors.Is(err, graph.ErrNotFound) {
 		a.log.Warn("member_of delete failed", "component", "collection",
 			"collection_id", collectionID, "item_id", itemID, "err", err)
-		return nil, ErrInternal("failed to detach item from source collection")
+		return CollectionMoveResponse{}, ErrInternal("failed to detach item from source collection")
 	}
 	if _, err := a.engine.Graph().AddEdge(itemID, req.TargetCollectionID, "member_of", 1.0, nil); err != nil {
 		a.log.Warn("member_of add failed", "component", "collection",
 			"collection_id", req.TargetCollectionID, "item_id", itemID, "err", err)
 		if errors.Is(err, graph.ErrNotFound) {
-			return nil, ErrNotFound("target collection or item missing during move")
+			return CollectionMoveResponse{}, ErrNotFound("target collection or item missing during move")
 		}
-		return nil, ErrInternal("failed to add item to target collection")
+		return CollectionMoveResponse{}, ErrInternal("failed to add item to target collection")
 	}
 	if cc := a.engine.CollCache(); cc != nil {
 		cc.RemoveMember(collectionID, itemID)
@@ -1552,14 +1591,14 @@ func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, r
 		Kind: graph.ActionCollectionMove, RecordID: itemID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "move", "err", err)
-		return nil, ErrInternal("failed to save collection move")
+		return CollectionMoveResponse{}, ErrInternal("failed to save collection move")
 	}
 
-	return map[string]any{
-		"moved":                true,
-		"item_id":              itemID,
-		"from_collection_id":   collectionID,
-		"to_collection_id":     req.TargetCollectionID,
+	return CollectionMoveResponse{
+		Moved:            true,
+		ItemID:           itemID,
+		FromCollectionID: collectionID,
+		ToCollectionID:   req.TargetCollectionID,
 	}, nil
 }
 
@@ -1567,22 +1606,22 @@ type CollectionRenameRequest struct {
 	Name string `json:"name"`
 }
 
-func (a *API) CollectionRename(ctx context.Context, collectionID string, req CollectionRenameRequest) (map[string]any, *APIError) {
+func (a *API) CollectionRename(ctx context.Context, collectionID string, req CollectionRenameRequest) (CollectionRenameResponse, *APIError) {
 	_ = ctx
 	if err := validateCollectionName(req.Name); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionRenameResponse{}, ErrInvalid(err.Error())
 	}
 
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
 	if _, svcErr := a.isCollection(collectionID); svcErr != nil {
-		return nil, svcErr
+		return CollectionRenameResponse{}, svcErr
 	}
 
 	// Check uniqueness (exclude self).
 	if existingID, exists := a.collectionByName(req.Name); exists && existingID != collectionID {
-		return nil, ErrConflict(fmt.Sprintf("collection %q already exists", req.Name))
+		return CollectionRenameResponse{}, ErrConflict(fmt.Sprintf("collection %q already exists", req.Name))
 	}
 
 	a.engine.SetProp(collectionID, "collection_name", graph.StringProperty(req.Name))
@@ -1591,20 +1630,20 @@ func (a *API) CollectionRename(ctx context.Context, collectionID string, req Col
 		Kind: graph.ActionCollectionRename, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "rename", "err", err)
-		return nil, ErrInternal("failed to save rename")
+		return CollectionRenameResponse{}, ErrInternal("failed to save rename")
 	}
 
-	return map[string]any{"renamed": true, "id": collectionID, "name": req.Name}, nil
+	return CollectionRenameResponse{Renamed: true, ID: collectionID, Name: req.Name}, nil
 }
 
-func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[string]any, *APIError) {
+func (a *API) CollectionDelete(ctx context.Context, collectionID string) (CollectionDeleteResponse, *APIError) {
 	_ = ctx
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionDeleteResponse{}, svcErr
 	}
 
 	if isRetired(coll) {
@@ -1614,9 +1653,9 @@ func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[st
 			Kind: graph.ActionCollectionUnretire, RecordID: collectionID,
 		}); err != nil {
 			a.log.Warn("collection save failed", "component", "collection", "op", "unretire", "err", err)
-			return nil, ErrInternal("failed to save unretire")
+			return CollectionDeleteResponse{}, ErrInternal("failed to save unretire")
 		}
-		return map[string]any{"unretired": true, "id": collectionID}, nil
+		return CollectionDeleteResponse{Unretired: true, ID: collectionID}, nil
 	}
 
 	// Retire: set valid_until, keep edges.
@@ -1626,54 +1665,54 @@ func (a *API) CollectionDelete(ctx context.Context, collectionID string) (map[st
 		Kind: graph.ActionCollectionRetire, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "retire", "err", err)
-		return nil, ErrInternal("failed to save retire")
+		return CollectionDeleteResponse{}, ErrInternal("failed to save retire")
 	}
 
 	itemCount := len(a.collectionItemEdges(collectionID))
-	return map[string]any{"retired": true, "id": collectionID, "items_preserved": itemCount}, nil
+	return CollectionDeleteResponse{Retired: true, ID: collectionID, ItemsPreserved: itemCount}, nil
 }
 
-func (a *API) CollectionSchemaRead(ctx context.Context, collectionID string) (map[string]any, *APIError) {
+func (a *API) CollectionSchemaRead(ctx context.Context, collectionID string) (CollectionSchemaReadResponse, *APIError) {
 	_ = ctx
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionSchemaReadResponse{}, svcErr
 	}
 
 	schema, err := loadSchema(coll)
 	if err != nil {
 		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
-		return nil, ErrInternal("failed to load schema")
+		return CollectionSchemaReadResponse{}, ErrInternal("failed to load schema")
 	}
 
-	result := map[string]any{"collection_id": collectionID}
+	resp := CollectionSchemaReadResponse{CollectionID: collectionID}
 	if schema != nil {
-		result["schema"] = schema
+		resp.Schema = schema
 	}
 
 	// Include migration state if active.
 	if migFields, ok := coll.Properties.GetStringList("collection_migration_fields"); ok && len(migFields) > 0 {
 		total, _ := coll.Properties.GetInt64("collection_migration_total")
-		result["migration"] = map[string]any{
-			"fields": migFields,
-			"total":  total,
+		resp.Migration = &CollectionMigrationState{
+			Fields: migFields,
+			Total:  total,
 		}
 	}
 
-	return result, nil
+	return resp, nil
 }
 
 type CollectionSchemaUpdateRequest struct {
 	Schema CollectionSchema `json:"schema"`
 }
 
-func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req CollectionSchemaUpdateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req CollectionSchemaUpdateRequest) (CollectionSchemaUpdateResponse, *APIError) {
 	_ = ctx
 	if err := validateSchema(&req.Schema); err != nil {
-		return nil, ErrInvalid(err.Error())
+		return CollectionSchemaUpdateResponse{}, ErrInvalid(err.Error())
 	}
 
 	a.engine.Lock()
@@ -1681,7 +1720,7 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionSchemaUpdateResponse{}, svcErr
 	}
 
 	// Determine if new required fields were added.
@@ -1705,11 +1744,11 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 	raw, err := serializeCollectionSchema(&req.Schema)
 	if err != nil {
 		a.log.Warn("collection schema serialize failed", "component", "collection", "err", err)
-		return nil, ErrInternal("failed to serialize schema")
+		return CollectionSchemaUpdateResponse{}, ErrInternal("failed to serialize schema")
 	}
 	a.engine.SetProp(collectionID, "collection_schema", graph.StringProperty(raw))
 
-	result := map[string]any{"updated": true, "collection_id": collectionID}
+	resp := CollectionSchemaUpdateResponse{Updated: true, CollectionID: collectionID}
 
 	// Enter migration state if new required fields.
 	if len(newRequiredFields) > 0 {
@@ -1719,10 +1758,10 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 		a.engine.SetProp(collectionID, "collection_migration_total",
 			graph.Int64Property(int64(itemCount)))
 
-		result["migration"] = map[string]any{
-			"fields": newRequiredFields,
-			"total":  itemCount,
-			"message": fmt.Sprintf("%d items need migration for new required fields: %s",
+		resp.Migration = &CollectionMigrationState{
+			Fields: newRequiredFields,
+			Total:  int64(itemCount),
+			Message: fmt.Sprintf("%d items need migration for new required fields: %s",
 				itemCount, strings.Join(newRequiredFields, ", ")),
 		}
 	}
@@ -1731,10 +1770,10 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 		Kind: graph.ActionCollectionSchemaUpdate, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "schema_update", "err", err)
-		return nil, ErrInternal("failed to save schema update")
+		return CollectionSchemaUpdateResponse{}, ErrInternal("failed to save schema update")
 	}
 
-	return result, nil
+	return resp, nil
 }
 
 type CollectionMigrateRequest struct {
@@ -1742,10 +1781,10 @@ type CollectionMigrateRequest struct {
 	Value any    `json:"value"`
 }
 
-func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req CollectionMigrateRequest) (map[string]any, *APIError) {
+func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req CollectionMigrateRequest) (CollectionMigrateResponse, *APIError) {
 	_ = ctx
 	if req.Field == "" {
-		return nil, ErrMissing("field is required")
+		return CollectionMigrateResponse{}, ErrMissing("field is required")
 	}
 
 	a.engine.Lock()
@@ -1753,13 +1792,13 @@ func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req Co
 
 	coll, svcErr := a.isCollection(collectionID)
 	if svcErr != nil {
-		return nil, svcErr
+		return CollectionMigrateResponse{}, svcErr
 	}
 
 	// Verify migration is active for this field.
 	migFields, ok := coll.Properties.GetStringList("collection_migration_fields")
 	if !ok || len(migFields) == 0 {
-		return nil, ErrInvalid("no migration is active for this collection")
+		return CollectionMigrateResponse{}, ErrInvalid("no migration is active for this collection")
 	}
 	found := false
 	for _, f := range migFields {
@@ -1769,7 +1808,7 @@ func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req Co
 		}
 	}
 	if !found {
-		return nil, ErrInvalid(fmt.Sprintf("field %q is not in the migration set", req.Field))
+		return CollectionMigrateResponse{}, ErrInvalid(fmt.Sprintf("field %q is not in the migration set", req.Field))
 	}
 
 	// Validate the value against the schema if non-null.
@@ -1777,13 +1816,13 @@ func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req Co
 		schema, err := loadSchema(coll)
 		if err != nil {
 			a.log.Warn("collection schema load failed", "component", "collection", "err", err)
-			return nil, ErrInternal("failed to load schema")
+			return CollectionMigrateResponse{}, ErrInternal("failed to load schema")
 		}
 		if schema != nil {
 			for _, f := range schema.Fields {
 				if f.Name == req.Field {
 					if err := validateFieldValue(f, req.Value); err != nil {
-						return nil, ErrInvalid(fmt.Sprintf("migration value for %q: %s", req.Field, err))
+						return CollectionMigrateResponse{}, ErrInvalid(fmt.Sprintf("migration value for %q: %s", req.Field, err))
 					}
 					break
 				}
@@ -1826,13 +1865,13 @@ func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req Co
 		Kind: graph.ActionCollectionMigrate, RecordID: collectionID,
 	}); err != nil {
 		a.log.Warn("collection save failed", "component", "collection", "op", "migrate", "err", err)
-		return nil, ErrInternal("failed to save migration")
+		return CollectionMigrateResponse{}, ErrInternal("failed to save migration")
 	}
 
-	return map[string]any{
-		"migrated":          updated,
-		"field":             req.Field,
-		"migration_complete": len(remaining) == 0,
+	return CollectionMigrateResponse{
+		Migrated:          updated,
+		Field:             req.Field,
+		MigrationComplete: len(remaining) == 0,
 	}, nil
 }
 

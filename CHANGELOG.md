@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **api/ Collection methods + `SessionCommit` now return typed
+  response structs instead of `map[string]any`.** Eleven Collection*
+  methods (`CollectionCreate`, `CollectionList`, `CollectionItems`,
+  `CollectionAdd`, `CollectionRemove`, `CollectionUpdate`,
+  `CollectionMove`, `CollectionRename`, `CollectionDelete`,
+  `CollectionSchemaRead`, `CollectionSchemaUpdate`,
+  `CollectionMigrate`) plus `SessionCommit` now return concrete types
+  defined in `api/collection_responses.go`. Wire-format unchanged --
+  `omitempty` plus pointer types preserve byte-identical JSON output
+  for HTTP and MCP. The error contract is preserved: non-nil
+  `APIError` returns the zero value of the response struct (no
+  partial-state leakage). `SessionCommit` and `CollectionMigrate`
+  responses now carry an optional `failed []ItemFailure` slice for
+  future partial-success surfacing; today both ops still abort on
+  first error per the APIError contract, so the slice is reserved.
+  Touches `api/collections.go`, `api/sessions.go`, the new
+  `api/collection_responses.go`, and the test files that switched
+  from map indexing to struct field access. P3-B + P3-C in the
+  api debt sweep.
+
 - **Phase 3 follow-on landed: every Save site now emits structured
   `graph.CommitAction` descriptors, enforced by a CI lint.** Three
   layers:

@@ -15,7 +15,7 @@ func newCollFromTemplate(t *testing.T, a *API, name, template string) string {
 	if err != nil {
 		t.Fatalf("CollectionCreate(%s, %s): %v", name, template, err)
 	}
-	id, _ := got["id"].(string)
+	id := got.ID
 	if id == "" {
 		t.Fatalf("CollectionCreate(%s, %s): no id in response %+v", name, template, got)
 	}
@@ -29,7 +29,7 @@ func newCollItem(t *testing.T, a *API, collID string, fields map[string]any) str
 	if err != nil {
 		t.Fatalf("CollectionAdd: %v", err)
 	}
-	id, _ := got["id"].(string)
+	id := got.ID
 	if id == "" {
 		t.Fatalf("CollectionAdd: no id in response %+v", got)
 	}

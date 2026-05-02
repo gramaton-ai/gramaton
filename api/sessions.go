@@ -693,12 +693,12 @@ func (c CommitSegment) shouldPromote() bool {
 // SessionCommit appends extracted segments to the session.
 // Validates that prepare was called first. Creates new topics as needed.
 // Phase 2: stores in Session only (no Memory records, no embedding).
-func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []CommitSegment) (map[string]any, *APIError) {
+func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []CommitSegment) (SessionCommitResponse, *APIError) {
 	if sessionID == "" {
-		return nil, ErrMissing("session_id is required")
+		return SessionCommitResponse{}, ErrMissing("session_id is required")
 	}
 	if len(segments) == 0 {
-		return nil, ErrMissing("segments is required and must not be empty")
+		return SessionCommitResponse{}, ErrMissing("segments is required and must not be empty")
 	}
 
 	// Validate all segments before consuming the prepared flag so that a
@@ -707,16 +707,16 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 	maxSummary := MaxSummaryShort()
 	for i, seg := range segments {
 		if strings.TrimSpace(seg.Content) == "" {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: content is required", i))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content is required", i))
 		}
 		if strings.TrimSpace(seg.TopicName) == "" {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: topic name is required", i))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name is required", i))
 		}
 		if maxContent > 0 && len(seg.Content) > maxContent {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: content exceeds maximum length", i))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content exceeds maximum length", i))
 		}
 		if len(seg.TopicName) > MaxTopicLength {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
 		}
 		// Sanitize summary_short to strip LLM tool-use-format
 		// leakage before length-checking. Mutate via the slice
@@ -725,22 +725,22 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		origSeg := segments[i].SummaryShort
 		segments[i].SummaryShort = sanitize.Field(origSeg)
 		if err := sanitize.Validate(origSeg, segments[i].SummaryShort, fmt.Sprintf("segment %d: summary_short", i), maxSummary); err != nil {
-			return nil, ErrInvalid(err.Error())
+			return SessionCommitResponse{}, ErrInvalid(err.Error())
 		}
 		if err := validateFloat64Range("confidence", seg.Confidence, 0.0, 1.0); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("temporality", seg.Temporality, ValidTemporalities); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("knowledge_type", seg.KnowledgeType, ValidKnowledgeTypes); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("epistemic_status", seg.EpistemicStatus, ValidEpistemicStatuses); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateKeywords(seg.Keywords); err != nil {
-			return nil, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 	}
 
@@ -755,7 +755,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 
 	if !prepared {
 		a.log.Warn("session commit rejected: prepare not called", "component", "session", "session_id", sessionID)
-		return nil, ErrPrepareRequired("You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.")
+		return SessionCommitResponse{}, ErrPrepareRequired("You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.")
 	}
 
 	start := time.Now()
@@ -798,7 +798,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 	defer a.engine.Unlock()
 
 	if _, svcErr := a.isSession(sessionID); svcErr != nil {
-		return nil, svcErr
+		return SessionCommitResponse{}, svcErr
 	}
 
 	// Build topic name -> ID map from existing topics.
@@ -835,7 +835,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 			if _, err := a.engine.Graph().AddEdge(topicNode.ID, sessionID, "topic_of", 1.0, nil); err != nil {
 				a.log.Warn("topic_of edge create failed", "component", "session",
 					"session_id", sessionID, "topic_id", topicNode.ID, "err", err)
-				return nil, ErrInternal("failed to link topic to session")
+				return SessionCommitResponse{}, ErrInternal("failed to link topic to session")
 			}
 			topicID = topicNode.ID
 			topicMap[seg.TopicName] = topicID
@@ -859,7 +859,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		if _, err := a.engine.Graph().AddEdge(segNode.ID, topicID, "segment_of", 1.0, nil); err != nil {
 			a.log.Warn("segment_of edge create failed", "component", "session",
 				"session_id", sessionID, "topic_id", topicID, "err", err)
-			return nil, ErrInternal("failed to link segment to topic")
+			return SessionCommitResponse{}, ErrInternal("failed to link segment to topic")
 		}
 		segmentsAdded++
 
@@ -993,7 +993,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 	}); err != nil {
 		a.log.Warn("session commit save failed", "component", "session",
 			"session_id", sessionID, "err", err)
-		return nil, ErrInternal("failed to save session commit")
+		return SessionCommitResponse{}, ErrInternal("failed to save session commit")
 	}
 
 	dur := time.Since(start)
@@ -1003,16 +1003,16 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		"memory_records_created", memoryRecordsCreated, "edges_created", edgesCreated,
 		"embed_ms", embedDur.Milliseconds(), "duration", dur)
 
-	resp := map[string]any{
-		"session_id":             sessionID,
-		"segments_added":         segmentsAdded,
-		"session_only_segments":  sessionOnlySegments,
-		"topics_created":         topicsCreated,
-		"memory_records_created": memoryRecordsCreated,
-		"edges_created":          edgesCreated,
+	resp := SessionCommitResponse{
+		SessionID:            sessionID,
+		SegmentsAdded:        segmentsAdded,
+		SessionOnlySegments:  sessionOnlySegments,
+		TopicsCreated:        topicsCreated,
+		MemoryRecordsCreated: memoryRecordsCreated,
+		EdgesCreated:         edgesCreated,
 	}
 	if len(superseded) > 0 {
-		resp["superseded"] = superseded
+		resp.Superseded = superseded
 	}
 	return resp, nil
 }

@@ -17,7 +17,7 @@ func makeCollection(t *testing.T, srv *Server, name string) string {
 	if apiErr != nil {
 		t.Fatalf("create collection %q: %v", name, apiErr)
 	}
-	return result["id"].(string)
+	return result.ID
 }
 
 func TestCollectionAddBatchHappyPath(t *testing.T) {
@@ -210,7 +210,7 @@ func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("create minimal collection: %v", apiErr)
 	}
-	collID := result["id"].(string)
+	collID := result.ID
 
 	// Seed an existing item.
 	seed, apiErr := srv.api.CollectionAdd(context.Background(), collID, api.CollectionAddRequest{
@@ -219,7 +219,7 @@ func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("seed: %v", apiErr)
 	}
-	seedID := seed["id"].(string)
+	seedID := seed.ID
 
 	req := api.CollectionAddBatchRequest{
 		Items: []api.CollectionAddItem{
@@ -266,7 +266,7 @@ func TestCollectionAddBatchMinimalIntraBatchIdempotent(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("create minimal collection: %v", apiErr)
 	}
-	collID := result["id"].(string)
+	collID := result.ID
 
 	req := api.CollectionAddBatchRequest{
 		Items: []api.CollectionAddItem{

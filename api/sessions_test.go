@@ -634,11 +634,11 @@ func TestSessionCommitAfterPrepare(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["segments_added"].(int) != 2 {
-		t.Errorf("segments_added = %v, want 2", commitResult["segments_added"])
+	if commitResult.SegmentsAdded != 2 {
+		t.Errorf("segments_added = %v, want 2", commitResult.SegmentsAdded)
 	}
-	if commitResult["topics_created"].(int) != 2 {
-		t.Errorf("topics_created = %v, want 2", commitResult["topics_created"])
+	if commitResult.TopicsCreated != 2 {
+		t.Errorf("topics_created = %v, want 2", commitResult.TopicsCreated)
 	}
 
 	got, _ := a.SessionGet(ctx, sessionID)
@@ -668,19 +668,19 @@ func TestSessionCommitPromoteFalseSkipsMemoryRecord(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["segments_added"].(int) != 1 {
-		t.Errorf("segments_added = %v, want 1", commitResult["segments_added"])
+	if commitResult.SegmentsAdded != 1 {
+		t.Errorf("segments_added = %v, want 1", commitResult.SegmentsAdded)
 	}
-	if commitResult["session_only_segments"].(int) != 1 {
-		t.Errorf("session_only_segments = %v, want 1", commitResult["session_only_segments"])
+	if commitResult.SessionOnlySegments != 1 {
+		t.Errorf("session_only_segments = %v, want 1", commitResult.SessionOnlySegments)
 	}
-	if commitResult["memory_records_created"].(int) != 0 {
+	if commitResult.MemoryRecordsCreated != 0 {
 		t.Errorf("memory_records_created = %v, want 0 (segment was Session-only)",
-			commitResult["memory_records_created"])
+			commitResult.MemoryRecordsCreated)
 	}
-	if commitResult["edges_created"].(int) != 0 {
+	if commitResult.EdgesCreated != 0 {
 		t.Errorf("edges_created = %v, want 0 (no extracted_as edge for Session-only segment)",
-			commitResult["edges_created"])
+			commitResult.EdgesCreated)
 	}
 
 	got, _ := a.SessionGet(ctx, sessionID)
@@ -723,18 +723,18 @@ func TestSessionCommitMixedPromotion(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["segments_added"].(int) != 4 {
-		t.Errorf("segments_added = %v, want 4", commitResult["segments_added"])
+	if commitResult.SegmentsAdded != 4 {
+		t.Errorf("segments_added = %v, want 4", commitResult.SegmentsAdded)
 	}
-	if commitResult["session_only_segments"].(int) != 2 {
-		t.Errorf("session_only_segments = %v, want 2", commitResult["session_only_segments"])
+	if commitResult.SessionOnlySegments != 2 {
+		t.Errorf("session_only_segments = %v, want 2", commitResult.SessionOnlySegments)
 	}
-	if commitResult["memory_records_created"].(int) != 2 {
+	if commitResult.MemoryRecordsCreated != 2 {
 		t.Errorf("memory_records_created = %v, want 2 (1 explicit true + 1 nil-default)",
-			commitResult["memory_records_created"])
+			commitResult.MemoryRecordsCreated)
 	}
-	if commitResult["edges_created"].(int) != 2 {
-		t.Errorf("edges_created = %v, want 2", commitResult["edges_created"])
+	if commitResult.EdgesCreated != 2 {
+		t.Errorf("edges_created = %v, want 2", commitResult.EdgesCreated)
 	}
 }
 
@@ -759,12 +759,12 @@ func TestSessionCommitNilPromoteDefaultsTrue(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["memory_records_created"].(int) != 2 {
+	if commitResult.MemoryRecordsCreated != 2 {
 		t.Errorf("nil PromoteToMemory should default to promote: memory_records_created = %v, want 2",
-			commitResult["memory_records_created"])
+			commitResult.MemoryRecordsCreated)
 	}
-	if commitResult["session_only_segments"].(int) != 0 {
-		t.Errorf("session_only_segments = %v, want 0", commitResult["session_only_segments"])
+	if commitResult.SessionOnlySegments != 0 {
+		t.Errorf("session_only_segments = %v, want 0", commitResult.SessionOnlySegments)
 	}
 }
 
@@ -798,8 +798,8 @@ func TestSessionCommitExistingTopic(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("second commit: %v", svcErr)
 	}
-	if commitResult["topics_created"].(int) != 0 {
-		t.Errorf("topics_created = %v, want 0 (topic already existed)", commitResult["topics_created"])
+	if commitResult.TopicsCreated != 0 {
+		t.Errorf("topics_created = %v, want 0 (topic already existed)", commitResult.TopicsCreated)
 	}
 
 	got, _ := a.SessionGet(ctx, sessionID)
@@ -1014,11 +1014,11 @@ func TestHybridCommitCreatesMemoryRecords(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["memory_records_created"].(int) != 1 {
-		t.Errorf("memory_records_created = %v, want 1", commitResult["memory_records_created"])
+	if commitResult.MemoryRecordsCreated != 1 {
+		t.Errorf("memory_records_created = %v, want 1", commitResult.MemoryRecordsCreated)
 	}
-	if commitResult["edges_created"].(int) != 1 {
-		t.Errorf("edges_created = %v, want 1", commitResult["edges_created"])
+	if commitResult.EdgesCreated != 1 {
+		t.Errorf("edges_created = %v, want 1", commitResult.EdgesCreated)
 	}
 
 	got, _ := a.SessionGet(ctx, sessionID)
@@ -1146,7 +1146,7 @@ func TestHybridCommitPartialMetadata(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["memory_records_created"].(int) != 1 {
+	if commitResult.MemoryRecordsCreated != 1 {
 		t.Error("should create memory record even with minimal metadata")
 	}
 
@@ -1179,14 +1179,14 @@ func TestHybridCommitMultipleSegments(t *testing.T) {
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
-	if commitResult["segments_added"].(int) != 3 {
-		t.Errorf("segments_added = %v, want 3", commitResult["segments_added"])
+	if commitResult.SegmentsAdded != 3 {
+		t.Errorf("segments_added = %v, want 3", commitResult.SegmentsAdded)
 	}
-	if commitResult["memory_records_created"].(int) != 3 {
-		t.Errorf("memory_records_created = %v, want 3", commitResult["memory_records_created"])
+	if commitResult.MemoryRecordsCreated != 3 {
+		t.Errorf("memory_records_created = %v, want 3", commitResult.MemoryRecordsCreated)
 	}
-	if commitResult["edges_created"].(int) != 3 {
-		t.Errorf("edges_created = %v, want 3", commitResult["edges_created"])
+	if commitResult.EdgesCreated != 3 {
+		t.Errorf("edges_created = %v, want 3", commitResult.EdgesCreated)
 	}
 }
 
