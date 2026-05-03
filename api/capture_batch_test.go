@@ -333,55 +333,10 @@ func TestCaptureBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchSupersession: dedup against an existing record
-// produces a supersedes edge and marks the older record historical.
-// The stub embedder returns near-identical vectors based on text
-// length, so a short text seeded earlier collides with a longer one
-// only if length-mod-7 matches. We force the collision by reusing
-// identical text.
-func TestCaptureBatchSupersession(t *testing.T) {
-	a, eng, emb := setupBatchAPI(t)
-	emb.dim = 8
-	// Seed an existing record via a single capture so dedup has a
-	// target to fire against.
-	id1 := addRecord(t, eng, "the original record content")
-	// Bump dim so the seeded record gets a vector via Capture's
-	// reembed path... actually addRecord doesn't embed. We need an
-	// existing record with an embedding. Use Capture instead.
-	_ = id1
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: mustItems("seed phrase one"),
-	})
-	if apiErr != nil || len(resp.Added) != 1 {
-		t.Fatalf("seed: %v %+v", apiErr, resp)
-	}
-	// Now capture an identical-content item; dedup should fire and
-	// supersede the seed.
-	resp2, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: mustItems("seed phrase one"),
-	})
-	if apiErr != nil {
-		t.Fatalf("dup: %v", apiErr)
-	}
-	if len(resp2.Added) != 1 {
-		t.Fatalf("expected 1 added, got %d", len(resp2.Added))
-	}
-	// Either Supersession ran (best case) or didn't (stub embedder
-	// vectors might not exceed dedup threshold). Both happy. Pin the
-	// observable: if Superseded is non-empty the older record has
-	// valid_until set.
-	if len(resp2.Added[0].Superseded) > 0 {
-		eng.RLock()
-		defer eng.RUnlock()
-		old, _ := eng.Graph().GetNode(resp.Added[0].ID)
-		if old == nil {
-			t.Fatal("seeded record vanished")
-		}
-		if _, hist := old.Properties.GetTimestamp("valid_until"); !hist {
-			t.Errorf("expected seeded record to have valid_until set after supersession")
-		}
-	}
-}
+// (TestCaptureBatchSupersession moved to capture_batch_review_test.go
+// as TestCaptureBatchSupersessionDeterministic — the prior version
+// gated its assertion on `if len(Superseded) > 0` which the stub
+// embedder rarely satisfied, making the test vacuous.)
 
 // TestCaptureBatchSkipSupersession: SkipSupersession=true disables
 // dedup-driven supersession entirely.

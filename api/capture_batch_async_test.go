@@ -183,31 +183,46 @@ func TestCaptureBatchCancelUnknownJob(t *testing.T) {
 }
 
 // TestCaptureBatchCancelPersistFailureRetrySucceeds: first persist
-// attempt fails via fault injector; the retry succeeds; cancel
+// attempt fails via the once-injector; the second succeeds; cancel
 // reaches the cancelled state without surfacing the transient.
+// Uses blockingInjector to park the runner so the cancel is
+// guaranteed to find a non-terminal job AND we can assert the
+// onceInjector actually fired (no race-tolerant escape).
 func TestCaptureBatchCancelPersistFailureRetrySucceeds(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+
+	park := newBlockingInjector()
+	release := park.blockOn(FaultPhaseChunkSave)
+	a.SetFaultInjector(park)
+	defer func() {
+		release()
+		a.SetFaultInjector(nil)
+	}()
 
 	f := false
 	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
+	park.waitEntered(t, FaultPhaseChunkSave, 2*time.Second)
 
-	a.SetFaultInjector(&onceInjector{phase: FaultPhaseJobstoreUpdate, err: errors.New("transient")})
-	defer a.SetFaultInjector(nil)
+	once := &onceInjector{phase: FaultPhaseJobstoreUpdate, err: errors.New("transient")}
+	a.SetFaultInjector(once)
 
 	c, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Cancel: %v (expected retry to succeed)", apiErr)
 	}
-	if !c.Cancelled && c.Status != jobs.StatusCancelled {
-		// Allow the runner to win the race.
-		if c.Status != jobs.StatusCompleted {
-			t.Errorf("expected cancelled or completed, got %q (Cancelled=%v)", c.Status, c.Cancelled)
-		}
+	if !c.Cancelled || c.Status != jobs.StatusCancelled {
+		t.Errorf("expected Cancelled=true, status=cancelled; got Cancelled=%v status=%q", c.Cancelled, c.Status)
 	}
+	if !once.fired {
+		t.Error("onceInjector did not fire — retry path was never exercised")
+	}
+
+	// Re-arm parking injector for cleanup release.
+	a.SetFaultInjector(park)
 }
 
 // onceInjector returns err only on the FIRST call to the named phase.
@@ -228,39 +243,42 @@ func (o *onceInjector) Inject(phase string) error {
 
 // TestCaptureBatchCancelPersistFailureBothFail: both persist attempts
 // fail; cancel returns ErrInternal so the caller knows the cancel
-// didn't take.
+// didn't take. Uses blockingInjector to park the runner inside Phase
+// 3 so the cancel is guaranteed to race a non-terminal job.
 func TestCaptureBatchCancelPersistFailureBothFail(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
+	inj := newBlockingInjector()
+	release := inj.blockOn(FaultPhaseChunkSave)
+	a.SetFaultInjector(inj)
+	defer func() {
+		// Release the runner so cleanup can drain.
+		release()
+		a.SetFaultInjector(nil)
+	}()
+
 	f := false
 	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
 		Wait:  &f,
-		Items: mustItems("x"),
+		Items: mustItems("y"),
 	})
-	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
+	inj.waitEntered(t, FaultPhaseChunkSave, 2*time.Second)
 
-	// Submit a fresh runner so cancel has a non-terminal target.
-	resp2, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Wait:        &f,
-		Items:       mustItems("y"),
-		ClientToken: "ffffffff-ffff-ffff-ffff-ffffffffffff",
-	})
+	// Now switch to a stub that fails BOTH AdvanceStatus calls. The
+	// blockingInjector itself doesn't return errors for jobstore_update;
+	// re-arm with a stub that does.
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseJobstoreUpdate: errors.New("forever"),
 	}})
-	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp2.JobID})
-	if apiErr == nil {
-		// Race tolerance: if the runner finished before our injector
-		// activated, the cancel observed terminal and returned no
-		// error. Both outcomes are acceptable; only a silent skip
-		// would be wrong.
-		j, _ := a.engine.JobStore().Get(resp2.JobID)
-		if j.Status == jobs.StatusPending || j.Status == jobs.StatusRunning {
-			t.Errorf("expected internal_error on persist-double-fail, got nil with non-terminal status %q", j.Status)
-		}
+	_, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	if apiErr == nil || apiErr.Code != "internal_error" {
+		t.Errorf("expected internal_error on persist-double-fail, got %v", apiErr)
 	}
+
+	// Restore the blocking injector so the deferred release+cleanup
+	// path still drains the runner.
+	a.SetFaultInjector(inj)
 }
 
 // TestCaptureBatchResultBlocksUntilCompletion: the result endpoint
@@ -295,36 +313,12 @@ func TestCaptureBatchResultBlocksUntilCompletion(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResultTimeout: too-short timeout returns
-// ErrTimeout-like (Code="timeout") with a current snapshot.
-func TestCaptureBatchResultTimeout(t *testing.T) {
-	a, _, _ := setupBatchAPI(t)
-	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
-
-	f := false
-	// Submit a batch that we then immediately cancel so the runner
-	// won't finish before the result poll deadline. We use a 1ms
-	// deadline with a job we'll let race.
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Wait:  &f,
-		Items: mustItems("x"),
-	})
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
-		JobID:     resp.JobID,
-		TimeoutMS: 1,
-	})
-	// Race-tolerant: 1ms is too short for the runner to finish on
-	// any reasonable machine, but if the scheduler obliges we get
-	// completed. Either is fine; only "no error AND not terminal" is
-	// wrong.
-	if apiErr == nil {
-		if full.Status != jobs.StatusCompleted && full.Status != jobs.StatusFailed && full.Status != jobs.StatusCancelled {
-			t.Errorf("expected timeout error or terminal status, got status=%q with no error", full.Status)
-		}
-	} else if apiErr.Code != "timeout" {
-		t.Errorf("expected timeout error code, got %q", apiErr.Code)
-	}
-}
+// (TestCaptureBatchResultTimeout moved to
+// capture_batch_review_test.go as TestCaptureBatchResultTimeoutDeterministic.
+// The prior version was race-tolerant — when the runner won the race,
+// the timeout path was never exercised, leaving the test
+// non-deterministic. The new version uses blockingInjector to park the
+// runner past the deadline so the timeout always fires.)
 
 // TestCaptureBatchResultUnknownJob: ErrNotFound.
 func TestCaptureBatchResultUnknownJob(t *testing.T) {
@@ -522,32 +516,9 @@ func TestShutdownAsyncBlocksNewRunners(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncRestartRecovery: the existing engine restart-
-// recovery path (Layer 2) flips pending/running async jobs to
-// failed/server_restart on engine reopen. We exercise that here for
-// async jobs specifically by creating an async job, manually flipping
-// its persisted status to running, closing+reopening the engine, and
-// checking the recovery effect.
-//
-// Because setupBatchAPI uses t.Cleanup to close the engine, we drive
-// the recovery via a fresh in-test engine reopen. Simpler: trust the
-// L2 jobstore_wiring_test coverage of the recovery semantics; here
-// we just verify async-created jobs are subject to it.
-func TestCaptureBatchAsyncRestartRecovery(t *testing.T) {
-	a, _, _ := setupBatchAPI(t)
-	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
-	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Wait:  &f,
-		Items: mustItems("x"),
-	})
-	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
-	// At this point the runner has finished. The test confirms the
-	// async-pathway leaves a queryable Job record post-runner;
-	// restart-recovery semantics are verified in
-	// jobstore_wiring_test.go.
-	j, _ := a.engine.JobStore().Get(resp.JobID)
-	if j.Kind != jobs.KindCaptureBatch {
-		t.Errorf("kind: %q want capture_batch", j.Kind)
-	}
-}
+// (TestCaptureBatchAsyncRestartRecovery removed as vacuous — its
+// only assertion was `j.Kind == capture_batch` which doesn't test
+// recovery at all. Restart-recovery semantics are exercised in
+// core/jobstore_wiring_test.go for both sync- and async-created jobs;
+// the api-level path uses the same JobStore so recovery applies
+// uniformly.)

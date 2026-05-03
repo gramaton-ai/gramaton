@@ -9,6 +9,76 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **F1 review-pass B: test hardening.** Closes the test gaps the
+  L3-L5 review flagged. Adds `go.uber.org/goleak` (test-only dep)
+  via `api/main_test.go`'s `TestMain` so a leaked async runner
+  goroutine fails the suite with a named stack instead of silently
+  leaking.
+
+  New deterministic test helpers in `api/capture_batch_review_test.go`:
+  - `blockingInjector` — a FaultInjector that BLOCKS inside Inject
+    until the test releases it via a per-phase channel. Tests that
+    used to be race-tolerant ("if A or B passed") now park the
+    runner inside Phase 3 and assert exactly the failure path
+    they're testing.
+  - `dedupEmbedder` — returns identical vectors for identical
+    content. Lets supersession tests deterministically trigger the
+    dedup path against a known seed.
+
+  New tests:
+  - `TestCaptureBatchAsyncRunnerPanicRecovery` — pins the
+    `recoverAsyncPanic` path via the new `FaultPhasePanic` seam.
+    Confirms the Job lands in `failed/panicked: <msg>` and that
+    subsequent submits work normally.
+  - `TestCaptureBatchAsyncCancelDuringRun`,
+    `TestCaptureBatchResultTimeoutDeterministic`,
+    `TestCaptureBatchAsyncStatusBeforeFirstChunk`,
+    `TestCaptureBatchAsyncConcurrentStatusReaders` — runner-blocked
+    versions of the L5 race-tolerant tests.
+  - `TestCaptureBatchSupersessionDeterministic`,
+    `TestCaptureBatchInternalSupersession` — pin same-batch and
+    second-call supersession via the dedupEmbedder.
+  - `TestCaptureBatchTenantOwnership` — cross-tenant Status / Cancel
+    / Result / JobsList all surface ErrNotFound; same-tenant access
+    works.
+  - `TestCaptureBatchClientTokenPerTenant` — same ClientToken across
+    tenants creates distinct Jobs; same-tenant retry returns the
+    prior JobID idempotently.
+  - `TestJobsListNoClientTokenInSummary` — the JSON wire shape no
+    longer includes client_token in JobSummary.
+  - `TestJobsListBoundsKind`, `TestJobsListBoundsClientToken`,
+    `TestJobsListBoundsSinceFormat`, `TestJobsListOffsetCap`,
+    `TestCaptureBatchResultTimeoutCap`,
+    `TestCaptureBatchResultTimeoutNegative` — pin the new
+    validation bounds from review-pass A.
+  - `TestCaptureBatchAsyncLargerThanSyncCap` — async accepts
+    MaxSyncBatchSize+50 items (was previously rejected by the
+    masked sync cap).
+  - `TestCanonicalEdgeWeightDefaultNormalized` — `Weight=nil` and
+    `Weight=&0.5` hash identically.
+  - `TestReservedNamespaceCaseBypass` — every case/whitespace
+    variant of `_gramaton.` is rejected.
+  - `TestSecIdxRolledBackOnSaveFailure` — pins the SecIdx purge in
+    Save-failure rollback.
+  - `TestJobsListBoundsSinceFormat` proves the `time.Parse` error
+    sanitizer doesn't echo input verbatim.
+  - HTTP wiring tests for `GET /v1/capture/batch/{id}/{status,
+    cancel, result}` and `GET /v1/jobs` in
+    `server/handler_capture_batch_test.go`.
+
+  Vacuous tests removed or replaced (with reference comments
+  pointing at their deterministic replacements):
+  - `TestCaptureBatchSupersession` (gated on `if len(Superseded) > 0`
+    which the stub embedder rarely satisfied) → replaced.
+  - `TestCaptureBatchAsyncRestartRecovery` (only asserted
+    `j.Kind`) → removed; recovery semantics covered in
+    `core/jobstore_wiring_test.go`.
+  - `TestCaptureBatchResultTimeout` (race-tolerant) → replaced.
+  - `TestCaptureBatchCancelPersistFailureBothFail` and
+    `RetrySucceeds` rewritten to park the runner inside chunk_save
+    so cancel races a non-terminal job; the retry test asserts
+    `onceInjector.fired == true`.
+
 - **F1 review-pass A: hardening + multi-tenancy foundation.** Lands
   before F1 Layer 6 to address the critical and medium findings from
   the L3-L5 review.
