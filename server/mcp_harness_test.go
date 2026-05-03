@@ -62,6 +62,7 @@ func TestMCPToolRegistry(t *testing.T) {
 		"gramaton_backup",
 		"gramaton_branch",
 		"gramaton_capture",
+		"gramaton_capture_batch",
 		"gramaton_classify",
 		"gramaton_collection_add",
 		"gramaton_collection_add_batch",

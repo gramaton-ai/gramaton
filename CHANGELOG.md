@@ -9,6 +9,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton_capture_batch` MCP tool + `POST /v1/capture/batch`
+  HTTP route + CLI proxy** (F1 Layer 3). Sync mode: stores up to
+  500 records in a single call sharing one engine write lock and
+  one batch-embed call. Each item follows the `gramaton_capture`
+  shape with an optional `client_ref` echoed back in the response;
+  per-item validation failures land in `failed[]` while the rest
+  commit. Phase 0 enforces a 256MB total content-byte budget
+  (`MaxBatchBytes`) and rejects `_gramaton.*` reserved meta keys.
+  `client_token` (UUID) provides cross-call idempotency: the same
+  body returns the prior `job_id`; a different body with the same
+  token is rejected with `conflict`. `skip_supersession=true`
+  disables auto-dedup for migration imports. Records are stamped
+  with `meta._gramaton.import.job_id` so a caller can recover
+  orphaned records via search even if the response is lost.
+  Engine-first / JobStore-second commit ordering: a Save failure
+  rolls back the in-memory PropIdx + VecIdx + BM25 + Graph entries
+  for the batch's nodes (no ghost-vector window) and marks the
+  Job `failed/chunk_1_save_failed`; a JobStore.Update failure
+  after Save logs loudly and leaves the records on disk for
+  caller-side recovery. Async mode (`wait=false`) is reserved for
+  Layer 5 and currently rejected.
+
+  New `api.FaultInjector` + `SetFaultInjector` test seam exposes
+  named phases (`chunk_save`, `jobstore_update`,
+  `jobstore_fail_mark`) so tests can exercise rare error paths
+  without disturbing real storage.
+
 - **`core.Engine` opens the `jobs.Store` and runs restart recovery
   on init** (F1 Layer 2). `(*Engine).JobStore()` exposes the live
   handle. In-flight jobs (status pending/running) from a prior run

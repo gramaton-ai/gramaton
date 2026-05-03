@@ -16,6 +16,52 @@ import (
 // underscore-delimited identifiers while denying traversal primitives.
 var clientSessionIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// clientTokenRe bounds capture_batch client_token to UUID v1-v5 shape.
+// Idempotency relies on collision-resistance, not strict version: any
+// 8-4-4-4-12 hex string is accepted.
+var clientTokenRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// clientRefRe bounds the per-item ClientRef label. Letters, digits,
+// hyphen, underscore, dot. Used as a map key for intra-batch edge
+// resolution (Layer 4) and echoed in responses; restricting the
+// charset keeps it safe against meta-key injection attempts.
+var clientRefRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// reservedMetaPrefix and reservedMetaInfix reserve the `_gramaton.`
+// namespace inside meta maps. CaptureBatch stamps
+// `meta._gramaton.import.job_id` for orphan recovery; rejecting these
+// at validation time prevents callers from shadowing the stamp.
+const (
+	reservedMetaPrefix = "_gramaton."
+	reservedMetaInfix  = "._gramaton."
+)
+
+// validateClientToken enforces UUID shape on a capture_batch
+// client_token. Idempotency hinges on this being a stable,
+// collision-resistant identifier per request.
+func validateClientToken(token string) error {
+	if !clientTokenRe.MatchString(token) {
+		return fmt.Errorf("client_token must be a UUID")
+	}
+	return nil
+}
+
+// validateClientRef enforces the per-item ClientRef shape (length cap
+// + restricted charset). Empty is acceptable to callers (the ref is
+// optional); empty-input is a no-op.
+func validateClientRef(ref string) error {
+	if ref == "" {
+		return nil
+	}
+	if len(ref) > MaxClientRefLen {
+		return fmt.Errorf("client_ref exceeds %d characters", MaxClientRefLen)
+	}
+	if !clientRefRe.MatchString(ref) {
+		return fmt.Errorf("client_ref may only contain letters, digits, dot, hyphen, and underscore")
+	}
+	return nil
+}
+
 // MaxClientSessionIDLen caps how long a client_session_id can be. Keeps
 // pathological callers from blowing up hook-state file paths.
 const MaxClientSessionIDLen = 256
@@ -57,6 +103,18 @@ const (
 	// batch-embed limits. 500 is a starting point -- raise it only
 	// after profiling.
 	MaxCollectionBatchSize = 500
+	// MaxSyncBatchSize caps the synchronous capture_batch path. Beyond
+	// this, the wall-clock and lock-hold cost outweigh the latency
+	// savings vs a series of single captures; the async path (Layer 5)
+	// raises the cap to MaxAsyncBatchSize.
+	MaxSyncBatchSize = 500
+	// MaxBatchBytes is the per-request total content-byte ceiling for
+	// the capture_batch path. Defends against a 1000-item × 100MB-each
+	// memory blowup; Phase 0 validation rejects oversize before any
+	// allocation.
+	MaxBatchBytes = 256 * 1024 * 1024
+	// MaxClientRefLen caps the per-item ClientRef label.
+	MaxClientRefLen = 128
 )
 
 // Search input cardinality limits.

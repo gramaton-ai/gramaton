@@ -69,6 +69,12 @@ const (
 	StatusCancelled = "cancelled"
 )
 
+// Kind values. Each async-capable operation registers its kind here;
+// JobStore filters and operator dashboards key off these strings.
+const (
+	KindCaptureBatch = "capture_batch"
+)
+
 // Job is the persisted record of an async operation.
 //
 // Field discipline: additive only. Renames require a new
@@ -111,11 +117,13 @@ type Job struct {
 }
 
 // ItemError records a per-item failure inside a job. The Index
-// refers to the original request's Items[] position.
+// refers to the original request's Items[] position; ClientRef
+// echoes the caller's per-item label when one was supplied.
 type ItemError struct {
-	Index   int    `json:"index"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Index     int    `json:"index"`
+	ClientRef string `json:"client_ref,omitempty"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
 }
 
 // JobSummary is the lightweight projection returned by List.

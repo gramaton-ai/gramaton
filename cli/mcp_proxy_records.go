@@ -21,6 +21,13 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		return proxyPost("/v1/records", args)
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_capture_batch",
+		Description: api.CaptureBatchDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchRequest) (*mcp.CallToolResult, any, error) {
+		return proxyPost("/v1/capture/batch", args)
+	})
+
 	// Inspect takes the ID as a tool-level field; the api request's ID
 	// is JSON-hidden so we redeclare the args struct here.
 	type inspectArgs struct {

@@ -26,6 +26,20 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
+	mux.HandleFunc("POST /v1/capture/batch", func(w http.ResponseWriter, r *http.Request) {
+		var req api.CaptureBatchRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		resp, apiErr := s.api.CaptureBatch(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, resp)
+	})
+
 	mux.HandleFunc("GET /v1/records/{id}", func(w http.ResponseWriter, r *http.Request) {
 		includeContent := r.URL.Query().Get("include_content") != "false"
 		req := api.InspectRequest{
@@ -152,6 +166,20 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_capture")
 		defer done(nil)
 		resp, apiErr := s.api.Capture(ctx, args)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(resp)
+	})
+
+	type captureBatchArgs = api.CaptureBatchRequest
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_capture_batch",
+		Description: api.CaptureBatchDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_capture_batch")
+		defer done(nil)
+		resp, apiErr := s.api.CaptureBatch(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

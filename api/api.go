@@ -56,9 +56,34 @@ type API struct {
 	// compression starts). This lets tests deterministically
 	// distinguish "snapshot-time" from "compression-time" without
 	// time.Sleep races.
+	//
+	// faultInjector, when non-nil, is consulted at named phases inside
+	// long-running operations. Production runs leave it nil; tests in
+	// this package set it via SetFaultInjector to exercise rare error
+	// paths (chunk_save failure, jobstore_update failure) without
+	// disturbing the underlying storage.
 	hooksMu                   sync.Mutex
 	testHookBackupSnapshotted chan struct{}
+	faultInjector             FaultInjector
 }
+
+// FaultInjector is the test-only fault-injection seam. Each
+// long-running operation calls Inject at named phases; a non-nil
+// returned error short-circuits the operation along its error path.
+// The interface is exported so external test packages can provide
+// implementations, but the SetFaultInjector setter is intended for
+// in-package tests only.
+type FaultInjector interface {
+	Inject(phase string) error
+}
+
+// Phase names recognized by FaultInjector. Defined as constants so
+// implementations don't drift from the call sites.
+const (
+	FaultPhaseChunkSave       = "chunk_save"
+	FaultPhaseJobstoreUpdate  = "jobstore_update"
+	FaultPhaseJobstoreFailMark = "jobstore_fail_mark"
+)
 
 // Dependencies holds the collaborators an API needs at construction.
 // Keeping this explicit (rather than letting methods reach into a
@@ -148,6 +173,25 @@ func (a *API) fireBackupSnapshotHook() {
 		}
 		a.hooksMu.Unlock()
 	}
+}
+
+// SetFaultInjector installs the FaultInjector consulted at named
+// phases of long-running operations. Pass nil to clear. Production
+// must never set this; in-package tests only.
+func (a *API) SetFaultInjector(fi FaultInjector) {
+	a.hooksMu.Lock()
+	defer a.hooksMu.Unlock()
+	a.faultInjector = fi
+}
+
+func (a *API) injectFault(phase string) error {
+	a.hooksMu.Lock()
+	fi := a.faultInjector
+	a.hooksMu.Unlock()
+	if fi == nil {
+		return nil
+	}
+	return fi.Inject(phase)
 }
 
 // StopPreparedSweeper cancels the sweeper goroutine started by
