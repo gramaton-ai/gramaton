@@ -12,19 +12,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BERT embedder: `Model.Forward` now takes a `*Scratch` parameter
   instead of holding scratch buffers on the Model itself.** Refactor
   with no behavior change — the previous shared scratch field is
-  replaced by a per-Provider Scratch (initialized in `New`). Sets up
-  the structure for upcoming concurrency layers (sync.Pool of
-  scratches, RWMutex on the Provider, parallel inner-loop fanout in
-  Embed). New: exported `Scratch` type and `NewScratch(maxSeq,
-  cfg)` constructor. Audited: every buffer location in Forward is
-  written before being read (so Scratch reuse is safe without
-  zeroing); Model has zero mutations during Forward (so concurrent
-  Forward against the same Model with disjoint Scratches is safe);
-  Tokenizer.Encode is read-only on Tokenizer fields. New test
-  `TestForwardScratchReuseSafety` deliberately fills a recycled
-  Scratch with NaN and verifies Forward output matches a fresh-
-  Scratch run byte-for-byte. Layer A of bert-parallel-embed; design
-  at `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
+  replaced first by a per-Provider Scratch and then (Layer B) by a
+  `sync.Pool` of Scratches reused across Embed calls. Sets up the
+  structure for upcoming concurrency layers (RWMutex on the
+  Provider, parallel inner-loop fanout in Embed). New: exported
+  `Scratch` type and `NewScratch(maxSeq, cfg)` constructor. Audited:
+  every buffer location in Forward is written before being read (so
+  Scratch reuse is safe without zeroing); Model has zero mutations
+  during Forward (so concurrent Forward against the same Model with
+  disjoint Scratches is safe); Tokenizer.Encode is read-only on
+  Tokenizer fields. New tests: `TestForwardScratchReuseSafety`
+  deliberately fills a recycled Scratch with NaN and verifies
+  Forward output matches a fresh-Scratch run byte-for-byte;
+  `TestEmbedScratchReuse` verifies the pool reuses Scratch across
+  sequential calls; `TestEmbedConcurrentScratchDistinct` verifies
+  Get/Put accounting under barrier-released goroutines. Layers A+B
+  of bert-parallel-embed; design at
+  `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
 
 - **api/ Collection methods + `SessionCommit` now return typed
   response structs instead of `map[string]any`.** Eleven Collection*

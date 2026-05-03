@@ -12,59 +12,9 @@ import (
 // Does not require downloading the real model.
 func TestProviderTiny(t *testing.T) {
 	path, cfg := buildTinyModel(t)
-	dir := filepath.Dir(path)
-
-	// Write config.json and tokenizer.json alongside the safetensors.
-	cfgJSON := `{
-		"hidden_size": 2,
-		"num_attention_heads": 1,
-		"intermediate_size": 4,
-		"num_hidden_layers": 1,
-		"max_position_embeddings": 8,
-		"vocab_size": 5,
-		"layer_norm_eps": 1e-12
-	}`
-	os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfgJSON), 0600)
-
-	tokJSON := `{
-		"model": {"type": "WordPiece", "vocab": {
-			"[PAD]": 0, "[UNK]": 1, "[CLS]": 2, "[SEP]": 3, "hello": 4
-		}},
-		"added_tokens": [],
-		"normalizer": {"lowercase": true, "strip_accents": true}
-	}`
-	os.WriteFile(filepath.Join(dir, "tokenizer.json"), []byte(tokJSON), 0600)
-
-	// Rename the safetensors file to what the provider expects.
-	os.Rename(path, filepath.Join(dir, "model.safetensors"))
-
-	// Manually construct the provider (bypasses download).
-	st, err := OpenSafeTensors(filepath.Join(dir, "model.safetensors"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	m, err := LoadModel(st, cfg)
-	if err != nil {
-		st.Close()
-		t.Fatal(err)
-	}
-
-	tokData, _ := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
-	tok, err := NewTokenizerFromJSON(tokData)
-	if err != nil {
-		st.Close()
-		t.Fatal(err)
-	}
-
-	p := &Provider{
-		model:     m,
-		tokenizer: tok,
-		st:        st,
-		modelID:   "tiny-test",
-		ctxWindow: cfg.MaxPositionEmbeds,
-		scratch:   NewScratch(cfg.MaxPositionEmbeds, cfg),
-	}
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "tiny-test", cfg)
 	defer p.Close()
 
 	// Test Embed with empty input.
@@ -145,8 +95,7 @@ func TestProviderContextCancellation(t *testing.T) {
 	tokData, _ := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
 	tok, _ := NewTokenizerFromJSON(tokData)
 
-	p := &Provider{model: m, tokenizer: tok, st: st, modelID: "test", ctxWindow: 8,
-		scratch: NewScratch(cfg.MaxPositionEmbeds, cfg)}
+	p := newWithPool(m, tok, st, "test", cfg)
 	defer p.Close()
 
 	// Cancel context before calling Embed.

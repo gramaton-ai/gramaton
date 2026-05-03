@@ -10,6 +10,14 @@ import (
 	"github.com/gramaton-ai/gramaton/config"
 )
 
+// scratchPoolHook lets tests instrument Get/Put without modifying
+// production code. nil in production. Set via newWithPool in
+// bert_test.go.
+type scratchPoolHook interface {
+	OnGet(s *Scratch)
+	OnPut(s *Scratch)
+}
+
 // Provider implements embed.Provider using a pure Go BERT inference engine.
 // Default model is bge-small-en-v1.5 (384-dim, 12-layer BERT encoder).
 //
@@ -21,17 +29,28 @@ import (
 // returns "bert: provider closed" if a concurrent Close zeroed them --
 // callers must NOT call Embed after Close returns.
 //
-// scratch is the single Forward buffer used by Embed. Layer A keeps it
-// here for compatibility; Layer B replaces it with a sync.Pool to enable
-// per-call buffers for concurrent Forward.
+// scratchPool holds Scratch instances reused across Forward calls.
+// Each Embed iteration acquires a Scratch from the pool, runs Forward,
+// returns the Scratch to the pool. Layer B introduces this; Layer C
+// will switch the outer mutex to RWMutex so multiple Embeds can run
+// concurrently against distinct Scratches.
+//
+// Memory bound: each Scratch is ~14MB at maxSeq=512, hidden=384,
+// intermediate=1536, heads=12. The pool grows under contention and
+// shrinks during idle (sync.Pool semantics; entries are GC-eligible
+// when not referenced). Currently Embed is still serialized by the
+// outer mutex, so peak live Scratches = 1; Layer C raises this to
+// max_workers (default cap 8 = ~112MB).
 type Provider struct {
-	model     *Model
-	tokenizer *Tokenizer
-	st        *SafeTensors
-	modelID   string
-	ctxWindow int
-	scratch   *Scratch
-	mu        sync.Mutex
+	model       *Model
+	tokenizer   *Tokenizer
+	st          *SafeTensors
+	modelID     string
+	ctxWindow   int
+	modelCfg    ModelConfig // retained for pool factory
+	scratchPool *sync.Pool
+	poolHook    scratchPoolHook // test-only; nil in production
+	mu          sync.Mutex
 }
 
 // New creates a BERT embedding provider. Downloads the model from
@@ -112,7 +131,12 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 		st:        st,
 		modelID:   model,
 		ctxWindow: modelCfg.MaxPositionEmbeds,
-		scratch:   NewScratch(modelCfg.MaxPositionEmbeds, modelCfg),
+		modelCfg:  modelCfg,
+		scratchPool: &sync.Pool{
+			New: func() any {
+				return NewScratch(modelCfg.MaxPositionEmbeds, modelCfg)
+			},
+		},
 	}, nil
 }
 
@@ -141,7 +165,15 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 			return nil, fmt.Errorf("bert: provider closed")
 		}
 		ids, mask, _ := p.tokenizer.Encode(text)
-		embedding := p.model.Forward(p.scratch, ids, mask)
+		s := p.scratchPool.Get().(*Scratch)
+		if p.poolHook != nil {
+			p.poolHook.OnGet(s)
+		}
+		embedding := p.model.Forward(s, ids, mask)
+		if p.poolHook != nil {
+			p.poolHook.OnPut(s)
+		}
+		p.scratchPool.Put(s)
 		p.mu.Unlock()
 
 		results[i] = embedding
@@ -178,6 +210,6 @@ func (p *Provider) Close() error {
 	p.st = nil
 	p.model = nil
 	p.tokenizer = nil
-	p.scratch = nil
+	p.scratchPool = nil
 	return err
 }
