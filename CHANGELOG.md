@@ -36,9 +36,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (variable-length inputs across goroutines), `TestEmbedConcurrentClose`
   (Close blocks for in-flight Embed; subsequent Embed returns
   closed-error), `TestEmbedConcurrentMixed` (no panic, no
-  garbage). All race-detector clean at `-count=20`. Layers A-C
-  of bert-parallel-embed; design at
+  garbage). Layer D adds **inner-loop fanout in Embed**: a single
+  `Embed(ctx, []string{N strings})` call now runs Encode + Forward
+  in parallel goroutines via `golang.org/x/sync/errgroup`, bounded
+  by the new `embedding.max_workers` config knob (default
+  `min(GOMAXPROCS, 8)`). Single-text Embed takes a fast path that
+  avoids goroutine overhead. Tests:
+  `TestEmbedSingleCallDeterminism` (output matches per-text
+  sequential reference), `TestEmbedSingleCallCtxCancel` (cancelled
+  ctx returns immediately, no goroutine leak),
+  `TestEmbedMaxWorkersBound` (configured cap honored), 
+  `TestEmbedSingleCallSingleItem` (fast path correctness). All
+  race-detector clean at `-count=20`. Layers A-D of
+  bert-parallel-embed; design at
   `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
+  New runtime dep: `golang.org/x/sync/errgroup`.
 
 - **api/ Collection methods + `SessionCommit` now return typed
   response structs instead of `map[string]any`.** Eleven Collection*

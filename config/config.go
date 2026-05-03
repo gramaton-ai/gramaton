@@ -135,6 +135,14 @@ type EmbeddingConfig struct {
 
 	// Bedrock-specific: env var name holding the secret access key.
 	AWSSecretAccessKeyEnv string `yaml:"aws_secret_access_key_env,omitempty"`
+
+	// MaxWorkers caps the per-Embed-call goroutine count for providers
+	// that parallelize internally (currently only `bert`). Default 0
+	// means use min(GOMAXPROCS, 8). Lower this on memory-constrained
+	// devices; raise on high-memory hosts. Each in-flight worker holds
+	// a Scratch buffer (~14MB for bge-small at maxSeq=512); total peak
+	// is roughly MaxWorkers * 14MB.
+	MaxWorkers int `yaml:"max_workers,omitempty"`
 }
 
 // LoggingConfig controls log verbosity and on-disk log rotation.

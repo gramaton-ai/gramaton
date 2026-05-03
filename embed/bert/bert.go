@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
@@ -54,10 +57,40 @@ type Provider struct {
 	st          *SafeTensors
 	modelID     string
 	ctxWindow   int
+	maxWorkers  int         // 0 = use embedDefaultMaxWorkers
 	modelCfg    ModelConfig // retained for pool factory
 	scratchPool *sync.Pool
 	poolHook    scratchPoolHook // test-only; nil in production
 	mu          sync.RWMutex
+}
+
+// embedDefaultMaxWorkers is the cap for inner-loop fanout in Embed
+// when cfg.Embedding.MaxWorkers is unset. Capped at 8 to bound peak
+// scratch memory (~14MB each, ~112MB at the default cap). On
+// machines with NumCPU < 8, scaled down to NumCPU.
+func embedDefaultMaxWorkers() int {
+	n := runtime.GOMAXPROCS(0)
+	if n > 8 {
+		n = 8
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// embedMaxWorkers returns the effective worker count for an Embed
+// call with `texts` items. Bounded by configured MaxWorkers (or the
+// default cap), and never exceeds the actual item count.
+func embedMaxWorkers(texts int, configured int) int {
+	cap := configured
+	if cap <= 0 {
+		cap = embedDefaultMaxWorkers()
+	}
+	if texts < cap {
+		return texts
+	}
+	return cap
 }
 
 // New creates a BERT embedding provider. Downloads the model from
@@ -133,12 +166,13 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 	}
 
 	return &Provider{
-		model:     m,
-		tokenizer: tok,
-		st:        st,
-		modelID:   model,
-		ctxWindow: modelCfg.MaxPositionEmbeds,
-		modelCfg:  modelCfg,
+		model:      m,
+		tokenizer:  tok,
+		st:         st,
+		modelID:    model,
+		ctxWindow:  modelCfg.MaxPositionEmbeds,
+		maxWorkers: cfg.MaxWorkers,
+		modelCfg:   modelCfg,
 		scratchPool: &sync.Pool{
 			New: func() any {
 				return NewScratch(modelCfg.MaxPositionEmbeds, modelCfg)
@@ -147,48 +181,109 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 	}, nil
 }
 
-// Embed generates embeddings for the given texts. Returns one 384-dim
-// vector per input text in the same order. Returns nil, nil for empty input.
+// Embed generates embeddings for the given texts. Returns one
+// vector per input text in the same order. Returns nil, nil for
+// empty input.
+//
+// Concurrency model:
+// - Single text (most common path; called from chunking and search
+//   in tight loops): runs inline without spawning goroutines.
+// - Multiple texts: bounded errgroup fanout. Each text's Encode +
+//   Forward runs in its own goroutine, holding RLock for the
+//   duration. Worker count bounded by Provider.maxWorkers (default
+//   min(GOMAXPROCS, 8)).
+//
+// On any goroutine error (provider closed, ctx cancelled), the
+// errgroup's context is cancelled, in-flight goroutines exit at
+// their next ctx check, and Embed returns (nil, err).
 func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
 
 	results := make([][]float32, len(texts))
-	for i, text := range texts {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
 
-		p.mu.RLock()
-		// Re-check under the RLock: a concurrent Close holds the
-		// write Lock, blocking us if it's mid-cleanup. Once we hold
-		// RLock, the fields can't be nil'd until we release.
-		// Returning an error is preferable to a nil dereference;
-		// the only legitimate caller pattern is "stop submitting
-		// before Close" anyway.
-		if p.tokenizer == nil || p.model == nil || p.scratchPool == nil {
-			p.mu.RUnlock()
-			return nil, fmt.Errorf("bert: provider closed")
+	// Fast path: single text. Avoids goroutine + errgroup + sem
+	// overhead on the hot path used by chunking and search.
+	if len(texts) == 1 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		ids, mask, _ := p.tokenizer.Encode(text)
-		s := p.scratchPool.Get().(*Scratch)
-		if p.poolHook != nil {
-			p.poolHook.OnGet(s)
+		v, err := p.embedOne(texts[0])
+		if err != nil {
+			return nil, err
 		}
-		embedding := p.model.Forward(s, ids, mask)
-		if p.poolHook != nil {
-			p.poolHook.OnPut(s)
-		}
-		p.scratchPool.Put(s)
-		p.mu.RUnlock()
-
-		results[i] = embedding
+		results[0] = v
+		return results, nil
 	}
 
+	// Concurrent path: bounded errgroup fanout.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	maxWorkers := embedMaxWorkers(len(texts), p.maxWorkers)
+	sem := make(chan struct{}, maxWorkers)
+	g, gctx := errgroup.WithContext(ctx)
+
+spawn:
+	for i, text := range texts {
+		// Acquire a worker slot or bail on cancellation.
+		select {
+		case <-gctx.Done():
+			break spawn
+		case sem <- struct{}{}:
+		}
+		g.Go(func() error {
+			defer func() { <-sem }()
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			v, err := p.embedOne(text)
+			if err != nil {
+				return err
+			}
+			results[i] = v
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	// If we broke out of spawn due to gctx cancellation but no
+	// goroutine recorded an error (e.g., ctx was cancelled BEFORE
+	// any goroutine fired), surface ctx.Err() explicitly.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
+}
+
+// embedOne runs Encode + Forward for a single text under the
+// Provider's RLock. Each call acquires a Scratch from the pool and
+// returns it before unlocking. Concurrent embedOne calls hold
+// independent RLocks and independent Scratches.
+func (p *Provider) embedOne(text string) ([]float32, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	// Re-check under RLock: Close takes write Lock and zeros these
+	// fields. Once we hold RLock, the fields can't be nil'd until we
+	// release; the only race is the field-already-nil case, which
+	// returns a clean error rather than panicking.
+	if p.tokenizer == nil || p.model == nil || p.scratchPool == nil {
+		return nil, fmt.Errorf("bert: provider closed")
+	}
+	ids, mask, _ := p.tokenizer.Encode(text)
+	s := p.scratchPool.Get().(*Scratch)
+	if p.poolHook != nil {
+		p.poolHook.OnGet(s)
+	}
+	embedding := p.model.Forward(s, ids, mask)
+	if p.poolHook != nil {
+		p.poolHook.OnPut(s)
+	}
+	p.scratchPool.Put(s)
+	return embedding, nil
 }
 
 // ModelID returns the model identifier for embedding provenance tracking.

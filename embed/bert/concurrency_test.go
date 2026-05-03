@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// goroutineCount returns the current number of goroutines.
+// Used as a leak guard in Layer D ctx-cancel tests.
+func goroutineCount() int { return runtime.NumGoroutine() }
+
 // TestEmbedConcurrentDeterminism — fixed-length inputs.
 //
 // 8 goroutines each call Embed with the SAME input set; output must
@@ -192,6 +196,145 @@ func TestEmbedConcurrentClose(t *testing.T) {
 	_, err := p.Embed(context.Background(), []string{"hello"})
 	if err == nil || err.Error() != "bert: provider closed" {
 		t.Errorf("post-Close Embed: got %v, want provider closed", err)
+	}
+}
+
+// TestEmbedSingleCallDeterminism — one Embed call with N texts;
+// inner-loop fanout. Output must match a per-text sequential
+// reference. Layer D.
+func TestEmbedSingleCallDeterminism(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-determinism", cfg)
+	defer p.Close()
+
+	inputs := make([]string, 20)
+	for i := range inputs {
+		inputs[i] = "hello"
+	}
+
+	// Sequential per-text reference.
+	refs := make([][]float32, len(inputs))
+	for i, text := range inputs {
+		r, err := p.Embed(context.Background(), []string{text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs[i] = r[0]
+	}
+
+	// One Embed call with N texts (uses concurrent inner-loop).
+	got, err := p.Embed(context.Background(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(refs) {
+		t.Fatalf("count: got %d, want %d", len(got), len(refs))
+	}
+	for i := range refs {
+		for j := range refs[i] {
+			if got[i][j] != refs[i][j] {
+				t.Errorf("got[%d][%d]=%v, want %v", i, j, got[i][j], refs[i][j])
+			}
+		}
+	}
+}
+
+// TestEmbedSingleCallCtxCancel — single Embed call with N texts
+// gets a cancelled ctx mid-flight. Returns ctx.Err(); no goroutine
+// leak. Layer D.
+func TestEmbedSingleCallCtxCancel(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-cancel", cfg)
+	defer p.Close()
+
+	// Already-cancelled ctx -> immediate return.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	inputs := make([]string, 50)
+	for i := range inputs {
+		inputs[i] = "hello"
+	}
+
+	before := goroutineCount()
+	_, err := p.Embed(ctx, inputs)
+	if err == nil {
+		t.Error("expected error on cancelled ctx")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want context.Canceled", err)
+	}
+
+	// Allow goroutines to wind down and assert no leak.
+	time.Sleep(50 * time.Millisecond)
+	runtime.GC()
+	after := goroutineCount()
+	if after > before+2 {
+		t.Errorf("goroutine leak: before=%d after=%d (delta=%d)",
+			before, after, after-before)
+	}
+}
+
+// TestEmbedMaxWorkersBound — MaxWorkers=2 caps simultaneous live
+// Scratches at 2 even with N=8 texts. Layer D.
+func TestEmbedMaxWorkersBound(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-bound", cfg)
+	p.maxWorkers = 2
+	defer p.Close()
+
+	hook := newInstrumentedPool()
+	p.poolHook = hook
+
+	inputs := make([]string, 8)
+	for i := range inputs {
+		inputs[i] = "hello"
+	}
+
+	if _, err := p.Embed(context.Background(), inputs); err != nil {
+		t.Fatal(err)
+	}
+
+	if hook.maxLive.Load() > 2 {
+		t.Errorf("maxLive=%d exceeds bound=2", hook.maxLive.Load())
+	}
+	if hook.gets.Load() != 8 {
+		t.Errorf("gets=%d, want 8", hook.gets.Load())
+	}
+}
+
+// TestEmbedSingleCallSingleItem — N=1 takes the fast path; no
+// errgroup, no semaphore. Verifies the fast path produces correct
+// output. Layer D.
+func TestEmbedSingleCallSingleItem(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-single", cfg)
+	defer p.Close()
+
+	res, err := p.Embed(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("count: got %d, want 1", len(res))
+	}
+	// Sanity: L2-normalized, no NaN/Inf.
+	var norm float64
+	for _, v := range res[0] {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Errorf("NaN/Inf in output")
+		}
+		norm += float64(v) * float64(v)
+	}
+	if math.Abs(norm-1.0) > 1e-3 {
+		t.Errorf("|v|^2=%v, want ~1.0", norm)
 	}
 }
 
