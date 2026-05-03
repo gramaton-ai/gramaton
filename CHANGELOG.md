@@ -47,8 +47,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ctx returns immediately, no goroutine leak),
   `TestEmbedMaxWorkersBound` (configured cap honored), 
   `TestEmbedSingleCallSingleItem` (fast path correctness). All
-  race-detector clean at `-count=20`. Layers A-D of
-  bert-parallel-embed; design at
+  race-detector clean at `-count=20`. Layer E adds benchmarks
+  (`BenchmarkEmbedSequential`, `BenchmarkEmbedSingleCallSize`,
+  `BenchmarkEmbedMultiCaller`, `BenchmarkEmbedScratchPoolPressure`)
+  with measured numbers on Apple M3: N=500 single Embed in 5.5s
+  (well under F1's 15s target), 5.6x speedup at N=64 vs sequential.
+  Layers A-E of bert-parallel-embed; design at
   `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
   New runtime dep: `golang.org/x/sync/errgroup`.
 
