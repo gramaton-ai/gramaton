@@ -145,7 +145,8 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 |---------|---------|
 | `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
-| `backup/` | Tar archive backup/restore, export/import. |
+| `backup/` | Tar archive backup/restore, export/import. The walker takes a bbolt-native coherent snapshot of `jobs.db` via `View+WriteTo` so the file is always consistent in the tarball. |
+| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_capture_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
 | `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop). Exposed as `gramaton hook <event>` subcommands; one-line proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them. `.cmd` on Windows for Kiro, `.sh` everywhere else. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
 | `internal/mmap/` | Cross-platform read-only file mmap: `syscall.Mmap` on Unix, `CreateFileMapping` + `MapViewOfFile` on Windows via `golang.org/x/sys/windows`. Consumed by `embed/bert/safetensors.go` (model weights) and `index/flat_mmap.go` (vector index). In-house to preserve Gramaton's frugal-deps posture — `edsrzf/mmap-go` carries 500+ LOC of features we don't use. |
@@ -204,6 +205,49 @@ Client → POST /v1/records → api.Capture
   8. Save incremental prolly update
   9. engine.Unlock()
   10. Serialize CaptureResponse (id, warnings, superseded[])
+```
+
+### Capture batch (sync)
+
+```
+Client → POST /v1/capture/batch (Wait=true) → api.CaptureBatch
+  1. Phase 0: validate envelope (item count cap, byte budget, ClientToken UUID, edge count cap)
+  2. ClientToken idempotency: FindByClientToken(token, tenant) — same body returns prior JobID,
+     mismatching body rejected with conflict, failed/cancelled prior gets a fresh job linked via SupersedesJobID
+  3. Create Job (kind=capture_batch, status=running, TenantID from ctx)
+  4. Phase 1: per-item validation off-lock (failures land in failed[])
+  5. Phase 2: batch embed off-lock with per-item fallback
+  6. Phase 3 (single Save): engine.Lock(); commit valid items + intra-batch edges; engine.Save; engine.Unlock()
+     - Save failure: scoped rollback PropIdx + VecIdx + BM25 + SecIdx + Graph; mark failed/save_failed
+  7. JobStore.Update with Result + Errors; mark completed
+```
+
+### Capture batch (async, multi-chunk)
+
+```
+Client → POST /v1/capture/batch (Wait=false) → api.CaptureBatch
+  1. Common prelude (validate, idempotency, create Job with status=pending)
+  2. Spawn goroutine via runCaptureBatchAsync; return JobID + status=pending immediately
+
+In the goroutine (runCaptureBatchAsyncChunked):
+  a. Re-read Job status; advance pending→running atomically (cancel that won the race exits cleanly)
+  b. Phase 0/1 + Phase 2 once for ALL items
+  c. For each chunk of MaxSyncBatchSize:
+     - shouldStopChunked (ctx.Done() OR Job.Status=cancelled) → finalizeCancelledWithProgress
+     - engine.Lock(); commit chunk's items in one Save ("capture_batch chunk N/M"); engine.Unlock()
+     - chunk Save failure: scoped rollback this chunk only; finalizeChunkSaveFailure with reason "chunk_N_save_failed"
+     - AdvanceStatus(running, mutator) persists ProcessedCount + ClientRefToID for status readers
+  d. Edge fixup: shouldStopChunked → engine.Lock(); resolve every edge against the now-complete ClientRefToID map;
+     engine.Save("capture_batch edge fixup"); engine.Unlock()
+     - fixup Save failure: rollback in-memory edges; finalizeEdgeFixupFailure with reason "edge_fixup_failed"
+       and Result.EdgesFailed listing every edge with code "fixup_failed" for caller-driven gramaton_link replay
+  e. Mark completed; populate Job.Result with the full CaptureBatchResponse (items + edges + stats)
+
+Companion endpoints:
+  GET  /v1/capture/batch/{job_id}/status  → live snapshot (read-only, cheap to poll)
+  POST /v1/capture/batch/{job_id}/cancel  → flip Job.Status=cancelled atomically; signal runner ctx
+  GET  /v1/capture/batch/{job_id}/result  → block (poll backoff) until terminal or timeout
+  GET  /v1/jobs                            → enumerate jobs (tenant-filtered, paginated)
 ```
 
 ### Search

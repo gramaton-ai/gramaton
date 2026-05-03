@@ -730,7 +730,7 @@ func TestCaptureBatchJobStateOnSaveFailure(t *testing.T) {
 	if j.Status != jobs.StatusFailed {
 		t.Errorf("status: %q", j.Status)
 	}
-	if j.FailureReason != "chunk_1_save_failed" {
+	if j.FailureReason != "save_failed" {
 		t.Errorf("reason: %q", j.FailureReason)
 	}
 }

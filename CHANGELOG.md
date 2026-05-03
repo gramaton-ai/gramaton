@@ -7,6 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **F1 final pre-merge sweep.** Three parallel review agents
+  (correctness, security, test coverage) reviewed the full L1-L6
+  branch and signed off as ready to merge. Mechanical fixes from
+  their findings:
+
+  - `cfg.Jobs.MaxBatchBytes` is now actually consulted by the
+    envelope validator. The constant is the fallback; an operator
+    lowering it in `config.yaml` to throttle abuse no longer hits a
+    silent no-op.
+  - Sync-mode save-failure reason changed from `chunk_1_save_failed`
+    (misleading: sync doesn't chunk) to `save_failed`. Chunked
+    runner's `chunk_N_save_failed` taxonomy is unchanged.
+  - `WithTenant` godoc now spells out the trust-boundary contract
+    so a future remote-callable mode wirer reads tenant from a
+    verified identity (signed JWT, OIDC subject, authenticated
+    middleware), not a wire-controlled HTTP header or JSON field.
+  - Removed an orphan `finalizeChunkedRunning` doc comment that
+    described an inlined helper.
+  - `docs/architecture.md` now lists the `jobs/` package and
+    documents the sync + async (multi-chunk) capture-batch flows
+    with their lock-cycle and finalize-state diagrams.
+
 ### Added
 
 - **F1 Layer 6: multi-chunk async runner + cross-chunk edge fixup.**

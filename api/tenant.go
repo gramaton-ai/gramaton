@@ -18,6 +18,15 @@ type tenantContextKey struct{}
 // every request runs with tenant="" and the persisted Job records
 // reflect that. The data layer is ready for the multi-tenant
 // switch-over without a migration.
+//
+// IMPORTANT — trust boundary: when remote-callable mode wires this
+// in, the tenant value MUST come from a verified identity (signed
+// JWT, OIDC subject claim, HTTP middleware that authenticates a
+// session before stamping ctx). It must NEVER be read from a
+// caller-controlled HTTP header or JSON field — that would let any
+// caller list any tenant's jobs by spoofing the value. tenantContextKey
+// is unexported precisely to keep external packages from
+// constructing it; only this package's setter is the official path.
 func WithTenant(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, tenantContextKey{}, tenant)
 }

@@ -495,11 +495,6 @@ func (a *API) finalizeChunkedCompleted(jobID string, items []CaptureBatchItem,
 	}
 }
 
-// finalizeChunkedRunning writes intermediate progress without flipping
-// status. Used between chunks. (Currently inlined via AdvanceStatus
-// in the main loop; kept as a helper for symmetry with the other
-// finalizers in case future code needs it.)
-
 // finalizeChunkSaveFailure handles a chunk-level Save error. Marks
 // Job failed/chunk_N_save_failed; Result.Added reflects every chunk
 // before N (the failing chunk's nodes already rolled back in-memory).

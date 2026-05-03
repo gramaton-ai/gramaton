@@ -150,14 +150,19 @@ Per-item failures land in the response's failed[] array (the batch keeps going);
 // path). L6 introduces multi-chunk + cross-chunk edge fixup.
 func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (CaptureBatchResponse, *APIError) {
 	asyncMode := req.Wait != nil && !*req.Wait
+	cfg := a.engine.Config()
 	itemCap := MaxSyncBatchSize
 	if asyncMode {
-		itemCap = a.engine.Config().Jobs.MaxAsyncBatchSize
+		itemCap = cfg.Jobs.MaxAsyncBatchSize
 		if itemCap <= 0 {
 			itemCap = MaxAsyncBatchSize
 		}
 	}
-	if err := validateBatchEnvelope(req, itemCap); err != nil {
+	byteCap := cfg.Jobs.MaxBatchBytes
+	if byteCap <= 0 {
+		byteCap = MaxBatchBytes
+	}
+	if err := validateBatchEnvelope(req, itemCap, byteCap); err != nil {
 		return CaptureBatchResponse{}, ErrInvalid(err.Error())
 	}
 
@@ -508,7 +513,10 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 		unlock()
 		a.log.Error("capture_batch save failed", "job_id", jobID, "err", saveErr)
 		job.Status = jobs.StatusFailed
-		job.FailureReason = "chunk_1_save_failed"
+		// Sync path commits the entire batch in one Save (no chunking),
+		// so a generic "save_failed" reason matches reality. The chunked
+		// runner's chunk_N_save_failed taxonomy lives in capture_batch_chunked.go.
+		job.FailureReason = "save_failed"
 		job.CompletedAt = time.Now().UTC()
 		if uerr := store.Update(job); uerr != nil {
 			a.log.Error("capture_batch job update on save failure failed", "job_id", jobID, "err", uerr)
@@ -744,9 +752,11 @@ func errorsFromFailures(in []BatchItemFailure) []jobs.ItemError {
 // validateBatchEnvelope checks the request-level invariants that don't
 // depend on per-item content. itemCap is the mode-specific item count
 // limit (MaxSyncBatchSize for sync, cfg.Jobs.MaxAsyncBatchSize or
-// MaxAsyncBatchSize for async). Per-item checks live in
-// validateBatchItem; per-edge checks live in resolveEdge.
-func validateBatchEnvelope(req CaptureBatchRequest, itemCap int) error {
+// MaxAsyncBatchSize for async). byteCap is the cumulative content
+// byte ceiling (cfg.Jobs.MaxBatchBytes, falling back to the
+// MaxBatchBytes constant). Per-item checks live in validateBatchItem;
+// per-edge checks live in resolveEdge.
+func validateBatchEnvelope(req CaptureBatchRequest, itemCap int, byteCap int64) error {
 	if len(req.Items) == 0 {
 		return errors.New("items must not be empty")
 	}
@@ -764,8 +774,8 @@ func validateBatchEnvelope(req CaptureBatchRequest, itemCap int) error {
 	var bytes int64
 	for i, item := range req.Items {
 		bytes += int64(len(item.Content))
-		if bytes > MaxBatchBytes {
-			return fmt.Errorf("items[%d]: total content bytes exceed %d", i, MaxBatchBytes)
+		if bytes > byteCap {
+			return fmt.Errorf("items[%d]: total content bytes exceed %d", i, byteCap)
 		}
 	}
 	return nil
