@@ -272,23 +272,34 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 // run to failed with reason "server_restart". Called during engine
 // init BEFORE the HTTP listener is bound, so callers cannot observe
 // stale running jobs after a crash + restart.
+//
+// Per-job failures are logged at Warn but don't abort recovery —
+// one corrupt or unwriteable job entry must not prevent the
+// engine from booting. Only fails the engine if listing the
+// in-flight set itself errors (suggests a deeper bbolt problem).
 func recoverInFlightJobs(s *jobs.Store) error {
 	inflight, err := s.ListInFlight()
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
+	var recovered, failed int
 	for _, j := range inflight {
 		j.Status = jobs.StatusFailed
 		j.FailureReason = "server_restart"
 		j.CompletedAt = now
 		if err := s.Update(j); err != nil {
-			return fmt.Errorf("recover job %s: %w", j.ID, err)
+			slog.Warn("failed to recover individual job",
+				"component", "engine", "job_id", j.ID, "err", err)
+			failed++
+			continue
 		}
+		recovered++
 	}
-	if len(inflight) > 0 {
-		slog.Info("recovered in-flight jobs as failed",
-			"component", "engine", "count", len(inflight))
+	if recovered > 0 || failed > 0 {
+		slog.Info("in-flight job recovery complete",
+			"component", "engine",
+			"recovered", recovered, "failed", failed)
 	}
 	return nil
 }
@@ -310,8 +321,14 @@ func runJobSweeper(ctx context.Context, done chan struct{}, s *jobs.Store, cfg c
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			deleted, err := s.RunGC(time.Now().UTC(), ret)
+			deleted, err := s.RunGC(ctx, time.Now().UTC(), ret)
 			if err != nil {
+				// Ctx-cancellation isn't an "error" worth flagging —
+				// it's just shutdown. RunGC returns ctx.Err() when
+				// cancelled mid-walk; loop exits via the next case.
+				if ctx.Err() != nil {
+					return
+				}
 				slog.Warn("job sweep error",
 					"component", "engine", "err", err)
 				continue
@@ -769,24 +786,35 @@ func (e *Engine) Close() error {
 
 	// Stop the job sweeper first so it can't fire mid-close. The
 	// goroutine respects sweepCtx and exits cleanly; we wait for
-	// it via jobSweepDone.
+	// it via jobSweepDone. Idempotent: cancel func is set to nil
+	// after first call so a second Close skips the wait.
 	if e.jobSweepCancel != nil {
 		e.jobSweepCancel()
 		<-e.jobSweepDone
+		e.jobSweepCancel = nil
+		e.jobSweepDone = nil
 	}
 
+	// Each Close on a sub-resource is idempotent in its own
+	// implementation (jobs.Store.Close, bbolt.Close); we still
+	// nil our refs to avoid second-call work.
 	if e.jobStore != nil {
 		if err := e.jobStore.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		e.jobStore = nil
 	}
-	if err := e.indexes.close(); err != nil && firstErr == nil {
-		firstErr = err
+	if e.indexes != nil {
+		if err := e.indexes.close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		e.indexes = nil
 	}
 	if e.boltDB != nil {
 		if err := e.boltDB.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		e.boltDB = nil
 	}
 	return firstErr
 }

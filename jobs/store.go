@@ -33,6 +33,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -508,8 +509,15 @@ func (s *Store) List(f ListFilter) ([]*JobSummary, error) {
 // retention. Zero retention duration means "keep forever" for that
 // status. In-flight (pending/running) jobs are never GC'd.
 //
+// Honors ctx cancellation: between every walked entry the loop
+// checks ctx.Done(); if cancelled, returns the partial count and
+// ctx.Err(). The bbolt View tx is held across the walk and released
+// on return; the Update tx (delete pass) runs only if walk finished
+// cleanly. Callers (the engine sweeper) cancel via ctx during
+// shutdown so Close doesn't block on a long walk.
+//
 // Returns the number of jobs deleted.
-func (s *Store) RunGC(now time.Time, ret RetentionPolicy) (int, error) {
+func (s *Store) RunGC(ctx context.Context, now time.Time, ret RetentionPolicy) (int, error) {
 	var toDelete []string
 
 	if err := s.db.View(func(tx *bolt.Tx) error {
@@ -518,6 +526,9 @@ func (s *Store) RunGC(now time.Time, ret RetentionPolicy) (int, error) {
 			return errors.New("jobs: bucket missing")
 		}
 		return b.ForEach(func(k, v []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			var j Job
 			if err := json.Unmarshal(v, &j); err != nil {
 				// Corrupted entry: skip rather than fail GC. The
@@ -544,12 +555,19 @@ func (s *Store) RunGC(now time.Time, ret RetentionPolicy) (int, error) {
 		return 0, nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
 			return errors.New("jobs: bucket missing")
 		}
 		for _, id := range toDelete {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := b.Delete([]byte(id)); err != nil {
 				return err
 			}

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -720,7 +721,7 @@ func TestRunGCRespectsTTL(t *testing.T) {
 	// Very old failed (400 days) — should GC.
 	makeJob("ancient-failed", StatusFailed, now.Add(-400*24*time.Hour))
 
-	deleted, err := s.RunGC(now, RetentionPolicy{
+	deleted, err := s.RunGC(context.Background(), now, RetentionPolicy{
 		Completed: 90 * 24 * time.Hour,
 		Failed:    365 * 24 * time.Hour,
 		Cancelled: 90 * 24 * time.Hour,
@@ -765,7 +766,7 @@ func TestRunGCSkipsInFlight(t *testing.T) {
 	running.CompletedAt = time.Time{}
 	_ = s.Create(running)
 
-	deleted, err := s.RunGC(now, RetentionPolicy{
+	deleted, err := s.RunGC(context.Background(), now, RetentionPolicy{
 		Completed: time.Nanosecond,
 		Failed:    time.Nanosecond,
 		Cancelled: time.Nanosecond,
@@ -795,7 +796,7 @@ func TestRunGCZeroRetentionKeepsForever(t *testing.T) {
 	j.CompletedAt = j.CreatedAt
 	_ = s.Create(j)
 
-	deleted, err := s.RunGC(now, RetentionPolicy{}) // all zero
+	deleted, err := s.RunGC(context.Background(), now, RetentionPolicy{}) // all zero
 	if err != nil {
 		t.Fatal(err)
 	}
