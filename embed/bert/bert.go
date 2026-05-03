@@ -47,18 +47,17 @@ type scratchPoolHook interface {
 // Memory bound: each Scratch is ~14MB at maxSeq=512, hidden=384,
 // intermediate=1536, heads=12. The pool grows under contention and
 // shrinks during idle (sync.Pool semantics; entries are GC-eligible
-// when not referenced). Peak live Scratches with the current outer-
-// loop in Embed = number of concurrent goroutines calling Embed.
-// Layer D will introduce inner-loop fanout with bounded workers
-// (default cap 8 = ~112MB).
+// when not referenced). Peak live Scratches per Provider is bounded
+// by maxWorkers (default min(GOMAXPROCS, 8) = ~112MB) under
+// inner-loop fanout, plus one per concurrent caller goroutine
+// holding RLock.
 type Provider struct {
 	model       *Model
 	tokenizer   *Tokenizer
 	st          *SafeTensors
 	modelID     string
 	ctxWindow   int
-	maxWorkers  int         // 0 = use embedDefaultMaxWorkers
-	modelCfg    ModelConfig // retained for pool factory
+	maxWorkers  int // 0 = use embedDefaultMaxWorkers
 	scratchPool *sync.Pool
 	poolHook    scratchPoolHook // test-only; nil in production
 	mu          sync.RWMutex
@@ -83,14 +82,14 @@ func embedDefaultMaxWorkers() int {
 // call with `texts` items. Bounded by configured MaxWorkers (or the
 // default cap), and never exceeds the actual item count.
 func embedMaxWorkers(texts int, configured int) int {
-	cap := configured
-	if cap <= 0 {
-		cap = embedDefaultMaxWorkers()
+	limit := configured
+	if limit <= 0 {
+		limit = embedDefaultMaxWorkers()
 	}
-	if texts < cap {
+	if texts < limit {
 		return texts
 	}
-	return cap
+	return limit
 }
 
 // New creates a BERT embedding provider. Downloads the model from
@@ -172,7 +171,6 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 		modelID:    model,
 		ctxWindow:  modelCfg.MaxPositionEmbeds,
 		maxWorkers: cfg.MaxWorkers,
-		modelCfg:   modelCfg,
 		scratchPool: &sync.Pool{
 			New: func() any {
 				return NewScratch(modelCfg.MaxPositionEmbeds, modelCfg)
@@ -263,6 +261,10 @@ spawn:
 // Provider's RLock. Each call acquires a Scratch from the pool and
 // returns it before unlocking. Concurrent embedOne calls hold
 // independent RLocks and independent Scratches.
+//
+// Defers ensure the Scratch is returned to the pool and poolHook
+// accounting balances even if Forward panics. Without defers, a
+// panic in Forward would leak a Scratch and break Get/Put accounting.
 func (p *Provider) embedOne(text string) ([]float32, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -278,12 +280,13 @@ func (p *Provider) embedOne(text string) ([]float32, error) {
 	if p.poolHook != nil {
 		p.poolHook.OnGet(s)
 	}
-	embedding := p.model.Forward(s, ids, mask)
-	if p.poolHook != nil {
-		p.poolHook.OnPut(s)
-	}
-	p.scratchPool.Put(s)
-	return embedding, nil
+	defer func() {
+		if p.poolHook != nil {
+			p.poolHook.OnPut(s)
+		}
+		p.scratchPool.Put(s)
+	}()
+	return p.model.Forward(s, ids, mask), nil
 }
 
 // ModelID returns the model identifier for embedding provenance tracking.

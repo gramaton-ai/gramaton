@@ -321,6 +321,141 @@ func TestEmbedMaxWorkersBound(t *testing.T) {
 	}
 }
 
+// TestEmbedEmptyInput — Embed(ctx, []string{}) returns (nil, nil)
+// regardless of which path Embed would otherwise pick. Layer D
+// must not introduce a regression on the empty-slice early-return.
+func TestEmbedEmptyInput(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-empty", cfg)
+	defer p.Close()
+
+	res, err := p.Embed(context.Background(), []string{})
+	if err != nil {
+		t.Errorf("err: %v", err)
+	}
+	if res != nil {
+		t.Errorf("res: got %v, want nil", res)
+	}
+
+	// Same with a nil slice.
+	res, err = p.Embed(context.Background(), nil)
+	if err != nil {
+		t.Errorf("err on nil: %v", err)
+	}
+	if res != nil {
+		t.Errorf("res on nil: got %v, want nil", res)
+	}
+}
+
+// TestEmbedFastPathConcurrentEquivalence — same input via the
+// single-text fast path produces byte-identical output to a
+// 2-item concurrent path. Guards against the fast path silently
+// diverging from the concurrent path's semantics.
+func TestEmbedFastPathConcurrentEquivalence(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-equiv", cfg)
+	defer p.Close()
+
+	// Fast path (N=1).
+	fast, err := p.Embed(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Concurrent path (N=2 with the same first text).
+	concurrent, err := p.Embed(context.Background(), []string{"hello", "world"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fast[0]) != len(concurrent[0]) {
+		t.Fatalf("len: fast=%d concurrent=%d", len(fast[0]), len(concurrent[0]))
+	}
+	for j := range fast[0] {
+		if fast[0][j] != concurrent[0][j] {
+			t.Errorf("[0][%d]: fast=%v concurrent=%v", j, fast[0][j], concurrent[0][j])
+		}
+	}
+}
+
+// TestEmbedMaxWorkersHelpers — direct unit tests for
+// embedDefaultMaxWorkers and embedMaxWorkers.
+func TestEmbedMaxWorkersHelpers(t *testing.T) {
+	d := embedDefaultMaxWorkers()
+	if d < 1 {
+		t.Errorf("embedDefaultMaxWorkers returned %d (must be >=1)", d)
+	}
+	if d > 8 {
+		t.Errorf("embedDefaultMaxWorkers returned %d (must be capped at 8)", d)
+	}
+	if d > runtime.GOMAXPROCS(0) {
+		t.Errorf("embedDefaultMaxWorkers returned %d, > GOMAXPROCS=%d",
+			d, runtime.GOMAXPROCS(0))
+	}
+
+	cases := []struct {
+		texts, configured, want int
+	}{
+		{1, 0, 1},   // 1 text, default cap → 1
+		{100, 4, 4}, // 100 texts, cap 4 → 4
+		{3, 4, 3},   // 3 texts, cap 4 → 3 (texts < cap)
+		{10, -1, d}, // negative cap falls back to default
+		{0, 4, 0},   // zero texts → 0 workers (caller doesn't enter parallel path)
+	}
+	for _, c := range cases {
+		got := embedMaxWorkers(c.texts, c.configured)
+		if got != c.want {
+			t.Errorf("embedMaxWorkers(%d, %d) = %d, want %d",
+				c.texts, c.configured, got, c.want)
+		}
+	}
+}
+
+// TestEmbedSingleCallCtxCancelMidFlight — ctx is alive at call-
+// start but cancels mid-flight. Some goroutines may have already
+// fired; they must drain cleanly and Embed must return ctx.Err().
+func TestEmbedSingleCallCtxCancelMidFlight(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+	dir := setupTinyProviderFiles(t, path, cfg)
+	st, m, tok := openTinyProvider(t, dir, cfg)
+	p := newWithPool(m, tok, st, "test-d-mid-cancel", cfg)
+	p.maxWorkers = 2 // bound concurrency so cancel fires while some are pending
+	defer p.Close()
+
+	inputs := make([]string, 200)
+	for i := range inputs {
+		inputs[i] = "hello"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a microsecond — Embed will be in flight when
+	// cancellation propagates.
+	go func() {
+		time.Sleep(time.Microsecond)
+		cancel()
+	}()
+
+	before := goroutineCount()
+	_, err := p.Embed(ctx, inputs)
+	if err == nil {
+		t.Skip("Embed completed before cancellation fired; non-deterministic timing — re-run if needed")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want context.Canceled", err)
+	}
+
+	// Allow goroutines to drain.
+	time.Sleep(50 * time.Millisecond)
+	runtime.GC()
+	after := goroutineCount()
+	if after > before+2 {
+		t.Errorf("goroutine leak: before=%d after=%d", before, after)
+	}
+}
+
 // TestEmbedSingleCallSingleItem — N=1 takes the fast path; no
 // errgroup, no semaphore. Verifies the fast path produces correct
 // output. Layer D.

@@ -88,7 +88,6 @@ func newWithPool(m *Model, tok *Tokenizer, st *SafeTensors, modelID string, cfg 
 		st:        st,
 		modelID:   modelID,
 		ctxWindow: cfg.MaxPositionEmbeds,
-		modelCfg:  cfg,
 		scratchPool: &sync.Pool{
 			New: func() any {
 				return NewScratch(cfg.MaxPositionEmbeds, cfg)
@@ -99,6 +98,15 @@ func newWithPool(m *Model, tok *Tokenizer, st *SafeTensors, modelID string, cfg 
 
 // instrumentedPool wraps a sync.Pool to track Get/Put events for
 // concurrency tests. Implements scratchPoolHook.
+//
+// Note on maxLive semantics: tracks the size of the live-Scratch
+// MAP, i.e., the count of DISTINCT Scratch pointers checked out
+// simultaneously. If two goroutines were incorrectly handed the
+// same pointer, the map size would not increase (the live[s]
+// count would, but maxLive measures map size). Pair maxLive with
+// the gets==puts balance check to catch both same-pointer
+// double-handout (caught by maxLive < expected) and missed
+// puts (caught by Get/Put imbalance).
 type instrumentedPool struct {
 	mu      sync.Mutex
 	gets    atomic.Int64
