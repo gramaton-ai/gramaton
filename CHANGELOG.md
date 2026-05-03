@@ -9,6 +9,56 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Async mode for `gramaton_capture_batch` + 4 companion MCP tools**
+  (F1 Layer 5). Setting `wait=false` returns a `job_id` immediately
+  and runs the commit in a background goroutine; the new tools poll
+  and control the job:
+
+  - **`gramaton_capture_batch_status(job_id)`** — read-only Job
+    snapshot (status, total_items, processed_count, errors[],
+    client_ref_to_id map, client_token, failure_reason). Polling
+    is cheap and never touches the engine write lock.
+  - **`gramaton_capture_batch_cancel(job_id)`** — flips the Job to
+    `cancelled` atomically (state-machine guarded; cancelling a
+    terminal job is an idempotent no-op). One automatic retry on
+    transient JobStore.Update failure to tolerate brief bbolt
+    contention. Signals the runner's context so an in-flight embed
+    exits cleanly.
+  - **`gramaton_capture_batch_result(job_id, timeout_ms)`** — blocks
+    with poll backoff until the Job reaches a terminal state, then
+    returns the full CaptureBatchResponse (added/failed/edges/
+    edges_failed/stats). On timeout: returns the current snapshot
+    with a `timeout` error code (HTTP 504). Default timeout from
+    `cfg.Jobs.ResultDefaultTimeout` (30 minutes).
+  - **`gramaton_jobs_list`** — enumerate persisted jobs by status /
+    kind / client_token / time range, paginated (default limit 50,
+    max 200). Returns lightweight summaries; heavy Result payload
+    requires `gramaton_capture_batch_status` on a specific id.
+
+  Async runner: panic-recovers (marks the Job
+  `failed/panicked: <message>` so a panic doesn't leave a stuck
+  running job). Honors a cancel that arrives before the runner
+  schedules (`cancelled_before_start`), races to advance pending →
+  running atomically (CAS-style; ErrInvalidTransition means a cancel
+  won and the runner exits cleanly), and propagates context to the
+  embedder so cancellation during embed is observed.
+
+  L5 single-chunk runner: the entire batch commits in one Save call
+  inside the goroutine. Multi-chunk processing + cross-chunk edge
+  fixup move to L6. The async path unblocks larger batches
+  (`MaxAsyncBatchSize` = 1000) and removes the "HTTP timeout vs
+  server completion" race for clients on slow networks; lock-hold
+  semantics are unchanged from sync.
+
+  New `(*API).ShutdownAsync(ctx)` cancels in-flight runners and
+  waits for them to exit so the engine can close cleanly. Server
+  callers (and tests with `t.Cleanup`) drain runners before the
+  engine close.
+
+  HTTP routes added: `GET /v1/capture/batch/{job_id}/status`,
+  `POST /v1/capture/batch/{job_id}/cancel`,
+  `GET /v1/capture/batch/{job_id}/result`, `GET /v1/jobs`.
+
 - **Intra-batch edges in `gramaton_capture_batch`** (F1 Layer 4).
   `Edges []EdgeSpec` in the request body lets the caller create
   intra-batch and to-existing-record edges in the same commit as

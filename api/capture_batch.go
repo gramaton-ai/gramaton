@@ -140,18 +140,28 @@ client_token + an exact-match request body returns the prior job_id idempotently
 
 Per-item failures land in the response's failed[] array (the batch keeps going); the only request-level errors are validation (item count, byte budget) and client_token reuse with a different body.`
 
-// CaptureBatch runs the synchronous capture-batch path. Layer 3 scope:
-// validation, batch embed off-lock with per-item fallback, single
-// chunked commit under one engine write lock, JobStore lifecycle, and
-// per-batch rollback of in-memory indexes on Save failure. Layer 4
-// adds intra-batch edges; Layer 5 adds async mode and chunked commits.
+// CaptureBatch dispatches to either the synchronous core or the
+// async runner based on req.Wait. Both paths share envelope
+// validation, ClientToken idempotency, and Job.Create up front; the
+// per-item commit work runs inline (sync) or in a goroutine (async).
+//
+// L5 single-chunk runner: the entire batch commits in one Save call
+// in the runner goroutine (same shape as sync, just off the request
+// path). L6 introduces multi-chunk + cross-chunk edge fixup.
 func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (CaptureBatchResponse, *APIError) {
-	if req.Wait != nil && !*req.Wait {
-		return CaptureBatchResponse{}, ErrInvalid("wait=false (async mode) is not yet implemented")
-	}
-
 	if err := validateBatchEnvelope(req); err != nil {
 		return CaptureBatchResponse{}, ErrInvalid(err.Error())
+	}
+
+	asyncMode := req.Wait != nil && !*req.Wait
+	if asyncMode {
+		cap := a.engine.Config().Jobs.MaxAsyncBatchSize
+		if cap <= 0 {
+			cap = MaxAsyncBatchSize
+		}
+		if len(req.Items) > cap {
+			return CaptureBatchResponse{}, ErrInvalid(fmt.Sprintf("items exceeds maximum of %d for async mode", cap))
+		}
 	}
 
 	store := a.engine.JobStore()
@@ -191,23 +201,60 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 
 	now := time.Now().UTC()
 	jobID := ulid.Make().String()
+	initialStatus := jobs.StatusRunning
+	if asyncMode {
+		initialStatus = jobs.StatusPending
+	}
 	job := &jobs.Job{
 		ID:              jobID,
 		Kind:            jobs.KindCaptureBatch,
-		Status:          jobs.StatusRunning,
+		Status:          initialStatus,
 		CreatedAt:       now,
-		StartedAt:       now,
 		ClientToken:     req.ClientToken,
 		RequestHash:     requestHash,
 		SupersedesJobID: supersedesJobID,
 		TotalItems:      len(req.Items),
 		ClientRefToID:   make(map[string]string),
 	}
+	if !asyncMode {
+		job.StartedAt = now
+	}
 	if err := store.Create(job); err != nil {
 		a.log.Warn("capture_batch job create failed", "err", err)
 		return CaptureBatchResponse{}, ErrInternal("failed to create job")
 	}
 
+	if asyncMode {
+		runnerCtx, cancel := context.WithCancel(context.Background())
+		if !a.registerAsyncRunner(jobID, cancel) {
+			// API is shutting down. Mark job failed and return so the
+			// caller doesn't believe a phantom runner is in flight.
+			cancel()
+			job.Status = jobs.StatusFailed
+			job.FailureReason = "shutdown"
+			job.CompletedAt = time.Now().UTC()
+			if uerr := store.Update(job); uerr != nil {
+				a.log.Warn("capture_batch shutdown job update failed", "job_id", jobID, "err", uerr)
+			}
+			return CaptureBatchResponse{}, ErrUnavailable("server shutting down")
+		}
+		go a.runCaptureBatchAsync(runnerCtx, jobID, req)
+		return CaptureBatchResponse{
+			JobID:  jobID,
+			Status: jobs.StatusPending,
+		}, nil
+	}
+
+	return a.runCaptureBatchCore(ctx, jobID, req, job)
+}
+
+// runCaptureBatchCore is the per-batch commit pipeline shared by the
+// sync path and the async runner. It assumes the Job already exists in
+// the JobStore with a usable Status (Pending or Running). Caller is
+// responsible for advancing Pending → Running before invoking this in
+// the async path.
+func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req CaptureBatchRequest, job *jobs.Job) (CaptureBatchResponse, *APIError) {
+	store := a.engine.JobStore()
 	// Phase 0/1: per-item validation off-lock. Failures stay attached
 	// to the original request index so the response order is stable.
 	itemValid := make([]bool, len(req.Items))

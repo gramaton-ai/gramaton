@@ -28,6 +28,73 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		return proxyPost("/v1/capture/batch", args)
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_capture_batch_status",
+		Description: api.CaptureBatchStatusDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchStatusRequest) (*mcp.CallToolResult, any, error) {
+		if args.JobID == "" {
+			return proxyErr("job_id is required")
+		}
+		return proxyGet(fmt.Sprintf("/v1/capture/batch/%s/status", url.PathEscape(args.JobID)))
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_capture_batch_cancel",
+		Description: api.CaptureBatchCancelDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchCancelRequest) (*mcp.CallToolResult, any, error) {
+		if args.JobID == "" {
+			return proxyErr("job_id is required")
+		}
+		return proxyPost(fmt.Sprintf("/v1/capture/batch/%s/cancel", url.PathEscape(args.JobID)), nil)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_capture_batch_result",
+		Description: api.CaptureBatchResultDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchResultRequest) (*mcp.CallToolResult, any, error) {
+		if args.JobID == "" {
+			return proxyErr("job_id is required")
+		}
+		path := fmt.Sprintf("/v1/capture/batch/%s/result", url.PathEscape(args.JobID))
+		if args.TimeoutMS > 0 {
+			path += fmt.Sprintf("?timeout_ms=%d", args.TimeoutMS)
+		}
+		return proxyGet(path)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_jobs_list",
+		Description: api.JobsListDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.JobsListRequest) (*mcp.CallToolResult, any, error) {
+		params := url.Values{}
+		if args.Status != "" {
+			params.Set("status", args.Status)
+		}
+		if args.Kind != "" {
+			params.Set("kind", args.Kind)
+		}
+		if args.ClientToken != "" {
+			params.Set("client_token", args.ClientToken)
+		}
+		if args.Since != "" {
+			params.Set("since", args.Since)
+		}
+		if args.Until != "" {
+			params.Set("until", args.Until)
+		}
+		if args.Limit > 0 {
+			params.Set("limit", fmt.Sprintf("%d", args.Limit))
+		}
+		if args.Offset > 0 {
+			params.Set("offset", fmt.Sprintf("%d", args.Offset))
+		}
+		path := "/v1/jobs"
+		if len(params) > 0 {
+			path += "?" + params.Encode()
+		}
+		return proxyGet(path)
+	})
+
 	// Inspect takes the ID as a tool-level field; the api request's ID
 	// is JSON-hidden so we redeclare the args struct here.
 	type inspectArgs struct {

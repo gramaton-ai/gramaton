@@ -19,6 +19,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
@@ -65,6 +66,13 @@ type API struct {
 	hooksMu                   sync.Mutex
 	testHookBackupSnapshotted chan struct{}
 	faultInjector             FaultInjector
+
+	// asyncMu protects asyncRunners. WaitGroup is goroutine-safe.
+	// asyncShutdown gates the spawn of new runners during shutdown.
+	asyncMu       sync.Mutex
+	asyncRunners  map[string]context.CancelFunc
+	asyncWG       sync.WaitGroup
+	asyncShutdown atomic.Bool
 }
 
 // FaultInjector is the test-only fault-injection seam. Each
@@ -204,5 +212,63 @@ func (a *API) StopPreparedSweeper() {
 	a.preparedMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+}
+
+// registerAsyncRunner records a running async-batch goroutine so
+// CaptureBatchCancel can signal it via ctx.Done() and ShutdownAsync
+// can wait for in-flight runners to exit. Returns false if the API
+// is shutting down -- callers must skip spawning the runner.
+func (a *API) registerAsyncRunner(jobID string, cancel context.CancelFunc) bool {
+	a.asyncMu.Lock()
+	defer a.asyncMu.Unlock()
+	if a.asyncShutdown.Load() {
+		return false
+	}
+	if a.asyncRunners == nil {
+		a.asyncRunners = make(map[string]context.CancelFunc)
+	}
+	a.asyncRunners[jobID] = cancel
+	a.asyncWG.Add(1)
+	return true
+}
+
+// unregisterAsyncRunner removes a runner entry on goroutine exit.
+func (a *API) unregisterAsyncRunner(jobID string) {
+	a.asyncMu.Lock()
+	delete(a.asyncRunners, jobID)
+	a.asyncMu.Unlock()
+	a.asyncWG.Done()
+}
+
+// signalAsyncRunner cancels the named runner's context. Safe to call
+// for unknown jobIDs (no-op).
+func (a *API) signalAsyncRunner(jobID string) {
+	a.asyncMu.Lock()
+	cancel := a.asyncRunners[jobID]
+	a.asyncMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// ShutdownAsync prevents new async runners from spawning, cancels
+// every in-flight runner's context, and waits for all of them to
+// exit (or until ctx.Done()). Call this before closing the engine
+// so runners don't touch a closed bbolt handle.
+func (a *API) ShutdownAsync(ctx context.Context) error {
+	a.asyncShutdown.Store(true)
+	a.asyncMu.Lock()
+	for _, cancel := range a.asyncRunners {
+		cancel()
+	}
+	a.asyncMu.Unlock()
+	done := make(chan struct{})
+	go func() { a.asyncWG.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

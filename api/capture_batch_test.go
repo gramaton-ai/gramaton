@@ -793,17 +793,28 @@ func TestCaptureBatchClientTokenInvalidShape(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncWaitFalseRejected: wait=false explicitly
-// rejected until Layer 5.
-func TestCaptureBatchAsyncWaitFalseRejected(t *testing.T) {
+// TestCaptureBatchAsyncReturnsPending: wait=false returns a JobID
+// with status=pending immediately; the async runner picks it up and
+// commits the work in the background.
+func TestCaptureBatchAsyncReturnsPending(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	f := false
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
-	if apiErr == nil || apiErr.Code != "input_error" {
-		t.Fatalf("expected input_error, got %v", apiErr)
+	if apiErr != nil {
+		t.Fatalf("CaptureBatch: %v", apiErr)
+	}
+	if resp.JobID == "" {
+		t.Error("expected JobID")
+	}
+	if resp.Status != jobs.StatusPending && resp.Status != jobs.StatusRunning {
+		t.Errorf("expected pending or running, got %q", resp.Status)
+	}
+	// Drain so the runner doesn't outlive the test.
+	if err := a.ShutdownAsync(context.Background()); err != nil {
+		t.Errorf("ShutdownAsync: %v", err)
 	}
 }
 

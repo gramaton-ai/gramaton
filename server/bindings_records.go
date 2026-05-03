@@ -40,6 +40,60 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
+	mux.HandleFunc("GET /v1/capture/batch/{job_id}/status", func(w http.ResponseWriter, r *http.Request) {
+		resp, apiErr := s.api.CaptureBatchStatus(r.Context(), api.CaptureBatchStatusRequest{
+			JobID: r.PathValue("job_id"),
+		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, resp)
+	})
+
+	mux.HandleFunc("POST /v1/capture/batch/{job_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		resp, apiErr := s.api.CaptureBatchCancel(r.Context(), api.CaptureBatchCancelRequest{
+			JobID: r.PathValue("job_id"),
+		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, resp)
+	})
+
+	mux.HandleFunc("GET /v1/capture/batch/{job_id}/result", func(w http.ResponseWriter, r *http.Request) {
+		timeoutMS := parseIntParam(r, "timeout_ms", 0, 1<<31-1)
+		resp, apiErr := s.api.CaptureBatchResult(r.Context(), api.CaptureBatchResultRequest{
+			JobID:     r.PathValue("job_id"),
+			TimeoutMS: timeoutMS,
+		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, resp)
+	})
+
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		req := api.JobsListRequest{
+			Status:      query.Get("status"),
+			Kind:        query.Get("kind"),
+			ClientToken: query.Get("client_token"),
+			Since:       query.Get("since"),
+			Until:       query.Get("until"),
+			Limit:       parseIntParam(r, "limit", 0, api.MaxJobsListLimit),
+			Offset:      parseIntParam(r, "offset", 0, 1<<31-1),
+		}
+		resp, apiErr := s.api.JobsList(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, resp)
+	})
+
 	mux.HandleFunc("GET /v1/records/{id}", func(w http.ResponseWriter, r *http.Request) {
 		includeContent := r.URL.Query().Get("include_content") != "false"
 		req := api.InspectRequest{
@@ -180,6 +234,62 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_capture_batch")
 		defer done(nil)
 		resp, apiErr := s.api.CaptureBatch(ctx, args)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(resp)
+	})
+
+	type captureBatchStatusArgs = api.CaptureBatchStatusRequest
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_capture_batch_status",
+		Description: api.CaptureBatchStatusDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchStatusArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_capture_batch_status")
+		defer done(nil)
+		resp, apiErr := s.api.CaptureBatchStatus(ctx, args)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(resp)
+	})
+
+	type captureBatchCancelArgs = api.CaptureBatchCancelRequest
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_capture_batch_cancel",
+		Description: api.CaptureBatchCancelDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchCancelArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_capture_batch_cancel")
+		defer done(nil)
+		resp, apiErr := s.api.CaptureBatchCancel(ctx, args)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(resp)
+	})
+
+	type captureBatchResultArgs = api.CaptureBatchResultRequest
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_capture_batch_result",
+		Description: api.CaptureBatchResultDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchResultArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_capture_batch_result")
+		defer done(nil)
+		resp, apiErr := s.api.CaptureBatchResult(ctx, args)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(resp)
+	})
+
+	type jobsListArgs = api.JobsListRequest
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_jobs_list",
+		Description: api.JobsListDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args jobsListArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_jobs_list")
+		defer done(nil)
+		resp, apiErr := s.api.JobsList(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
