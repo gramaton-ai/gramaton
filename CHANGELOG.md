@@ -7,6 +7,53 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **F1 Layer 6: multi-chunk async runner + cross-chunk edge fixup.**
+  L5 shipped the async path as a single-chunk runner with edges in
+  the same Save call as items. L6 makes it actually chunk:
+
+  - Items split into chunks of `MaxSyncBatchSize` (500 by default;
+    overridable in tests via `SetChunkSizeForTests`). Each chunk
+    acquires the engine write lock, commits its own items in a
+    single Save (`capture_batch chunk N/M`), releases the lock,
+    persists progress (ProcessedCount + ClientRefToID) to the
+    JobStore. A status reader sees real motion as chunks land.
+  - After all chunks commit, a separate edge-fixup phase resolves
+    every edge against the now-fully-populated ClientRefToID map
+    and saves them in one Save (`capture_batch edge fixup`).
+    Cross-chunk edges (source and target in different chunks) just
+    work — by the time the fixup runs, every ClientRef has an
+    assigned ULID.
+  - Cancel between chunks: the runner re-reads Job.Status before
+    each chunk and before fixup. A cancel observed at any point
+    short-circuits with `cancelled` status; previously-committed
+    chunks remain in the store.
+  - Per-chunk save failure: scoped rollback (only the failing
+    chunk's nodes leave PropIdx + VecIdx + BM25 + SecIdx + Graph);
+    Job lands in `failed/chunk_N_save_failed`; Result.Added carries
+    every chunk before N.
+  - Edge-fixup save failure: every node chunk stayed on disk;
+    Job goes to `failed/edge_fixup_failed`; Result.EdgesFailed
+    lists every edge with code `fixup_failed` so the caller can
+    replay each via gramaton_link. Successfully-added edges are
+    rolled back from the in-memory edge store before the failure
+    response so on-disk state matches in-memory state.
+
+  `MaxAsyncBatchSize` raised from 1000 to 10000 now that the chunker
+  bounds per-chunk lock-hold; `MaxBatchBytes` (256MB) remains the
+  byte-level safety net. Sync mode (`Wait=true`) is unchanged — items
+  + edges still commit in one combined Save.
+
+  New `FaultPhaseEdgeFixup` test seam: returning a non-nil error from
+  Inject for that phase forces the fixup commit to fail. Tests use
+  this to pin the fixup-failure recovery path.
+
+  New `(*API).SetChunkSizeForTests(int)` test-only method overrides
+  the runner's chunk size so tests can exercise multi-chunk
+  behavior with 30-item batches instead of 1500-item batches.
+  Production never sets it.
+
 ### Changed
 
 - **F1 review-pass B: test hardening.** Closes the test gaps the

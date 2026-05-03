@@ -1163,7 +1163,7 @@ func Defaults() Config {
 			},
 			SweepInterval:        1 * time.Hour,
 			ResultDefaultTimeout: 30 * time.Minute,
-			MaxAsyncBatchSize:    1000,
+			MaxAsyncBatchSize:    10000,
 			MaxBatchBytes:        256 * 1024 * 1024, // 256MB
 		},
 

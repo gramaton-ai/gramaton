@@ -73,6 +73,10 @@ type API struct {
 	asyncRunners  map[string]context.CancelFunc
 	asyncWG       sync.WaitGroup
 	asyncShutdown atomic.Bool
+	// chunkSizeOverride lets tests force a smaller chunk size so the
+	// chunked runner can be exercised against tiny inputs. 0 (default)
+	// means "use MaxSyncBatchSize". Production never sets this.
+	chunkSizeOverride atomic.Int64
 }
 
 // FaultInjector is the test-only fault-injection seam. Each
@@ -90,6 +94,11 @@ type FaultInjector interface {
 const (
 	FaultPhaseChunkSave      = "chunk_save"
 	FaultPhaseJobstoreUpdate = "jobstore_update"
+	// FaultPhaseEdgeFixup fires inside the L6 chunked runner's
+	// post-chunks edge-fixup save. Returning an error simulates the
+	// fixup commit failing; the runner rolls back the in-memory edges
+	// and marks Job failed/edge_fixup_failed.
+	FaultPhaseEdgeFixup = "edge_fixup"
 	// FaultPhasePanic is honored only by FaultInjector implementations
 	// that can panic on demand. CaptureBatch's runner consults this
 	// via tests via the panic-injection seam.
@@ -193,6 +202,23 @@ func (a *API) SetFaultInjector(fi FaultInjector) {
 	a.hooksMu.Lock()
 	defer a.hooksMu.Unlock()
 	a.faultInjector = fi
+}
+
+// SetChunkSizeForTests overrides the chunked async runner's chunk
+// size so tests can exercise multi-chunk behavior without seeding
+// 1000+ items. Pass 0 to clear (production behavior:
+// MaxSyncBatchSize). Production must never set this; in-package
+// tests only.
+func (a *API) SetChunkSizeForTests(size int) {
+	a.chunkSizeOverride.Store(int64(size))
+}
+
+// chunkSize returns the chunk size to use for the async runner.
+func (a *API) chunkSize() int {
+	if v := a.chunkSizeOverride.Load(); v > 0 {
+		return int(v)
+	}
+	return MaxSyncBatchSize
 }
 
 func (a *API) injectFault(phase string) error {

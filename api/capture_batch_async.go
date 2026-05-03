@@ -71,12 +71,12 @@ func (a *API) runCaptureBatchAsync(ctx context.Context, jobID string, req Captur
 	current.Status = jobs.StatusRunning
 	current.StartedAt = time.Now().UTC()
 
-	// Single-chunk runner: dispatch the same core that sync uses.
-	// L6 will replace this with a per-chunk loop + cross-chunk edge
-	// fixup. For L5 the entire batch commits in one Save call inside
-	// the goroutine, so the response shape and JobStore record are
-	// identical to a sync run for the same input.
-	_, _ = a.runCaptureBatchCore(ctx, jobID, req, current)
+	// L6 multi-chunk runner: split items into MaxSyncBatchSize chunks,
+	// commit each in its own Save, persist progress between chunks,
+	// then run the post-chunks edge-fixup commit. Cancellation flips
+	// at chunk boundaries; per-chunk Save failures roll back only the
+	// failing chunk. The L5 single-chunk shortcut is gone.
+	a.runCaptureBatchAsyncChunked(ctx, jobID, req, current)
 }
 
 // recoverAsyncPanic is the deferred panic handler for the async

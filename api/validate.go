@@ -121,11 +121,12 @@ const (
 	// a 5-item batch keeps Phase 0 from chewing up unbounded
 	// validation work for an obviously-malformed request.
 	MaxBatchEdgeMultiplier = 10
-	// MaxAsyncBatchSize caps the async capture_batch path. Larger
-	// than MaxSyncBatchSize because the async runner can split work
-	// across chunks and commit per-chunk progress. Operator override
-	// via cfg.Jobs.MaxAsyncBatchSize.
-	MaxAsyncBatchSize = 1000
+	// MaxAsyncBatchSize caps the async capture_batch path. The async
+	// runner splits work into MaxSyncBatchSize-per-chunk pieces and
+	// commits per-chunk progress, so this can be much larger than the
+	// sync cap. Operator override via cfg.Jobs.MaxAsyncBatchSize.
+	// MaxBatchBytes (256MB) remains the byte-level safety net.
+	MaxAsyncBatchSize = 10000
 	// MaxJobsListLimit caps gramaton_jobs_list pagination. Above
 	// this an operator should narrow filters (status, kind, time
 	// range) rather than scroll a single huge response.
