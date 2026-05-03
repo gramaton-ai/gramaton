@@ -26,7 +26,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Forward output matches a fresh-Scratch run byte-for-byte;
   `TestEmbedScratchReuse` verifies the pool reuses Scratch across
   sequential calls; `TestEmbedConcurrentScratchDistinct` verifies
-  Get/Put accounting under barrier-released goroutines. Layers A+B
+  Get/Put accounting under barrier-released goroutines. Layer C
+  flips the Provider mutex to `sync.RWMutex` so multiple Embed
+  goroutines can run concurrently against shared read-only Model
+  with their own pooled Scratches; Close still takes write Lock
+  and blocks until in-flight Embeds release. New tests:
+  `TestEmbedConcurrentDeterminism` (8 goroutines, byte-identical
+  to sequential reference), `TestEmbedConcurrentVariableLengths`
+  (variable-length inputs across goroutines), `TestEmbedConcurrentClose`
+  (Close blocks for in-flight Embed; subsequent Embed returns
+  closed-error), `TestEmbedConcurrentMixed` (no panic, no
+  garbage). All race-detector clean at `-count=20`. Layers A-C
   of bert-parallel-embed; design at
   `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
 

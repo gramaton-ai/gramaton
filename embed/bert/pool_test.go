@@ -71,10 +71,17 @@ func openTinyProvider(t *testing.T, dir string, cfg ModelConfig) (*SafeTensors, 
 
 // newWithPool is a test-only Provider constructor that bypasses the
 // download/load path. Same shape as the production New, but takes
-// pre-loaded model/tokenizer/safetensors. Used by tests that build
-// tiny synthetic models. Layer B introduced this helper so tests
-// don't repeat the pool-initialization boilerplate.
+// pre-loaded model/tokenizer/safetensors. Mirrors New's tokenizer-
+// clamp step so concurrent tests don't emit sequences longer than
+// the model's scratch can handle.
 func newWithPool(m *Model, tok *Tokenizer, st *SafeTensors, modelID string, cfg ModelConfig) *Provider {
+	// Match production New: clamp tokenizer.maxLen to model's
+	// MaxPositionEmbeds. Without this, concurrent tests with longer
+	// inputs panic in Forward because scratch was sized for a smaller
+	// maxSeq.
+	if tok.MaxLen() > cfg.MaxPositionEmbeds {
+		tok.SetMaxLen(cfg.MaxPositionEmbeds)
+	}
 	return &Provider{
 		model:     m,
 		tokenizer: tok,
@@ -161,12 +168,14 @@ func TestEmbedScratchReuse(t *testing.T) {
 	}
 }
 
-// TestEmbedConcurrentScratchDistinct exercises the case where
-// multiple goroutines call Embed in parallel. Layer B still
-// serializes via the outer mutex, so concurrent goroutines actually
-// run sequentially through Embed; maxLive=1 holds. Layer C lifts
-// this; until then, the test confirms the instrumentation works
-// and the pool is structurally ready for concurrent access.
+// TestEmbedConcurrentScratchDistinct verifies that multiple
+// goroutines calling Embed in parallel each hold a DISTINCT Scratch
+// instance during their Forward call. Layer C's RWMutex pattern
+// makes this real concurrency; the instrumented pool's maxLive
+// counter records the peak number of simultaneously-live Scratches.
+//
+// Without per-call distinct Scratches, concurrent Forward calls
+// would corrupt each other's intermediate buffers.
 func TestEmbedConcurrentScratchDistinct(t *testing.T) {
 	path, cfg := buildTinyModel(t)
 	dir := setupTinyProviderFiles(t, path, cfg)
@@ -205,10 +214,12 @@ func TestEmbedConcurrentScratchDistinct(t *testing.T) {
 		t.Errorf("Get/Put imbalance: gets=%d puts=%d",
 			hook.gets.Load(), hook.puts.Load())
 	}
-	// In Layer B, outer mutex still serializes -> maxLive==1.
-	// This is documented and expected; Layer C will change.
-	if hook.maxLive.Load() != 1 {
-		t.Errorf("maxLive=%d (Layer B): expected exactly 1 since outer mutex serializes Embed",
+	// Layer C: RWMutex permits concurrent Embed -> maxLive should
+	// exceed 1 under contention. We don't assert a specific bound
+	// (depends on scheduler timing); just that we ARE running
+	// concurrently.
+	if hook.maxLive.Load() < 2 {
+		t.Errorf("maxLive=%d: expected >=2 with RWMutex enabling concurrent Embed",
 			hook.maxLive.Load())
 	}
 }

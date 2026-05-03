@@ -21,26 +21,33 @@ type scratchPoolHook interface {
 // Provider implements embed.Provider using a pure Go BERT inference engine.
 // Default model is bge-small-en-v1.5 (384-dim, 12-layer BERT encoder).
 //
-// Thread-safety: a single mutex serializes Embed and Close. Multiple
-// concurrent Embed calls run sequentially (each ~100-200ms, not a
-// bottleneck). Close takes the same mutex so an in-flight Forward pass
-// cannot read float32 slices that point into the mmap'd region after
-// Munmap. Embed re-checks the model/tokenizer fields under the lock and
-// returns "bert: provider closed" if a concurrent Close zeroed them --
-// callers must NOT call Embed after Close returns.
+// Thread-safety (RWMutex pattern):
+// - Embed takes RLock for the duration of each per-text Encode +
+//   Forward. Multiple goroutines can hold RLocks concurrently; the
+//   model is read-only after LoadModel and each Embed iteration uses
+//   its own Scratch from the pool, so concurrent Forward is safe.
+// - Close takes the full Lock and blocks until every in-flight
+//   RLock holder releases. After Close returns, model/tokenizer/
+//   scratchPool/st are all nil; Embed checks under RLock and returns
+//   "bert: provider closed" cleanly without segfault.
+//
+// Critical: the RLock must wrap BOTH the nil-check AND Encode +
+// Forward. Releasing RLock between them would let Close Munmap the
+// safetensors region while Forward is mid-read of float32 slices
+// that point into mmap'd memory.
 //
 // scratchPool holds Scratch instances reused across Forward calls.
-// Each Embed iteration acquires a Scratch from the pool, runs Forward,
-// returns the Scratch to the pool. Layer B introduces this; Layer C
-// will switch the outer mutex to RWMutex so multiple Embeds can run
-// concurrently against distinct Scratches.
+// Each Embed iteration acquires a Scratch from the pool, runs
+// Forward, returns the Scratch to the pool. Concurrent Embed
+// goroutines each get their own Scratch instance.
 //
 // Memory bound: each Scratch is ~14MB at maxSeq=512, hidden=384,
 // intermediate=1536, heads=12. The pool grows under contention and
 // shrinks during idle (sync.Pool semantics; entries are GC-eligible
-// when not referenced). Currently Embed is still serialized by the
-// outer mutex, so peak live Scratches = 1; Layer C raises this to
-// max_workers (default cap 8 = ~112MB).
+// when not referenced). Peak live Scratches with the current outer-
+// loop in Embed = number of concurrent goroutines calling Embed.
+// Layer D will introduce inner-loop fanout with bounded workers
+// (default cap 8 = ~112MB).
 type Provider struct {
 	model       *Model
 	tokenizer   *Tokenizer
@@ -50,7 +57,7 @@ type Provider struct {
 	modelCfg    ModelConfig // retained for pool factory
 	scratchPool *sync.Pool
 	poolHook    scratchPoolHook // test-only; nil in production
-	mu          sync.Mutex
+	mu          sync.RWMutex
 }
 
 // New creates a BERT embedding provider. Downloads the model from
@@ -155,13 +162,15 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 		default:
 		}
 
-		p.mu.Lock()
-		// Re-check under the lock: a concurrent Close may have
-		// nil'd these out. Returning an error is preferable to a
-		// nil dereference; the only legitimate caller pattern is
-		// "stop submitting before Close" anyway.
-		if p.tokenizer == nil || p.model == nil {
-			p.mu.Unlock()
+		p.mu.RLock()
+		// Re-check under the RLock: a concurrent Close holds the
+		// write Lock, blocking us if it's mid-cleanup. Once we hold
+		// RLock, the fields can't be nil'd until we release.
+		// Returning an error is preferable to a nil dereference;
+		// the only legitimate caller pattern is "stop submitting
+		// before Close" anyway.
+		if p.tokenizer == nil || p.model == nil || p.scratchPool == nil {
+			p.mu.RUnlock()
 			return nil, fmt.Errorf("bert: provider closed")
 		}
 		ids, mask, _ := p.tokenizer.Encode(text)
@@ -174,7 +183,7 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 			p.poolHook.OnPut(s)
 		}
 		p.scratchPool.Put(s)
-		p.mu.Unlock()
+		p.mu.RUnlock()
 
 		results[i] = embedding
 	}
@@ -192,14 +201,15 @@ func (p *Provider) ContextWindow() int {
 	return p.ctxWindow
 }
 
-// Close releases the mmap'd safetensors file. Takes the same mutex
-// as Embed so an in-flight Forward pass cannot read float32 slices
-// (which point into the mmap'd region) after Munmap. Without this
-// guard, a concurrent Embed during shutdown would segfault.
+// Close releases the mmap'd safetensors file. Takes the full write
+// Lock; blocks until every concurrent Embed holding RLock has
+// released. Without this guard, a concurrent Forward could read
+// float32 slices that point into the mmap'd region after Munmap,
+// causing a segfault.
 //
-// Callers must NOT call Embed after Close returns; the model and
-// tokenizer fields are zeroed to make subsequent misuse panic
-// loudly rather than silently corrupt.
+// Callers must NOT call Embed after Close returns; the model,
+// tokenizer, and scratchPool fields are zeroed to make subsequent
+// misuse return "bert: provider closed" rather than silently corrupt.
 func (p *Provider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
