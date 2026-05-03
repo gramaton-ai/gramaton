@@ -4,6 +4,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,6 +35,15 @@ type Snapshot struct {
 	// version). Stable between commits but snapshotted anyway so
 	// the archive is a single coherent moment.
 	Format string
+
+	// JobsDB is an optional handle to the live jobs.db bbolt
+	// database. When non-nil, the walker takes a coherent
+	// bbolt-native snapshot via tx.WriteTo to avoid torn-page
+	// reads under concurrent writes. When nil, the walker falls
+	// back to direct os.ReadFile (safe only when the engine is
+	// shut down — the file is then stable). Callers that have a
+	// live engine should always populate this.
+	JobsDB *bolt.DB
 }
 
 // Create is a convenience wrapper for non-concurrent callers (tests,
@@ -183,21 +194,40 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 			return tw.WriteHeader(header)
 		}
 
-		// Files: read the body into memory first, then write the
-		// header sized to the body and the body itself. This is the
-		// only way to keep header.Size and the byte stream aligned
-		// when concurrent writers can grow or shrink files between
-		// Walk's stat and our read. Chunks are typically a few KB
-		// to a few MB; buffering is acceptable.
-		body, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				// Vanished between Walk and ReadFile. Skip silently --
-				// any committed state still references chunks that
-				// exist; transient temp files are not our problem.
-				return nil
+		// jobs.db: bbolt file under concurrent writes from the
+		// running engine. Direct os.ReadFile would yield a torn
+		// snapshot; we use bbolt's View+WriteTo to emit a coherent
+		// page-consistent copy. Falls back to os.ReadFile if the
+		// caller didn't pass a JobsDB handle (engine shut down;
+		// file is stable).
+		var body []byte
+		if rel == "jobs.db" && snap.JobsDB != nil {
+			var buf bytes.Buffer
+			err := snap.JobsDB.View(func(tx *bolt.Tx) error {
+				_, werr := tx.WriteTo(&buf)
+				return werr
+			})
+			if err != nil {
+				return fmt.Errorf("snapshot jobs.db: %w", err)
 			}
-			return err
+			body = buf.Bytes()
+		} else {
+			// Files: read the body into memory first, then write the
+			// header sized to the body and the body itself. This is the
+			// only way to keep header.Size and the byte stream aligned
+			// when concurrent writers can grow or shrink files between
+			// Walk's stat and our read. Chunks are typically a few KB
+			// to a few MB; buffering is acceptable.
+			body, err = os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					// Vanished between Walk and ReadFile. Skip silently --
+					// any committed state still references chunks that
+					// exist; transient temp files are not our problem.
+					return nil
+				}
+				return err
+			}
 		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
@@ -569,6 +599,10 @@ func listBackups(dir string) ([]string, error) {
 //     indexes.db, vec.flat.
 //  3. Transient files that never belong in a backup: server.json,
 //     gramaton.log*, .gramaton-*, .chunk-*.
+//
+// jobs.db is INCLUDED in backup snapshots (not derived state); the
+// walker takes a bbolt-native snapshot for it via Snapshot.JobsDB
+// to avoid torn-page reads.
 func shouldExcludeSnapshot(rel string, info os.FileInfo) bool {
 	if rel == "" || rel == "." {
 		return false // preserve the root dir entry itself

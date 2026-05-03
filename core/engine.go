@@ -23,6 +23,7 @@ import (
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/search"
 	"github.com/gramaton-ai/gramaton/storage"
@@ -41,6 +42,19 @@ type Engine struct {
 	prov     *providers
 	searcher *searcherSubsystem
 	headHash string
+
+	// jobStore is the F1 async-operation tracking store. Owns its own
+	// jobs.db file (separate from indexes.db). nil if engine init
+	// failed before jobStore opened. Close in Engine.Close before
+	// boltDB to keep error reporting tidy.
+	jobStore *jobs.Store
+
+	// jobSweepCancel stops the background TTL-based GC sweeper for
+	// terminal jobs. Set to a real cancel func when the sweeper is
+	// running; nil when SweepInterval is 0 (sweeper disabled). The
+	// sweeper goroutine respects this ctx and exits on Engine.Close.
+	jobSweepCancel context.CancelFunc
+	jobSweepDone   chan struct{} // closed when the sweeper goroutine exits
 
 	// accessDirty is set when access metadata (access_count,
 	// last_accessed, activation_boost) has been recorded in memory
@@ -223,8 +237,91 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	e.searcher = &searcherSubsystem{}
 	e.searcher.rebuild(g, idx.propIdx, idx.vecIdx, idx.bm25Full, idx.secIdx, e.prov.embedder, e.prov.llm, cfg)
 
+	// Open the F1 jobs store. Separate bbolt file from indexes.db so
+	// it survives backup/restore (indexes.db is excluded as derived
+	// state). Restart recovery: any in-flight job from a prior run
+	// is flipped to failed/server_restart before any HTTP listener
+	// can accept calls.
+	jobsPath := filepath.Join(cfg.DataDir, "jobs.db")
+	jobStore, err := jobs.New(jobsPath)
+	if err != nil {
+		return nil, fmt.Errorf("open jobs store: %w", err)
+	}
+	cleanups = append(cleanups, func() { _ = jobStore.Close() })
+	if err := recoverInFlightJobs(jobStore); err != nil {
+		return nil, fmt.Errorf("jobs restart recovery: %w", err)
+	}
+	e.jobStore = jobStore
+
+	// Spawn the GC sweeper goroutine if enabled. SweepInterval=0
+	// disables the sweeper; jobs then accumulate until manually
+	// pruned. We use a dedicated context so Engine.Close can cancel
+	// it cleanly; jobSweepDone closes when the goroutine exits.
+	if cfg.Jobs.SweepInterval > 0 {
+		sweepCtx, cancel := context.WithCancel(context.Background())
+		e.jobSweepCancel = cancel
+		e.jobSweepDone = make(chan struct{})
+		go runJobSweeper(sweepCtx, e.jobSweepDone, jobStore, cfg.Jobs)
+	}
+
 	success = true // disarm the deferred cleanup
 	return e, nil
+}
+
+// recoverInFlightJobs flips any pending/running job from a prior
+// run to failed with reason "server_restart". Called during engine
+// init BEFORE the HTTP listener is bound, so callers cannot observe
+// stale running jobs after a crash + restart.
+func recoverInFlightJobs(s *jobs.Store) error {
+	inflight, err := s.ListInFlight()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, j := range inflight {
+		j.Status = jobs.StatusFailed
+		j.FailureReason = "server_restart"
+		j.CompletedAt = now
+		if err := s.Update(j); err != nil {
+			return fmt.Errorf("recover job %s: %w", j.ID, err)
+		}
+	}
+	if len(inflight) > 0 {
+		slog.Info("recovered in-flight jobs as failed",
+			"component", "engine", "count", len(inflight))
+	}
+	return nil
+}
+
+// runJobSweeper runs the periodic TTL-based GC sweeper. Exits on
+// ctx cancellation. Closes done when it returns so Engine.Close
+// can wait for clean shutdown.
+func runJobSweeper(ctx context.Context, done chan struct{}, s *jobs.Store, cfg config.JobsConfig) {
+	defer close(done)
+	ret := jobs.RetentionPolicy{
+		Completed: cfg.Retention.Completed,
+		Failed:    cfg.Retention.Failed,
+		Cancelled: cfg.Retention.Cancelled,
+	}
+	t := time.NewTicker(cfg.SweepInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			deleted, err := s.RunGC(time.Now().UTC(), ret)
+			if err != nil {
+				slog.Warn("job sweep error",
+					"component", "engine", "err", err)
+				continue
+			}
+			if deleted > 0 {
+				slog.Info("job sweep deleted terminal jobs",
+					"component", "engine", "count", deleted)
+			}
+		}
+	}
 }
 
 // Config returns the engine's config. Safe for concurrent read.
@@ -669,6 +766,20 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 // Returns the first error encountered; all resources are closed regardless.
 func (e *Engine) Close() error {
 	var firstErr error
+
+	// Stop the job sweeper first so it can't fire mid-close. The
+	// goroutine respects sweepCtx and exits cleanly; we wait for
+	// it via jobSweepDone.
+	if e.jobSweepCancel != nil {
+		e.jobSweepCancel()
+		<-e.jobSweepDone
+	}
+
+	if e.jobStore != nil {
+		if err := e.jobStore.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	if err := e.indexes.close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -678,6 +789,14 @@ func (e *Engine) Close() error {
 		}
 	}
 	return firstErr
+}
+
+// JobStore returns the engine's job store. F1 capture_batch and
+// future async operations use this for tracking. Returns nil if
+// the engine was constructed in a way that bypassed jobs init
+// (test harnesses).
+func (e *Engine) JobStore() *jobs.Store {
+	return e.jobStore
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing

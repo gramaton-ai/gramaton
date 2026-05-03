@@ -39,6 +39,7 @@ type Config struct {
 	Observe   ObserveConfig   `yaml:"observe"`
 	Limits    LimitsConfig    `yaml:"limits"`
 	Search    SearchConfig    `yaml:"search"`
+	Jobs      JobsConfig      `yaml:"jobs"`
 
 	// --- Internal tuning (do not adjust casually) ---
 
@@ -729,6 +730,41 @@ type SearchConfig struct {
 	VectorOnlyPenalty float64 `yaml:"vector_only_penalty"`
 }
 
+// JobsConfig controls the `jobs/` package: persistence (one
+// jobs.db per store), TTL-based GC, default async-batch limits,
+// and the result-fetch timeout. The 0 = use default convention
+// applies to every duration and integer here.
+type JobsConfig struct {
+	// Retention. Zero = keep forever for that status. Defaults
+	// pinned at the engine init layer if zero.
+	Retention JobsRetention `yaml:"retention"`
+
+	// SweepInterval is how often the GC sweeper goroutine runs.
+	// Default 1h. Set to 0 to disable the sweeper entirely; jobs
+	// then accumulate until manually pruned.
+	SweepInterval time.Duration `yaml:"sweep_interval"`
+
+	// ResultDefaultTimeout is the default timeout for blocking
+	// result fetches when the caller doesn't specify one. Default
+	// 30 minutes.
+	ResultDefaultTimeout time.Duration `yaml:"result_default_timeout"`
+
+	// MaxAsyncBatchSize caps len(Items) on async-mode capture.
+	// Default 1000. 0 = use default.
+	MaxAsyncBatchSize int `yaml:"max_async_batch_size"`
+
+	// MaxBatchBytes caps the total content bytes per batch
+	// (sum of len(item.Content)). Default 256MB. 0 = use default.
+	MaxBatchBytes int64 `yaml:"max_batch_bytes"`
+}
+
+// JobsRetention is the per-status TTL for terminal jobs.
+type JobsRetention struct {
+	Completed time.Duration `yaml:"completed"`
+	Failed    time.Duration `yaml:"failed"`
+	Cancelled time.Duration `yaml:"cancelled"`
+}
+
 // =============================================================================
 // INTERNAL TUNING PARAMETERS
 // =============================================================================
@@ -1117,6 +1153,18 @@ func Defaults() Config {
 			VectorOnlyPenalty:   0.1,
 			RetrievalCandidates: 200,
 			SessionDedupEnabled: true,
+		},
+
+		Jobs: JobsConfig{
+			Retention: JobsRetention{
+				Completed: 90 * 24 * time.Hour,
+				Failed:    365 * 24 * time.Hour,
+				Cancelled: 90 * 24 * time.Hour,
+			},
+			SweepInterval:        1 * time.Hour,
+			ResultDefaultTimeout: 30 * time.Minute,
+			MaxAsyncBatchSize:    1000,
+			MaxBatchBytes:        256 * 1024 * 1024, // 256MB
 		},
 
 		// --- Internal tuning defaults ---

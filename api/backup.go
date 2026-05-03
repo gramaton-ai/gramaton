@@ -114,6 +114,13 @@ func (a *API) BackupCreate(ctx context.Context) (BackupCreateResponse, *APIError
 		a.log.Warn("backup: read snapshot failed", "component", "backup", "err", snapErr)
 		return BackupCreateResponse{}, ErrInternal("failed to snapshot store state")
 	}
+	// Populate the live JobStore handle so the walker can take a
+	// bbolt-native snapshot of jobs.db (instead of a torn os.ReadFile).
+	// JobStore is read-safe outside the engine lock — bbolt has its
+	// own concurrency.
+	if js := a.engine.JobStore(); js != nil {
+		snap.JobsDB = js.DB()
+	}
 	a.fireBackupSnapshotHook()
 
 	// Phase 2: compress off-lock.

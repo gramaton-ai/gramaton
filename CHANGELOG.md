@@ -9,6 +9,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`core.Engine` opens the `jobs.Store` and runs restart recovery
+  on init** (F1 Layer 2). `(*Engine).JobStore()` exposes the live
+  handle. In-flight jobs (status pending/running) from a prior run
+  are flipped to `failed/server_restart` BEFORE engine init returns,
+  so the HTTP listener can never observe stale running jobs after
+  a crash + restart. A background TTL-based GC sweeper goroutine
+  runs at `cfg.Jobs.SweepInterval` (default 1h); `Engine.Close()`
+  cancels it cleanly via context and waits for clean shutdown.
+  Disable the sweeper by setting `SweepInterval=0`.
+
+  New `JobsConfig` block in `config.yaml`:
+  ```yaml
+  jobs:
+    retention:
+      completed: 90d
+      failed:    365d
+      cancelled: 90d
+    sweep_interval:         1h
+    result_default_timeout: 30m
+    max_async_batch_size:   1000
+    max_batch_bytes:        268435456  # 256MB
+  ```
+  Zero values use defaults via the `0 = use default` convention.
+
+  Backup integration: `backup.Snapshot` gains an optional
+  `JobsDB *bolt.DB` field. When populated (api/ backup callsite
+  passes `engine.JobStore().DB()`), the walker takes a
+  bbolt-native coherent snapshot via `View+WriteTo` to avoid
+  torn-page reads under concurrent writes. The `shouldExcludeSnapshot`
+  list still excludes `indexes.db` (derived state) but now
+  INCLUDES `jobs.db`. Restore picks up the included file
+  automatically.
+
 - **New `jobs/` package: persistent tracking for long-running async
   operations** (F1 Layer 1 — prereq for `gramaton_capture_batch`).
   Bbolt-backed store in a dedicated `jobs.db` file separate from
