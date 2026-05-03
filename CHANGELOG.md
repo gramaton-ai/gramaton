@@ -7,6 +7,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **New `jobs/` package: persistent tracking for long-running async
+  operations** (F1 Layer 1 — prereq for `gramaton_capture_batch`).
+  Bbolt-backed store in a dedicated `jobs.db` file separate from
+  the engine's index store and graph commit log. Search isolation
+  by construction: jobs are not graph nodes, so curation and search
+  paths never see them.
+
+  Surface:
+  - `jobs.New(path) (*Store, error)` opens or creates `jobs.db`.
+  - `Job` struct with FormatVersion, Kind (capture_batch /
+    f4_import / future), Status, ClientToken + RequestHash for
+    idempotency, ClientRefToID for cross-chunk edge resolution,
+    Result (json.RawMessage), Errors slice, FailureReason.
+  - State machine with explicit transition whitelist:
+    pending→{running, cancelled, failed}, running→{completed,
+    failed, cancelled}. Terminal states have no outgoing edges.
+  - `Update(j)` validates transition atomically inside a single
+    bbolt write tx; rejects invalid with `ErrInvalidTransition`.
+    Same-status updates (e.g., bumping ProcessedCount) bypass
+    the whitelist.
+  - `AdvanceStatus(id, newStatus, mutator)` is the CAS-style
+    helper for runners: read + validate + mutator-applied + write,
+    all in one tx.
+  - `Create`, `Get`, `Delete`, `FindByClientToken` (linear scan,
+    returns most recent on token collision), `ListInFlight`
+    (pending+running for restart recovery), `List(filter)` →
+    `JobSummary` (lightweight projection without Result).
+  - `RunGC(now, RetentionPolicy{Completed, Failed, Cancelled})`
+    deletes terminal jobs older than configured TTL; in-flight
+    jobs never GC'd; zero retention duration means "keep
+    forever" for that status.
+  - Schema-evolution policy: per-Get migration on stale
+    FormatVersion. v1 is current; legacy v0 records (no
+    FormatVersion field) are migrated and persisted on first Get
+    so subsequent Gets are no-ops. Future versions chain
+    migrations in `migrate()`.
+
+  Tests cover: roundtrip with all fields populated; valid +
+  invalid transitions table-driven (every whitelist edge);
+  AdvanceStatus race with barrier-channel + count=20; reopen
+  after Close; corrupted JSON returns clean error not panic;
+  legacy v0 schema migration is idempotent; future format
+  version returns `ErrFutureFormatVersion`; List filter table
+  (status / kind / token / time-range / pagination); GC respects
+  TTL and skips in-flight; Supersedes chain walks; concurrent
+  readers + writer.
+
+  ~1634 LOC (675 impl + 959 test). Standalone-mergeable; no
+  engine wiring yet (Layer 2). Build plan at
+  `~/workspaces/gramaton-inspection/F1-build.md`.
+
 ### Changed
 
 - **BERT embedder: `Model.Forward` now takes a `*Scratch` parameter
