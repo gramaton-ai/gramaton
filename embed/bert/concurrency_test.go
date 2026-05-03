@@ -4,16 +4,29 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/config"
 )
 
 // goroutineCount returns the current number of goroutines.
 // Used as a leak guard in Layer D ctx-cancel tests.
 func goroutineCount() int { return runtime.NumGoroutine() }
+
+// hasCachedModel returns true if the real bge-small-en-v1.5 weights
+// are present in ~/.gramaton/models. Layer F's speedup-gate tests
+// skip when absent (download is out of scope for go test).
+func hasCachedModel() bool {
+	dir := ModelDir(DefaultModel)
+	_, err := os.Stat(filepath.Join(dir, "model.safetensors"))
+	return err == nil
+}
 
 // TestEmbedConcurrentDeterminism — fixed-length inputs.
 //
@@ -393,4 +406,204 @@ func TestEmbedConcurrentMixed(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// loadRealProvider opens the cached BERT model for Layer F's
+// speedup-gate tests. Skips when the model isn't cached; download
+// is out of scope for go test.
+func loadRealProvider(t *testing.T) *Provider {
+	t.Helper()
+	if !hasCachedModel() {
+		t.Skip("requires cached BERT model at " + ModelDir(DefaultModel))
+	}
+	p, err := New(config.EmbeddingConfig{Provider: "bert", Model: DefaultModel})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return p
+}
+
+// timeEmbed returns the wall-clock duration for a single Embed
+// call. Used by the speedup gates to compute ratios from a
+// per-run baseline so the assertions tolerate slow CI runners.
+func timeEmbed(t *testing.T, p *Provider, texts []string) time.Duration {
+	t.Helper()
+	start := time.Now()
+	if _, err := p.Embed(context.Background(), texts); err != nil {
+		t.Fatal(err)
+	}
+	return time.Since(start)
+}
+
+// TestEmbedSpeedupGateSingleCall4 — N=8 single-call wall-clock vs
+// 8 sequential single-text calls. Asserts >=1.8x speedup at
+// effective 4-worker concurrency. Conservative for memory-
+// bandwidth-bound matmul. Skips when NumCPU < 4.
+func TestEmbedSpeedupGateSingleCall4(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skipf("requires NumCPU >= 4, got %d", runtime.NumCPU())
+	}
+	p := loadRealProvider(t)
+	defer p.Close()
+	p.maxWorkers = 4
+
+	texts := make([]string, 8)
+	for i := range texts {
+		texts[i] = "the quick brown fox jumps over the lazy dog"
+	}
+
+	// Warm up (first call may pay one-time costs).
+	_, _ = p.Embed(context.Background(), []string{texts[0]})
+
+	// Sequential baseline: 8 separate Embed(N=1) calls.
+	seqStart := time.Now()
+	for _, text := range texts {
+		if _, err := p.Embed(context.Background(), []string{text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seqDur := time.Since(seqStart)
+
+	// Concurrent: one Embed(N=8) with maxWorkers=4.
+	parDur := timeEmbed(t, p, texts)
+
+	speedup := float64(seqDur) / float64(parDur)
+	t.Logf("seq=%v par=%v speedup=%.2fx", seqDur, parDur, speedup)
+	if speedup < 1.8 {
+		t.Errorf("speedup %.2fx below 1.8x gate (seq=%v, par=%v)",
+			speedup, seqDur, parDur)
+	}
+}
+
+// TestEmbedSpeedupGateSingleCall8 — N=64 single-call vs 64
+// sequential. Asserts >=2.5x at maxWorkers=8. Skips when
+// NumCPU < 8.
+func TestEmbedSpeedupGateSingleCall8(t *testing.T) {
+	if runtime.NumCPU() < 8 {
+		t.Skipf("requires NumCPU >= 8, got %d", runtime.NumCPU())
+	}
+	p := loadRealProvider(t)
+	defer p.Close()
+	p.maxWorkers = 8
+
+	texts := make([]string, 64)
+	for i := range texts {
+		texts[i] = "the quick brown fox jumps over the lazy dog"
+	}
+
+	_, _ = p.Embed(context.Background(), []string{texts[0]})
+
+	seqStart := time.Now()
+	for _, text := range texts {
+		if _, err := p.Embed(context.Background(), []string{text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seqDur := time.Since(seqStart)
+
+	parDur := timeEmbed(t, p, texts)
+
+	speedup := float64(seqDur) / float64(parDur)
+	t.Logf("seq=%v par=%v speedup=%.2fx", seqDur, parDur, speedup)
+	if speedup < 2.5 {
+		t.Errorf("speedup %.2fx below 2.5x gate (seq=%v, par=%v)",
+			speedup, seqDur, parDur)
+	}
+}
+
+// TestEmbedSpeedupGateMultiCaller4 — 4 concurrent goroutines
+// each calling Embed(N=1). Aggregate wall-clock vs sequential 4
+// separate calls. Asserts >=1.8x. Skips when NumCPU < 4.
+func TestEmbedSpeedupGateMultiCaller4(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skipf("requires NumCPU >= 4, got %d", runtime.NumCPU())
+	}
+	p := loadRealProvider(t)
+	defer p.Close()
+
+	const k = 4
+	const iters = 8 // each goroutine
+
+	_, _ = p.Embed(context.Background(), []string{"warmup"})
+
+	// Sequential: k*iters separate Embeds.
+	seqStart := time.Now()
+	for i := 0; i < k*iters; i++ {
+		if _, err := p.Embed(context.Background(), []string{"hello"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seqDur := time.Since(seqStart)
+
+	// Concurrent: k goroutines, each doing iters Embeds.
+	parStart := time.Now()
+	var wg sync.WaitGroup
+	for g := 0; g < k; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				if _, err := p.Embed(context.Background(), []string{"hello"}); err != nil {
+					t.Errorf("embed: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	parDur := time.Since(parStart)
+
+	speedup := float64(seqDur) / float64(parDur)
+	t.Logf("seq=%v par=%v speedup=%.2fx", seqDur, parDur, speedup)
+	if speedup < 1.8 {
+		t.Errorf("speedup %.2fx below 1.8x gate (seq=%v, par=%v)",
+			speedup, seqDur, parDur)
+	}
+}
+
+// TestEmbedSpeedupGateMultiCaller8 — 8 concurrent goroutines.
+// Asserts >=2.5x. Skips when NumCPU < 8.
+func TestEmbedSpeedupGateMultiCaller8(t *testing.T) {
+	if runtime.NumCPU() < 8 {
+		t.Skipf("requires NumCPU >= 8, got %d", runtime.NumCPU())
+	}
+	p := loadRealProvider(t)
+	defer p.Close()
+
+	const k = 8
+	const iters = 8
+
+	_, _ = p.Embed(context.Background(), []string{"warmup"})
+
+	seqStart := time.Now()
+	for i := 0; i < k*iters; i++ {
+		if _, err := p.Embed(context.Background(), []string{"hello"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seqDur := time.Since(seqStart)
+
+	parStart := time.Now()
+	var wg sync.WaitGroup
+	for g := 0; g < k; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iters; i++ {
+				if _, err := p.Embed(context.Background(), []string{"hello"}); err != nil {
+					t.Errorf("embed: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	parDur := time.Since(parStart)
+
+	speedup := float64(seqDur) / float64(parDur)
+	t.Logf("seq=%v par=%v speedup=%.2fx", seqDur, parDur, speedup)
+	if speedup < 2.5 {
+		t.Errorf("speedup %.2fx below 2.5x gate (seq=%v, par=%v)",
+			speedup, seqDur, parDur)
+	}
 }

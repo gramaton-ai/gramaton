@@ -52,7 +52,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BenchmarkEmbedMultiCaller`, `BenchmarkEmbedScratchPoolPressure`)
   with measured numbers on Apple M3: N=500 single Embed in 5.5s
   (well under F1's 15s target), 5.6x speedup at N=64 vs sequential.
-  Layers A-E of bert-parallel-embed; design at
+  Layer F adds **speedup gates** —
+  `TestEmbedSpeedupGateSingleCall4` (≥1.8x at 4 workers),
+  `TestEmbedSpeedupGateSingleCall8` (≥2.5x at 8 workers),
+  `TestEmbedSpeedupGateMultiCaller4` (≥1.8x), and
+  `TestEmbedSpeedupGateMultiCaller8` (≥2.5x). Skip cleanly on
+  underprovisioned hardware (NumCPU < threshold). Measured on
+  Apple M3: 3.20x / 4.90x / 3.31x / 4.68x — all comfortably
+  above the conservative gates. Layers A-F of bert-parallel-embed
+  COMPLETE; design at
   `~/workspaces/gramaton-inspection/bert-parallel-build.md`.
   New runtime dep: `golang.org/x/sync/errgroup`.
 
