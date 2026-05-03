@@ -115,6 +115,12 @@ const (
 	MaxBatchBytes = 256 * 1024 * 1024
 	// MaxClientRefLen caps the per-item ClientRef label.
 	MaxClientRefLen = 128
+	// MaxBatchEdgeMultiplier caps how many edges a batch may carry
+	// relative to its item count. The cap is len(Items) *
+	// MaxBatchEdgeMultiplier; rejecting a 10000-edge request against
+	// a 5-item batch keeps Phase 0 from chewing up unbounded
+	// validation work for an obviously-malformed request.
+	MaxBatchEdgeMultiplier = 10
 )
 
 // Search input cardinality limits.

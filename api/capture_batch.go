@@ -24,9 +24,52 @@ import (
 // canonicalized RequestHash provide cross-call idempotency.
 type CaptureBatchRequest struct {
 	Items            []CaptureBatchItem `json:"items" jsonschema:"items to capture (1 to MaxSyncBatchSize); each follows the gramaton_capture shape with an optional client_ref"`
+	Edges            []EdgeSpec         `json:"edges,omitempty" jsonschema:"intra-batch and to-existing-record edges. Capped at 10x item count. Each edge resolves source/target via either an existing record id or an in-batch client_ref."`
 	Wait             *bool              `json:"wait,omitempty" jsonschema:"true (sync, default) returns the full result inline; false (async) returns a job_id to poll. Layer 5 implements async; Layer 3 rejects wait=false."`
 	ClientToken      string             `json:"client_token,omitempty" jsonschema:"UUID. With identical request body returns the prior JobID idempotently; with a different body the same token is rejected."`
 	SkipSupersession bool               `json:"skip_supersession,omitempty" jsonschema:"when true, dedup-driven supersession is disabled for the entire batch. For migration imports."`
+}
+
+// EdgeSpec describes a single edge to create alongside the batch's
+// items. Exactly one of (SourceID, SourceClientRef) must be set per
+// endpoint; same for target. ID resolves to an existing record OR a
+// successful item from this batch. ClientRef resolves only to a
+// successful item in this batch.
+type EdgeSpec struct {
+	SourceID        string   `json:"source_id,omitempty" jsonschema:"existing record id OR id assigned to a successful batch item"`
+	SourceClientRef string   `json:"source_client_ref,omitempty" jsonschema:"client_ref of a batch item (mutually exclusive with source_id)"`
+	TargetID        string   `json:"target_id,omitempty" jsonschema:"existing record id OR id assigned to a successful batch item"`
+	TargetClientRef string   `json:"target_client_ref,omitempty" jsonschema:"client_ref of a batch item (mutually exclusive with target_id)"`
+	Type            string   `json:"type" jsonschema:"edge type (e.g. related_to, supports, contradicts)"`
+	Weight          *float64 `json:"weight,omitempty" jsonschema:"0.0-1.0; default 0.5"`
+}
+
+// EdgeAdded describes one edge that was successfully created. Index
+// maps back to the original Edges slice so callers can correlate.
+type EdgeAdded struct {
+	Index    int     `json:"index"`
+	EdgeID   string  `json:"edge_id"`
+	SourceID string  `json:"source_id"`
+	TargetID string  `json:"target_id"`
+	Type     string  `json:"type"`
+	Weight   float64 `json:"weight"`
+}
+
+// EdgeFailure describes one edge that did NOT commit. Code is one of:
+//   - source_item_failed / target_item_failed: the referenced
+//     ClientRef points at an item whose Phase 0 validation failed
+//   - source_id_not_found / target_id_not_found: the referenced ID
+//     (or ClientRef) doesn't resolve to any record
+//   - self_loop: source and target resolve to the same node
+//   - duplicate_edge: same (source, target, type) tuple appears
+//     earlier in the batch
+//   - invalid_type / invalid_weight: per-edge shape rejected
+//   - missing_endpoint: neither id nor client_ref supplied for an
+//     endpoint, or both supplied for the same endpoint
+type EdgeFailure struct {
+	Index   int    `json:"index"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // CaptureBatchItem is one record in a CaptureBatchRequest. Embeds the
@@ -69,18 +112,22 @@ type CaptureBatchStats struct {
 	AddedCount      int `json:"added_count"`
 	FailedCount     int `json:"failed_count"`
 	SupersededCount int `json:"superseded_count"`
+	EdgesAdded      int `json:"edges_added,omitempty"`
+	EdgesFailed     int `json:"edges_failed,omitempty"`
 }
 
 // CaptureBatchResponse is the canonical output of CaptureBatch. Sync
 // mode populates Added/Failed/Stats inline; async mode (Layer 5) fills
 // JobID + Status only and the caller polls.
 type CaptureBatchResponse struct {
-	JobID    string              `json:"job_id"`
-	Status   string              `json:"status"`
-	Added    []CaptureBatchAdded `json:"added,omitempty"`
-	Failed   []BatchItemFailure  `json:"failed,omitempty"`
-	Stats    CaptureBatchStats   `json:"stats"`
-	Warnings []string            `json:"warnings,omitempty"`
+	JobID       string              `json:"job_id"`
+	Status      string              `json:"status"`
+	Added       []CaptureBatchAdded `json:"added,omitempty"`
+	Failed      []BatchItemFailure  `json:"failed,omitempty"`
+	Edges       []EdgeAdded         `json:"edges,omitempty"`
+	EdgesFailed []EdgeFailure       `json:"edges_failed,omitempty"`
+	Stats       CaptureBatchStats   `json:"stats"`
+	Warnings    []string            `json:"warnings,omitempty"`
 }
 
 // CaptureBatchDescription is the MCP tool description shared by every
@@ -297,6 +344,79 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 		actions = append(actions, graph.CommitAction{Kind: graph.ActionCapture, RecordID: n.ID})
 	}
 
+	// Edge resolution + commit. Each edge resolves source/target via
+	// the in-batch ClientRef map, an existing record id, or both.
+	// Failures land in edgesFailed[]; successes append an ActionLink
+	// CommitAction for the same Save call as the items.
+	failedItemRefs := make(map[string]struct{}, len(failures))
+	for _, f := range failures {
+		if f.ClientRef != "" {
+			failedItemRefs[f.ClientRef] = struct{}{}
+		}
+	}
+	type edgeKey struct{ source, target, etype string }
+	seenEdges := make(map[edgeKey]int, len(req.Edges))
+	edgesAdded := make([]EdgeAdded, 0, len(req.Edges))
+	edgesFailed := make([]EdgeFailure, 0)
+	for i, espec := range req.Edges {
+		srcID, code, msg := a.resolveEdgeEndpoint(
+			"source", espec.SourceID, espec.SourceClientRef,
+			job.ClientRefToID, failedItemRefs,
+		)
+		if code != "" {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: code, Message: msg})
+			continue
+		}
+		tgtID, code, msg := a.resolveEdgeEndpoint(
+			"target", espec.TargetID, espec.TargetClientRef,
+			job.ClientRefToID, failedItemRefs,
+		)
+		if code != "" {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: code, Message: msg})
+			continue
+		}
+		if espec.Type == "" {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "invalid_type", Message: "type is required"})
+			continue
+		}
+		if len(espec.Type) > MaxEdgeTypeLen {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "invalid_type", Message: fmt.Sprintf("type exceeds %d characters", MaxEdgeTypeLen)})
+			continue
+		}
+		if err := validateFloat64Range("weight", espec.Weight, 0.0, 1.0); err != nil {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "invalid_weight", Message: err.Error()})
+			continue
+		}
+		if srcID == tgtID {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "self_loop", Message: "source and target are the same record"})
+			continue
+		}
+		key := edgeKey{source: srcID, target: tgtID, etype: espec.Type}
+		if prev, dup := seenEdges[key]; dup {
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "duplicate_edge", Message: fmt.Sprintf("duplicate of edges[%d]", prev)})
+			continue
+		}
+		seenEdges[key] = i
+		weight := 0.5
+		if espec.Weight != nil {
+			weight = *espec.Weight
+		}
+		edge, err := a.engine.Graph().AddEdge(srcID, tgtID, espec.Type, weight, nil)
+		if err != nil {
+			// Should be unreachable: we already verified both endpoints
+			// resolved to existing records. Treat as a transient
+			// internal error to keep the batch moving.
+			a.log.Warn("capture_batch unexpected AddEdge error",
+				"job_id", jobID, "edge_index", i, "err", err)
+			edgesFailed = append(edgesFailed, EdgeFailure{Index: i, Code: "internal_error", Message: "failed to create edge"})
+			continue
+		}
+		edgesAdded = append(edgesAdded, EdgeAdded{
+			Index: i, EdgeID: edge.ID, SourceID: srcID, TargetID: tgtID, Type: espec.Type, Weight: weight,
+		})
+		actions = append(actions, graph.CommitAction{Kind: graph.ActionLink, RecordID: srcID})
+	}
+
 	// Engine first, JobStore second. The fault injector lets tests
 	// simulate a Save failure without disturbing bbolt; in production
 	// it returns nil and the actual Save runs.
@@ -305,6 +425,14 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 		_, saveErr = a.engine.Save("capture_batch", actions...)
 	}
 	if saveErr != nil {
+		// Roll back edges first so DeleteNode below doesn't leave
+		// dangling edge references in the in-memory edge store.
+		for _, ea := range edgesAdded {
+			if err := a.engine.Graph().DeleteEdge(ea.EdgeID); err != nil {
+				a.log.Warn("capture_batch edge rollback failed",
+					"job_id", jobID, "edge_id", ea.EdgeID, "err", err)
+			}
+		}
 		for _, e := range rollback {
 			// Re-read current props so RemoveNode purges every entry
 			// added after AddNode (meta, embedding, orphan stamp).
@@ -344,15 +472,19 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 	job.CompletedAt = time.Now().UTC()
 	job.ProcessedCount = len(finalAdded) + len(failures)
 	resp := CaptureBatchResponse{
-		JobID:  jobID,
-		Status: jobs.StatusCompleted,
-		Added:  finalAdded,
-		Failed: failures,
+		JobID:       jobID,
+		Status:      jobs.StatusCompleted,
+		Added:       finalAdded,
+		Failed:      failures,
+		Edges:       edgesAdded,
+		EdgesFailed: edgesFailed,
 		Stats: CaptureBatchStats{
 			TotalItems:      len(req.Items),
 			AddedCount:      len(finalAdded),
 			FailedCount:     len(failures),
 			SupersededCount: supersededTotal,
+			EdgesAdded:      len(edgesAdded),
+			EdgesFailed:     len(edgesFailed),
 		},
 	}
 	if data, err := json.Marshal(resp); err == nil {
@@ -458,6 +590,50 @@ func (a *API) batchSupersedeIfDuplicate(newID string) []SupersededRecord {
 	}}
 }
 
+// resolveEdgeEndpoint returns the resolved record ID for one edge
+// endpoint, or a (code, message) failure tuple. Caller already holds
+// the engine write lock.
+//
+// Resolution rules:
+//   - Both id and ref empty                → missing_endpoint
+//   - Both id and ref set                  → missing_endpoint (caller must pick one)
+//   - ref points at a failed item          → source_item_failed / target_item_failed
+//   - ref doesn't appear in batch          → source_id_not_found / target_id_not_found
+//   - id doesn't resolve to existing node  → source_id_not_found / target_id_not_found
+//
+// The role parameter is "source" or "target" so failure codes carry
+// the right prefix.
+func (a *API) resolveEdgeEndpoint(
+	role, id, ref string,
+	clientRefToID map[string]string,
+	failedItemRefs map[string]struct{},
+) (resolved, code, msg string) {
+	hasID := id != ""
+	hasRef := ref != ""
+	if !hasID && !hasRef {
+		return "", "missing_endpoint", role + ": neither id nor client_ref supplied"
+	}
+	if hasID && hasRef {
+		return "", "missing_endpoint", role + ": id and client_ref are mutually exclusive"
+	}
+	if hasRef {
+		if _, failed := failedItemRefs[ref]; failed {
+			return "", role + "_item_failed", fmt.Sprintf("%s client_ref %q references an item that failed validation", role, ref)
+		}
+		assigned, ok := clientRefToID[ref]
+		if !ok {
+			return "", role + "_id_not_found", fmt.Sprintf("%s client_ref %q does not match any batch item", role, ref)
+		}
+		return assigned, "", ""
+	}
+	// id path: check whether the id is in the batch's freshly-assigned
+	// IDs (rare but valid) or an existing record.
+	if _, ok := a.engine.Graph().GetNode(id); !ok {
+		return "", role + "_id_not_found", fmt.Sprintf("%s id %q not found", role, id)
+	}
+	return id, "", ""
+}
+
 // embedTextForBatch derives the embedding text for one batch item,
 // preferring SummaryShort and capping Content at MaxSummaryShort to
 // match Capture's geometry.
@@ -509,13 +685,16 @@ func errorsFromFailures(in []BatchItemFailure) []jobs.ItemError {
 
 // validateBatchEnvelope checks the request-level invariants that don't
 // depend on per-item content. Item-level checks live in
-// validateBatchItem.
+// validateBatchItem; per-edge checks live in resolveEdge.
 func validateBatchEnvelope(req CaptureBatchRequest) error {
 	if len(req.Items) == 0 {
 		return errors.New("items must not be empty")
 	}
 	if len(req.Items) > MaxSyncBatchSize {
 		return fmt.Errorf("items exceeds maximum of %d", MaxSyncBatchSize)
+	}
+	if cap := len(req.Items) * MaxBatchEdgeMultiplier; len(req.Edges) > cap {
+		return fmt.Errorf("edges exceeds maximum of %d (%d items × %d)", cap, len(req.Items), MaxBatchEdgeMultiplier)
 	}
 	if req.ClientToken != "" {
 		if err := validateClientToken(req.ClientToken); err != nil {

@@ -9,6 +9,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Intra-batch edges in `gramaton_capture_batch`** (F1 Layer 4).
+  `Edges []EdgeSpec` in the request body lets the caller create
+  intra-batch and to-existing-record edges in the same commit as
+  the items they connect. Each EdgeSpec resolves source and
+  target via either an existing record id (`source_id`,
+  `target_id`) or a within-batch label (`source_client_ref`,
+  `target_client_ref`); exactly one of each pair must be set per
+  endpoint. Forward and backward references resolve correctly
+  regardless of item position. Edges share the items' single
+  Save call (one ActionLink CommitAction per edge); save-failure
+  rollback removes the in-memory edges before the node rollback.
+
+  Edges are capped at `len(Items) * MaxBatchEdgeMultiplier` (10x);
+  exceeding this is an envelope-level ErrInvalid. Per-edge
+  failures land in `edges_failed[]` with one of these codes:
+  `source_item_failed` / `target_item_failed` (referenced item
+  failed Phase 0 validation); `source_id_not_found` /
+  `target_id_not_found` (id or ref doesn't resolve); `self_loop`
+  (source and target resolve to the same node); `duplicate_edge`
+  (same source/target/type tuple already in the batch);
+  `invalid_type` (empty or over-length); `invalid_weight`
+  (NaN/Inf or out of [0,1]); `missing_endpoint` (neither id nor
+  ref supplied, or both supplied for the same endpoint).
+  `weight=0.0` is a valid edge weight; the canonical hash
+  includes Edges so a different edge set rejects ClientToken
+  reuse.
+
 - **`gramaton_capture_batch` MCP tool + `POST /v1/capture/batch`
   HTTP route + CLI proxy** (F1 Layer 3). Sync mode: stores up to
   500 records in a single call sharing one engine write lock and

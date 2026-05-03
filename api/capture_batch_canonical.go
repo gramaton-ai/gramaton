@@ -34,14 +34,29 @@ func canonicalizeRequest(req CaptureBatchRequest) ([]byte, error) {
 	for i, item := range req.Items {
 		c.Items[i] = canonicalizeItem(item)
 	}
+	if len(req.Edges) > 0 {
+		c.Edges = make([]EdgeSpec, len(req.Edges))
+		for i, e := range req.Edges {
+			c.Edges[i] = EdgeSpec{
+				SourceID:        e.SourceID,
+				SourceClientRef: e.SourceClientRef,
+				TargetID:        e.TargetID,
+				TargetClientRef: e.TargetClientRef,
+				Type:            e.Type,
+				Weight:          finiteOrNil(e.Weight),
+			}
+		}
+	}
 	return json.Marshal(c)
 }
 
 // canonicalRequest is the wire form fed into the hash. It mirrors
 // CaptureBatchRequest with Wait + ClientToken stripped and timestamps
-// normalized.
+// normalized. Edges affect semantics so they hash; their order is
+// preserved (caller-meaningful).
 type canonicalRequest struct {
 	Items            []canonicalItem `json:"items"`
+	Edges            []EdgeSpec      `json:"edges,omitempty"`
 	SkipSupersession bool            `json:"skip_supersession,omitempty"`
 }
 
