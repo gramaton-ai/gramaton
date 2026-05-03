@@ -94,6 +94,14 @@ type Job struct {
 	RequestHash     string `json:"request_hash,omitempty"`
 	SupersedesJobID string `json:"supersedes_job_id,omitempty"`
 
+	// TenantID scopes the job to a caller. Empty in single-tenant
+	// deployments; populated from request context when caller
+	// identity wires in. JobStore queries that don't restrict by
+	// TenantID will return rows from every tenant -- always pass the
+	// caller's TenantID through ListFilter and check Job.TenantID
+	// against the caller before returning a single-job projection.
+	TenantID string `json:"tenant_id,omitempty"`
+
 	TotalItems     int `json:"total_items"`
 	ProcessedCount int `json:"processed_count"`
 
@@ -148,8 +156,9 @@ type ListFilter struct {
 	Status        string    // "" = all
 	Kind          string    // "" = all
 	ClientToken   string    // "" = all
-	CreatedAfter  time.Time // zero = no lower bound
-	CreatedBefore time.Time // zero = no upper bound
+	TenantID      string    // "" matches "" (single-tenant); set to caller's tenant otherwise
+	CreatedAfter  time.Time // inclusive lower bound; zero = no lower bound
+	CreatedBefore time.Time // inclusive upper bound; zero = no upper bound
 	Limit         int       // 0 = use MaxListLimit default
 	Offset        int       // for pagination
 }
@@ -411,9 +420,11 @@ func (s *Store) Delete(id string) error {
 }
 
 // FindByClientToken returns the most recently-created Job with the
-// given ClientToken. Linear scan; N is bounded (jobs accumulate
-// slowly). Returns nil, nil if no match.
-func (s *Store) FindByClientToken(token string) (*Job, error) {
+// given (token, tenant) pair. ClientToken collisions across tenants
+// are independent: tenant A's token "abc" never matches tenant B's.
+// Linear scan; N is bounded (jobs accumulate slowly). Returns
+// (nil, nil) on no match.
+func (s *Store) FindByClientToken(token, tenant string) (*Job, error) {
 	if token == "" {
 		return nil, nil
 	}
@@ -429,6 +440,9 @@ func (s *Store) FindByClientToken(token string) (*Job, error) {
 				return fmt.Errorf("jobs: unmarshal during scan: %w", err)
 			}
 			if j.ClientToken != token {
+				return nil
+			}
+			if j.TenantID != tenant {
 				return nil
 			}
 			if found == nil || j.CreatedAt.After(found.CreatedAt) {
@@ -616,7 +630,9 @@ func summarize(j *Job) *JobSummary {
 }
 
 // filterMatches returns true if j passes every constraint in f.
-// Zero-value fields in f are unconstrained.
+// Zero-value fields in f are unconstrained EXCEPT TenantID, which
+// always requires equality (empty matches empty in single-tenant
+// deployments). Time bounds are inclusive: CreatedAt == bound passes.
 func filterMatches(j *Job, f ListFilter) bool {
 	if f.Status != "" && j.Status != f.Status {
 		return false
@@ -627,10 +643,13 @@ func filterMatches(j *Job, f ListFilter) bool {
 	if f.ClientToken != "" && j.ClientToken != f.ClientToken {
 		return false
 	}
-	if !f.CreatedAfter.IsZero() && !j.CreatedAt.After(f.CreatedAfter) {
+	if j.TenantID != f.TenantID {
 		return false
 	}
-	if !f.CreatedBefore.IsZero() && !j.CreatedAt.Before(f.CreatedBefore) {
+	if !f.CreatedAfter.IsZero() && j.CreatedAt.Before(f.CreatedAfter) {
+		return false
+	}
+	if !f.CreatedBefore.IsZero() && j.CreatedAt.After(f.CreatedBefore) {
 		return false
 	}
 	return true

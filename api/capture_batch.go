@@ -149,19 +149,16 @@ Per-item failures land in the response's failed[] array (the batch keeps going);
 // in the runner goroutine (same shape as sync, just off the request
 // path). L6 introduces multi-chunk + cross-chunk edge fixup.
 func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (CaptureBatchResponse, *APIError) {
-	if err := validateBatchEnvelope(req); err != nil {
-		return CaptureBatchResponse{}, ErrInvalid(err.Error())
-	}
-
 	asyncMode := req.Wait != nil && !*req.Wait
+	itemCap := MaxSyncBatchSize
 	if asyncMode {
-		cap := a.engine.Config().Jobs.MaxAsyncBatchSize
-		if cap <= 0 {
-			cap = MaxAsyncBatchSize
+		itemCap = a.engine.Config().Jobs.MaxAsyncBatchSize
+		if itemCap <= 0 {
+			itemCap = MaxAsyncBatchSize
 		}
-		if len(req.Items) > cap {
-			return CaptureBatchResponse{}, ErrInvalid(fmt.Sprintf("items exceeds maximum of %d for async mode", cap))
-		}
+	}
+	if err := validateBatchEnvelope(req, itemCap); err != nil {
+		return CaptureBatchResponse{}, ErrInvalid(err.Error())
 	}
 
 	store := a.engine.JobStore()
@@ -179,9 +176,12 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 	// ClientToken idempotency. A prior completed/running call with the
 	// same body returns the same JobID; mismatching body rejected;
 	// failed/cancelled prior gets a fresh job linked via SupersedesJobID.
+	// Lookup is scoped to the caller's tenant so the same token used
+	// by a different tenant never collides.
+	tenant := tenantFromContext(ctx)
 	var supersedesJobID string
 	if req.ClientToken != "" {
-		prior, err := store.FindByClientToken(req.ClientToken)
+		prior, err := store.FindByClientToken(req.ClientToken, tenant)
 		if err != nil {
 			a.log.Warn("capture_batch client_token lookup failed", "err", err)
 			return CaptureBatchResponse{}, ErrInternal("failed to look up client_token")
@@ -211,6 +211,7 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 		Status:          initialStatus,
 		CreatedAt:       now,
 		ClientToken:     req.ClientToken,
+		TenantID:        tenant,
 		RequestHash:     requestHash,
 		SupersedesJobID: supersedesJobID,
 		TotalItems:      len(req.Items),
@@ -255,6 +256,13 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 // the async path.
 func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req CaptureBatchRequest, job *jobs.Job) (CaptureBatchResponse, *APIError) {
 	store := a.engine.JobStore()
+	// Test-only panic-injection seam. The async runner's
+	// recoverAsyncPanic deferred handler observes the panic and marks
+	// the Job failed/panicked. Production never sets the injector so
+	// this branch is a no-op.
+	if err := a.injectFault(FaultPhasePanic); err != nil {
+		panic(err.Error())
+	}
 	// Phase 0/1: per-item validation off-lock. Failures stay attached
 	// to the original request index so the response order is stable.
 	itemValid := make([]bool, len(req.Items))
@@ -492,6 +500,9 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 			a.engine.PropIdx().RemoveNode(e.nodeID, currentProps)
 			a.engine.VecIdx().Remove(e.nodeID)
 			a.engine.BM25Full().Remove(e.nodeID)
+			if sec := a.engine.SecIdx(); sec != nil {
+				sec.RemoveNode(e.nodeID)
+			}
 			a.engine.Graph().DeleteNode(e.nodeID)
 		}
 		unlock()
@@ -731,14 +742,16 @@ func errorsFromFailures(in []BatchItemFailure) []jobs.ItemError {
 }
 
 // validateBatchEnvelope checks the request-level invariants that don't
-// depend on per-item content. Item-level checks live in
+// depend on per-item content. itemCap is the mode-specific item count
+// limit (MaxSyncBatchSize for sync, cfg.Jobs.MaxAsyncBatchSize or
+// MaxAsyncBatchSize for async). Per-item checks live in
 // validateBatchItem; per-edge checks live in resolveEdge.
-func validateBatchEnvelope(req CaptureBatchRequest) error {
+func validateBatchEnvelope(req CaptureBatchRequest, itemCap int) error {
 	if len(req.Items) == 0 {
 		return errors.New("items must not be empty")
 	}
-	if len(req.Items) > MaxSyncBatchSize {
-		return fmt.Errorf("items exceeds maximum of %d", MaxSyncBatchSize)
+	if len(req.Items) > itemCap {
+		return fmt.Errorf("items exceeds maximum of %d", itemCap)
 	}
 	if cap := len(req.Items) * MaxBatchEdgeMultiplier; len(req.Edges) > cap {
 		return fmt.Errorf("edges exceeds maximum of %d (%d items × %d)", cap, len(req.Items), MaxBatchEdgeMultiplier)
@@ -786,9 +799,15 @@ func validateBatchItem(item *CaptureBatchItem) error {
 // nests inside the `_gramaton.` namespace. Reserved for orphan-
 // recovery stamps and future internal bookkeeping; allowing a caller
 // to write here would let them shadow the import.job_id stamp.
+//
+// The check normalizes by trimming whitespace and lowercasing so
+// `" _GRAMATON.foo"` and `"\t_Gramaton.bar"` are also rejected --
+// otherwise an attacker could plant a quasi-reserved-namespace key
+// that fools casual auditors scanning for the prefix in lowercase.
 func validateReservedMetaNamespace(meta map[string]any) error {
 	for k := range meta {
-		if strings.HasPrefix(k, reservedMetaPrefix) || strings.Contains(k, reservedMetaInfix) {
+		norm := strings.ToLower(strings.TrimSpace(k))
+		if strings.HasPrefix(norm, reservedMetaPrefix) || strings.Contains(norm, reservedMetaInfix) {
 			return fmt.Errorf("meta key %q uses reserved namespace %q", k, reservedMetaPrefix)
 		}
 	}

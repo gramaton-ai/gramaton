@@ -337,7 +337,7 @@ func TestStoreFindByClientToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.FindByClientToken("tok-a")
+	got, err := s.FindByClientToken("tok-a", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestStoreFindByClientToken(t *testing.T) {
 		t.Errorf("got %+v, want id=a", got)
 	}
 
-	got, err = s.FindByClientToken("tok-missing")
+	got, err = s.FindByClientToken("tok-missing", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestStoreFindByClientToken(t *testing.T) {
 		t.Errorf("expected nil for missing token, got %+v", got)
 	}
 
-	got, err = s.FindByClientToken("")
+	got, err = s.FindByClientToken("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestStoreFindByClientTokenLatestWins(t *testing.T) {
 	_ = s.Create(older)
 	_ = s.Create(newer)
 
-	got, _ := s.FindByClientToken("tok")
+	got, _ := s.FindByClientToken("tok", "")
 	if got == nil || got.ID != "newer" {
 		t.Errorf("got %+v, want newer", got)
 	}
@@ -626,11 +626,17 @@ func TestStoreList(t *testing.T) {
 		}
 	})
 	t.Run("time range", func(t *testing.T) {
+		// CreatedAfter and CreatedBefore are both INCLUSIVE
+		// (api/jobs_list.go documents "lower-bound" / "upper-bound").
+		// All three jobs land in [t1, t3].
 		got, _ := s.List(ListFilter{CreatedAfter: t1, CreatedBefore: t3})
-		// CreatedAfter is exclusive; CreatedBefore is exclusive
-		// → only b (t2) qualifies.
+		if len(got) != 3 {
+			t.Errorf("inclusive [t1, t3]: got %d, want 3", len(got))
+		}
+		// Strict-inside via shifting bounds by one ns:
+		got, _ = s.List(ListFilter{CreatedAfter: t1.Add(time.Nanosecond), CreatedBefore: t3.Add(-time.Nanosecond)})
 		if len(got) != 1 || got[0].ID != "b" {
-			t.Errorf("got %+v, want only b", got)
+			t.Errorf("strict-inside: got %+v, want only b", got)
 		}
 	})
 	t.Run("pagination", func(t *testing.T) {

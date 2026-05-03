@@ -115,6 +115,10 @@ func (a *API) recoverAsyncPanic(jobID string) {
 // finalizeCancelled marks a Job that never started its core work as
 // cancelled with a specific reason. Used when ctx.Done() fires before
 // the runner enters its core path.
+//
+// Race guard: if a concurrent CaptureBatchCancel already flipped the
+// Job to cancelled, exit without touching it -- the cancel handler's
+// CompletedAt and FailureReason should win, not be clobbered.
 func (a *API) finalizeCancelled(jobID, reason string) {
 	store := a.engine.JobStore()
 	if store == nil {
@@ -122,6 +126,9 @@ func (a *API) finalizeCancelled(jobID, reason string) {
 	}
 	j, err := store.Get(jobID)
 	if err != nil {
+		return
+	}
+	if j.Status == jobs.StatusCancelled {
 		return
 	}
 	if j.Status != jobs.StatusPending && j.Status != jobs.StatusRunning {

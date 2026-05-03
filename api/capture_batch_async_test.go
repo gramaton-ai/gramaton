@@ -384,12 +384,14 @@ func TestJobsListFilters(t *testing.T) {
 		t.Errorf("expected >=3 completed jobs, got %d", all.Total)
 	}
 
-	// Filter by token returns a single job.
+	// Filter by token returns a single job. ClientToken is no longer
+	// surfaced in JobSummary (multi-tenant safety); confirm by ID
+	// instead.
 	one, apiErr := a.JobsList(context.Background(), JobsListRequest{ClientToken: tok1})
 	if apiErr != nil {
 		t.Fatalf("JobsList token: %v", apiErr)
 	}
-	if one.Total != 1 || one.Jobs[0].ClientToken != tok1 {
+	if one.Total != 1 || one.Jobs[0].ID != r1.JobID {
 		t.Errorf("token filter: got %d jobs (%+v)", one.Total, one.Jobs)
 	}
 

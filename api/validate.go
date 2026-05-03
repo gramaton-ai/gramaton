@@ -133,6 +133,23 @@ const (
 	// DefaultJobsListLimit is the limit applied when the request
 	// omits one.
 	DefaultJobsListLimit = 50
+	// MaxJobsListOffset caps the pagination offset. Once a caller
+	// is scrolling past 100k jobs, narrowing by status / kind / time
+	// is the right tool; allowing arbitrary offset turns a single
+	// request into an unbounded bbolt scan.
+	MaxJobsListOffset = 100_000
+	// MaxKindLen caps the Job kind filter string. The kind set is
+	// closed (capture_batch and future ops); 64 is generous.
+	MaxKindLen = 64
+	// MaxRFC3339Len caps the wire length of an RFC3339 timestamp
+	// argument. Real RFC3339 maxes around 30 characters; 64 leaves
+	// headroom for nanoseconds + offset and rejects pathological
+	// 10MB inputs.
+	MaxRFC3339Len = 64
+	// MaxResultTimeoutMS caps CaptureBatchResult's blocking timeout.
+	// Holding a connection for longer than this is a footgun; the
+	// caller should poll Status instead.
+	MaxResultTimeoutMS = 30 * 60 * 1000 // 30 minutes
 )
 
 // Search input cardinality limits.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/jobs"
@@ -14,7 +15,7 @@ import (
 // stuck job.
 type CaptureBatchResultRequest struct {
 	JobID     string `json:"job_id" jsonschema:"the job_id returned by gramaton_capture_batch"`
-	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"max ms to wait for terminal state; 0 = use cfg.Jobs.ResultDefaultTimeout (30 min); minimum 1 ms"`
+	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"max ms to wait for terminal state; 0 = use cfg.Jobs.ResultDefaultTimeout (30 min); max 30 minutes (1800000 ms)"`
 }
 
 // CaptureBatchResultDescription is the MCP tool description for
@@ -26,12 +27,23 @@ The call returns immediately if the job is already terminal. It honors the timeo
 For polling progress without blocking use gramaton_capture_batch_status.`
 
 // CaptureBatchResult blocks (with poll backoff) until the Job reaches
-// a terminal state or the timeout elapses. On timeout: returns the
-// current Job snapshot in CaptureBatchResponse and an ErrUnavailable
-// so the caller knows the wait didn't complete.
+// a terminal state or the timeout elapses. On timeout returns the
+// current Job snapshot and a "timeout" APIError so the caller knows
+// the wait didn't complete.
+//
+// The timeout is bounded by MaxResultTimeoutMS even when the caller
+// passes a larger value. Holding a connection for longer is a
+// footgun; the caller should poll Status instead. Per-tenant Job
+// access is enforced inside the poll loop.
 func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequest) (CaptureBatchResponse, *APIError) {
 	if req.JobID == "" {
 		return CaptureBatchResponse{}, ErrMissing("job_id is required")
+	}
+	if req.TimeoutMS < 0 {
+		return CaptureBatchResponse{}, ErrInvalid("timeout_ms must not be negative")
+	}
+	if req.TimeoutMS > MaxResultTimeoutMS {
+		return CaptureBatchResponse{}, ErrInvalid(fmt.Sprintf("timeout_ms exceeds %d (30 min)", MaxResultTimeoutMS))
 	}
 	store := a.engine.JobStore()
 	if store == nil {
@@ -52,6 +64,7 @@ func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequ
 	delay := 25 * time.Millisecond
 	const maxDelay = 1 * time.Second
 
+	tenant := tenantFromContext(ctx)
 	for {
 		j, err := store.Get(req.JobID)
 		if err != nil {
@@ -60,6 +73,9 @@ func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequ
 			}
 			a.log.Warn("capture_batch_result: get failed", "job_id", req.JobID, "err", err)
 			return CaptureBatchResponse{}, ErrInternal("failed to read job")
+		}
+		if !tenantOwnsJob(tenant, j.TenantID) {
+			return CaptureBatchResponse{}, ErrNotFound("job not found")
 		}
 		switch j.Status {
 		case jobs.StatusCompleted, jobs.StatusFailed, jobs.StatusCancelled:

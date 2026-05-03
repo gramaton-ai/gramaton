@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"math"
-	"sort"
 	"time"
 )
 
@@ -43,11 +42,34 @@ func canonicalizeRequest(req CaptureBatchRequest) ([]byte, error) {
 				TargetID:        e.TargetID,
 				TargetClientRef: e.TargetClientRef,
 				Type:            e.Type,
-				Weight:          finiteOrNil(e.Weight),
+				Weight:          defaultedEdgeWeight(e.Weight),
 			}
 		}
 	}
 	return json.Marshal(c)
+}
+
+// defaultedEdgeWeight normalizes EdgeSpec.Weight for canonical hashing.
+// Weight=nil and Weight=&0.5 produce identical edges in production
+// (the default kicks in at AddEdge time), so they must produce
+// identical canonical bytes too — otherwise a retry that serializes
+// the default explicitly vs implicitly would be rejected for
+// ClientToken reuse with a different request body.
+//
+// NaN/Inf are dropped to the default rather than nil so the
+// canonical bytes are always JSON-marshalable; per-edge validation
+// rejects NaN/Inf separately on the per-edge failure path.
+func defaultedEdgeWeight(p *float64) *float64 {
+	const defaultWeight = 0.5
+	if p == nil {
+		w := defaultWeight
+		return &w
+	}
+	if math.IsNaN(*p) || math.IsInf(*p, 0) {
+		w := defaultWeight
+		return &w
+	}
+	return p
 }
 
 // canonicalRequest is the wire form fed into the hash. It mirrors
@@ -184,6 +206,3 @@ func normalizeMeta(m map[string]any) map[string]any {
 	return out
 }
 
-// canonicalSortedKeys is exposed for tests; kept private through the
-// upstream validation helpers.
-var _ = sort.Strings

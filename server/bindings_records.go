@@ -63,7 +63,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("GET /v1/capture/batch/{job_id}/result", func(w http.ResponseWriter, r *http.Request) {
-		timeoutMS := parseIntParam(r, "timeout_ms", 0, 1<<31-1)
+		timeoutMS := parseIntParam(r, "timeout_ms", 0, api.MaxResultTimeoutMS)
 		resp, apiErr := s.api.CaptureBatchResult(r.Context(), api.CaptureBatchResultRequest{
 			JobID:     r.PathValue("job_id"),
 			TimeoutMS: timeoutMS,

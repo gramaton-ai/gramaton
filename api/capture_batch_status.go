@@ -35,8 +35,9 @@ const CaptureBatchStatusDescription = `Inspect the live state of an async gramat
 Safe to poll repeatedly; the call is read-only against the JobStore.`
 
 // CaptureBatchStatus reads the current Job state. Read-only; never
-// touches the engine write lock.
-func (a *API) CaptureBatchStatus(_ context.Context, req CaptureBatchStatusRequest) (CaptureBatchStatusResponse, *APIError) {
+// touches the engine write lock. Cross-tenant access surfaces
+// ErrNotFound rather than ErrForbidden so existence isn't leaked.
+func (a *API) CaptureBatchStatus(ctx context.Context, req CaptureBatchStatusRequest) (CaptureBatchStatusResponse, *APIError) {
 	if req.JobID == "" {
 		return CaptureBatchStatusResponse{}, ErrMissing("job_id is required")
 	}
@@ -51,6 +52,9 @@ func (a *API) CaptureBatchStatus(_ context.Context, req CaptureBatchStatusReques
 		}
 		a.log.Warn("capture_batch_status: get failed", "job_id", req.JobID, "err", err)
 		return CaptureBatchStatusResponse{}, ErrInternal("failed to read job")
+	}
+	if !tenantOwnsJob(tenantFromContext(ctx), j.TenantID) {
+		return CaptureBatchStatusResponse{}, ErrNotFound("job not found")
 	}
 	return CaptureBatchStatusResponse{
 		JobID:          j.ID,

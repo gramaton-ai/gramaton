@@ -7,6 +7,80 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **F1 review-pass A: hardening + multi-tenancy foundation.** Lands
+  before F1 Layer 6 to address the critical and medium findings from
+  the L3-L5 review.
+
+  Critical fix:
+  - `server.Run()` and `server.Shutdown()` now call
+    `api.ShutdownAsync(ctx)` after `httpServer.Shutdown` and before
+    `engine.Close()`. Without this, a SIGTERM during an in-flight
+    async batch tore down the bbolt handle while the runner was
+    mid-Save (panic + possible mmap corruption). The CHANGELOG
+    claim "Server callers ... drain runners before the engine close"
+    is now true.
+
+  Multi-tenancy foundation (single-tenant deployments unaffected):
+  - `jobs.Job` gains an additive `TenantID` field (omitempty).
+  - `jobs.ListFilter` gains `TenantID`; `filterMatches` always
+    requires equality (empty matches empty in single-tenant).
+  - `jobs.Store.FindByClientToken(token, tenant)` is scoped: same
+    token across different tenants doesn't collide.
+  - `api.WithTenant(ctx, id)` / `tenantFromContext(ctx)` helper plus
+    `tenantOwnsJob(caller, jobTenant)`. `CaptureBatchStatus`,
+    `CaptureBatchCancel`, and `CaptureBatchResult` enforce
+    ownership: cross-tenant access surfaces `ErrNotFound` (not
+    `ErrForbidden`) so existence isn't leaked. `JobsList` always
+    filters by caller tenant.
+  - `JobSummary` no longer surfaces `ClientToken`. Listing other
+    tenants' tokens would let one caller guess another's
+    idempotency window. Single-job lookup with an explicit JobID
+    still returns ClientToken via `CaptureBatchStatus`.
+  - Until real caller identity wires in, `tenantFromContext` returns
+    "" everywhere, all filters degenerate to single-tenant
+    behavior, and Job records carry `TenantID=""`. The data layer
+    is ready for the multi-tenant switch-over without a migration.
+
+  Mechanical fixes:
+  - `JobsListRequest`: bounded `Kind` (`MaxKindLen=64`), `Since` /
+    `Until` (`MaxRFC3339Len=64`), `ClientToken` (UUID-validated),
+    `Offset` (`MaxJobsListOffset=100k`). `time.Parse` errors no
+    longer echo caller input verbatim into `APIError.Message`.
+  - `CaptureBatchResultRequest.TimeoutMS` capped at 30 minutes
+    (`MaxResultTimeoutMS`); negative values rejected. HTTP route's
+    `parseIntParam` cap reduced from `1<<31-1` to the constant.
+  - Reserved-namespace check on meta keys now normalizes via
+    `ToLower(TrimSpace(k))` so `" _GRAMATON.foo"` and similar
+    bypasses are also rejected.
+  - Sync vs async item-count cap reordered: the mode-specific cap
+    (sync=500 / async=1000) is computed before
+    `validateBatchEnvelope` runs, so an async request with 600 items
+    no longer fails the sync cap before reaching async validation.
+  - `EdgeSpec.Weight=nil` and `Weight=&0.5` now produce identical
+    canonical bytes via `defaultedEdgeWeight`. ClientToken-based
+    retries that serialize the default explicitly vs implicitly are
+    no longer rejected for body mismatch.
+  - Async runner's `finalizeCancelled` skips when Job is already
+    cancelled; previously it overwrote the cancel handler's
+    CompletedAt + FailureReason on a race.
+  - Save-failure rollback now also purges `SecIdx` (BboltSecondary
+    Index) so field-existence and timestamp entries don't ghost
+    after a Save error.
+
+  Time-range filter semantics: `jobs.ListFilter.CreatedAfter` and
+  `CreatedBefore` are now INCLUSIVE (the previous strict-after /
+  strict-before behavior didn't match the documented "lower-bound"
+  and "upper-bound" wording). Existing callers using exact-second
+  bounds will see one extra job per query.
+
+  Test seam: new `FaultPhasePanic` constant. When an injector returns
+  a non-nil error for that phase, `runCaptureBatchCore` panics with
+  the error message — pinning the async runner's panic-recovery path
+  in tests. `FaultPhaseJobstoreFailMark` (declared but unused)
+  removed.
+
 ### Added
 
 - **Async mode for `gramaton_capture_batch` + 4 companion MCP tools**

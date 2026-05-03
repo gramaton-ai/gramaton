@@ -439,6 +439,14 @@ func (s *Server) Run() error {
 		s.log.Error("shutdown error", "err", err)
 	}
 
+	// Drain async batch runners before closing the engine. A runner
+	// touching engine.Save against a closed bbolt handle would panic
+	// or corrupt on-disk state; ShutdownAsync gates new submits and
+	// waits for in-flight runners to exit.
+	if err := s.api.ShutdownAsync(ctx); err != nil {
+		s.log.Warn("async runner drain timed out", "err", err)
+	}
+
 	// Persist LLM usage tracking.
 	if s.usageTracker != nil {
 		s.usageTracker.Persist()
@@ -515,6 +523,12 @@ func (s *Server) Shutdown() {
 	defer ctxCancel()
 	s.httpServer.Shutdown(ctx)
 	s.removeServerInfo()
+
+	// Drain async batch runners before closing the engine. See Run()
+	// comment.
+	if err := s.api.ShutdownAsync(ctx); err != nil {
+		s.log.Warn("async runner drain timed out", "err", err)
+	}
 
 	// Close the engine (flushes mmap vectors, closes bbolt DB).
 	if err := s.engine.Close(); err != nil {

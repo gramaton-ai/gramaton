@@ -88,9 +88,12 @@ type FaultInjector interface {
 // Phase names recognized by FaultInjector. Defined as constants so
 // implementations don't drift from the call sites.
 const (
-	FaultPhaseChunkSave       = "chunk_save"
-	FaultPhaseJobstoreUpdate  = "jobstore_update"
-	FaultPhaseJobstoreFailMark = "jobstore_fail_mark"
+	FaultPhaseChunkSave      = "chunk_save"
+	FaultPhaseJobstoreUpdate = "jobstore_update"
+	// FaultPhasePanic is honored only by FaultInjector implementations
+	// that can panic on demand. CaptureBatch's runner consults this
+	// via tests via the panic-injection seam.
+	FaultPhasePanic = "panic"
 )
 
 // Dependencies holds the collaborators an API needs at construction.

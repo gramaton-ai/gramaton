@@ -35,7 +35,7 @@ Idempotent: cancelling an already-cancelled or already-terminal job returns the 
 // the runner's context (which the runner observes between chunks and
 // during embed). One retry on transient JobStore.Update failure to
 // tolerate brief bbolt contention.
-func (a *API) CaptureBatchCancel(_ context.Context, req CaptureBatchCancelRequest) (CaptureBatchCancelResponse, *APIError) {
+func (a *API) CaptureBatchCancel(ctx context.Context, req CaptureBatchCancelRequest) (CaptureBatchCancelResponse, *APIError) {
 	if req.JobID == "" {
 		return CaptureBatchCancelResponse{}, ErrMissing("job_id is required")
 	}
@@ -53,6 +53,9 @@ func (a *API) CaptureBatchCancel(_ context.Context, req CaptureBatchCancelReques
 		}
 		a.log.Warn("capture_batch_cancel: get failed", "job_id", req.JobID, "err", err)
 		return CaptureBatchCancelResponse{}, ErrInternal("failed to read job")
+	}
+	if !tenantOwnsJob(tenantFromContext(ctx), j.TenantID) {
+		return CaptureBatchCancelResponse{}, ErrNotFound("job not found")
 	}
 	if j.Status == jobs.StatusCompleted || j.Status == jobs.StatusFailed || j.Status == jobs.StatusCancelled {
 		return CaptureBatchCancelResponse{
