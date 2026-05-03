@@ -20,12 +20,17 @@ import (
 // Munmap. Embed re-checks the model/tokenizer fields under the lock and
 // returns "bert: provider closed" if a concurrent Close zeroed them --
 // callers must NOT call Embed after Close returns.
+//
+// scratch is the single Forward buffer used by Embed. Layer A keeps it
+// here for compatibility; Layer B replaces it with a sync.Pool to enable
+// per-call buffers for concurrent Forward.
 type Provider struct {
 	model     *Model
 	tokenizer *Tokenizer
 	st        *SafeTensors
 	modelID   string
 	ctxWindow int
+	scratch   *Scratch
 	mu        sync.Mutex
 }
 
@@ -107,6 +112,7 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 		st:        st,
 		modelID:   model,
 		ctxWindow: modelCfg.MaxPositionEmbeds,
+		scratch:   NewScratch(modelCfg.MaxPositionEmbeds, modelCfg),
 	}, nil
 }
 
@@ -135,7 +141,7 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 			return nil, fmt.Errorf("bert: provider closed")
 		}
 		ids, mask, _ := p.tokenizer.Encode(text)
-		embedding := p.model.Forward(ids, mask)
+		embedding := p.model.Forward(p.scratch, ids, mask)
 		p.mu.Unlock()
 
 		results[i] = embedding
@@ -172,5 +178,6 @@ func (p *Provider) Close() error {
 	p.st = nil
 	p.model = nil
 	p.tokenizer = nil
+	p.scratch = nil
 	return err
 }

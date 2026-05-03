@@ -9,11 +9,13 @@ import (
 
 // Model holds the weights and configuration for BERT inference.
 // Weights are backed by mmap'd safetensors data (zero-copy).
+//
+// Read-only after LoadModel. Concurrent Forward calls are safe
+// when each caller supplies its own Scratch.
 type Model struct {
 	Config    ModelConfig
 	Embedding EmbeddingWeights
 	Layers    []EncoderLayer
-	scratch   *scratch
 }
 
 // ModelConfig holds the BERT model hyperparameters, typically
@@ -69,9 +71,14 @@ type LayerNormWeights struct {
 	Bias   []float32 // [HiddenSize]
 }
 
-// scratch holds pre-allocated buffers reused across forward passes.
-// Avoids allocation on the hot path. Sized for max sequence length.
-type scratch struct {
+// Scratch holds pre-allocated buffers used by Forward. Each Forward
+// call writes every buffer location before reading (verified in
+// Layer A audit), so a recycled Scratch is safe to reuse across
+// calls without zeroing.
+//
+// Each goroutine running Forward must supply its own Scratch.
+// Concurrent reuse of the same Scratch instance corrupts output.
+type Scratch struct {
 	hidden  []float32 // [maxSeq, hiddenSize]
 	qkv     []float32 // [maxSeq, hiddenSize*3] for fused Q,K,V
 	attn    []float32 // [numHeads, maxSeq, maxSeq]
@@ -80,9 +87,12 @@ type scratch struct {
 	proj    []float32 // [maxSeq, hiddenSize]
 }
 
-func newScratch(maxSeq int, cfg ModelConfig) *scratch {
+// NewScratch allocates a Scratch sized for the given configuration.
+// Sized for max sequence length so the same Scratch handles any
+// input up to MaxPositionEmbeds tokens.
+func NewScratch(maxSeq int, cfg ModelConfig) *Scratch {
 	h := cfg.HiddenSize
-	return &scratch{
+	return &Scratch{
 		hidden:  make([]float32, maxSeq*h),
 		qkv:     make([]float32, maxSeq*h*3),
 		attn:    make([]float32, cfg.NumAttentionHeads*maxSeq*maxSeq),
@@ -183,19 +193,21 @@ func LoadModel(st *SafeTensors, cfg ModelConfig) (*Model, error) {
 		}
 	}
 
-	m.scratch = newScratch(cfg.MaxPositionEmbeds, cfg)
 	return m, nil
 }
 
 // Forward runs the BERT encoder and returns the CLS embedding (L2-normalized).
 // tokenIDs and attentionMask must be the same length (<= MaxPositionEmbeds).
-func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
+//
+// The caller supplies a Scratch sized for the model's MaxPositionEmbeds.
+// Each goroutine calling Forward concurrently must use its own Scratch.
+func (m *Model) Forward(s *Scratch, tokenIDs, attentionMask []int32) []float32 {
 	seqLen := len(tokenIDs)
 	h := m.Config.HiddenSize
 	eps := m.Config.LayerNormEps
 
 	// --- Embedding lookup ---
-	hidden := m.scratch.hidden[:seqLen*h]
+	hidden := s.hidden[:seqLen*h]
 	for i, tid := range tokenIDs {
 		row := hidden[i*h : (i+1)*h]
 		wOff := int(tid) * h
@@ -219,9 +231,9 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 		layer := &m.Layers[li]
 
 		// Self-attention: compute Q, K, V projections.
-		q := m.scratch.qkv[:seqLen*h]
-		k := m.scratch.qkv[seqLen*h : 2*seqLen*h]
-		v := m.scratch.qkv[2*seqLen*h : 3*seqLen*h]
+		q := s.qkv[:seqLen*h]
+		k := s.qkv[seqLen*h : 2*seqLen*h]
+		v := s.qkv[2*seqLen*h : 3*seqLen*h]
 
 		ZeroSlice(q)
 		ZeroSlice(k)
@@ -231,8 +243,8 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 		MatMulAdd(hidden, layer.Attn.V.Weight, seqLen, h, h, layer.Attn.V.Bias, v)
 
 		// Multi-head attention.
-		context := m.scratch.context[:seqLen*h]
-		attnBuf := m.scratch.attn[:numHeads*seqLen*seqLen]
+		context := s.context[:seqLen*h]
+		attnBuf := s.attn[:numHeads*seqLen*seqLen]
 
 		for head := 0; head < numHeads; head++ {
 			// Extract per-head Q, K slices (interleaved in the full projection).
@@ -273,7 +285,7 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 		}
 
 		// Output projection + residual + layer norm.
-		proj := m.scratch.proj[:seqLen*h]
+		proj := s.proj[:seqLen*h]
 		ZeroSlice(proj)
 		MatMulAdd(context, layer.Attn.O.Weight, seqLen, h, h, layer.Attn.O.Bias, proj)
 
@@ -286,7 +298,7 @@ func (m *Model) Forward(tokenIDs, attentionMask []int32) []float32 {
 		LayerNorm(hidden, layer.AttnLN.Weight, layer.AttnLN.Bias, seqLen, h, eps)
 
 		// Feed-forward network.
-		ffn := m.scratch.ffn[:seqLen*m.Config.IntermediateSize]
+		ffn := s.ffn[:seqLen*m.Config.IntermediateSize]
 		ZeroSlice(ffn)
 		MatMulAdd(hidden, layer.FFNUp.Weight, seqLen, h, m.Config.IntermediateSize, layer.FFNUp.Bias, ffn)
 		GELU(ffn)

@@ -148,7 +148,8 @@ func TestForwardTinyModel(t *testing.T) {
 	tokenIDs := []int32{2, 1, 3}
 	mask := []int32{1, 1, 1}
 
-	result := m.Forward(tokenIDs, mask)
+	scratch := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	result := m.Forward(scratch, tokenIDs, mask)
 
 	// Verify output dimension.
 	if len(result) != cfg.HiddenSize {
@@ -165,7 +166,9 @@ func TestForwardTinyModel(t *testing.T) {
 	}
 
 	// Verify deterministic: same input -> same output.
-	result2 := m.Forward(tokenIDs, mask)
+	// Use a fresh scratch to also verify scratch reuse across calls.
+	scratch2 := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	result2 := m.Forward(scratch2, tokenIDs, mask)
 	for i := range result {
 		if result[i] != result2[i] {
 			t.Errorf("non-deterministic: result[%d] = %v vs %v", i, result[i], result2[i])
@@ -191,7 +194,8 @@ func TestForwardSingleToken(t *testing.T) {
 	tokenIDs := []int32{2, 3}
 	mask := []int32{1, 1}
 
-	result := m.Forward(tokenIDs, mask)
+	scratch := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	result := m.Forward(scratch, tokenIDs, mask)
 	if len(result) != cfg.HiddenSize {
 		t.Fatalf("output dim: got %d, want %d", len(result), cfg.HiddenSize)
 	}
@@ -203,6 +207,60 @@ func TestForwardSingleToken(t *testing.T) {
 	}
 	if math.Abs(norm-1.0) > 1e-4 {
 		t.Errorf("output not L2 normalized: |v|^2 = %v", norm)
+	}
+}
+
+// TestForwardScratchReuseSafety verifies that recycling a Scratch
+// across Forward calls produces byte-identical output to a fresh
+// Scratch. The audit established that every buffer location is
+// written before being read, so reuse is safe in principle. This
+// test guards the property by deliberately filling a recycled
+// Scratch with NaN: any read-before-write would taint the
+// L2-normalized output (NaN propagates through arithmetic) and
+// fail the byte-identity check.
+func TestForwardScratchReuseSafety(t *testing.T) {
+	path, cfg := buildTinyModel(t)
+
+	st, err := OpenSafeTensors(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m, err := LoadModel(st, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokenIDs := []int32{2, 1, 3}
+	mask := []int32{1, 1, 1}
+
+	// Reference run: fresh Scratch.
+	fresh := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	want := m.Forward(fresh, tokenIDs, mask)
+
+	// Tainted run: pre-fill every buffer with NaN, then run Forward.
+	nan := float32(math.NaN())
+	tainted := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	for _, buf := range [][]float32{
+		tainted.hidden, tainted.qkv, tainted.attn,
+		tainted.context, tainted.ffn, tainted.proj,
+	} {
+		for i := range buf {
+			buf[i] = nan
+		}
+	}
+	got := m.Forward(tainted, tokenIDs, mask)
+
+	if len(got) != len(want) {
+		t.Fatalf("output length: got %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("scratch reuse drift at output[%d]: got %v, want %v",
+				i, got[i], want[i])
+			break
+		}
 	}
 }
 

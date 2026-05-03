@@ -63,6 +63,7 @@ func TestProviderTiny(t *testing.T) {
 		st:        st,
 		modelID:   "tiny-test",
 		ctxWindow: cfg.MaxPositionEmbeds,
+		scratch:   NewScratch(cfg.MaxPositionEmbeds, cfg),
 	}
 	defer p.Close()
 
@@ -144,7 +145,8 @@ func TestProviderContextCancellation(t *testing.T) {
 	tokData, _ := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
 	tok, _ := NewTokenizerFromJSON(tokData)
 
-	p := &Provider{model: m, tokenizer: tok, st: st, modelID: "test", ctxWindow: 8}
+	p := &Provider{model: m, tokenizer: tok, st: st, modelID: "test", ctxWindow: 8,
+		scratch: NewScratch(cfg.MaxPositionEmbeds, cfg)}
 	defer p.Close()
 
 	// Cancel context before calling Embed.
@@ -221,7 +223,8 @@ func TestGoldenBGESmall(t *testing.T) {
 	ids, mask, _ := tok.Encode("hello world")
 	t.Logf("tokens: %v (len=%d)", ids, len(ids))
 
-	embedding := m.Forward(ids, mask)
+	scratch := NewScratch(cfg.MaxPositionEmbeds, cfg)
+	embedding := m.Forward(scratch, ids, mask)
 
 	// Verify dimension.
 	if len(embedding) != 384 {
@@ -253,8 +256,9 @@ func TestGoldenBGESmall(t *testing.T) {
 	t.Logf("embedding[:5] = %v", embedding[:5])
 
 	// Test that different texts produce different embeddings.
+	// Reuse the scratch to also exercise the reuse-safety property.
 	ids2, mask2, _ := tok.Encode("the quick brown fox")
-	embedding2 := m.Forward(ids2, mask2)
+	embedding2 := m.Forward(scratch, ids2, mask2)
 
 	// Compute cosine similarity.
 	var dot float64
