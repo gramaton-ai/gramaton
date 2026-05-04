@@ -70,6 +70,11 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "segment" {
 			continue
 		}
+		// Effective curation gate: skip records whose collection
+		// memberships resolve to curation=none.
+		if EffectiveCurationFor(e.Graph(), n.ID).Curation == "none" {
+			continue
+		}
 		content, ok := n.Properties.GetString("content_full")
 		minLen := cfg.Curation.ObservationMinContentLength
 		if minLen <= 0 {

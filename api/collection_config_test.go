@@ -10,7 +10,7 @@ import (
 // TestCollectionConfigDefaults confirms the read-time fallback: a
 // collection created without explicit config returns the default for
 // every getter. This is the "no migration sweep needed" guarantee --
-// Phase 5 + Phase 8 consumers can read through these getters without
+// downstream consumers can read through these getters without
 // worrying about pre-existing collections.
 func TestCollectionConfigDefaults(t *testing.T) {
 	a, eng := setupTestAPI(t)
@@ -34,6 +34,9 @@ func TestCollectionConfigDefaults(t *testing.T) {
 	if got := CollectionCuration(n); got != DefaultCuration {
 		t.Errorf("Curation default: got %q, want %q", got, DefaultCuration)
 	}
+	if got := CollectionContradictions(n); got != DefaultContradictions {
+		t.Errorf("Contradictions default: got %q, want %q", got, DefaultContradictions)
+	}
 }
 
 // TestCollectionConfigRoundTrip creates a collection with explicit
@@ -44,10 +47,11 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	coll, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
-		Name:         "With-Config",
-		ClearMode:    "unlink",
-		Supersession: "store",
-		Curation:     "minimal",
+		Name:           "With-Config",
+		ClearMode:      "unlink",
+		Supersession:   "store",
+		Curation:       "none",
+		Contradictions: "off",
 	})
 	if apiErr != nil {
 		t.Fatalf("create: %v", apiErr)
@@ -60,8 +64,11 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	if got := CollectionSupersession(n); got != SupersessionStore {
 		t.Errorf("Supersession: got %q, want store", got)
 	}
-	if got := CollectionCuration(n); got != CurationMinimal {
-		t.Errorf("Curation: got %q, want minimal", got)
+	if got := CollectionCuration(n); got != CurationNone {
+		t.Errorf("Curation: got %q, want none", got)
+	}
+	if got := CollectionContradictions(n); got != ContradictionsOff {
+		t.Errorf("Contradictions: got %q, want off", got)
 	}
 
 	// Sanity: raw property names.
@@ -71,8 +78,11 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	if v, _ := n.Properties.GetString("collection_supersession"); v != "store" {
 		t.Errorf("raw collection_supersession: %q", v)
 	}
-	if v, _ := n.Properties.GetString("collection_curation"); v != "minimal" {
+	if v, _ := n.Properties.GetString("collection_curation"); v != "none" {
 		t.Errorf("raw collection_curation: %q", v)
+	}
+	if v, _ := n.Properties.GetString("collection_contradictions"); v != "off" {
+		t.Errorf("raw collection_contradictions: %q", v)
 	}
 }
 
@@ -109,6 +119,66 @@ func TestCollectionConfigInvalidCuration(t *testing.T) {
 	}
 }
 
+// TestCollectionConfigInvalidContradictions ensures unknown values
+// for the new contradictions knob are rejected at write time.
+func TestCollectionConfigInvalidContradictions(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
+		Name:           "X",
+		Contradictions: "maybe",
+	})
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("expected input_error for contradictions=maybe, got %+v", apiErr)
+	}
+}
+
+// TestCollectionConfigLegacyCurationRejectedOnWrite confirms that
+// the dropped 4-level enum values are rejected when written via the
+// API (only "standard" and "none" are accepted). Reads still
+// normalize legacy values; see TestCollectionCurationLegacyNormalize.
+func TestCollectionConfigLegacyCurationRejectedOnWrite(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	for _, v := range []string{"minimal", "full"} {
+		_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
+			Name:     "Legacy-" + v,
+			Curation: v,
+		})
+		if apiErr == nil || apiErr.Code != "input_error" {
+			t.Errorf("curation=%q should be rejected on write, got %+v", v, apiErr)
+		}
+	}
+}
+
+// TestCollectionCurationLegacyNormalize verifies that collections
+// with the dropped 4-level enum values stored on-disk continue to
+// work: the getter normalizes "minimal" to "none" and "full" to
+// "standard". This is the no-migration-sweep contract for stores
+// that pre-date the redesign.
+func TestCollectionCurationLegacyNormalize(t *testing.T) {
+	cases := []struct {
+		stored string
+		want   Curation
+	}{
+		{"minimal", CurationNone},
+		{"full", CurationStandard},
+		{"standard", CurationStandard},
+		{"none", CurationNone},
+		{"", CurationStandard}, // empty -> default
+	}
+	for _, tc := range cases {
+		n := &graph.Node{
+			ID:         "n_test",
+			Properties: graph.Properties{},
+		}
+		if tc.stored != "" {
+			n.Properties[propCuration] = graph.StringProperty(tc.stored)
+		}
+		if got := CollectionCuration(n); got != tc.want {
+			t.Errorf("stored=%q: got %q, want %q", tc.stored, got, tc.want)
+		}
+	}
+}
+
 // TestCollectionConfigGettersOnNilNode returns defaults for nil input
 // so callers don't have to nil-check before reading config.
 func TestCollectionConfigGettersOnNilNode(t *testing.T) {
@@ -121,5 +191,8 @@ func TestCollectionConfigGettersOnNilNode(t *testing.T) {
 	}
 	if got := CollectionCuration(n); got != DefaultCuration {
 		t.Errorf("nil node Curation: got %q, want %q", got, DefaultCuration)
+	}
+	if got := CollectionContradictions(n); got != DefaultContradictions {
+		t.Errorf("nil node Contradictions: got %q, want %q", got, DefaultContradictions)
 	}
 }

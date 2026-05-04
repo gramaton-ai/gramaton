@@ -163,7 +163,7 @@ For the full layered package map, lock discipline, and data flow, see [Architect
 - **Three storage paths** — Memory (fuzzy), Sessions (auto-extract), Collections (exhaustive)
 - **Concept detection and promotion** — recurring keywords are detected as concept candidates; with an LLM provider configured, candidates are promoted to concept nodes that link related knowledge across topics
 - **Automatic curation** — lifecycle management, orphan linking, dedup, concept candidate detection, optional LLM classification and contradiction detection
-- **Auto-supersession** — captures that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge
+- **Auto-supersession** — captures that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge. Scoped per-collection via three orthogonal knobs (`curation`, `supersession`, `contradictions`); see `gramaton_guide(topic="collections")` for the per-template defaults.
 - **Named stores** — run multiple isolated knowledge bases from the same binary (personal store, benchmark store, per-project store)
 - **Multiple providers** — pure-Go BERT (local, default, no external runtime), Ollama (local, alternative), OpenAI-compatible, and AWS Bedrock for embeddings; Anthropic, OpenAI-compatible, and AWS Bedrock for LLM
 

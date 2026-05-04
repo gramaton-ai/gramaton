@@ -790,19 +790,19 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 	}
 }
 
-// TestCollectionAddIdempotentOnMinimalCuration covers Phase 5 Layer 2:
-// collections with curation=minimal (shopping-list / packing-list
-// style) make duplicate adds idempotent instead of returning
+// TestCollectionAddIdempotentOnCurationNone covers the idempotent-add
+// path: collections with curation=none (shopping-list / packing-list
+// shape) make duplicate adds idempotent instead of returning
 // ErrConflict. Short-content items like "eggs" or "milk" treat
 // identical content as the same item; the response surfaces
 // deduplicated=true + the existing ID.
-func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
+func TestCollectionAddIdempotentOnCurationNone(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "Groceries",
-		Curation: "minimal",
+		Curation: "none",
 	})
 	collID := result.ID
 
@@ -837,6 +837,104 @@ func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
 	}
 	if third.ID != firstID {
 		t.Errorf("case/trim variant id = %v, want %q", third.ID, firstID)
+	}
+}
+
+// TestCollectionAddProcessingStatusGatedByCuration pins the
+// commit-4 contract: collection_add stamps the new item's
+// processing_status based on the resolved curation knob. Items in
+// curation=standard collections are eligible for the autonomous
+// pipeline (captured); items in curation=none collections bypass
+// it (processed). This is what makes the curation knob mean
+// something at the per-record level.
+func TestCollectionAddProcessingStatusGatedByCuration(t *testing.T) {
+	a, eng := setupTestAPI(t)
+	ctx := context.Background()
+
+	// curation=standard (collection-level default).
+	std, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:     "StandardColl",
+		Curation: "standard",
+	})
+	stdItem, apiErr := a.CollectionAdd(ctx, std.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "thing"},
+	})
+	if apiErr != nil {
+		t.Fatalf("add to standard collection: %v", apiErr)
+	}
+	stdNode, _ := eng.Graph().GetNode(stdItem.ID)
+	if got, _ := stdNode.Properties.GetString("processing_status"); got != "captured" {
+		t.Errorf("standard collection item: processing_status = %q, want captured", got)
+	}
+
+	// curation=none.
+	none, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:     "NoneColl",
+		Curation: "none",
+	})
+	noneItem, apiErr := a.CollectionAdd(ctx, none.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "thing"},
+	})
+	if apiErr != nil {
+		t.Fatalf("add to none collection: %v", apiErr)
+	}
+	noneNode, _ := eng.Graph().GetNode(noneItem.ID)
+	if got, _ := noneNode.Properties.GetString("processing_status"); got != "processed" {
+		t.Errorf("none collection item: processing_status = %q, want processed", got)
+	}
+}
+
+// TestCollectionAddBatchProcessingStatusGatedByCuration mirrors the
+// single-add gate for the batch path. The status decision is hoisted
+// once per call and applied to every item in the batch.
+func TestCollectionAddBatchProcessingStatusGatedByCuration(t *testing.T) {
+	a, eng := setupTestAPI(t)
+	ctx := context.Background()
+
+	std, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:     "StandardBatch",
+		Curation: "standard",
+	})
+	stdResp, apiErr := a.CollectionAddBatch(ctx, std.ID, CollectionAddBatchRequest{
+		Items: []CollectionAddItem{
+			{Fields: map[string]any{"title": "first"}},
+			{Fields: map[string]any{"title": "second"}},
+		},
+	})
+	if apiErr != nil {
+		t.Fatalf("batch add to standard collection: %v", apiErr)
+	}
+	if len(stdResp.Added) != 2 {
+		t.Fatalf("standard batch: Added = %d, want 2", len(stdResp.Added))
+	}
+	for _, a := range stdResp.Added {
+		n, _ := eng.Graph().GetNode(a.ID)
+		if got, _ := n.Properties.GetString("processing_status"); got != "captured" {
+			t.Errorf("standard batch item %s: processing_status = %q, want captured", a.ID, got)
+		}
+	}
+
+	none, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:     "NoneBatch",
+		Curation: "none",
+	})
+	noneResp, apiErr := a.CollectionAddBatch(ctx, none.ID, CollectionAddBatchRequest{
+		Items: []CollectionAddItem{
+			{Fields: map[string]any{"title": "first"}},
+			{Fields: map[string]any{"title": "second"}},
+		},
+	})
+	if apiErr != nil {
+		t.Fatalf("batch add to none collection: %v", apiErr)
+	}
+	if len(noneResp.Added) != 2 {
+		t.Fatalf("none batch: Added = %d, want 2", len(noneResp.Added))
+	}
+	for _, a := range noneResp.Added {
+		n, _ := eng.Graph().GetNode(a.ID)
+		if got, _ := n.Properties.GetString("processing_status"); got != "processed" {
+			t.Errorf("none batch item %s: processing_status = %q, want processed", a.ID, got)
+		}
 	}
 }
 

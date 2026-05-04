@@ -54,6 +54,11 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		if !ok {
 			continue
 		}
+		// Effective curation gate: skip records whose collection
+		// memberships resolve to curation=none.
+		if EffectiveCurationFor(e.Graph(), id).Curation == "none" {
+			continue
+		}
 		content, ok := n.Properties.GetString("content_full")
 		if !ok || content == "" {
 			continue

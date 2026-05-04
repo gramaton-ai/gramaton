@@ -195,20 +195,20 @@ func TestCollectionAddBatchIntraBatchDedup(t *testing.T) {
 	}
 }
 
-// TestCollectionAddBatchMinimalCurationIdempotent verifies that on
-// curation=minimal collections, duplicate titles land in Added with
+// TestCollectionAddBatchCurationNoneIdempotent verifies that on
+// curation=none collections, duplicate titles land in Added with
 // Deduplicated=true pointing at the existing item -- matching single-
 // add's idempotent behavior. Also exercises the shared title
 // normalization: " already " with leading/trailing whitespace and
 // different case still collides with the seeded "already".
-func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
+func TestCollectionAddBatchCurationNoneIdempotent(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{
 		Name:     "Shopping",
-		Curation: "minimal",
+		Curation: "none",
 	})
 	if apiErr != nil {
-		t.Fatalf("create minimal collection: %v", apiErr)
+		t.Fatalf("create curation=none collection: %v", apiErr)
 	}
 	collID := result.ID
 
@@ -253,18 +253,18 @@ func TestCollectionAddBatchMinimalCurationIdempotent(t *testing.T) {
 	}
 }
 
-// TestCollectionAddBatchMinimalIntraBatchIdempotent covers the intra-
-// batch first-write-wins path on a curation=minimal collection: two
-// items in the same batch share a title, second lands as Added with
-// Deduplicated=true pointing at the first's generated ID.
-func TestCollectionAddBatchMinimalIntraBatchIdempotent(t *testing.T) {
+// TestCollectionAddBatchCurationNoneIntraBatchIdempotent covers the
+// intra-batch first-write-wins path on a curation=none collection:
+// two items in the same batch share a title, second lands as Added
+// with Deduplicated=true pointing at the first's generated ID.
+func TestCollectionAddBatchCurationNoneIntraBatchIdempotent(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{
 		Name:     "Packing",
-		Curation: "minimal",
+		Curation: "none",
 	})
 	if apiErr != nil {
-		t.Fatalf("create minimal collection: %v", apiErr)
+		t.Fatalf("create curation=none collection: %v", apiErr)
 	}
 	collID := result.ID
 

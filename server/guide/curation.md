@@ -11,8 +11,9 @@ one that runs when an LLM is configured.
   archive concluded ones.
 - **Orphan linking**: connect unlinked records to similar ones via
   auto-generated edges.
-- **Duplicate consolidation**: auto-supersession for Memory records
-  where cosine ≥ 0.92.
+- **Duplicate consolidation**: auto-supersession for records where
+  cosine ≥ 0.92, gated by the per-record effective `supersession`
+  knob (see "Stage → knob mapping" below).
 - **Concept candidate detection**: surface recurring keywords that
   could graduate to concept nodes.
 - **Store manifest computation**: topic/theme summary across the
@@ -23,18 +24,48 @@ one that runs when an LLM is configured.
 - **Record classification**: captured -> processed for records
   lacking full metadata. Uses the question-type-driven classification
   from `gramaton_guide(topic="metadata")`.
-- **Contradiction detection**: flags semantically similar Memory
-  records that contradict each other.
+- **Contradiction detection**: flags semantically similar records
+  that contradict each other.
 - **Concept synthesis**: promote candidates to concept nodes and
   link evidence.
 - **Auto-summarization**: generates `content_short` (the embedding-
-  ready semantic anchor, ~750 chars) for records missing it. The
-  summarize prompt is tuned to produce substance, not taglines.
+  ready semantic anchor, ~750 chars) for records missing it.
+- **Observation extraction**: pulls structured observations from
+  long records.
+
+## Stage → knob mapping
+
+Each pipeline stage reads exactly one collection-level knob to
+decide whether to run on a given record. The knobs are documented
+in `gramaton_guide(topic="collections")` under "Behaviour fields".
+Memory orphan records resolve to the memory-store defaults
+(`curation=standard, supersession=store, contradictions=on`).
+
+| Stage | Reads knob | Runs when |
+|---|---|---|
+| classify | `curation` | standard |
+| summarize | `curation` | standard (and `content_short` is missing) |
+| observation_extract | `curation` | standard |
+| concept synthesis | `curation` | standard |
+| contradictions | `contradictions` | on |
+| supersession | `supersession` | per-pair: both `store` always fires; `collection` requires a shared `member_of` collection; `none` on either side blocks |
+| embed | (always) | always |
+
+`gramaton_inspect` returns a record's resolved knob values as
+`effective_curation: {curation, supersession, contradictions}` so
+you can see exactly which stages will run on a given record before
+the next cycle fires.
 
 ## Scope: What Curation Touches
 
-- **Memory records**: full pipeline applies. Classification,
-  supersession, contradiction detection, concept synthesis.
+- **Memory records**: orphan defaults apply (curation=standard,
+  supersession=store, contradictions=on). Full pipeline runs
+  unless the user has wired the record into a collection that
+  resolves differently.
+- **Collection items**: governed by the collection's three knobs.
+  `processing_status` is set at insert time based on the
+  `curation` knob -- standard items enter the autonomous pipeline,
+  none items bypass it.
 - **Session segments** (`knowledge_type="segment"`): deterministic
   lifecycle only. Skipped for:
   - TF-IDF observation extraction (they were already extracted by
@@ -42,9 +73,8 @@ one that runs when an LLM is configured.
     noise).
   - Auto-supersession (Session segments are append-only snapshots;
     they don't supersede each other).
-- **Collection items** and **container nodes** (Session, Topic,
-  Collection): excluded from search and from curation lifecycle
-  transitions.
+- **Container nodes** (Session, Topic, Collection): excluded from
+  search and from curation lifecycle transitions.
 
 ## Tools
 
@@ -84,3 +114,5 @@ When `autonomous: true`, the server handles this. Do not duplicate.
 - `gramaton_duplicates`: preview what auto-supersession will catch.
 - `gramaton_guide(topic="metadata")`: field-by-field classification
   heuristics.
+- `gramaton_guide(topic="collections")`: the three behaviour knobs
+  and their template defaults.

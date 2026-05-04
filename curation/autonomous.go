@@ -410,6 +410,12 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if !ok {
 			continue
 		}
+		// Effective curation gate: skip if the record's collection
+		// memberships resolve to curation=none. Memory orphans get
+		// the standard default and pass through.
+		if EffectiveCurationFor(e.Graph(), id).Curation == "none" {
+			continue
+		}
 		content, ok := n.Properties.GetString("content_full")
 		if !ok || content == "" {
 			continue
@@ -716,6 +722,11 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		n := sumIt.Node()
 		id := n.ID
 		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
+			continue
+		}
+		// Effective curation gate: skip records whose collection
+		// memberships resolve to curation=none.
+		if EffectiveCurationFor(g, id).Curation == "none" {
 			continue
 		}
 		content, hasContent := n.Properties.GetString("content_full")
@@ -1801,6 +1812,16 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			}
 			contentB, ok := nB.Properties.GetString("content_full")
 			if !ok || contentB == "" {
+				continue
+			}
+
+			// Effective contradictions gate: skip the pair if either
+			// record's collection memberships resolve to
+			// contradictions=off. The knob is additive (creates
+			// contradicts edges); most-restrictive on the pair means
+			// if either side opts out, no edge is generated.
+			if EffectiveCurationFor(e.Graph(), idA).Contradictions == "off" ||
+				EffectiveCurationFor(e.Graph(), sr.NodeID).Contradictions == "off" {
 				continue
 			}
 

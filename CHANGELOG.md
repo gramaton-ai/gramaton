@@ -9,6 +9,71 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Phase 5 follow-on: three-knob curation model + Layer 1 cross-collection
+  supersession filter.** Decomposes the single `curation` field into three
+  orthogonal collection-level knobs:
+  - `curation`: `none | standard` (LLM analysis intensity — controls
+    classify, summarize, observation_extract, concept synthesis)
+  - `supersession`: `none | collection | store` (unchanged from
+    Phase 4)
+  - `contradictions`: `on | off` (new — controls whether `contradicts`
+    edges are generated from records in this collection)
+
+  The 4-level `curation` enum (`none|minimal|standard|full`)
+  collapses to `none|standard`. Legacy stored values `minimal` and
+  `full` are normalized on read (`minimal` → `none`, `full` →
+  `standard`) so existing collections work without a migration
+  sweep. Writes reject the legacy values.
+
+  Layer 1 supersession filter (`curation/deterministic.go`): the
+  blanket "skip all collection members" guard is replaced with a
+  per-pair check via the new `EffectiveCurationFor` resolver. Within-
+  collection records at `supersession=collection` now consolidate
+  on duplicates (the shopping-list dedup contract); cross-collection
+  records at `supersession=collection` correctly do not supersede
+  each other (the original Phase 5 cross-collection-contamination
+  fix). Memory orphans (effective `supersession=store`) keep today's
+  global dedup behaviour.
+
+  Per-stage skip gates added to classify, summarize,
+  observation_extract, batch classify, and contradictions. Each
+  reads its mapped knob via `EffectiveCurationFor` and skips when
+  the effective value excludes the stage. Idempotent-on-dup behaviour
+  on `gramaton_collection_add` / `_batch` (previously gated on
+  `curation=minimal`) now gates on `curation=none`.
+
+  Multi-collection resolution rule (a record with multiple
+  `member_of` edges): destructive knobs go most-restrictive
+  (supersession), additive knobs go most-permissive (curation,
+  contradictions). One-line principle: never irreversibly modify a
+  record without unanimous agreement; always enrich when any
+  collection wants enrichment.
+
+  `gramaton_collection_add` and `_batch` now stamp `processing_status`
+  on item nodes based on the collection's curation knob (standard →
+  `captured`, none → `processed`). Note: items in `curation=standard`
+  collections are now eligible for the autonomous pipeline pool, but
+  still bounce at every stage's `content_full` guard because
+  collection items don't populate `content_full`. Activation of
+  collection items in the LLM pipeline is tracked separately as
+  follow-up `01KQT5DPW2PQNDY08ANW1NMQB2` (P1).
+
+  New starter templates: `journal` (standard / none / off — daily
+  entries / observation logs) and `references` (standard / collection /
+  off — bookmarks / recipes / places / contacts / code snippets).
+
+  `gramaton_inspect` returns `effective_curation: {curation,
+  supersession, contradictions}` for record nodes (Memory records,
+  collection items, session segments). Field is omitted on
+  structural / container nodes (collections, sessions, topics) and
+  concept-synthesis nodes.
+
+  Docs updated: `server/guide/collections.md` (three-knob model,
+  templates table, multi-collection resolution),
+  `server/guide/curation.md` (stage→knob mapping table),
+  `docs/integrator-guide.md` (rewrites of curation=minimal / full
+  references), `README.md` (per-collection knob pointer).
+
 - **F1 final pre-merge sweep.** Three parallel review agents
   (correctness, security, test coverage) reviewed the full L1-L6
   branch and signed off as ready to merge. Mechanical fixes from

@@ -545,11 +545,16 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					continue
 				}
 
-				// Collection members have structured per-item fields (status,
-				// title, etc.). Silently consolidating them on embedding alone
-				// would merge distinct tracked work. Operators still see these
-				// pairs via gramaton_duplicates for manual triage.
-				if isCollectionMember(ws.Graph(), na.ID) || isCollectionMember(ws.Graph(), nb.ID) {
+				// Per-record effective supersession governs candidacy:
+				// - either record's supersession=none -> skip (opt-out);
+				// - both at supersession=store -> fire (legacy global,
+				//   memory-orphan path);
+				// - at least one at supersession=collection -> require
+				//   a shared member_of collection. Cross-collection
+				//   pairs at "collection" scope correctly skip.
+				// Operators still see filtered pairs via gramaton_duplicates
+				// for manual triage.
+				if !shouldAutoSupersede(ws.Graph(), na.ID, nb.ID) {
 					continue
 				}
 
@@ -969,19 +974,6 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 }
 
 func isChunkNode(g graph.NodeReader, id string) bool { return g.IsStructuralChild(id) }
-
-// isCollectionMember returns true if id has a member_of edge to any
-// collection. Used by the dedup loop to skip collection items --
-// their structured per-item fields shouldn't be merged on embedding
-// similarity alone.
-func isCollectionMember(g graph.NodeReader, id string) bool {
-	for _, e := range g.EdgesFrom(id) {
-		if e.Type == "member_of" {
-			return true
-		}
-	}
-	return false
-}
 
 // enrichConcepts updates evidence_count and last_evidence_at on concept
 // nodes based on their inbound edges.
