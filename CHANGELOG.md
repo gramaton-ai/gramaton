@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Collection items inherit the collection's name + description in
+  the indexed text.** Items added via `gramaton_collection_add` and
+  `gramaton_collection_add_batch` now have the collection's `name`
+  and `description` (when set) prepended to both the BM25 input
+  and the embedding input at insert time. An item titled "Phase 5
+  follow-on" in a collection named "Gramaton development" now
+  surfaces for a "Gramaton" search via lexical BM25 match;
+  previously only vector proximity caught it (and only when the
+  collection's domain semantically overlapped). Existing items
+  aren't reindexed retroactively; new items get the prefix going
+  forward. Tracker: `01KQTHJRQB9RVBD6YXFA5JCJSA`.
+
 - **Phase 5 follow-on: three-knob curation model + Layer 1 cross-collection
   supersession filter.** Decomposes the single `curation` field into three
   orthogonal collection-level knobs:

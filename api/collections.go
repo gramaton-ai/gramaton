@@ -96,6 +96,35 @@ func isRetired(n *graph.Node) bool {
 	return vu.Before(time.Now())
 }
 
+// collectionContextParts returns the collection's name and description
+// (when present) as ordered string segments. Used to prepend the
+// collection's identity to its members' indexed text (BM25 + embedding
+// input) so a query mentioning the collection's name surfaces its
+// items even when the items' own fields don't contain that name.
+//
+// Example: an item titled "Phase 5 follow-on" lives in a collection
+// named "Gramaton development". Without context-prepending, searching
+// "Gramaton" misses the item via BM25 (its fields don't contain the
+// word) and only finds it via vector proximity (luck). With the
+// prefix, BM25 hits via lexical match and the embedding semantically
+// shifts toward the collection's domain.
+//
+// Returns nil if the node is nil. Caller is responsible for prepending
+// the parts to the indexable text.
+func collectionContextParts(coll *graph.Node) []string {
+	if coll == nil {
+		return nil
+	}
+	var parts []string
+	if name, _ := coll.Properties.GetString("collection_name"); name != "" {
+		parts = append(parts, name)
+	}
+	if desc, _ := coll.Properties.GetString("collection_description"); desc != "" {
+		parts = append(parts, desc)
+	}
+	return parts
+}
+
 // loadSchema loads and parses the schema from a collection node.
 func loadSchema(n *graph.Node) (*CollectionSchema, error) {
 	raw, ok := n.Properties.GetString("collection_schema")
@@ -991,10 +1020,24 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		return CollectionAddResponse{}, ErrMissing("fields are required")
 	}
 
+	// Capture the collection's name + description under a brief RLock.
+	// Prepended to the item's indexed text so an item like "Phase 5
+	// follow-on" in collection "Gramaton development" surfaces for
+	// searches mentioning "Gramaton" via lexical match. Captured once
+	// here and reused for both the embedding (below) and the BM25
+	// indexing (under the main Lock further down) to keep the two
+	// inputs consistent across a possible concurrent rename.
+	var contextParts []string
+	a.engine.RLock()
+	if coll, ok := a.engine.Graph().GetNode(collectionID); ok {
+		contextParts = collectionContextParts(coll)
+	}
+	a.engine.RUnlock()
+
 	// Pre-embed field text for graph connectivity (outside lock).
 	var itemVec []float32
 	if a.engine.Embedder() != nil {
-		var textParts []string
+		textParts := append([]string{}, contextParts...)
 		for _, v := range req.Fields {
 			if str, ok := v.(string); ok && str != "" {
 				textParts = append(textParts, str)
@@ -1081,8 +1124,13 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	n := a.engine.Graph().AddNode(props)
 	a.setFieldProps(n.ID, req.Fields)
 
-	// Index for BM25 using field values.
-	var bm25Parts []string
+	// Index for BM25 using field values, prepended with the collection's
+	// name + description (captured into contextParts above) so the
+	// BM25 input is consistent with the embedding input. Without
+	// this, items in collection "Gramaton development" don't surface
+	// for BM25 queries on "Gramaton" unless their own fields contain
+	// the word.
+	bm25Parts := append([]string{}, contextParts...)
 	for _, v := range req.Fields {
 		if s, ok := v.(string); ok {
 			bm25Parts = append(bm25Parts, s)
@@ -1191,6 +1239,18 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 		vec     []float32
 		vecText string // concatenated string fields; empty if none
 	}
+	// Capture the collection's name + description under a brief RLock.
+	// Prepended to each item's indexed text (BM25 + embedding). Same
+	// rationale as single CollectionAdd. Captured once here and
+	// reused in phase 2 for BM25 to keep both inputs consistent
+	// across a possible concurrent rename between phases.
+	var contextParts []string
+	a.engine.RLock()
+	if coll, ok := a.engine.Graph().GetNode(collectionID); ok {
+		contextParts = collectionContextParts(coll)
+	}
+	a.engine.RUnlock()
+
 	// Schema lookup has to wait for the write lock so we don't race
 	// with CollectionSchemaUpdate. Validate the per-item SHAPE
 	// (non-empty Fields) here; defer schema conformance to phase 2.
@@ -1206,7 +1266,7 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			})
 			continue
 		}
-		var parts []string
+		parts := append([]string{}, contextParts...)
 		for _, v := range item.Fields {
 			if s, ok := v.(string); ok && s != "" {
 				parts = append(parts, s)
@@ -1356,8 +1416,12 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			n := ws.AddNode(props)
 			a.setFieldPropsIn(ws, n.ID, s.item.Fields)
 
-			// Index + BM25 from string field values.
-			var bm25Parts []string
+			// Index + BM25 from string field values, prepended with the
+			// collection's name + description (captured into contextParts
+			// above in phase 1) so the BM25 input is consistent with
+			// the embedding input each item already carries via
+			// vecText. Same rationale as single CollectionAdd.
+			bm25Parts := append([]string{}, contextParts...)
 			for _, v := range s.item.Fields {
 				if str, ok := v.(string); ok {
 					bm25Parts = append(bm25Parts, str)
