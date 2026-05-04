@@ -193,3 +193,56 @@ func mostPermissiveContradictions(a, b string) string {
 	}
 	return "off"
 }
+
+// shouldAutoSupersede returns true if the auto-supersession path
+// may consolidate a candidate pair (a, b). Encodes the per-pair
+// rule that flows from each record's effective supersession value:
+//
+//   - If either record's effective supersession is "none", skip.
+//     A "none" record opted out of auto-supersession entirely.
+//   - If both records are at "store" scope, fire. This is the
+//     legacy global-dedup path, used by Memory orphan records.
+//   - Otherwise (at least one record is at "collection" scope),
+//     require the pair to share at least one member_of collection.
+//     Cross-collection pairs at "collection" scope correctly skip
+//     -- this is the bug fix Phase 5 ships.
+//
+// Mixed "collection" + "store" with a shared collection: fires.
+// The "collection"-scope record's contract ("only supersede with
+// records that share my collection") is satisfied; the "store"-
+// scope record's broader contract is also satisfied, since a
+// shared-collection peer is a subset of "anywhere in the store".
+func shouldAutoSupersede(g graph.NodeReader, aID, bID string) bool {
+	eA := EffectiveCurationFor(g, aID)
+	eB := EffectiveCurationFor(g, bID)
+	if eA.Supersession == "none" || eB.Supersession == "none" {
+		return false
+	}
+	if eA.Supersession == "store" && eB.Supersession == "store" {
+		return true
+	}
+	return shareCollection(g, aID, bID)
+}
+
+// shareCollection returns true if a and b have at least one
+// member_of edge target in common. O(M+N) where M and N are the
+// edge counts of each record.
+func shareCollection(g graph.NodeReader, aID, bID string) bool {
+	aColls := make(map[string]struct{})
+	for _, e := range g.EdgesFrom(aID) {
+		if e.Type == "member_of" {
+			aColls[e.TargetID] = struct{}{}
+		}
+	}
+	if len(aColls) == 0 {
+		return false
+	}
+	for _, e := range g.EdgesFrom(bID) {
+		if e.Type == "member_of" {
+			if _, ok := aColls[e.TargetID]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
