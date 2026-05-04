@@ -215,3 +215,19 @@ func CollectionContradictions(n *graph.Node) Contradictions {
 	}
 	return Contradictions(v)
 }
+
+// initialProcessingStatus picks the processing_status to stamp on a
+// new collection-item record based on its collection's curation
+// knob. curation=standard items are eligible for the autonomous
+// pipeline (captured); curation=none items bypass it (processed).
+//
+// This is what makes the curation knob mean something at the
+// per-record level: the autonomous pipeline filters on
+// processing_status=captured, so the knob's value at write time
+// determines whether a given item ever sees an LLM stage.
+func initialProcessingStatus(c Curation) string {
+	if c == CurationNone {
+		return "processed"
+	}
+	return "captured"
+}

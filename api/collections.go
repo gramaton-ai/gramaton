@@ -1071,10 +1071,13 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		}
 	}
 
-	// Create item node.
+	// Create item node. processing_status is gated by the collection's
+	// curation knob: standard items enter the autonomous pipeline,
+	// none items bypass it.
 	props := graph.Properties{
-		"created_at":   graph.TimestampProperty(time.Now().UTC()),
-		"access_count": graph.Int64Property(0),
+		"created_at":        graph.TimestampProperty(time.Now().UTC()),
+		"access_count":      graph.Int64Property(0),
+		"processing_status": graph.StringProperty(initialProcessingStatus(CollectionCuration(coll))),
 	}
 	n := a.engine.Graph().AddNode(props)
 	a.setFieldProps(n.ID, req.Fields)
@@ -1282,6 +1285,10 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	// On curation=standard, duplicates are failures.
 	idempotentOnDup := CollectionCuration(coll) == CurationNone
 
+	// processing_status for new items is gated by the collection's
+	// curation knob; computed once and reused per item below.
+	itemProcessingStatus := initialProcessingStatus(CollectionCuration(coll))
+
 	added := make([]BatchAddSuccess, 0, len(survivors))
 	emb := a.engine.Embedder()
 	var modelID string
@@ -1343,8 +1350,9 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 
 			// Create item node. Same shape as single CollectionAdd.
 			props := graph.Properties{
-				"created_at":   graph.TimestampProperty(time.Now().UTC()),
-				"access_count": graph.Int64Property(0),
+				"created_at":        graph.TimestampProperty(time.Now().UTC()),
+				"access_count":      graph.Int64Property(0),
+				"processing_status": graph.StringProperty(itemProcessingStatus),
 			}
 			n := ws.AddNode(props)
 			a.setFieldPropsIn(ws, n.ID, s.item.Fields)
