@@ -1,0 +1,20 @@
+name: journal
+description: Daily journal / log entries. Append-only by design (supersession=none) so similar entries on different days don't consolidate. Standard curation runs classify and summarize for retrieval; contradictions off because journal entries aren't claims to fact-check (today's mood doesn't refute yesterday's).
+clear_mode: resolve
+supersession: none
+curation: standard
+contradictions: off
+schema:
+  fields:
+    - name: title
+      type: string
+      required: true
+    - name: entry
+      type: string
+      required: false
+    - name: mood
+      type: string
+      required: false
+    - name: date
+      type: date
+      required: false

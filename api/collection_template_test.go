@@ -5,9 +5,11 @@ import (
 	"testing"
 )
 
-// TestTemplateRegistryHasStarterFive confirms the five starter
-// templates ship embedded + loadable.
-func TestTemplateRegistryHasStarterFive(t *testing.T) {
+// TestTemplateRegistryHasStarterTemplates confirms the starter
+// templates ship embedded + loadable. Adding a new template:
+// extend the want map AND TestTemplateThreeKnobsExplicit's entries
+// so its three behaviour knobs are explicit.
+func TestTemplateRegistryHasStarterTemplates(t *testing.T) {
 	names := ListTemplates()
 	want := map[string]bool{
 		"backlog":       false,
@@ -15,6 +17,8 @@ func TestTemplateRegistryHasStarterFive(t *testing.T) {
 		"reading-list":  false,
 		"shopping-list": false,
 		"packing-list":  false,
+		"journal":       false,
+		"references":    false,
 	}
 	for _, n := range names {
 		if _, ok := want[n]; ok {
@@ -67,6 +71,8 @@ func TestTemplateThreeKnobsExplicit(t *testing.T) {
 		"reading-list":  {curation: "standard", supersession: "collection", contradictions: "off"},
 		"shopping-list": {curation: "none", supersession: "collection", contradictions: "off"},
 		"packing-list":  {curation: "none", supersession: "collection", contradictions: "off"},
+		"journal":       {curation: "standard", supersession: "none", contradictions: "off"},
+		"references":    {curation: "standard", supersession: "collection", contradictions: "off"},
 	}
 	for name, w := range want {
 		tmpl, ok := LookupTemplate(name)
