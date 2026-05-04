@@ -226,8 +226,8 @@ Field names must match `^[a-zA-Z_][a-zA-Z0-9_]*$` — they become property keys 
 
 Duplicate-title handling depends on the collection's `curation` profile:
 
-- **`curation: minimal`** (shopping-list / packing-list shape): a duplicate returns the existing item's id with `deduplicated: true` in the response — idempotent add, no error.
-- **Any other profile** (default `standard`, `full`, `none`): a duplicate returns `ErrConflict`:
+- **`curation: none`** (shopping-list / packing-list shape): a duplicate returns the existing item's id with `deduplicated: true` in the response — idempotent add, no error.
+- **`curation: standard`** (default; backlog / todo / reading-list / journal / references shape): a duplicate returns `ErrConflict`:
 
 ```
 item with title "Buy milk" already exists in this collection (existing id: 01ABC...)
@@ -331,7 +331,7 @@ When writing system prompts or agent instructions for Gramaton integration:
 3. **Be specific about when to capture.** For Memory, capture only when the user explicitly asks. For Sessions, commit at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
 4. **Don't tell the agent to classify everything at capture time.** Let curation handle unclassified records. Classify only when the agent is confident about metadata.
 5. **For collections, be explicit about the target.** "Add this to the Sprint Backlog collection" beats "save this task."
-6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before capturing Memory records — the server handles auto-supersession at ≥0.92 cosine. For Collections with structured data (default `standard` curation, or `full`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For short-content collections (`curation: minimal`), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
+6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before capturing Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (default), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For short-content collections (`curation: none`, e.g. shopping-list / packing-list), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
 7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for capture / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
 Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md), [Kiro specs](../integration/kiro/), and [custom agent frameworks](../integration/docs/custom-agents.md).
