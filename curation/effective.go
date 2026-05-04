@@ -44,10 +44,14 @@ const (
 // string forms of the three knobs; api callers can cast to
 // api.Curation / api.Supersession / api.Contradictions when the
 // typed forms are required (e.g. for response serialisation).
+//
+// JSON tags lowercase the field names for API responses
+// (gramaton_inspect surfaces this struct as an effective_curation
+// object).
 type EffectiveConfig struct {
-	Curation       string
-	Supersession   string
-	Contradictions string
+	Curation       string `json:"curation"`
+	Supersession   string `json:"supersession"`
+	Contradictions string `json:"contradictions"`
 }
 
 // EffectiveCurationFor returns the effective curation, supersession,

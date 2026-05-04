@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -30,6 +31,14 @@ type InspectResponse struct {
 	Properties      map[string]any `json:"properties"`
 	MetadataSummary string         `json:"metadata_summary"`
 	Related         []RelatedEdge  `json:"related"`
+
+	// EffectiveCuration is the resolved per-record curation behaviour
+	// computed from the node's member_of edges. Tells callers exactly
+	// what curation work will run on this record (curation, supersession,
+	// contradictions). Absent on structural/container nodes (collections,
+	// sessions, topics) and concept-synthesis nodes -- those are not
+	// records that flow through curation.
+	EffectiveCuration *curation.EffectiveConfig `json:"effective_curation,omitempty"`
 }
 
 // InspectDescription is the MCP tool description for gramaton_inspect.
@@ -81,6 +90,11 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		MetadataSummary: inspectMetadataSummary(n.Properties),
 	}
 
+	if isRecordNode(n) {
+		ec := curation.EffectiveCurationFor(a.engine.Graph(), n.ID)
+		out.EffectiveCuration = &ec
+	}
+
 	related := []RelatedEdge{}
 	for _, e := range a.engine.Graph().EdgesFrom(req.ID) {
 		rel := RelatedEdge{
@@ -112,4 +126,26 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	a.retrieval.Track(req.ID)
 
 	return out, nil
+}
+
+// isRecordNode returns true for nodes that flow through curation
+// (Memory records, collection items, session segments). Returns
+// false for structural/container nodes (collections, sessions,
+// topics) and concept-synthesis nodes -- those don't have a
+// meaningful effective_curation. Their classification is unrelated
+// to the per-record knob model.
+func isRecordNode(n *graph.Node) bool {
+	if n == nil {
+		return false
+	}
+	if knType, _ := n.Properties.GetString("knowledge_type"); knType != "" {
+		switch knType {
+		case "collection", "session", "topic":
+			return false
+		}
+	}
+	if nodeType, _ := n.Properties.GetString("node_type"); nodeType == "concept" {
+		return false
+	}
+	return true
 }
