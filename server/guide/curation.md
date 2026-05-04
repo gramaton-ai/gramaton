@@ -44,11 +44,11 @@ Memory orphan records resolve to the memory-store defaults
 | Stage | Reads knob | Runs when |
 |---|---|---|
 | classify | `curation` | standard |
-| summarize | `curation` | standard (and content > ~750 chars) |
+| summarize | `curation` | standard (and `content_short` is missing) |
 | observation_extract | `curation` | standard |
 | concept synthesis | `curation` | standard |
 | contradictions | `contradictions` | on |
-| supersession | `supersession` | collection or store |
+| supersession | `supersession` | per-pair: both `store` always fires; `collection` requires a shared `member_of` collection; `none` on either side blocks |
 | embed | (always) | always |
 
 `gramaton_inspect` returns a record's resolved knob values as

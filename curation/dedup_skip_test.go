@@ -195,6 +195,111 @@ func TestDedupOrphanRecordsSupersede(t *testing.T) {
 	}
 }
 
+// TestDedupCrossCollectionStoreScopeFires is the bug-pin for the
+// "both supersession=store but different collections" branch of
+// shouldAutoSupersede. Under the pre-fix blanket guard, both records
+// were collection members and got skipped. Under the new logic,
+// store-scope is global -- two store-scope records in different
+// collections still consolidate. This pins that branch (which the
+// other store/store test only exercises with orphans).
+func TestDedupCrossCollectionStoreScopeFires(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Dedup.SimilarityThreshold = 0.5
+
+	vec := []float32{0.9, 0.1, 0.0}
+
+	eng.Lock()
+	collA := dedupTestCollection(t, eng, "store")
+	collB := dedupTestCollection(t, eng, "store")
+	olderID := dedupTestRecord(t, eng, "team chose Postgres on April 14", 60, vec, collA)
+	newerID := dedupTestRecord(t, eng, "team chose Postgres on April 14", 5, vec, collB)
+	eng.Save("test")
+	eng.Unlock()
+
+	RunDeterministic(eng, cfg, nil)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	older, _ := eng.Graph().GetNode(olderID)
+	if _, ok := older.Properties.GetTimestamp("valid_until"); !ok {
+		t.Errorf("store-scope cross-collection: older record should have been superseded; valid_until unset")
+	}
+	newer, _ := eng.Graph().GetNode(newerID)
+	if _, ok := newer.Properties.GetTimestamp("valid_until"); ok {
+		t.Errorf("store-scope cross-collection: newer record should NOT be superseded; valid_until set")
+	}
+}
+
+// TestDedupCollectionItemRealShapeNoSupersession pins the
+// content_full-bounce contract for collection items as today's
+// API actually creates them: with field.title set but content_full
+// empty. Two such items share a collection (default
+// supersession=collection so the gate would otherwise allow
+// supersession). The Jaccard verification on empty content must
+// keep them from consolidating. Without this guard, a regression
+// in the dedup pipeline (e.g. a future change that synthesises
+// content_full from fields without per-item disambiguation) would
+// silently merge distinct tracked items in the same collection.
+//
+// Distinct from TestDedupSameCollectionSupersedes (which seeds
+// content_full to exercise the new same-collection-supersedes
+// behaviour); this test verifies real-shape items remain safe.
+func TestDedupCollectionItemRealShapeNoSupersession(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Dedup.SimilarityThreshold = 0.5
+
+	now := time.Now().UTC()
+	vec := []float32{0.9, 0.1, 0.0}
+
+	mk := func(title string, ageMin int) string {
+		eng.Lock()
+		n := eng.Graph().AddNode(graph.Properties{
+			"created_at":     graph.TimestampProperty(now.Add(-time.Duration(ageMin) * time.Minute)),
+			"embedding_full": graph.VectorProperty(vec),
+			"field.title":    graph.StringProperty(title),
+		})
+		for k, v := range n.Properties {
+			eng.PropIdx().Add(n.ID, k, v)
+		}
+		eng.VecIdx().Add(n.ID, vec)
+		eng.Unlock()
+		return n.ID
+	}
+
+	eng.Lock()
+	coll := dedupTestCollection(t, eng, "")
+	eng.Save("test-coll")
+	eng.Unlock()
+
+	olderID := mk("Wire LimitsConfig through to validation", 60)
+	newerID := mk("Wire MaxJSONSize from LimitsConfig", 5)
+
+	eng.Lock()
+	if _, err := eng.Graph().AddEdge(olderID, coll, "member_of", 1.0, nil); err != nil {
+		t.Fatalf("AddEdge olderID member_of: %v", err)
+	}
+	if _, err := eng.Graph().AddEdge(newerID, coll, "member_of", 1.0, nil); err != nil {
+		t.Fatalf("AddEdge newerID member_of: %v", err)
+	}
+	eng.Save("test-edges")
+	eng.Unlock()
+
+	RunDeterministic(eng, cfg, nil)
+
+	eng.RLock()
+	defer eng.RUnlock()
+	older, _ := eng.Graph().GetNode(olderID)
+	if _, ok := older.Properties.GetTimestamp("valid_until"); ok {
+		t.Errorf("real-shape collection item was superseded with empty content_full; Jaccard guard should have blocked")
+	}
+	newer, _ := eng.Graph().GetNode(newerID)
+	if _, ok := newer.Properties.GetTimestamp("valid_until"); ok {
+		t.Errorf("real-shape collection item was superseded with empty content_full; Jaccard guard should have blocked")
+	}
+}
+
 // TestDedupSupersessionNoneSkips pins the opt-out contract. A
 // collection with supersession=none disables auto-supersession for
 // its members regardless of similarity. Use case: journal entries,

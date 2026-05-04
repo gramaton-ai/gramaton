@@ -229,7 +229,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		Supersession   string                `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
 		Curation       string                `json:"curation,omitempty" jsonschema:"LLM analysis intensity: standard (default, runs classify/summarize/observation_extract/concept synthesis) or none (skip all LLM stages; embed + supersession + contradictions still governed by their own knobs)"`
 		Contradictions string                `json:"contradictions,omitempty" jsonschema:"whether the system generates contradicts edges from records in this collection: on (default) or off"`
-		Template       string                `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
+		Template       string                `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list, journal, references). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_create",

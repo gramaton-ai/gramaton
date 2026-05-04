@@ -272,12 +272,12 @@ type CollectionCreateRequest struct {
 	Curation       string `json:"curation,omitempty"`
 	Contradictions string `json:"contradictions,omitempty"`
 
-	// Template names a pre-built Collection shape (Phase 7). Valid
-	// names are exposed via api.ListTemplates; ships with backlog /
-	// todo / reading-list / shopping-list / packing-list. When set,
-	// the template's schema + behaviour fields populate any caller
-	// fields that are left empty. Caller-provided fields always
-	// win (shallow merge).
+	// Template names a pre-built Collection shape. Valid names are
+	// exposed via api.ListTemplates; ships with backlog / todo /
+	// reading-list / shopping-list / packing-list / journal /
+	// references. When set, the template's schema + behaviour fields
+	// populate any caller fields that are left empty. Caller-provided
+	// fields always win (shallow merge).
 	Template string `json:"template,omitempty"`
 }
 
@@ -1033,11 +1033,10 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	// (case-insensitive, after trim). Behaviour branches on the
 	// collection's curation profile:
 	//
-	//   - curation=minimal (shopping/packing style, short-content items):
+	//   - curation=none (shopping/packing style, short-content items):
 	//     idempotent return of the existing item's ID with
-	//     deduplicated=true in the response. Layer 2 of the Phase 5
-	//     short-content dedup fix. No ErrConflict.
-	//   - any other profile (structured data): ErrConflict with the
+	//     deduplicated=true in the response. No ErrConflict.
+	//   - curation=standard (structured data): ErrConflict with the
 	//     existing ID in the message. Preserves T-02 semantics for
 	//     backlog/todo-style collections where same-title-different-
 	//     context is legitimate.
@@ -1129,7 +1128,7 @@ type CollectionAddBatchRequest struct {
 
 // BatchAddSuccess is one entry in CollectionAddBatchResponse.Added.
 // Deduplicated=true means the item's title already existed on a
-// curation=minimal collection and ID points to the pre-existing item;
+// curation=none collection and ID points to the pre-existing item;
 // the batch did not create a new node for this entry. This mirrors
 // single-add's idempotent-return shape so callers don't need to
 // branch on batch vs. single for the same collection profile.
@@ -1319,9 +1318,9 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 
 			// Dedup pass: check against existing members AND against
 			// prior items in this batch (first-write-wins). On
-			// curation=minimal collections the duplicate lands in
-			// Added with Deduplicated=true; elsewhere it lands in
-			// Failed with code=duplicate.
+			// curation=none collections the duplicate lands in
+			// Added with Deduplicated=true; on curation=standard it
+			// lands in Failed with code=duplicate.
 			if title, ok := s.item.Fields["title"]; ok {
 				if titleStr, isStr := title.(string); isStr {
 					normalized := normalizeTitle(titleStr)
