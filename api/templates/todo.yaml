@@ -1,8 +1,9 @@
 name: todo
-description: Personal task list. Resolving items preserves history for pattern recall ("what did I complete last week").
+description: Personal task list. Resolving items preserves history for pattern recall ("what did I complete last week"). Contradictions on so conflicting tasks surface.
 clear_mode: resolve
 supersession: collection
 curation: standard
+contradictions: on
 schema:
   fields:
     - name: title

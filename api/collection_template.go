@@ -23,12 +23,13 @@ var embeddedTemplates embed.FS
 // shallow merge -- whatever the caller passes explicitly overrides
 // the template's default.
 type Template struct {
-	Name         string            `yaml:"name"`
-	Description  string            `yaml:"description,omitempty"`
-	Schema       *CollectionSchema `yaml:"schema,omitempty"`
-	ClearMode    string            `yaml:"clear_mode,omitempty"`
-	Supersession string            `yaml:"supersession,omitempty"`
-	Curation     string            `yaml:"curation,omitempty"`
+	Name           string            `yaml:"name"`
+	Description    string            `yaml:"description,omitempty"`
+	Schema         *CollectionSchema `yaml:"schema,omitempty"`
+	ClearMode      string            `yaml:"clear_mode,omitempty"`
+	Supersession   string            `yaml:"supersession,omitempty"`
+	Curation       string            `yaml:"curation,omitempty"`
+	Contradictions string            `yaml:"contradictions,omitempty"`
 }
 
 var (
@@ -129,6 +130,9 @@ func applyTemplate(req *CollectionCreateRequest) *APIError {
 	}
 	if req.Curation == "" {
 		req.Curation = t.Curation
+	}
+	if req.Contradictions == "" {
+		req.Contradictions = t.Contradictions
 	}
 	return nil
 }

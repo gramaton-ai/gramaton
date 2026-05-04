@@ -790,19 +790,19 @@ func TestCollectionSchemaEvolution(t *testing.T) {
 	}
 }
 
-// TestCollectionAddIdempotentOnMinimalCuration covers Phase 5 Layer 2:
-// collections with curation=minimal (shopping-list / packing-list
-// style) make duplicate adds idempotent instead of returning
+// TestCollectionAddIdempotentOnCurationNone covers the idempotent-add
+// path: collections with curation=none (shopping-list / packing-list
+// shape) make duplicate adds idempotent instead of returning
 // ErrConflict. Short-content items like "eggs" or "milk" treat
 // identical content as the same item; the response surfaces
 // deduplicated=true + the existing ID.
-func TestCollectionAddIdempotentOnMinimalCuration(t *testing.T) {
+func TestCollectionAddIdempotentOnCurationNone(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
 	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "Groceries",
-		Curation: "minimal",
+		Curation: "none",
 	})
 	collID := result.ID
 

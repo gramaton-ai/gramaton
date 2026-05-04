@@ -238,7 +238,7 @@ const CollectionListDescription = "List collections with names, item counts, and
 
 const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]})."
 
-const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=minimal collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On any other profile (backlog / todo / default standard), a duplicate returns ErrConflict with the existing id in the message."
+const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On curation=standard (backlog / todo / default), a duplicate returns ErrConflict with the existing id in the message."
 
 const CollectionUpdateDescription = "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema."
 
@@ -254,7 +254,7 @@ const CollectionSchemaDescription = "Read a collection's schema and migration st
 
 const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
 
-const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=minimal collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On any other profile, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure."
+const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On curation=standard, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure."
 
 // --- service methods ---
 
@@ -263,14 +263,14 @@ type CollectionCreateRequest struct {
 	Description string            `json:"description,omitempty"`
 	Schema      *CollectionSchema `json:"schema,omitempty"`
 
-	// Behaviour knobs (Phase 4). All three are optional -- absent
-	// means "use the default", via the read-time fallback in
-	// collection_config.go. Passing an explicit value stores it on
-	// the collection node so future reads surface it without the
-	// fallback (useful for visibility).
-	ClearMode    string `json:"clear_mode,omitempty"`
-	Supersession string `json:"supersession,omitempty"`
-	Curation     string `json:"curation,omitempty"`
+	// Behaviour knobs. All optional -- absent means "use the default",
+	// via the read-time fallback in collection_config.go. Passing an
+	// explicit value stores it on the collection node so future reads
+	// surface it without the fallback (useful for visibility).
+	ClearMode      string `json:"clear_mode,omitempty"`
+	Supersession   string `json:"supersession,omitempty"`
+	Curation       string `json:"curation,omitempty"`
+	Contradictions string `json:"contradictions,omitempty"`
 
 	// Template names a pre-built Collection shape (Phase 7). Valid
 	// names are exposed via api.ListTemplates; ships with backlog /
@@ -297,7 +297,7 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	if err := validateSchema(req.Schema); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
-	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation); err != nil {
+	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation, req.Contradictions); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
 
@@ -335,6 +335,9 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	}
 	if req.Curation != "" {
 		props[propCuration] = graph.StringProperty(req.Curation)
+	}
+	if req.Contradictions != "" {
+		props[propContradictions] = graph.StringProperty(req.Contradictions)
 	}
 
 	n := a.engine.Graph().AddNode(props)
@@ -1055,7 +1058,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 					if normalizeTitle(existing) != normalized {
 						continue
 					}
-					if CollectionCuration(coll) == CurationMinimal {
+					if CollectionCuration(coll) == CurationNone {
 						return CollectionAddResponse{
 							ID:           e.SourceID,
 							CollectionID: collectionID,
@@ -1274,10 +1277,10 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	}
 
 	// Curation profile controls how duplicates land in the response.
-	// On curation=minimal, a duplicate title returns an idempotent
-	// success pointing to the existing item (Phase 5 Layer 2, mirrored
-	// here for batch). On any other profile, duplicates are failures.
-	idempotentOnDup := CollectionCuration(coll) == CurationMinimal
+	// On curation=none, a duplicate title returns an idempotent
+	// success pointing to the existing item (mirrors single-add Layer 2).
+	// On curation=standard, duplicates are failures.
+	idempotentOnDup := CollectionCuration(coll) == CurationNone
 
 	added := make([]BatchAddSuccess, 0, len(survivors))
 	emb := a.engine.Embedder()

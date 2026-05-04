@@ -9,6 +9,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Collection curation knobs decomposed into three orthogonal axes
+  (Phase 5 follow-on, commit 1 of 7).** The single `curation` field
+  is split into:
+  - `curation`: `none | standard` (LLM analysis intensity — controls
+    classify, summarize, observation_extract, concept synthesis)
+  - `supersession`: `none | collection | store` (unchanged from
+    Phase 4)
+  - `contradictions`: `on | off` (new — controls whether `contradicts`
+    edges are generated from records in this collection)
+
+  The 4-level `curation` enum (`none|minimal|standard|full`)
+  collapses to `none|standard`. Legacy stored values `minimal` and
+  `full` are normalized on read (`minimal` → `none`, `full` →
+  `standard`) so existing collections work without a migration
+  sweep. Writes reject the legacy values.
+
+  Idempotent-on-dup behavior on `gramaton_collection_add` and
+  `gramaton_collection_add_batch` (previously gated on
+  `curation=minimal`) now gates on `curation=none`. Templates updated
+  accordingly: backlog/todo → `standard / collection / on`,
+  reading-list → `standard / collection / off`,
+  shopping-list/packing-list → `none / collection / off`.
+
 - **F1 final pre-merge sweep.** Three parallel review agents
   (correctness, security, test coverage) reviewed the full L1-L6
   branch and signed off as ready to merge. Mechanical fixes from

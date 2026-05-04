@@ -222,13 +222,14 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 // registerCollectionsMCPTools wires the collections cluster MCP tools.
 func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	type createArgs struct {
-		Name         string                `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
-		Description  string                `json:"description,omitempty" jsonschema:"optional description"`
-		Schema       *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
-		ClearMode    string                `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
-		Supersession string                `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
-		Curation     string                `json:"curation,omitempty" jsonschema:"per-collection curation profile: full (every stage), standard (default), minimal (only embed + concepts), or none (BM25 only)"`
-		Template     string                `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
+		Name           string                `json:"name" jsonschema:"collection name (unique within store, max 128 chars)"`
+		Description    string                `json:"description,omitempty" jsonschema:"optional description"`
+		Schema         *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
+		ClearMode      string                `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
+		Supersession   string                `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
+		Curation       string                `json:"curation,omitempty" jsonschema:"LLM analysis intensity: standard (default, runs classify/summarize/observation_extract/concept synthesis) or none (skip all LLM stages; embed + supersession + contradictions still governed by their own knobs)"`
+		Contradictions string                `json:"contradictions,omitempty" jsonschema:"whether the system generates contradicts edges from records in this collection: on (default) or off"`
+		Template       string                `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_create",
@@ -237,13 +238,14 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		done := s.mcpToolStart("gramaton_collection_create")
 		defer done(nil)
 		result, apiErr := s.api.CollectionCreate(ctx, api.CollectionCreateRequest{
-			Name:         args.Name,
-			Description:  args.Description,
-			Schema:       args.Schema,
-			ClearMode:    args.ClearMode,
-			Supersession: args.Supersession,
-			Curation:     args.Curation,
-			Template:     args.Template,
+			Name:           args.Name,
+			Description:    args.Description,
+			Schema:         args.Schema,
+			ClearMode:      args.ClearMode,
+			Supersession:   args.Supersession,
+			Curation:       args.Curation,
+			Contradictions: args.Contradictions,
+			Template:       args.Template,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

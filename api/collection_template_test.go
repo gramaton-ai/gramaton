@@ -50,6 +50,42 @@ func TestTemplateLookup(t *testing.T) {
 	}
 }
 
+// TestTemplateThreeKnobsExplicit asserts that every starter template
+// sets all three behaviour knobs (curation, supersession,
+// contradictions) explicitly. The three-knob model relies on this:
+// templates that don't set a knob would inherit the global default,
+// which can drift from the template's intent. Catching this at the
+// template-registry level prevents accidental drops.
+func TestTemplateThreeKnobsExplicit(t *testing.T) {
+	want := map[string]struct {
+		curation       string
+		supersession   string
+		contradictions string
+	}{
+		"backlog":       {curation: "standard", supersession: "collection", contradictions: "on"},
+		"todo":          {curation: "standard", supersession: "collection", contradictions: "on"},
+		"reading-list":  {curation: "standard", supersession: "collection", contradictions: "off"},
+		"shopping-list": {curation: "none", supersession: "collection", contradictions: "off"},
+		"packing-list":  {curation: "none", supersession: "collection", contradictions: "off"},
+	}
+	for name, w := range want {
+		tmpl, ok := LookupTemplate(name)
+		if !ok {
+			t.Errorf("template %q missing from registry", name)
+			continue
+		}
+		if tmpl.Curation != w.curation {
+			t.Errorf("%s.curation = %q, want %q", name, tmpl.Curation, w.curation)
+		}
+		if tmpl.Supersession != w.supersession {
+			t.Errorf("%s.supersession = %q, want %q", name, tmpl.Supersession, w.supersession)
+		}
+		if tmpl.Contradictions != w.contradictions {
+			t.Errorf("%s.contradictions = %q, want %q", name, tmpl.Contradictions, w.contradictions)
+		}
+	}
+}
+
 // TestCollectionCreateWithTemplate confirms the end-to-end flow:
 // pass template=shopping-list to CollectionCreate, expect the
 // resulting collection to carry the template's schema + behaviour
@@ -74,8 +110,11 @@ func TestCollectionCreateWithTemplate(t *testing.T) {
 	if got := CollectionClearMode(n); got != ClearModeResolve {
 		t.Errorf("ClearMode = %q, want resolve", got)
 	}
-	if got := CollectionCuration(n); got != CurationMinimal {
-		t.Errorf("Curation = %q, want minimal (template default)", got)
+	if got := CollectionCuration(n); got != CurationNone {
+		t.Errorf("Curation = %q, want none (shopping-list template default)", got)
+	}
+	if got := CollectionContradictions(n); got != ContradictionsOff {
+		t.Errorf("Contradictions = %q, want off (shopping-list template default)", got)
 	}
 
 	// Schema landed from the template.
@@ -103,18 +142,23 @@ func TestCollectionCreateTemplateOverride(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	// shopping-list template is minimal curation; override to full.
+	// shopping-list template is curation=none + contradictions=off;
+	// override curation to standard (one of the two valid values).
 	resp, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
-		Name:     "Notepad Groceries",
-		Template: "shopping-list",
-		Curation: "full",
+		Name:           "Notepad Groceries",
+		Template:       "shopping-list",
+		Curation:       "standard",
+		Contradictions: "on",
 	})
 	if apiErr != nil {
 		t.Fatalf("CollectionCreate: %v", apiErr)
 	}
 	n, _ := eng.Graph().GetNode(resp.ID)
-	if got := CollectionCuration(n); got != CurationFull {
-		t.Errorf("override failed: Curation = %q, want full", got)
+	if got := CollectionCuration(n); got != CurationStandard {
+		t.Errorf("override failed: Curation = %q, want standard", got)
+	}
+	if got := CollectionContradictions(n); got != ContradictionsOn {
+		t.Errorf("override failed: Contradictions = %q, want on", got)
 	}
 	// But ClearMode stays from the template (caller didn't override).
 	if got := CollectionClearMode(n); got != ClearModeResolve {

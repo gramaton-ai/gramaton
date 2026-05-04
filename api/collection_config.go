@@ -6,11 +6,18 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
-// Collection-level behaviour knobs controlling lifecycle ergonomics.
+// Collection-level behaviour knobs. Three orthogonal axes that
+// together determine how curation treats records in a collection:
+//
+//   - clear_mode     -- what `clear` does to items (resolve vs unlink).
+//   - supersession   -- auto-supersession scope (none/collection/store).
+//   - curation       -- LLM-analysis intensity (none/standard).
+//   - contradictions -- whether contradicts edges are generated (on/off).
+//
 // These live as node properties on the collection (not inside the
 // item-schema JSON) so they can be updated without rewriting the
-// schema blob, and so consumers that read them (Phase 5 dedup,
-// Phase 8 log filters) don't have to parse the schema first.
+// schema blob, and so consumers that read them don't have to parse
+// the schema first.
 //
 // Defaults match the values the `gramaton migrate` / collection
 // creation paths would write explicitly if they ran a sweep; the
@@ -39,16 +46,14 @@ var validClearModes = map[ClearMode]bool{
 }
 
 // Supersession controls the candidate scope for auto-supersession on
-// short-content records (Layer 1 of the dedup fix; consumed by
-// Phase 5).
+// short-content records.
 //
 //	collection (default) -- only records sharing this collection
 //	                        participate in same-collection supersession.
 //	                        Cross-collection collisions ("eggs" in
 //	                        Grocery vs "eggs" in Recipes) don't fire.
 //	store                -- legacy behaviour: any record in the store
-//	                        is a candidate. Opt-in for knowledge-shaped
-//	                        collections where global dedup is wanted.
+//	                        is a candidate. Default for memory orphans.
 //	none                 -- collection's items never participate in
 //	                        auto-supersession.
 type Supersession string
@@ -65,52 +70,76 @@ var validSupersessions = map[Supersession]bool{
 	SupersessionNone:       true,
 }
 
-// Curation is the per-collection curation profile. Controls which
-// pipeline stages (classify, summary, embed, contradictions,
-// concepts) run on items in this collection. Consumed by Phase 5's
-// per-stage skip logic.
+// Curation controls per-collection LLM-analysis intensity. Each
+// pipeline stage that consults this knob (classify, summarize,
+// observation_extract, concept synthesis) runs only when the
+// effective value resolves to standard.
 //
-//	full     -- every stage runs.
-//	standard (default) -- every stage except summary-for-short-content.
-//	minimal  -- only embed + concepts. Right for short-content items
-//	            where LLM-expensive stages add no value.
-//	none     -- even embed skipped; BM25 search only.
+//	standard (default) -- LLM analysis runs.
+//	none               -- no LLM analysis runs. Records still get
+//	                      embedded for vector search; supersession
+//	                      and contradictions are governed by their
+//	                      own knobs.
+//
+// Legacy values "minimal" and "full" are normalized on read --
+// minimal -> none, full -> standard -- so existing collections keep
+// working without a migration sweep. Writes reject the legacy values.
 type Curation string
 
 const (
-	CurationFull     Curation = "full"
 	CurationStandard Curation = "standard"
-	CurationMinimal  Curation = "minimal"
 	CurationNone     Curation = "none"
 )
 
 var validCurations = map[Curation]bool{
-	CurationFull:     true,
 	CurationStandard: true,
-	CurationMinimal:  true,
 	CurationNone:     true,
 }
 
-// Default values used when a collection's property is absent. The
-// read-time fallback these constants power is why Phase 4 doesn't
-// need a migrate-time sweep.
+// Contradictions controls whether the system generates contradicts
+// edges between records in this collection and other records. The
+// stage is LLM-driven, so off saves cost on collections where
+// pairwise contradiction detection is meaningless (journal entries,
+// bookmarks, recipe collections).
+//
+//	on (default) -- contradictions stage runs against records here.
+//	off          -- contradictions stage skipped.
+type Contradictions string
+
 const (
-	DefaultClearMode    = ClearModeResolve
-	DefaultSupersession = SupersessionCollection
-	DefaultCuration     = CurationStandard
+	ContradictionsOn  Contradictions = "on"
+	ContradictionsOff Contradictions = "off"
+)
+
+var validContradictions = map[Contradictions]bool{
+	ContradictionsOn:  true,
+	ContradictionsOff: true,
+}
+
+// Default values used when a collection's property is absent. The
+// read-time fallback these constants power is why we don't need a
+// migrate-time sweep on every config change.
+const (
+	DefaultClearMode      = ClearModeResolve
+	DefaultSupersession   = SupersessionCollection
+	DefaultCuration       = CurationStandard
+	DefaultContradictions = ContradictionsOn
 )
 
 // Property names on the collection node.
 const (
-	propClearMode    = "collection_clear_mode"
-	propSupersession = "collection_supersession"
-	propCuration     = "collection_curation"
+	propClearMode      = "collection_clear_mode"
+	propSupersession   = "collection_supersession"
+	propCuration       = "collection_curation"
+	propContradictions = "collection_contradictions"
 )
 
 // validateCollectionConfig rejects unknown values for each config
 // field. Empty strings are accepted -- they signal "use the default"
-// and the getters pick that up.
-func validateCollectionConfig(clearMode, supersession, curation string) error {
+// and the getters pick that up. Legacy curation values "minimal" and
+// "full" are rejected on writes; reads still accept them and
+// normalize.
+func validateCollectionConfig(clearMode, supersession, curation, contradictions string) error {
 	if clearMode != "" && !validClearModes[ClearMode(clearMode)] {
 		return fmt.Errorf("clear_mode %q not in {resolve, unlink}", clearMode)
 	}
@@ -118,7 +147,10 @@ func validateCollectionConfig(clearMode, supersession, curation string) error {
 		return fmt.Errorf("supersession %q not in {collection, store, none}", supersession)
 	}
 	if curation != "" && !validCurations[Curation(curation)] {
-		return fmt.Errorf("curation %q not in {full, standard, minimal, none}", curation)
+		return fmt.Errorf("curation %q not in {standard, none}", curation)
+	}
+	if contradictions != "" && !validContradictions[Contradictions(contradictions)] {
+		return fmt.Errorf("contradictions %q not in {on, off}", contradictions)
 	}
 	return nil
 }
@@ -151,14 +183,35 @@ func CollectionSupersession(n *graph.Node) Supersession {
 }
 
 // CollectionCuration returns the collection's curation profile,
-// falling back to DefaultCuration when absent.
+// falling back to DefaultCuration when absent. Legacy values from
+// the pre-redesign 4-level enum are normalized on read so existing
+// stores keep working without a migration sweep.
 func CollectionCuration(n *graph.Node) Curation {
 	if n == nil {
 		return DefaultCuration
 	}
 	v, _ := n.Properties.GetString(propCuration)
-	if v == "" {
+	switch v {
+	case "":
 		return DefaultCuration
+	case "minimal":
+		return CurationNone
+	case "full":
+		return CurationStandard
+	default:
+		return Curation(v)
 	}
-	return Curation(v)
+}
+
+// CollectionContradictions returns the collection's contradictions
+// config, falling back to DefaultContradictions when absent.
+func CollectionContradictions(n *graph.Node) Contradictions {
+	if n == nil {
+		return DefaultContradictions
+	}
+	v, _ := n.Properties.GetString(propContradictions)
+	if v == "" {
+		return DefaultContradictions
+	}
+	return Contradictions(v)
 }
