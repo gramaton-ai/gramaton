@@ -84,6 +84,7 @@ func (s *Server) registerCollectionsRoutes(mux *http.ServeMux) {
 			IncludeRetired: query.Get("include_retired") == "true",
 			Fields:         projection,
 			Filter:         filter,
+			Match:          query.Get("match"),
 			AsOf:           query.Get("as_of"),
 		})
 		if apiErr != nil {
@@ -277,6 +278,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		IncludeRetired bool           `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
 		Fields         []string       `json:"fields,omitempty" jsonschema:"allowlist of schema field names to include per item (default: all fields). id, created_at, and needs_migration are always included."`
 		Filter         map[string]any `json:"filter,omitempty" jsonschema:"schema-field -> expected-value(s) map. Value may be a string (exact match) or []string (any-of). Items must match every entry. Useful for auditing status=open or severity=P1 without dragging the full details payload."`
+		Match          string         `json:"match,omitempty" jsonschema:"literal substring search across the item's string fields (case-insensitive). Composes with filter -- e.g. filter={status:open} + match=auth returns open items mentioning auth."`
 		AsOf           string         `json:"as_of,omitempty" jsonschema:"point-in-time membership: return members the collection had at the commit at-or-before this date (YYYY-MM-DD or RFC3339). Response carries as_of + semantics=point_in_time. Future dates rejected."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -291,6 +293,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 			IncludeRetired: args.IncludeRetired,
 			Fields:         args.Fields,
 			Filter:         args.Filter,
+			Match:          args.Match,
 			AsOf:           args.AsOf,
 		})
 		if apiErr != nil {
