@@ -59,8 +59,8 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		if EffectiveCurationFor(e.Graph(), id).Curation == "none" {
 			continue
 		}
-		content, ok := n.Properties.GetString("content_full")
-		if !ok || content == "" {
+		content := RecordContentFor(e.Graph(), id)
+		if content == "" {
 			continue
 		}
 		records = append(records, pending{
@@ -385,9 +385,8 @@ func applyClassification(e *core.Engine, id string, data *classificationResult, 
 	// content_medium generation removed (D12: single BM25 layer).
 
 	// Record which model classified this record for audit.
-	n, ok := e.Graph().GetNode(id)
-	if ok {
-		content, _ := n.Properties.GetString("content_full")
+	if _, ok := e.Graph().GetNode(id); ok {
+		content := RecordContentFor(e.Graph(), id)
 		model := longModel
 		if len(content) < threshold && shortModel != "" {
 			model = shortModel

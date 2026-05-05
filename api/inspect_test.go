@@ -49,6 +49,12 @@ func TestInspectEffectiveCurationCollectionItem(t *testing.T) {
 		Curation:       "standard",
 		Supersession:   "none",
 		Contradictions: "off",
+		Schema: &CollectionSchema{
+			Fields: []SchemaField{
+				{Name: "title", Type: FieldTypeString, Required: true},
+			},
+			ContentFields: []string{"title"},
+		},
 	})
 	item, apiErr := a.CollectionAdd(ctx, coll.ID, CollectionAddRequest{
 		Fields: map[string]any{"title": "today's entry"},
@@ -72,6 +78,38 @@ func TestInspectEffectiveCurationCollectionItem(t *testing.T) {
 	}
 	if got.Contradictions != "off" {
 		t.Errorf("Contradictions = %q, want off", got.Contradictions)
+	}
+}
+
+// TestInspectEffectiveCurationDefaultCollection pins that the api-
+// layer DefaultCuration constant and curation/effective.go's
+// collectionDefaultCuration constant agree end-to-end. A collection
+// created without an explicit Curation knob and a record added to
+// it should both resolve to "none" (the post-activation default).
+// Drift between the two constants would surface here as inspect
+// reporting "standard" while the api-side getter says "none".
+func TestInspectEffectiveCurationDefaultCollection(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	// Create with no Curation knob -> falls through to the default.
+	coll, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Defaults"})
+	item, apiErr := a.CollectionAdd(ctx, coll.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "anything"},
+	})
+	if apiErr != nil {
+		t.Fatalf("CollectionAdd: %v", apiErr)
+	}
+	resp, apiErr := a.Inspect(ctx, InspectRequest{ID: item.ID})
+	if apiErr != nil {
+		t.Fatalf("Inspect: %v", apiErr)
+	}
+	if resp.EffectiveCuration == nil {
+		t.Fatal("expected effective_curation on collection item, got nil")
+	}
+	if resp.EffectiveCuration.Curation != "none" {
+		t.Errorf("default curation drift: got %q, want %q (api/curation defaults out of sync)",
+			resp.EffectiveCuration.Curation, "none")
 	}
 }
 

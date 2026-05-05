@@ -163,7 +163,7 @@ func TestCollectionCurationLegacyNormalize(t *testing.T) {
 		{"full", CurationStandard},
 		{"standard", CurationStandard},
 		{"none", CurationNone},
-		{"", CurationStandard}, // empty -> default
+		{"", CurationNone}, // empty -> DefaultCuration (none)
 	}
 	for _, tc := range cases {
 		n := &graph.Node{

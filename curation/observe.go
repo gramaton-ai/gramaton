@@ -75,12 +75,12 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		if EffectiveCurationFor(e.Graph(), n.ID).Curation == "none" {
 			continue
 		}
-		content, ok := n.Properties.GetString("content_full")
+		content := RecordContentFor(e.Graph(), n.ID)
 		minLen := cfg.Curation.ObservationMinContentLength
 		if minLen <= 0 {
 			minLen = 1500
 		}
-		if !ok || len(content) < minLen {
+		if len(content) < minLen {
 			continue
 		}
 		if _, done := hasObservations[n.ID]; done {

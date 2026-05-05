@@ -65,7 +65,14 @@ the next cycle fires.
 - **Collection items**: governed by the collection's three knobs.
   `processing_status` is set at insert time based on the
   `curation` knob -- standard items enter the autonomous pipeline,
-  none items bypass it.
+  none items bypass it. The text the LLM stages read is built from
+  the schema's `content_fields` list (see
+  `gramaton_guide(topic="collections")`); items in collections
+  without `content_fields` declared can't participate in
+  `curation=standard` (refused at create time). Editing a field
+  named in `content_fields` via `gramaton_collection_update`
+  refreshes the vector + BM25 indexes and re-flags the item for
+  reclassify in the next cycle.
 - **Session segments** (`knowledge_type="segment"`): deterministic
   lifecycle only. Skipped for:
   - TF-IDF observation extraction (they were already extracted by

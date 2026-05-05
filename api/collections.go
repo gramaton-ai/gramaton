@@ -220,6 +220,27 @@ func extractFields(n *graph.Node) map[string]any {
 	return fields
 }
 
+// contentFieldsFor walks recordID's member_of edges and returns
+// the content_fields list from the first governing collection that
+// declares one. Returns nil for orphan records and for records
+// whose collections all omit content_fields. Caller must hold at
+// least RLock.
+func (a *API) contentFieldsFor(recordID string) []string {
+	for _, e := range a.engine.Graph().EdgesFrom(recordID) {
+		if e.Type != "member_of" {
+			continue
+		}
+		coll, ok := a.engine.Graph().GetNode(e.TargetID)
+		if !ok {
+			continue
+		}
+		if cf, ok := coll.Properties.GetStringList(propContentFields); ok && len(cf) > 0 {
+			return cf
+		}
+	}
+	return nil
+}
+
 // isMemberOf checks if itemID has a member_of edge to collectionID.
 // Returns the edge if found.
 func (a *API) isMemberOf(itemID, collectionID string) (*graph.Edge, bool) {
@@ -329,6 +350,22 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation, req.Contradictions); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
+	// curation=standard runs LLM stages on items; those stages need a
+	// clean text representation provided by content_fields. Refuse the
+	// combination of curation=standard with no content_fields here so
+	// the failure surfaces at create time rather than as silent
+	// low-quality classification later. Two valid escape hatches:
+	// pick a curation=standard template (which declares content_fields),
+	// or declare content_fields explicitly on a custom schema.
+	effectiveCuration := req.Curation
+	if effectiveCuration == "" {
+		effectiveCuration = string(DefaultCuration)
+	}
+	if effectiveCuration == string(CurationStandard) {
+		if req.Schema == nil || len(req.Schema.ContentFields) == 0 {
+			return CollectionCreateResponse{}, ErrInvalid("curation=standard requires content_fields declared on the schema; use a curation=standard template (backlog, todo, reading-list, journal, references) or declare content_fields on your custom schema, or set curation=none")
+		}
+	}
 
 	a.engine.Lock()
 	defer a.engine.Unlock()
@@ -355,6 +392,13 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 			return CollectionCreateResponse{}, ErrInternal("failed to serialize schema")
 		}
 		props["collection_schema"] = graph.StringProperty(raw)
+		// Parallel-encoded content_fields for curation/ readers (which
+		// can't import api/ to parse the JSON). Stored when declared;
+		// absence on the collection node means "no content_fields, use
+		// the schemaless wide-concat fallback at read time."
+		if len(req.Schema.ContentFields) > 0 {
+			props[propContentFields] = graph.StringListProperty(req.Schema.ContentFields)
+		}
 	}
 	if req.ClearMode != "" {
 		props[propClearMode] = graph.StringProperty(req.ClearMode)
@@ -1020,30 +1064,36 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		return CollectionAddResponse{}, ErrMissing("fields are required")
 	}
 
-	// Capture the collection's name + description under a brief RLock.
-	// Prepended to the item's indexed text so an item like "Phase 5
-	// follow-on" in collection "Gramaton development" surfaces for
-	// searches mentioning "Gramaton" via lexical match. Captured once
-	// here and reused for both the embedding (below) and the BM25
-	// indexing (under the main Lock further down) to keep the two
-	// inputs consistent across a possible concurrent rename.
+	// Capture the collection's name + description AND its schema's
+	// content_fields under a brief RLock. The two are reused outside
+	// the lock for the pre-embed (below) and re-validated under the
+	// main Lock further down. Captured together so the embedding and
+	// BM25 indexing stay consistent across a possible concurrent
+	// rename or schema migration.
 	var contextParts []string
+	var contentFields []string
 	a.engine.RLock()
 	if coll, ok := a.engine.Graph().GetNode(collectionID); ok {
 		contextParts = collectionContextParts(coll)
+		if schema, _ := loadSchema(coll); schema != nil {
+			contentFields = schema.ContentFields
+		}
 	}
 	a.engine.RUnlock()
 
-	// Pre-embed field text for graph connectivity (outside lock).
+	// Pre-embed (outside lock) using the LLM/embedding-grade text:
+	// content_fields-driven for schema'd collections, wide concat for
+	// schemaless. The collection context (name + description) is
+	// prepended so items surface for searches that mention the
+	// collection's name via the embedding-similarity path.
 	var itemVec []float32
 	if a.engine.Embedder() != nil {
-		textParts := append([]string{}, contextParts...)
-		for _, v := range req.Fields {
-			if str, ok := v.(string); ok && str != "" {
-				textParts = append(textParts, str)
+		contentText := core.RecordContentFromFields(contentFields, req.Fields)
+		if contentText != "" || len(contextParts) > 0 {
+			textParts := append([]string{}, contextParts...)
+			if contentText != "" {
+				textParts = append(textParts, contentText)
 			}
-		}
-		if len(textParts) > 0 {
 			embedText := strings.Join(textParts, " ")
 			if vecs, err := a.engine.Embedder().Embed(ctx, []string{embedText}); err == nil && len(vecs) > 0 {
 				itemVec = vecs[0]
@@ -1239,21 +1289,26 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 		vec     []float32
 		vecText string // concatenated string fields; empty if none
 	}
-	// Capture the collection's name + description under a brief RLock.
-	// Prepended to each item's indexed text (BM25 + embedding). Same
-	// rationale as single CollectionAdd. Captured once here and
-	// reused in phase 2 for BM25 to keep both inputs consistent
-	// across a possible concurrent rename between phases.
+	// Capture the collection's name + description AND its schema's
+	// content_fields under a brief RLock. Reused in phase 2 for BM25
+	// indexing to keep both inputs consistent across a possible
+	// concurrent rename or schema migration between phases.
 	var contextParts []string
+	var contentFields []string
 	a.engine.RLock()
 	if coll, ok := a.engine.Graph().GetNode(collectionID); ok {
 		contextParts = collectionContextParts(coll)
+		if schema, _ := loadSchema(coll); schema != nil {
+			contentFields = schema.ContentFields
+		}
 	}
 	a.engine.RUnlock()
 
-	// Schema lookup has to wait for the write lock so we don't race
-	// with CollectionSchemaUpdate. Validate the per-item SHAPE
+	// Schema conformance still waits for the write lock (so we don't
+	// race with CollectionSchemaUpdate). Validate per-item SHAPE
 	// (non-empty Fields) here; defer schema conformance to phase 2.
+	// vecText uses the LLM/embedding-grade synthesis (content_fields
+	// for schema'd collections, wide concat for schemaless).
 	failed := make([]BatchAddFailure, 0)
 	survivors := make([]prepared, 0, len(req.Items))
 	for i, item := range req.Items {
@@ -1266,11 +1321,10 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			})
 			continue
 		}
+		contentText := core.RecordContentFromFields(contentFields, item.Fields)
 		parts := append([]string{}, contextParts...)
-		for _, v := range item.Fields {
-			if s, ok := v.(string); ok && s != "" {
-				parts = append(parts, s)
-			}
+		if contentText != "" {
+			parts = append(parts, contentText)
 		}
 		survivors = append(survivors, prepared{
 			reqIdx:  i,
@@ -1537,11 +1591,74 @@ type CollectionUpdateRequest struct {
 }
 
 func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req CollectionUpdateRequest) (CollectionUpdateResponse, *APIError) {
-	_ = ctx
 	if len(req.Fields) == 0 {
 		return CollectionUpdateResponse{}, ErrMissing("fields are required")
 	}
 
+	// Phase 1 (RLock): capture the inputs we need to compute the
+	// post-update content text outside the lock. We need the
+	// collection's contextParts (for the embedding text prefix), the
+	// schema's content_fields (which fields are LLM/embedding-grade),
+	// the item's current fields (for the merge), and the current
+	// RecordContent (so we can detect change).
+	var contextParts []string
+	var contentFields []string
+	var existingFields map[string]any
+	var contentBefore string
+	a.engine.RLock()
+	coll, ok := a.engine.Graph().GetNode(collectionID)
+	if !ok {
+		a.engine.RUnlock()
+		return CollectionUpdateResponse{}, ErrNotFound("collection not found")
+	}
+	contextParts = collectionContextParts(coll)
+	if schema, _ := loadSchema(coll); schema != nil {
+		contentFields = schema.ContentFields
+	}
+	n, ok := a.engine.Graph().GetNode(itemID)
+	if !ok {
+		a.engine.RUnlock()
+		return CollectionUpdateResponse{}, ErrNotFound("item not found")
+	}
+	if _, mem := a.isMemberOf(itemID, collectionID); !mem {
+		a.engine.RUnlock()
+		return CollectionUpdateResponse{}, ErrNotFound("item is not a member of this collection")
+	}
+	existingFields = extractFields(n)
+	contentBefore = core.RecordContent(n, contentFields)
+	a.engine.RUnlock()
+
+	// Phase 2 (no lock): compute the merged content_fields output and
+	// re-embed if it differs from before. Embedding outside the lock
+	// keeps writers from blocking on provider I/O. The merge here
+	// matches what setFieldProps will land under the lock; if a
+	// concurrent CollectionSchemaUpdate or CollectionUpdate races
+	// ahead, Phase 3 re-validates and the new content stored at
+	// commit time may not match this preview -- that's acceptable
+	// because the next curation cycle will reconcile (we still flip
+	// processing_status=captured), and reembed brings vectors home.
+	merged := make(map[string]any, len(existingFields)+len(req.Fields))
+	for k, v := range existingFields {
+		merged[k] = v
+	}
+	for k, v := range req.Fields {
+		merged[k] = v
+	}
+	contentAfter := core.RecordContentFromFields(contentFields, merged)
+	contentChanged := contentBefore != contentAfter
+	var newVec []float32
+	if contentChanged && a.engine.Embedder() != nil && contentAfter != "" {
+		textParts := append([]string{}, contextParts...)
+		textParts = append(textParts, contentAfter)
+		embedText := strings.Join(textParts, " ")
+		if vecs, err := a.engine.Embedder().Embed(ctx, []string{embedText}); err == nil && len(vecs) > 0 {
+			newVec = vecs[0]
+		}
+	}
+
+	// Phase 3 (write lock): re-validate, apply, and re-index. State
+	// may have changed since Phase 1 -- re-fetch and re-validate to
+	// catch concurrent retire / migration.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -1549,13 +1666,9 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	if svcErr != nil {
 		return CollectionUpdateResponse{}, svcErr
 	}
-
 	if _, ok := a.isMemberOf(itemID, collectionID); !ok {
 		return CollectionUpdateResponse{}, ErrNotFound("item is not a member of this collection")
 	}
-
-	// Validate against schema. Merge existing fields with updates for
-	// full validation (required fields might already be set).
 	schema, err := loadSchema(coll)
 	if err != nil {
 		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
@@ -1576,6 +1689,29 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	}
 
 	a.setFieldProps(itemID, req.Fields)
+
+	// If RecordContent changed: re-index BM25 + vector to reflect
+	// current text, and flip processing_status=captured so the next
+	// curation cycle reclassifies/resummarizes for curation=standard
+	// collections. Vector freshness matters for similarity-based
+	// features (concept synthesis, contradictions). BM25 input is the
+	// wide RecordIndexText (every field.* string), distinct from the
+	// narrow RecordContent that drove the embedding -- the same
+	// asymmetry CollectionAdd uses at insert time.
+	if contentChanged {
+		updated, _ := a.engine.Graph().GetNode(itemID)
+		bm25Parts := append([]string{}, contextParts...)
+		if t := core.RecordIndexText(updated); t != "" {
+			bm25Parts = append(bm25Parts, t)
+		}
+		a.engine.IndexNode(itemID, strings.Join(bm25Parts, " "), newVec)
+		if newVec != nil && a.engine.Embedder() != nil {
+			a.engine.SetProp(itemID, "embedding_model", graph.StringProperty(a.engine.Embedder().ModelID()))
+		}
+		if CollectionCuration(coll) == CurationStandard {
+			a.engine.SetProp(itemID, "processing_status", graph.StringProperty("captured"))
+		}
+	}
 
 	if _, err := a.engine.Save("collection_update", graph.CommitAction{
 		Kind: graph.ActionCollectionUpdate, RecordID: itemID,
@@ -1821,6 +1957,14 @@ func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, r
 		return CollectionSchemaUpdateResponse{}, ErrInternal("failed to serialize schema")
 	}
 	a.engine.SetProp(collectionID, "collection_schema", graph.StringProperty(raw))
+	// Keep the parallel-encoded content_fields property in sync with
+	// the JSON schema. Curation reads this directly (cycle-safe; no
+	// JSON parse on every record).
+	if len(req.Schema.ContentFields) > 0 {
+		a.engine.SetProp(collectionID, propContentFields, graph.StringListProperty(req.Schema.ContentFields))
+	} else {
+		a.engine.Graph().RemoveNodeProperty(collectionID, propContentFields)
+	}
 
 	resp := CollectionSchemaUpdateResponse{Updated: true, CollectionID: collectionID}
 

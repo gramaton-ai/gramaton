@@ -559,7 +559,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 
 				// Jaccard guard: verify content similarity, not just embedding.
-				if !verifyDedupJaccard(na, nb) {
+				if !verifyDedupJaccard(ws.Graph(), na, nb) {
 					continue
 				}
 
@@ -1101,9 +1101,9 @@ const (
 // behaviour (skip Jaccard entirely when both sides <200 chars and trust
 // cosine) was load-bearing for false-positive supersession on short
 // records — see tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
-func verifyDedupJaccard(a, b *graph.Node) bool {
-	textA := curationNodeText(a)
-	textB := curationNodeText(b)
+func verifyDedupJaccard(g graph.NodeReader, a, b *graph.Node) bool {
+	textA := curationNodeText(g, a)
+	textB := curationNodeText(g, b)
 
 	tokA := index.Tokenize(textA)
 	tokB := index.Tokenize(textB)
@@ -1116,12 +1116,16 @@ func verifyDedupJaccard(a, b *graph.Node) bool {
 	return sim >= threshold
 }
 
-// curationNodeText returns the best content text for Jaccard comparison.
-func curationNodeText(n *graph.Node) string {
+// curationNodeText returns the best content text for Jaccard
+// comparison. Prefers RecordContentFor (Memory: content_full;
+// collection items: content_fields-driven text). Falls back to
+// content_short when present but no resolvable RecordContent --
+// covers concept nodes and partially-curated records.
+func curationNodeText(g graph.NodeReader, n *graph.Node) string {
 	if n == nil {
 		return ""
 	}
-	if s, ok := n.Properties.GetString("content_full"); ok {
+	if s := RecordContentFor(g, n.ID); s != "" {
 		return s
 	}
 	if s, ok := n.Properties.GetString("content_short"); ok {

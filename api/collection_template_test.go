@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -92,6 +93,47 @@ func TestTemplateThreeKnobsExplicit(t *testing.T) {
 	}
 }
 
+// TestTemplateContentFieldsExplicit pins each starter template's
+// content_fields declaration. content_fields drives RecordContent
+// (the LLM/embedding text representation of an item) so a silent
+// drop or reorder would change classify/summarize input. The test
+// catches that at template-load time. Curation=none templates
+// (shopping/packing) intentionally omit content_fields -- they
+// don't enter the LLM pipeline.
+func TestTemplateContentFieldsExplicit(t *testing.T) {
+	want := map[string][]string{
+		"backlog":      {"title", "details"},
+		"todo":         {"title", "notes"},
+		"reading-list": {"title", "author", "notes"},
+		"journal":      {"title", "entry"},
+		"references":   {"title", "description", "notes"},
+	}
+	for name, w := range want {
+		tmpl, ok := LookupTemplate(name)
+		if !ok {
+			t.Errorf("template %q missing from registry", name)
+			continue
+		}
+		if tmpl.Schema == nil {
+			t.Errorf("%s schema missing", name)
+			continue
+		}
+		if !slices.Equal(tmpl.Schema.ContentFields, w) {
+			t.Errorf("%s.content_fields = %v, want %v", name, tmpl.Schema.ContentFields, w)
+		}
+	}
+	for _, name := range []string{"shopping-list", "packing-list"} {
+		tmpl, ok := LookupTemplate(name)
+		if !ok {
+			t.Errorf("template %q missing", name)
+			continue
+		}
+		if tmpl.Schema != nil && len(tmpl.Schema.ContentFields) != 0 {
+			t.Errorf("%s.content_fields should be empty (curation=none), got %v", name, tmpl.Schema.ContentFields)
+		}
+	}
+}
+
 // TestCollectionCreateWithTemplate confirms the end-to-end flow:
 // pass template=shopping-list to CollectionCreate, expect the
 // resulting collection to carry the template's schema + behaviour
@@ -148,13 +190,22 @@ func TestCollectionCreateTemplateOverride(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	// shopping-list template is curation=none + contradictions=off;
-	// override curation to standard (one of the two valid values).
+	// shopping-list template is curation=none + contradictions=off.
+	// Override curation to standard (one of the two valid values) and
+	// supply a schema with content_fields, since curation=standard
+	// requires content_fields declared (enforced at create time).
 	resp, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:           "Notepad Groceries",
 		Template:       "shopping-list",
 		Curation:       "standard",
 		Contradictions: "on",
+		Schema: &CollectionSchema{
+			Fields: []SchemaField{
+				{Name: "title", Type: FieldTypeString, Required: true},
+				{Name: "notes", Type: FieldTypeString},
+			},
+			ContentFields: []string{"title", "notes"},
+		},
 	})
 	if apiErr != nil {
 		t.Fatalf("CollectionCreate: %v", apiErr)

@@ -851,10 +851,17 @@ func TestCollectionAddProcessingStatusGatedByCuration(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	// curation=standard (collection-level default).
+	// curation=standard requires content_fields declared on the
+	// schema (enforced at create time).
 	std, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "StandardColl",
 		Curation: "standard",
+		Schema: &CollectionSchema{
+			Fields: []SchemaField{
+				{Name: "title", Type: FieldTypeString, Required: true},
+			},
+			ContentFields: []string{"title"},
+		},
 	})
 	stdItem, apiErr := a.CollectionAdd(ctx, std.ID, CollectionAddRequest{
 		Fields: map[string]any{"title": "thing"},
@@ -894,6 +901,12 @@ func TestCollectionAddBatchProcessingStatusGatedByCuration(t *testing.T) {
 	std, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:     "StandardBatch",
 		Curation: "standard",
+		Schema: &CollectionSchema{
+			Fields: []SchemaField{
+				{Name: "title", Type: FieldTypeString, Required: true},
+			},
+			ContentFields: []string{"title"},
+		},
 	})
 	stdResp, apiErr := a.CollectionAddBatch(ctx, std.ID, CollectionAddBatchRequest{
 		Items: []CollectionAddItem{
@@ -946,7 +959,19 @@ func TestCollectionDedup(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "List"})
+	// curation=standard collections reject duplicate titles with
+	// ErrConflict (this test's contract); curation=none collections
+	// dedup idempotently. Use standard explicitly.
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:     "List",
+		Curation: "standard",
+		Schema: &CollectionSchema{
+			Fields: []SchemaField{
+				{Name: "title", Type: FieldTypeString, Required: true},
+			},
+			ContentFields: []string{"title"},
+		},
+	})
 	collID := result.ID
 
 	a.CollectionAdd(ctx, collID, CollectionAddRequest{Fields: map[string]any{"title": "Buy milk"}})

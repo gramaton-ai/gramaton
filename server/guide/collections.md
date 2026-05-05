@@ -27,6 +27,27 @@ Use for tasks, TODOs, action items, backlogs, checklists -- anything where missi
 
 Collections can have optional schemas that enforce field types and required fields. Field types: `string`, `number`, `boolean`, `date`, `enum` (closed, values predefined in schema), `enum[]` (multi-select).
 
+### `content_fields`: which fields drive LLM curation + embedding
+
+Schemas may declare an ordered `content_fields` list naming the fields that constitute the canonical text representation of an item. The list drives:
+
+- **LLM-stage curation** — classify, summarize, contradictions, concept synthesis read this text as their input.
+- **Vector embedding** — items embed against the joined `content_fields` text (plus the collection's name + description as context). Reembed converges on the same text.
+
+Each name must reference a declared `type=string` field; non-string types are rejected at schema validation. The five `curation=standard` templates ship with explicit declarations:
+
+| Template | content_fields |
+|---|---|
+| `backlog` | `[title, details]` |
+| `todo` | `[title, notes]` |
+| `reading-list` | `[title, author, notes]` |
+| `journal` | `[title, entry]` |
+| `references` | `[title, description, notes]` |
+
+`curation=standard` requires `content_fields` declared (via template or custom schema). `gramaton_collection_create` rejects schemaless `curation=standard` requests with a clear error. `curation=none` collections (`shopping-list`, `packing-list`) don't declare `content_fields`; their items skip the LLM pipeline entirely.
+
+When an item's `content_fields`-output text changes via `gramaton_collection_update`, the BM25 index and vector embedding refresh and `processing_status` flips to `captured` so the next curation cycle reclassifies the item. Updates to non-`content_fields` fields (status enums, dates) leave the indexes and pipeline state untouched.
+
 ## Behaviour fields (the three-knob curation model)
 
 Three orthogonal knobs control how curation treats records in a collection. Set them per-collection at create time, or rely on the template defaults.

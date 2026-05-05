@@ -42,9 +42,10 @@ func TestVerifyDedupJaccardLongContent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(tc.a)}}
-			b := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(tc.b)}}
-			got := verifyDedupJaccard(a, b)
+			g := graph.New()
+			a := g.AddNode(graph.Properties{"content_full": graph.StringProperty(tc.a)})
+			b := g.AddNode(graph.Properties{"content_full": graph.StringProperty(tc.b)})
+			got := verifyDedupJaccard(g, a, b)
 			if got != tc.want {
 				t.Errorf("verifyDedupJaccard = %v, want %v\n  a=%q\n  b=%q", got, tc.want, tc.a, tc.b)
 			}
@@ -100,9 +101,10 @@ func TestVerifyDedupJaccardShortContentRejectsFalsePositives(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(tc.a)}}
-			b := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(tc.b)}}
-			got := verifyDedupJaccard(a, b)
+			g := graph.New()
+			a := g.AddNode(graph.Properties{"content_full": graph.StringProperty(tc.a)})
+			b := g.AddNode(graph.Properties{"content_full": graph.StringProperty(tc.b)})
+			got := verifyDedupJaccard(g, a, b)
 			if got != tc.want {
 				t.Errorf("verifyDedupJaccard = %v, want %v\n  a=%q\n  b=%q", got, tc.want, tc.a, tc.b)
 			}
@@ -123,10 +125,11 @@ func TestVerifyDedupJaccardMixedLengthUsesStricterThreshold(t *testing.T) {
 	// long; ratio well below 0.5.
 	long := "the auth bug we're tracking has nothing to do with login flow but rather with token expiration during long-running sessions when refresh tokens silently fail and the user is logged out without warning."
 
-	a := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(short)}}
-	b := &graph.Node{Properties: graph.Properties{"content_full": graph.StringProperty(long)}}
+	g := graph.New()
+	a := g.AddNode(graph.Properties{"content_full": graph.StringProperty(short)})
+	b := g.AddNode(graph.Properties{"content_full": graph.StringProperty(long)})
 
-	if verifyDedupJaccard(a, b) {
+	if verifyDedupJaccard(g, a, b) {
 		t.Errorf("mixed-length pair with low token overlap should NOT consolidate (stricter short threshold applies)")
 	}
 }

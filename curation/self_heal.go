@@ -130,10 +130,12 @@ func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) 
 		return outcomeStripped
 	}
 
-	// Tier 3: strip yielded too little. Try first-sentences of
-	// content_full.
-	contentFull, hasFull := n.Properties.GetString("content_full")
-	if hasFull {
+	// Tier 3: strip yielded too little. Try first-sentences of the
+	// record's full text. RecordContentFor returns content_full for
+	// Memory records and the content_fields-driven text for
+	// collection items.
+	contentFull := RecordContentFor(e.Graph(), nodeID)
+	if contentFull != "" {
 		fallback := firstSentences(contentFull, 2, 500)
 		if fallback != "" && len(fallback) >= minSummaryAfterStrip {
 			e.SetContentProp(nodeID, "content_short", fallback)

@@ -136,12 +136,12 @@ func (e *Engine) Validate() *ValidationResult {
 		if !ok {
 			continue
 		}
-		if _, ok := n.Properties.GetString("content_full"); ok {
+		if RecordIndexText(n) != "" {
 			bm25FullExpected++
 		}
 	}
 	if bm25FullLen != bm25FullExpected {
-		r.addWarning("bm25_full: indexed %d docs, expected ~%d (nodes with content_full)", bm25FullLen, bm25FullExpected)
+		r.addWarning("bm25_full: indexed %d docs, expected ~%d (nodes with indexable text)", bm25FullLen, bm25FullExpected)
 	}
 
 	// --- Index consistency: Vector ---

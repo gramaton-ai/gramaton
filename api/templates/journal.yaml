@@ -18,3 +18,4 @@ schema:
     - name: date
       type: date
       required: false
+  content_fields: [title, entry]
