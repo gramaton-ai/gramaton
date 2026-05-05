@@ -286,7 +286,7 @@ const CollectionCreateDescription = "Create a new collection. Collections provid
 
 const CollectionListDescription = "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page."
 
-const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]) and `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]})."
+const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]), `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]}), and `match` for case-insensitive substring search across string fields (e.g. match=\"auth\" returns items whose title/details/notes/etc. contain \"auth\")."
 
 const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On curation=standard (backlog / todo / default), a duplicate returns ErrConflict with the existing id in the message."
 
@@ -528,6 +528,15 @@ type CollectionItemsRequest struct {
 	// exact, not ranked.
 	Filter map[string]any `json:"filter,omitempty"`
 
+	// Match is a literal substring search across the item's string
+	// fields (case-insensitive). Use to narrow within an exhaustive
+	// collection list (e.g. "all open backlog items mentioning
+	// 'auth'" via filter={"status":"open"} + match="auth"). Distinct
+	// from Filter which is exact-match: Match scans every field.*
+	// string property for the substring. Mirrors SearchRequest.Match
+	// semantics but scoped to a single collection.
+	Match string `json:"match,omitempty"`
+
 	// AsOf, when set, returns point-in-time membership: the members
 	// that had `member_of` edges to the collection at the commit
 	// immediately before AsOf, with each member's state at that
@@ -565,6 +574,10 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req Coll
 	if projErr != nil {
 		return CollectionItemsResponse{}, ErrInvalid(projErr.Error())
 	}
+	if len(req.Match) > MaxMatchLength {
+		return CollectionItemsResponse{}, ErrInvalid(fmt.Sprintf("match string exceeds maximum length of %d", MaxMatchLength))
+	}
+	matchSubstr := strings.ToLower(req.Match)
 
 	a.engine.RLock()
 	defer a.engine.RUnlock()
@@ -574,7 +587,7 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req Coll
 	// everything flows through the CAS store via the commit's prolly
 	// tree roots.
 	if !asOfT.IsZero() {
-		return a.collectionItemsAtCommit(collectionID, asOfT, filterMatchers, projection, req)
+		return a.collectionItemsAtCommit(collectionID, asOfT, filterMatchers, matchSubstr, projection, req)
 	}
 
 	coll, svcErr := a.isCollection(collectionID)
@@ -630,6 +643,13 @@ func (a *API) CollectionItems(ctx context.Context, collectionID string, req Coll
 		// projection. Filtering on a field the caller didn't project
 		// must still work.
 		if len(filterMatchers) > 0 && !matchesFilter(fullFields, filterMatchers) {
+			continue
+		}
+
+		// Substring match across all string fields. Case-insensitive,
+		// runs after Filter so the two compose ("status=open AND
+		// title/details mentions auth").
+		if matchSubstr != "" && !matchesSubstring(fullFields, matchSubstr) {
 			continue
 		}
 
@@ -774,6 +794,7 @@ func (a *API) collectionItemsAtCommit(
 	collectionID string,
 	asOfT time.Time,
 	filterMatchers map[string]map[string]struct{},
+	matchSubstr string,
 	projection map[string]struct{},
 	req CollectionItemsRequest,
 ) (CollectionItemsResponse, *APIError) {
@@ -864,6 +885,9 @@ func (a *API) collectionItemsAtCommit(
 		fullFields := extractFields(n)
 
 		if len(filterMatchers) > 0 && !matchesFilter(fullFields, filterMatchers) {
+			continue
+		}
+		if matchSubstr != "" && !matchesSubstring(fullFields, matchSubstr) {
 			continue
 		}
 
@@ -1024,6 +1048,21 @@ func matchesFilter(fields map[string]any, matchers map[string]map[string]struct{
 		}
 	}
 	return true
+}
+
+// matchesSubstring returns true if any string-typed field value
+// contains needle as a case-insensitive substring. Caller passes
+// needle pre-lowercased so the cost is one ToLower per field value
+// per call rather than two ToLowers per comparison. Non-string field
+// values (number, boolean, date, []any) are skipped — by design,
+// substring search only applies to free-text fields.
+func matchesSubstring(fields map[string]any, needle string) bool {
+	for _, v := range fields {
+		if s, ok := v.(string); ok && strings.Contains(strings.ToLower(s), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeProjection returns a set (map-with-empty-struct values) of

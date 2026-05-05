@@ -86,6 +86,7 @@ type proxyCollectionItemsInput struct {
 	IncludeRetired bool           `json:"include_retired,omitempty" jsonschema:"include items from retired collections"`
 	Fields         []string       `json:"fields,omitempty" jsonschema:"allowlist of schema field names to include per item (default: all fields). id, created_at, and needs_migration are always included."`
 	Filter         map[string]any `json:"filter,omitempty" jsonschema:"schema-field -> expected-value(s) map. Value may be a string (exact match) or []string (any-of). Items must match every entry."`
+	Match          string         `json:"match,omitempty" jsonschema:"literal substring search across the item's string fields (case-insensitive). Composes with filter -- e.g. filter={status:open} + match=auth returns open items mentioning auth."`
 	AsOf           string         `json:"as_of,omitempty" jsonschema:"point-in-time membership: return members the collection had at the commit at-or-before this date (YYYY-MM-DD or RFC3339). Response carries as_of + semantics=point_in_time. Future dates rejected."`
 }
 
@@ -110,6 +111,9 @@ func registerCollectionItemsProxy(s *mcp.Server) {
 		}
 		if args.AsOf != "" {
 			params.Set("as_of", args.AsOf)
+		}
+		if args.Match != "" {
+			params.Set("match", args.Match)
 		}
 		for _, f := range args.Fields {
 			if f = strings.TrimSpace(f); f != "" {

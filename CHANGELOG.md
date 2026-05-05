@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton_collection_items` gains a `match` parameter for
+  case-insensitive substring search.** Narrows an exhaustive
+  collection list to items whose `field.*` string properties contain
+  the substring. Composes with `filter`: e.g.
+  `filter={"status":"open"} + match="auth"` returns open items
+  mentioning "auth". Mirrors `gramaton_search`'s `match` semantics
+  (literal substring, distinct from vector similarity), scoped to a
+  single collection. Preserves the exhaustive-by-contract guarantee
+  — items just have to satisfy filter + match. Tracker:
+  `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR A of search-ergonomics work).
+
 - **`content_fields` declaration on collection schemas.** Schemas
   may now declare an ordered `content_fields: [name1, name2, ...]`
   list naming the fields that constitute the canonical text
