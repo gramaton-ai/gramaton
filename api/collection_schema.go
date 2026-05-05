@@ -43,8 +43,18 @@ type SchemaField struct {
 }
 
 // CollectionSchema defines what fields items in a collection must/may have.
+//
+// ContentFields is an ordered list of field names whose values
+// constitute the canonical text representation of an item for
+// LLM-stage curation (classify, summarize, contradictions, concept
+// synthesis) and for embedding. Each name must reference a declared
+// field of type=string. When unset, items in this collection use a
+// schemaless wide concatenation of every field.* string property
+// (acceptable for curation=none collections; rejected at create
+// time for curation=standard collections lacking a template).
 type CollectionSchema struct {
-	Fields []SchemaField `json:"fields"`
+	Fields        []SchemaField `json:"fields"`
+	ContentFields []string      `json:"content_fields,omitempty" yaml:"content_fields,omitempty"`
 }
 
 const (
@@ -113,6 +123,37 @@ func validateSchema(s *CollectionSchema) error {
 			return fmt.Errorf("field %q: values only allowed for enum and enum[] types", f.Name)
 		}
 	}
+
+	// Validate content_fields if declared. Each name must reference a
+	// declared field, the referenced field must be type=string, and
+	// each name must appear at most once. Empty/unset is permitted
+	// here -- the curation=standard requirement is enforced at
+	// CollectionCreate time so curation=none collections (which never
+	// read content_fields) aren't burdened with the declaration.
+	if len(s.ContentFields) > 0 {
+		fieldDefs := make(map[string]SchemaField, len(s.Fields))
+		for _, f := range s.Fields {
+			fieldDefs[f.Name] = f
+		}
+		seenCF := make(map[string]bool, len(s.ContentFields))
+		for i, name := range s.ContentFields {
+			if name == "" {
+				return fmt.Errorf("content_fields[%d]: name cannot be empty", i)
+			}
+			def, ok := fieldDefs[name]
+			if !ok {
+				return fmt.Errorf("content_fields[%d]: %q is not a declared field", i, name)
+			}
+			if def.Type != FieldTypeString {
+				return fmt.Errorf("content_fields[%d]: %q is type %q; only string fields are allowed", i, name, def.Type)
+			}
+			if seenCF[name] {
+				return fmt.Errorf("content_fields[%d]: duplicate field %q", i, name)
+			}
+			seenCF[name] = true
+		}
+	}
+
 	return nil
 }
 

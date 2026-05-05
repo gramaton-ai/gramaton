@@ -13,7 +13,21 @@ import (
 // test below.
 func makeCollection(t *testing.T, srv *Server, name string) string {
 	t.Helper()
-	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{Name: name})
+	// Default to curation=standard for the strict-dedup test contract
+	// most server tests rely on. curation=standard requires
+	// content_fields declared on the schema (enforced at create time)
+	// so we provide a minimal title-only shape.
+	result, apiErr := srv.api.CollectionCreate(context.Background(), api.CollectionCreateRequest{
+		Name:     name,
+		Curation: "standard",
+		Schema: &api.CollectionSchema{
+			Fields: []api.SchemaField{
+				{Name: "title", Type: api.FieldTypeString, Required: true},
+				{Name: "note", Type: api.FieldTypeString},
+			},
+			ContentFields: []string{"title", "note"},
+		},
+	})
 	if apiErr != nil {
 		t.Fatalf("create collection %q: %v", name, apiErr)
 	}

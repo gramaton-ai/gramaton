@@ -119,19 +119,38 @@ var validContradictions = map[Contradictions]bool{
 // Default values used when a collection's property is absent. The
 // read-time fallback these constants power is why we don't need a
 // migrate-time sweep on every config change.
+//
+// DefaultCuration is CurationNone. Bare-bones collections created
+// without a template or explicit curation knob skip LLM work --
+// the safe default for "I want a collection, didn't say anything
+// else." Templates that want LLM-driven enrichment (backlog, todo,
+// reading-list, journal, references) declare curation=standard
+// explicitly. The flip from CurationStandard followed activation
+// of curation on collection items: default=standard was risk-free
+// while items lacked content_full and no LLM stage actually ran;
+// once activation made the knob load-bearing, the deliberate
+// choice was to make LLM costs explicitly opt-in rather than
+// rely on an inherited default.
 const (
 	DefaultClearMode      = ClearModeResolve
 	DefaultSupersession   = SupersessionCollection
-	DefaultCuration       = CurationStandard
+	DefaultCuration       = CurationNone
 	DefaultContradictions = ContradictionsOn
 )
 
 // Property names on the collection node.
+//
+// propContentFields is a parallel-encoded copy of the schema's
+// content_fields list. Stored as a top-level StringList property
+// (alongside the JSON-encoded collection_schema) so curation/ --
+// which cannot import api/ without a cycle -- can read it directly
+// without parsing JSON each cycle.
 const (
 	propClearMode      = "collection_clear_mode"
 	propSupersession   = "collection_supersession"
 	propCuration       = "collection_curation"
 	propContradictions = "collection_contradictions"
+	propContentFields  = "collection_content_fields"
 )
 
 // validateCollectionConfig rejects unknown values for each config

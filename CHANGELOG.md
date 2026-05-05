@@ -7,7 +7,73 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`content_fields` declaration on collection schemas.** Schemas
+  may now declare an ordered `content_fields: [name1, name2, ...]`
+  list naming the fields that constitute the canonical text
+  representation for LLM-stage curation (classify, summarize,
+  contradictions, concept synthesis) and embedding. Each name must
+  reference a declared `type=string` field; non-string types
+  (enum, number, date, boolean) are rejected at schema validation
+  with an explicit error. The five `curation=standard` starter
+  templates ship with explicit declarations: `backlog`
+  `[title, details]`, `todo` `[title, notes]`, `reading-list`
+  `[title, author, notes]`, `journal` `[title, entry]`,
+  `references` `[title, description, notes]`. Tracker:
+  `01KQT5DPW2PQNDY08ANW1NMQB2`.
+
+- **RecordContent activation: collection items now flow through
+  the autonomous curation pipeline.** Previously, `curation=standard`
+  on collection items was a no-op: items were eligible for the
+  pipeline (`processing_status=captured`) but bounced at every LLM
+  stage's `content_full` guard because collection items don't
+  populate `content_full`. The new `core.RecordContent(node,
+  contentFields)` and `curation.RecordContentFor(g, recordID)`
+  helpers synthesize LLM-grade text from `field.*` properties
+  using the schema's `content_fields` (or a wide concat for
+  schemaless paths). Memory records pass through `content_full`
+  unchanged. Classify, summarize, observation extraction, concept
+  synthesis, and contradiction detection now read through these
+  helpers. The result: collection items in `curation=standard`
+  collections actually get classified, get `content_short`
+  generated, and participate in concept synthesis. Tracker:
+  `01KQT5DPW2PQNDY08ANW1NMQB2`.
+
 ### Changed
+
+- **`DefaultCuration` flipped from `CurationStandard` to
+  `CurationNone`.** Collections created without a template and
+  without an explicit `curation` value default to `none` (no LLM
+  work). The flip preserves the *observed* user-facing behavior
+  pre-activation (where `curation=standard` was theatre because
+  collection items had no `content_full` to feed the LLM stages):
+  bare-bones `gramaton_collection_create(name="X")` continues to
+  produce no LLM work, but now does so explicitly rather than via
+  inert default. Templates that want LLM-driven enrichment
+  declare `curation=standard` explicitly.
+
+- **`curation=standard` requires `content_fields` on the schema.**
+  At create time, a collection with effective `curation=standard`
+  must satisfy one of: a curation=standard template (which
+  declares `content_fields`), or a custom schema with explicit
+  `content_fields` declared. `gramaton_collection_create` rejects
+  `curation=standard` on schemaless / no-content_fields requests
+  with a clear error. Protects against noisy concept synthesis
+  and content_short polluting cross-store search snippets when
+  the LLM has nothing structured to work with.
+
+- **`gramaton_collection_update` triggers re-embed + reclassify
+  when `RecordContent` changes.** When an update mutates a field
+  declared in `content_fields`, the BM25 index and vector
+  embedding are refreshed to reflect current text, and the item's
+  `processing_status` is flipped to `captured` so the next
+  curation cycle re-runs classify and summarize (on
+  `curation=standard` collections). Updates to non-`content_fields`
+  fields (status enums, dates, etc.) leave the indexes and
+  pipeline state untouched. Three-phase pattern: schema/content
+  read under RLock, embedding outside the lock, validate + apply +
+  index under the write lock.
 
 - **Collection items inherit the collection's name + description in
   the indexed text.** Items added via `gramaton_collection_add` and

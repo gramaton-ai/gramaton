@@ -80,8 +80,11 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		}
 		n := rit.Node()
 		id := n.ID
-		_, hasContent := n.Properties.GetString("content_full")
-		if !hasContent {
+		// Skip nodes with no embeddable text. Memory records gate on
+		// content_full; collection items gate on RecordIndexText
+		// (which returns the wide concat of field.* strings).
+		_, hasContentFull := n.Properties.GetString("content_full")
+		if !hasContentFull && core.RecordIndexText(n) == "" {
 			continue
 		}
 		// Skip records that have exhausted their reembed retry budget.
@@ -110,7 +113,10 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 
 		// Embed three sources when present: full, keywords, short.
 		// The short embedding wins as the node's primary vector
-		// (it is the semantic anchor used by the vec index).
+		// (it is the semantic anchor used by the vec index). For
+		// collection items (no content_full), the full vector is
+		// regenerated from RecordContent (content_fields-driven
+		// text), aligning insert-time embedding with reembed.
 		embedSources := []struct {
 			sourceKey string
 			embedKey  string
@@ -132,6 +138,16 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 			if text != "" {
 				texts = append(texts, text)
 				keys = append(keys, src.embedKey)
+			}
+		}
+		// Collection items have no content_full; regenerate
+		// embedding_full from RecordContent so the vector reflects
+		// current text after schema/field updates.
+		if !hasContentFull {
+			contentFields := a.contentFieldsFor(id)
+			if t := core.RecordContent(n, contentFields); t != "" {
+				texts = append(texts, t)
+				keys = append(keys, "embedding_full")
 			}
 		}
 

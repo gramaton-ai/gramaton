@@ -375,7 +375,7 @@ func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex
 				}
 			}
 			if !bm25FullLoaded {
-				if text, ok := n.Properties.GetString("content_full"); ok {
+				if text := RecordIndexText(n); text != "" {
 					bm25Full.AddTx(tx, bm25Batch, n.ID, text)
 				}
 			}

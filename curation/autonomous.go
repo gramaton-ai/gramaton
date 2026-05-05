@@ -416,8 +416,12 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		if EffectiveCurationFor(e.Graph(), id).Curation == "none" {
 			continue
 		}
-		content, ok := n.Properties.GetString("content_full")
-		if !ok || content == "" {
+		// LLM input text. RecordContentFor returns content_full for
+		// Memory records and content_fields-driven text for collection
+		// items (or the wide-concat fallback for schemaless). Empty
+		// result means nothing classifiable -- skip.
+		content := RecordContentFor(e.Graph(), id)
+		if content == "" {
 			continue
 		}
 		ca, _ := n.Properties.GetTimestamp("created_at")
@@ -729,9 +733,9 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		if EffectiveCurationFor(g, id).Curation == "none" {
 			continue
 		}
-		content, hasContent := n.Properties.GetString("content_full")
+		content := RecordContentFor(g, id)
 		summary, hasSummary := n.Properties.GetString("content_short")
-		if !hasContent || content == "" {
+		if content == "" {
 			continue
 		}
 		// Skip records that have exhausted their summary retry budget.
@@ -1344,9 +1348,10 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 			}
 			if s, ok := mn.Properties.GetString("content_short"); ok && s != "" {
 				memberSummaries = append(memberSummaries, "- "+s)
-			} else if s, ok := mn.Properties.GetString("content_full"); ok && len(s) > 200 {
-				memberSummaries = append(memberSummaries, "- "+s[:200])
-			} else if s, ok := mn.Properties.GetString("content_full"); ok {
+			} else if s := RecordContentFor(g, mid); s != "" {
+				if len(s) > 200 {
+					s = s[:200]
+				}
 				memberSummaries = append(memberSummaries, "- "+s)
 			}
 		}
@@ -1731,8 +1736,8 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		if !ok {
 			continue
 		}
-		contentA, ok := nA.Properties.GetString("content_full")
-		if !ok || contentA == "" {
+		contentA := RecordContentFor(e.Graph(), idA)
+		if contentA == "" {
 			continue
 		}
 		if isChunkNode(e.Graph(), idA) {
@@ -1806,12 +1811,8 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 				continue
 			}
 
-			nB, ok := e.Graph().GetNode(sr.NodeID)
-			if !ok {
-				continue
-			}
-			contentB, ok := nB.Properties.GetString("content_full")
-			if !ok || contentB == "" {
+			contentB := RecordContentFor(e.Graph(), sr.NodeID)
+			if contentB == "" {
 				continue
 			}
 

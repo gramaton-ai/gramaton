@@ -26,3 +26,4 @@ schema:
     - name: file_refs
       type: string
       required: false
+  content_fields: [title, details]

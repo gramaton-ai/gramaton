@@ -25,3 +25,4 @@ schema:
     - name: url
       type: string
       required: false
+  content_fields: [title, author, notes]

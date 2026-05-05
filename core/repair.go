@@ -114,7 +114,7 @@ func (e *Engine) Repair() *RepairResult {
 			if !ok {
 				continue
 			}
-			if _, ok := n.Properties.GetString("content_full"); !ok {
+			if RecordIndexText(n) == "" {
 				continue
 			}
 			model, ok := n.Properties.GetString("embedding_model")

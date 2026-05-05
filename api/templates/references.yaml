@@ -18,3 +18,4 @@ schema:
     - name: notes
       type: string
       required: false
+  content_fields: [title, description, notes]

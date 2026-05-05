@@ -29,11 +29,26 @@ const (
 )
 
 // Collection-level defaults applied when the property is absent on
-// a collection node. Diverge from MemoryOrphan only on supersession
-// (collection-default is intra-collection scope; orphan-default is
-// store-wide for back-compat with today's Memory behaviour).
+// a collection node. Kept in sync with api/collection_config.go's
+// Default* constants (api/curation can't share a const without a
+// cycle; tests pin equivalence at the inspect surface).
+//
+// curation defaults to "none": LLM costs are explicitly opt-in via
+// templates that declare curation=standard or via explicit caller
+// values, not via the default. Templates that want LLM enrichment
+// declare curation=standard explicitly. The flip from "standard"
+// happened when activation made the knob load-bearing on collection
+// items -- standard had been theatre while content_full was
+// uniformly absent.
+//
+// supersession defaults to "collection" (intra-collection scope);
+// MemoryOrphan defaults to "store" for back-compat with today's
+// global Memory dedup.
+//
+// contradictions defaults to "on" matching the additive-knob /
+// most-permissive-wins resolution principle.
 const (
-	collectionDefaultCuration       = "standard"
+	collectionDefaultCuration       = "none"
 	collectionDefaultSupersession   = "collection"
 	collectionDefaultContradictions = "on"
 )
