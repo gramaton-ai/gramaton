@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/search"
@@ -48,19 +50,52 @@ type SearchRequest struct {
 	Order              string            `json:"order,omitempty" jsonschema:"asc or desc (default: desc)"`
 	Meta               map[string]string `json:"meta,omitempty" jsonschema:"filter by structured metadata (e.g. {assignee: Sarah Chen, status: in_progress})"`
 	Store              string            `json:"store,omitempty" jsonschema:"filter by store: memory|sessions|all (default: all)"`
+
+	// Pagination fields. Cursor takes precedence: when set, all
+	// other filter args are ignored (the cursor encodes the slice
+	// against a previously-materialized snapshot) and the response
+	// carries `ignored_params` listing what was dropped. PageSize
+	// applies to both fresh searches and cursor calls.
+	Cursor   string `json:"cursor,omitempty" jsonschema:"opaque pagination cursor from a prior response's pages[].cursor or next_cursor. When set, other query args are ignored and the response slices into the cached snapshot from the original call."`
+	PageSize int    `json:"page_size,omitempty" jsonschema:"results per page (default from server config; capped at server-side max)."`
+}
+
+// PageRef points at one page's worth of results within a search
+// snapshot. The Range is a human-readable 1-indexed slice
+// description; the Cursor is the opaque token to pass on a
+// subsequent call to retrieve that page.
+type PageRef struct {
+	Range  string `json:"range"`
+	Cursor string `json:"cursor"`
 }
 
 // SearchResponse carries ranked results plus aggregates (facets,
-// refinement suggestions).
+// refinement suggestions) plus pagination scaffolding.
 type SearchResponse struct {
 	Results     []search.Result     `json:"results"`
 	Facets      search.Facets       `json:"facets,omitempty"`
 	Suggestions *search.Suggestions `json:"suggestions,omitempty"`
 	// Warnings surfaces non-fatal degradations -- e.g. the query
-	// embedder failed so the request fell back to BM25-only. Callers
-	// can decide whether to surface them to the user. Empty on the
-	// happy path.
+	// embedder failed so the request fell back to BM25-only, or the
+	// underlying match set exceeded the snapshot's candidate cap.
+	// Callers can decide whether to surface them to the user. Empty
+	// on the happy path.
 	Warnings []string `json:"warnings,omitempty"`
+
+	// Pagination fields. Always populated for fresh searches;
+	// populated for cursor calls based on the looked-up snapshot.
+	Page       int       `json:"page,omitempty"`
+	PageSize   int       `json:"page_size,omitempty"`
+	Total      int       `json:"total,omitempty"`
+	NextCursor string    `json:"next_cursor,omitempty"`
+	QueryID    string    `json:"query_id,omitempty"`
+	Pages      []PageRef `json:"pages,omitempty"`
+
+	// IgnoredParams names request fields that were dropped because
+	// a Cursor was provided. Empty on fresh searches; non-empty
+	// only on cursor calls where the request also carried filter
+	// args.
+	IgnoredParams []string `json:"ignored_params,omitempty"`
 }
 
 // SearchDescription is the MCP tool description for gramaton_search.
@@ -76,7 +111,39 @@ const SearchDescription = "Search the knowledge store -- call BEFORE producing c
 // access under Lock so retrieval metadata is kept fresh. Retrieved IDs
 // are tracked so the observe pipeline can skip re-extracting content
 // we just surfaced to the agent.
+//
+// Pagination: a fresh call materializes up to cfg.Search.Pagination.
+// CandidateCap ranked candidates into a snapshot keyed by a ULID
+// query_id, slices the first PageSize for the response, and emits a
+// page table covering the snapshot. A subsequent call with the same
+// Cursor (from any PageRef.Cursor or NextCursor) slices the same
+// snapshot at the encoded boundaries; record content is fetched
+// fresh per page so modifications surface immediately while the
+// match set stays stable for the snapshot's TTL.
 func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *APIError) {
+	paginationCfg := a.engine.Config().Search.Pagination
+
+	// Resolve page size: explicit PageSize wins; legacy Top is the
+	// fallback for callers that haven't migrated; otherwise default.
+	// Capped at PageSizeMax.
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = req.Top
+	}
+	if pageSize <= 0 {
+		pageSize = paginationCfg.PageSizeDefault
+	}
+	if pageSize > paginationCfg.PageSizeMax {
+		pageSize = paginationCfg.PageSizeMax
+	}
+
+	// Cursor branch: slice into a previously-cached snapshot. Other
+	// query args (text, filter, etc.) are ignored; the cursor encodes
+	// the slice against the original call's match set.
+	if req.Cursor != "" {
+		return a.searchCursor(req, pageSize)
+	}
+
 	if req.Top <= 0 {
 		req.Top = 10
 	}
@@ -139,9 +206,18 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		return SearchResponse{}, ErrInvalid(`store must be one of "memory", "sessions", or "all"`)
 	}
 
+	// Materialize up to candidate_cap candidates so the snapshot is
+	// useful for pagination beyond the first page. The legacy req.Top
+	// field is preserved for the response's page-size fallback (above)
+	// but the underlying search runs to candidate_cap regardless.
+	candidateCap := paginationCfg.CandidateCap
+	if candidateCap <= 0 || candidateCap > config.MaxCandidateCapHard {
+		candidateCap = config.MaxCandidateCapHard
+	}
+
 	q := search.Query{
 		Text:              req.Text,
-		Top:               req.Top,
+		Top:               candidateCap,
 		Temporality:       req.Temporality,
 		KnowledgeType:     req.KnowledgeType,
 		EpistemicStatus:   req.EpistemicStatus,
@@ -299,10 +375,57 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		}
 	}
 
+	// Snapshot population + page-1 slice. Snapshot stores IDs +
+	// scores only (content is fetched fresh on each page response).
+	// Pagination fields are always emitted, even for single-page
+	// results, so callers have a consistent shape.
+	store := a.engine.SearchSnapshots()
+	queryID := store.NewQueryID()
+	ids := make([]string, len(results))
+	scores := make([]float32, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+		scores[i] = float32(r.EffectiveScore)
+	}
+	// Heuristic: if the underlying search returned exactly
+	// candidate_cap, it's likely the actual match set is larger.
+	// False positives on the rare exact-match-count case are
+	// acceptable; the warning is informational.
+	truncated := len(results) >= candidateCap
+	store.Put(&core.SearchSnapshot{
+		QueryID:   queryID,
+		IDs:       ids,
+		Scores:    scores,
+		Total:     len(results),
+		Truncated: truncated,
+	})
+
+	// Slice the first page for the response. The full snapshot is
+	// available via cursor pagination; the response carries page 1.
+	pageEnd := pageSize
+	if pageEnd > len(results) {
+		pageEnd = len(results)
+	}
+	pageResults := results[:pageEnd]
+
 	resp := SearchResponse{
-		Results:  results,
+		Results:  pageResults,
 		Facets:   search.ComputeFacets(results),
 		Warnings: warnings,
+
+		Page:     1,
+		PageSize: pageSize,
+		Total:    len(results),
+		QueryID:  queryID,
+		Pages:    buildPageTable(queryID, len(results), pageSize),
+	}
+	if pageEnd < len(results) {
+		resp.NextCursor = encodeCursor(queryID, pageEnd, pageSize)
+	}
+	if truncated {
+		resp.Warnings = append(resp.Warnings,
+			fmt.Sprintf("ranked candidate set capped at %d (more matches may exist). Use cursor pagination via 'pages' to walk the snapshot, or refine the query.",
+				len(results)))
 	}
 
 	a.engine.RLock()
@@ -316,5 +439,93 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		resp.Suggestions = suggestions
 	}
 
+	return resp, nil
+}
+
+// searchCursor handles cursor-paginated calls. Decodes the cursor,
+// looks up the snapshot, slices the requested range, fetches fresh
+// content for each ID in the slice, and builds the response with
+// the same page table the original call would have emitted.
+//
+// Failure modes:
+//   - Malformed cursor → ErrInvalid
+//   - Snapshot expired or evicted → ErrUnavailable("snapshot_expired");
+//     agent's documented response is to re-issue the original query
+//   - Record deleted between snapshot and fetch → silently skipped
+//     (page returns N-1 results; not surfaced as an error)
+func (a *API) searchCursor(req SearchRequest, requestPageSize int) (SearchResponse, *APIError) {
+	queryID, start, encodedPageSize, err := decodeCursor(req.Cursor)
+	if err != nil {
+		return SearchResponse{}, ErrInvalid("invalid cursor")
+	}
+	store := a.engine.SearchSnapshots()
+	if store == nil {
+		return SearchResponse{}, ErrUnavailable("snapshot store unavailable")
+	}
+	snap, ok := store.Get(queryID)
+	if !ok {
+		return SearchResponse{}, ErrUnavailable("snapshot_expired")
+	}
+
+	// Use the cursor's encoded page_size so page boundaries stay
+	// stable across calls. The request's PageSize on a cursor call
+	// is ignored; if the agent supplied one that differs, it lands
+	// in ignored_params.
+	pageSize := encodedPageSize
+	end := start + pageSize
+	if end > len(snap.IDs) {
+		end = len(snap.IDs)
+	}
+	if start > end {
+		start = end
+	}
+
+	// Slice + fresh fetch under a brief RLock. BuildResultsByID
+	// re-reads each node so modifications since the snapshot was
+	// taken surface immediately. Records deleted between snapshot
+	// and call are silently skipped (page returns N-1).
+	a.engine.RLock()
+	pageIDs := snap.IDs[start:end]
+	pageScores := snap.Scores[start:end]
+	pageResults := a.engine.Searcher().BuildResultsByID(pageIDs, pageScores)
+	a.engine.RUnlock()
+
+	// Annotate collection memberships (matches fresh-search behavior).
+	if len(pageResults) > 0 {
+		a.engine.RLock()
+		for i := range pageResults {
+			if colls := a.nodeCollectionNames(pageResults[i].ID); len(colls) > 0 {
+				pageResults[i].Collections = colls
+			}
+		}
+		a.engine.RUnlock()
+	}
+
+	// Page number from cursor's start + encoded page size. Always
+	// exact because the page table aligns to pageSize boundaries.
+	pageNum := (start / pageSize) + 1
+
+	ignored := ignoredParamsForCursor(req)
+	if requestPageSize > 0 && requestPageSize != encodedPageSize {
+		ignored = append(ignored, "page_size")
+	}
+
+	resp := SearchResponse{
+		Results:       pageResults,
+		Page:          pageNum,
+		PageSize:      pageSize,
+		Total:         snap.Total,
+		QueryID:       queryID,
+		Pages:         buildPageTable(queryID, snap.Total, pageSize),
+		IgnoredParams: ignored,
+	}
+	if end < snap.Total {
+		resp.NextCursor = encodeCursor(queryID, end, pageSize)
+	}
+	if snap.Truncated {
+		resp.Warnings = append(resp.Warnings,
+			fmt.Sprintf("snapshot is truncated (capped at %d candidates; more matches may exist). Refine the original query if you need a different slice.",
+				snap.Total))
+	}
 	return resp, nil
 }

@@ -60,6 +60,97 @@ func TestDefaults(t *testing.T) {
 	if cfg.Embedding.Endpoint != "http://localhost:11434" {
 		t.Fatalf("embedding.endpoint: expected ollama default, got %q", cfg.Embedding.Endpoint)
 	}
+
+	// Search pagination defaults.
+	if cfg.Search.Pagination.SnapshotTTL != 20*time.Minute {
+		t.Fatalf("search.pagination.snapshot_ttl: expected 20m, got %v", cfg.Search.Pagination.SnapshotTTL)
+	}
+	if cfg.Search.Pagination.CandidateCap != 500 {
+		t.Fatalf("search.pagination.candidate_cap: expected 500, got %d", cfg.Search.Pagination.CandidateCap)
+	}
+	if cfg.Search.Pagination.PageSizeDefault != 20 {
+		t.Fatalf("search.pagination.page_size_default: expected 20, got %d", cfg.Search.Pagination.PageSizeDefault)
+	}
+	if cfg.Search.Pagination.PageSizeMax != 100 {
+		t.Fatalf("search.pagination.page_size_max: expected 100, got %d", cfg.Search.Pagination.PageSizeMax)
+	}
+}
+
+// TestNormalizeSearchPaginationClamps pins the safety rails on
+// SearchPaginationConfig: candidate_cap > MaxCandidateCapHard
+// silently clamps; zero values get the defaults; page_size_default
+// can't exceed page_size_max.
+func TestNormalizeSearchPaginationClamps(t *testing.T) {
+	cases := []struct {
+		name string
+		in   SearchPaginationConfig
+		want SearchPaginationConfig
+	}{
+		{
+			name: "all zeros -> defaults",
+			in:   SearchPaginationConfig{},
+			want: SearchPaginationConfig{
+				SnapshotTTL:     20 * time.Minute,
+				CandidateCap:    500,
+				PageSizeDefault: 20,
+				PageSizeMax:     100,
+			},
+		},
+		{
+			name: "candidate_cap above ceiling -> clamps to ceiling",
+			in:   SearchPaginationConfig{CandidateCap: 100000, PageSizeDefault: 20, PageSizeMax: 100, SnapshotTTL: time.Minute},
+			want: SearchPaginationConfig{
+				SnapshotTTL:     time.Minute,
+				CandidateCap:    MaxCandidateCapHard,
+				PageSizeDefault: 20,
+				PageSizeMax:     100,
+			},
+		},
+		{
+			name: "page_size_default above page_size_max -> clamps to max",
+			in:   SearchPaginationConfig{CandidateCap: 500, PageSizeDefault: 200, PageSizeMax: 50, SnapshotTTL: time.Minute},
+			want: SearchPaginationConfig{
+				SnapshotTTL:     time.Minute,
+				CandidateCap:    500,
+				PageSizeDefault: 50,
+				PageSizeMax:     50,
+			},
+		},
+		{
+			name: "negative values -> filled with defaults",
+			in:   SearchPaginationConfig{SnapshotTTL: -1, CandidateCap: -1, PageSizeDefault: -1, PageSizeMax: -1},
+			want: SearchPaginationConfig{
+				SnapshotTTL:     20 * time.Minute,
+				CandidateCap:    500,
+				PageSizeDefault: 20,
+				PageSizeMax:     100,
+			},
+		},
+		{
+			name: "valid values preserved",
+			in:   SearchPaginationConfig{SnapshotTTL: 5 * time.Minute, CandidateCap: 750, PageSizeDefault: 10, PageSizeMax: 50},
+			want: SearchPaginationConfig{
+				SnapshotTTL:     5 * time.Minute,
+				CandidateCap:    750,
+				PageSizeDefault: 10,
+				PageSizeMax:     50,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Search.Pagination = tc.in
+			cfg.Dedup.Action = "supersede" // satisfy normalize's required field
+			if err := normalize(&cfg); err != nil {
+				t.Fatalf("normalize: %v", err)
+			}
+			got := cfg.Search.Pagination
+			if got != tc.want {
+				t.Errorf("got %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestSaveAndLoad(t *testing.T) {

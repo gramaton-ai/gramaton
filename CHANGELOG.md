@@ -9,6 +9,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton_search` cursor pagination + page table.** Fresh
+  searches materialize up to `search.pagination.candidate_cap`
+  ranked candidates (default 500, hard ceiling 1000) into a
+  short-lived snapshot keyed by a ULID `query_id`. The response
+  carries `page`, `page_size`, `total`, `next_cursor`, `query_id`,
+  and a `pages` table with cursors for every page in the snapshot.
+  Subsequent calls with `cursor` slice into the same snapshot at
+  the encoded boundaries — record content is fetched fresh per
+  page so modifications surface immediately while the match set
+  stays stable for the snapshot's TTL.
+  - Random-access pagination via the page table enables map-reduce
+    fan-out: parent agent dispatches subagents to non-adjacent
+    pages in parallel.
+  - `cursor` calls ignore other filter args (text, match, filter,
+    etc.) — the cursor encodes its slice against the original
+    snapshot. Response carries `ignored_params` listing what was
+    dropped so the caller knows.
+  - Snapshot TTL configurable via `search.pagination.snapshot_ttl`
+    (default 20m). Expired snapshots return
+    `{error: "snapshot_expired"}` so the agent can re-issue the
+    original query.
+  - Snapshot stores IDs + scores only (~50 bytes each); content
+    is re-fetched on each page response. Memory footprint is
+    trivial (~500KB across 10 concurrent snapshots at the cap).
+  - `core.SnapshotStore` is the new in-engine cache; one per
+    engine instance, started/stopped with the engine. Eviction
+    is periodic + lazy on access.
+  - Legacy `top` field falls back to `page_size` when the new
+    field isn't supplied, preserving back-compat for existing
+    callers. `MaxSearchTop = 1000` cap unchanged.
+  - Tracker: `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR B of search-
+    ergonomics work; the filtered CLI export half is a separate
+    follow-up PR).
+
 - **`gramaton_collection_items` gains a `match` parameter for
   case-insensitive substring search.** Narrows an exhaustive
   collection list to items whose `field.*` string properties contain

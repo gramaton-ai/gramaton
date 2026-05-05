@@ -1075,6 +1075,31 @@ func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	return inputs
 }
 
+// BuildResultsByID re-fetches records by ID and builds enriched
+// Result objects, using scores[i] as the EffectiveScore for
+// results[i]. Records that no longer exist (deleted between
+// snapshot and call) are silently skipped, so the returned slice
+// may be shorter than ids. Used by api.Search's cursor-paginated
+// branch to convert a snapshot's ID list into ranked results
+// without re-running the underlying query. Caller must hold at
+// least an engine read lock.
+func (t *Tool) BuildResultsByID(ids []string, scores []float32) []Result {
+	now := time.Now().UTC()
+	out := make([]Result, 0, len(ids))
+	for i, id := range ids {
+		n, ok := t.graph.GetNode(id)
+		if !ok {
+			continue
+		}
+		var score float64
+		if i < len(scores) {
+			score = float64(scores[i])
+		}
+		out = append(out, t.buildResult(n, score, now))
+	}
+	return out
+}
+
 func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 	r := Result{
 		ID:             n.ID,
