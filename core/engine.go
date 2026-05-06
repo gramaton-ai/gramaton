@@ -68,6 +68,12 @@ type Engine struct {
 	// retry indefinitely; we log the first failure at Warn and then
 	// every 10th attempt at Error rather than every attempt.
 	accessFlushFailures int
+
+	// searchSnapshots caches paginated search result sets so cursor
+	// calls slice into a stable matched-set without re-running the
+	// query. TTL configured via cfg.Search.Pagination.SnapshotTTL.
+	// Lifetime tied to the engine; Close stops the eviction loop.
+	searchSnapshots *SnapshotStore
 }
 
 // EngineOption configures an engine at construction time. Options are
@@ -263,6 +269,11 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		e.jobSweepDone = make(chan struct{})
 		go runJobSweeper(sweepCtx, e.jobSweepDone, jobStore, cfg.Jobs)
 	}
+
+	// Search snapshot store for paginated gramaton_search. Owns its
+	// own background eviction goroutine; Close stops it.
+	e.searchSnapshots = NewSnapshotStore(cfg.Search.Pagination.SnapshotTTL)
+	cleanups = append(cleanups, func() { e.searchSnapshots.Stop() })
 
 	success = true // disarm the deferred cleanup
 	return e, nil
@@ -784,6 +795,12 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 func (e *Engine) Close() error {
 	var firstErr error
 
+	// Stop the search-snapshot eviction loop; idempotent.
+	if e.searchSnapshots != nil {
+		e.searchSnapshots.Stop()
+		e.searchSnapshots = nil
+	}
+
 	// Stop the job sweeper first so it can't fire mid-close. The
 	// goroutine respects sweepCtx and exits cleanly; we wait for
 	// it via jobSweepDone. Idempotent: cancel func is set to nil
@@ -825,6 +842,14 @@ func (e *Engine) Close() error {
 // (test harnesses).
 func (e *Engine) JobStore() *jobs.Store {
 	return e.jobStore
+}
+
+// SearchSnapshots returns the engine's search snapshot store. Used
+// by api.Search to populate snapshots after a fresh query and to
+// look them up on cursor-paginated calls. May be nil only if the
+// engine was constructed in a way that bypassed standard init.
+func (e *Engine) SearchSnapshots() *SnapshotStore {
+	return e.searchSnapshots
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing

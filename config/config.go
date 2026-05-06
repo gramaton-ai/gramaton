@@ -680,6 +680,12 @@ type SearchConfig struct {
 	// result set. Reduces duplication across the two stores.
 	SessionDedupEnabled bool `yaml:"session_dedup_enabled"`
 
+	// Pagination controls cursor-based pagination on gramaton_search:
+	// snapshot lifetime, candidate-set materialization size, and
+	// per-call page size. See SearchPaginationConfig for individual
+	// fields.
+	Pagination SearchPaginationConfig `yaml:"pagination"`
+
 	// --- Internal scoring / index parameters (rarely adjust) ---
 
 	// BM25K1: term frequency saturation parameter.
@@ -729,6 +735,40 @@ type SearchConfig struct {
 	// semantic-only matches to favor lexical+semantic hits.
 	VectorOnlyPenalty float64 `yaml:"vector_only_penalty"`
 }
+
+// SearchPaginationConfig controls cursor-based pagination on
+// gramaton_search. The values below are user-facing dials; the
+// MaxCandidateCapHard ceiling defined alongside this struct caps
+// CandidateCap to prevent accidental memory blowouts from typo'd
+// values.
+type SearchPaginationConfig struct {
+	// SnapshotTTL is how long a search snapshot stays alive after
+	// first call. Subsequent paginated calls slice the snapshot
+	// rather than re-running the query. Default 20m.
+	SnapshotTTL time.Duration `yaml:"snapshot_ttl"`
+
+	// CandidateCap is the maximum number of ranked candidates
+	// materialized into a snapshot per query. Bounds the page
+	// table and the snapshot's memory footprint. Default 500.
+	// Silently clamped to MaxCandidateCapHard at startup if the
+	// configured value exceeds it (typo defense, not feature).
+	CandidateCap int `yaml:"candidate_cap"`
+
+	// PageSizeDefault is the default number of results per page
+	// when the caller doesn't specify one. Default 20.
+	PageSizeDefault int `yaml:"page_size_default"`
+
+	// PageSizeMax is the upper bound on caller-supplied page size.
+	// Default 100. Requests above this are silently clamped.
+	PageSizeMax int `yaml:"page_size_max"`
+}
+
+// MaxCandidateCapHard is the hardcoded ceiling on
+// SearchPaginationConfig.CandidateCap. Intentionally a code
+// constant (not configurable) so users can't typo their way into
+// memory pressure. ~50 bytes per snapshot entry × 1000 max × 10
+// concurrent snapshots ≈ 500KB.
+const MaxCandidateCapHard = 1000
 
 // JobsConfig controls the `jobs/` package: persistence (one
 // jobs.db per store), TTL-based GC, default async-batch limits,
@@ -1153,6 +1193,12 @@ func Defaults() Config {
 			VectorOnlyPenalty:   0.1,
 			RetrievalCandidates: 200,
 			SessionDedupEnabled: true,
+			Pagination: SearchPaginationConfig{
+				SnapshotTTL:     20 * time.Minute,
+				CandidateCap:    500,
+				PageSizeDefault: 20,
+				PageSizeMax:     100,
+			},
 		},
 
 		Jobs: JobsConfig{
@@ -1498,6 +1544,29 @@ func normalize(cfg *Config) error {
 	if cfg.Curation.MaxDedupPerRun > 200 {
 		cfg.Curation.MaxDedupPerRun = 200
 	}
+
+	// Search pagination: zero-fill defaults so a partial yaml
+	// override doesn't leave empty knobs, then clamp candidate_cap
+	// to the hardcoded ceiling.
+	if cfg.Search.Pagination.SnapshotTTL <= 0 {
+		cfg.Search.Pagination.SnapshotTTL = 20 * time.Minute
+	}
+	if cfg.Search.Pagination.CandidateCap <= 0 {
+		cfg.Search.Pagination.CandidateCap = 500
+	}
+	if cfg.Search.Pagination.CandidateCap > MaxCandidateCapHard {
+		cfg.Search.Pagination.CandidateCap = MaxCandidateCapHard
+	}
+	if cfg.Search.Pagination.PageSizeDefault <= 0 {
+		cfg.Search.Pagination.PageSizeDefault = 20
+	}
+	if cfg.Search.Pagination.PageSizeMax <= 0 {
+		cfg.Search.Pagination.PageSizeMax = 100
+	}
+	if cfg.Search.Pagination.PageSizeDefault > cfg.Search.Pagination.PageSizeMax {
+		cfg.Search.Pagination.PageSizeDefault = cfg.Search.Pagination.PageSizeMax
+	}
+
 	return nil
 }
 
