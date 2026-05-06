@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/backup"
+	"github.com/gramaton-ai/gramaton/embed"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 // BackupInfo describes one archive found in the backup directory.
@@ -42,8 +46,31 @@ type RestoreResponse struct {
 	Path     string `json:"path"`
 }
 
+// ExportRequest controls a streaming record export. Filter fields
+// mirror SearchRequest's most useful subset; when none are set the
+// request behaves like a full-store dump (legacy compatibility).
+// When any filter is set, only matching records are exported.
+//
+// The export is exhaustive over the matched set -- there is no
+// candidate_cap or pagination on this path. The CLI is the
+// "give me everything" escape valve from gramaton_search's MCP-side
+// pagination.
 type ExportRequest struct {
-	Format string `json:"format,omitempty" jsonschema:"json|csv|markdown (default: json)"`
+	Format string `json:"format,omitempty" jsonschema:"jsonl|json|csv|markdown (default: jsonl). jsonl streams one JSON object per line; json buffers a parseable array."`
+
+	// Filter fields. Additive; absent fields mean "no filter on
+	// this dimension."
+	Text             string         `json:"text,omitempty" jsonschema:"vector-similarity query; ranks results by relevance (otherwise sorted by created_at desc)"`
+	Match            string         `json:"match,omitempty" jsonschema:"literal substring match across content fields (case-insensitive)"`
+	Store            string         `json:"store,omitempty" jsonschema:"memory|sessions|all (default: all)"`
+	Keywords         []string       `json:"keywords,omitempty" jsonschema:"keywords that must all be present"`
+	Temporality      string         `json:"temporality,omitempty"`
+	KnowledgeType    string         `json:"knowledge_type,omitempty"`
+	EpistemicStatus  string         `json:"epistemic_status,omitempty"`
+	Resolution       string         `json:"resolution,omitempty"`
+	ProcessingStatus string         `json:"processing_status,omitempty"`
+	Since            string         `json:"since,omitempty" jsonschema:"YYYY-MM-DD or RFC3339 lower bound on created_at"`
+	Meta             map[string]string `json:"meta,omitempty"`
 }
 
 type ImportRequest struct {
@@ -222,52 +249,140 @@ func (a *API) BackupRestore(ctx context.Context, req RestoreRequest) (RestoreRes
 	return RestoreResponse{Restored: true, Path: req.Path}, nil
 }
 
-// BackupExport streams the store in the requested format. The
-// export runs under RLock into a buffer, the lock is released, and
-// then the buffer is handed to the caller's writer. Buffer avoids
-// holding the lock across slow network writes.
+// BackupExport streams matching records in the requested format.
 //
-// Returns the content-type for the format on success.
+// Three-phase pattern (lock-discipline preserving):
+//
+//   - Phase 1 (RLock): apply filters + collect candidate IDs.
+//     Filter args (Text, Match, Filter, etc.) reuse the search
+//     machinery; an empty filter set means "every record."
+//   - Phase 2 (no lock): the response writer.
+//   - Phase 3 (per-record RLock + write): backup.StreamRecords
+//     reacquires the lock briefly per record, fetches it, releases,
+//     then writes to w. Concurrent writers aren't blocked across
+//     the entire export.
+//
+// Returns the content-type for the format on success. The export
+// is exhaustive over the matched set -- no candidate_cap, no
+// pagination -- since the loopback gate already restricts callers.
 func (a *API) BackupExport(ctx context.Context, req ExportRequest, w io.Writer) (string, *APIError) {
 	format := req.Format
 	if format == "" {
-		format = "json"
+		format = "jsonl"
 	}
-	if format != "json" && format != "csv" && format != "markdown" {
-		return "", ErrInvalid("format must be json, csv, or markdown")
-	}
-
-	var buf bytes.Buffer
-
-	a.engine.RLock()
-	var err error
 	switch format {
-	case "json":
-		err = backup.ExportJSON(&buf, a.engine)
-	case "csv":
-		err = backup.ExportCSV(&buf, a.engine)
-	case "markdown":
-		err = backup.ExportMarkdown(&buf, a.engine)
+	case "jsonl", "json", "csv", "markdown":
+		// supported
+	case "":
+		format = "jsonl"
+	default:
+		return "", ErrInvalid("format must be jsonl, json, csv, or markdown")
 	}
-	a.engine.RUnlock()
-	if err != nil {
-		a.log.Warn("export failed", "component", "backup", "format", format, "err", err)
+
+	// Phase 1: collect candidate IDs.
+	ids, apiErr := a.collectExportIDs(ctx, req)
+	if apiErr != nil {
+		return "", apiErr
+	}
+
+	// Phase 2 + 3: stream records to w. backup.StreamRecords
+	// handles per-record RLock + write + format dispatch.
+	if err := backup.StreamRecords(w, a.engine, format, ids); err != nil {
+		a.log.Warn("export: stream failed", "component", "backup", "format", format, "err", err)
 		return "", ErrInternal("export failed")
 	}
 
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		a.log.Warn("export: write response failed", "component", "backup", "format", format, "err", err)
-		return "", ErrInternal("failed to write export response")
-	}
-
 	switch format {
-	case "json":
+	case "jsonl":
 		return "application/x-ndjson", nil
+	case "json":
+		return "application/json", nil
 	case "csv":
 		return "text/csv", nil
 	default:
 		return "text/markdown", nil
 	}
+}
+
+// collectExportIDs builds the candidate ID list for an export.
+// When the request has no filter fields set, returns every node ID
+// in the graph (legacy "full dump" behavior). Otherwise builds a
+// search.Query from the filter fields and runs it with no Top cap,
+// returning the matched IDs in ranked order (Text-mode) or
+// created_at desc (filter-only mode).
+func (a *API) collectExportIDs(ctx context.Context, req ExportRequest) ([]string, *APIError) {
+	if !exportHasFilters(req) {
+		// Legacy full-store dump: every node ID, in iterator order.
+		a.engine.RLock()
+		defer a.engine.RUnlock()
+		return a.engine.Graph().AllNodeIDs(), nil
+	}
+
+	q := search.Query{
+		Text:             req.Text,
+		Match:            req.Match,
+		Store:            req.Store,
+		Keywords:         req.Keywords,
+		Temporality:      req.Temporality,
+		KnowledgeType:    req.KnowledgeType,
+		EpistemicStatus:  req.EpistemicStatus,
+		Resolution:       req.Resolution,
+		ProcessingStatus: req.ProcessingStatus,
+		Meta:             req.Meta,
+		// No Top cap. The internal default top=10 fires when Top is
+		// unset, so set explicitly to a value that exceeds any
+		// realistic match count. ExecuteWithVector slices the top-K;
+		// passing math.MaxInt32 effectively disables the cap.
+		Top: math.MaxInt32,
+	}
+	if req.Since != "" {
+		t, err := parseDateArg(req.Since)
+		if err != nil {
+			return nil, ErrInvalid(fmt.Sprintf("invalid since date: %s", err))
+		}
+		q.Since = &t
+	}
+
+	var queryVec []float32
+	if q.Text != "" && a.engine.Embedder() != nil {
+		vec, err := embed.EmbedForQuery(ctx, a.engine.Embedder(), q.Text)
+		if err == nil {
+			queryVec = vec
+		}
+		// On embed failure, search degrades to BM25-only -- same
+		// behavior as gramaton_search's pre-embed path.
+	}
+
+	a.engine.RLock()
+	results, err := a.engine.Searcher().ExecuteWithVector(ctx, q, queryVec)
+	a.engine.RUnlock()
+	if err != nil {
+		a.log.Warn("export: filter pass failed", "component", "backup", "err", err)
+		return nil, ErrInternal("export filter failed")
+	}
+
+	ids := make([]string, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
+// exportHasFilters reports whether the request carries any filter
+// argument that would narrow the export from the legacy full-dump
+// behavior.
+func exportHasFilters(req ExportRequest) bool {
+	return req.Text != "" ||
+		req.Match != "" ||
+		req.Store != "" ||
+		req.Temporality != "" ||
+		req.KnowledgeType != "" ||
+		req.EpistemicStatus != "" ||
+		req.Resolution != "" ||
+		req.ProcessingStatus != "" ||
+		req.Since != "" ||
+		len(req.Keywords) > 0 ||
+		len(req.Meta) > 0
 }
 
 // BackupImport takes a batch of ExportRecord values and imports

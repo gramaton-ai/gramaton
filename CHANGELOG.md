@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Filtered `gramaton export` + new `json` array format.** The
+  CLI's `--format`, `--keywords`, etc. now actually filter
+  server-side (previously the body fields were silently ignored).
+  `--format` accepts `jsonl` (canonical line-delimited form,
+  default), `json` (parseable JSON array — new shape), `csv`, and
+  `markdown`. Filter args mirror `gramaton_search`'s most useful
+  subset (`text`, `match`, `store`, `keywords`, `temporality`,
+  `knowledge_type`, `epistemic_status`, `resolution`, `since`,
+  `meta`); when none are set the export remains a full-store dump
+  (legacy compat). The export is exhaustive over the matched set
+  with no candidate cap — the CLI is the "give me everything"
+  escape valve from the MCP-side pagination cap.
+  - Streaming three-phase pattern (RLock → collect IDs; per-record
+    RLock → fetch + write) eliminates the lock-across-I/O
+    anti-pattern that previously held the engine RLock for the
+    whole serialize. Concurrent writers are no longer blocked
+    across an export.
+  - JSON-array output streams (`[`, records with commas, `]`)
+    rather than buffering the whole array; large exports stay
+    bounded in memory.
+  - `gramaton_search` truncation messages now point at
+    `gramaton export --query "..." --output results.jsonl` for
+    the genuine-exhaustion path, complementing cursor pagination.
+  - Tracker: `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR C of search-
+    ergonomics work).
+
 - **`gramaton_search` cursor pagination + page table.** Fresh
   searches materialize up to `search.pagination.candidate_cap`
   ranked candidates (default 500, hard ceiling 1000) into a
@@ -42,6 +68,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Tracker: `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR B of search-
     ergonomics work; the filtered CLI export half is a separate
     follow-up PR).
+
+### Changed
+
+- **Export format `json` semantic flip; new `jsonl` is canonical
+  for line-delimited.** `gramaton export --format json` previously
+  produced JSON Lines (Content-Type `application/x-ndjson`) — the
+  shape didn't match the name, which routinely confused users
+  trying `gramaton export --format json | jq`. After this change:
+  - `--format jsonl` produces JSON Lines (the historical `json`
+    behavior). New canonical name; **default**.
+  - `--format json` produces a parseable JSON array
+    (Content-Type `application/json`). New shape. The shape
+    consumers expecting `--format json` typically want.
+  - `csv`, `markdown` unchanged.
+  - Backup-package functions mirror this: `backup.ExportJSON` now
+    writes a JSON array; the historical JSONL writer is renamed
+    `backup.ExportJSONL`. Per-format `*ByIDs` variants accept a
+    pre-collected ID list for filtered exports.
 
 - **`gramaton_collection_items` gains a `match` parameter for
   case-insensitive substring search.** Narrows an exhaustive
