@@ -33,6 +33,8 @@ Topics: metadata, capture, search, sessions, collections, curation.
 The guide is the authoritative live reference — prefer it over
 assumptions from memory.
 
+<!-- CLIENT_ADDENDUM -->
+
 ### Retrieval
 
 **When to search (triggers, not suggestions — act immediately):**

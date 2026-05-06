@@ -247,17 +247,82 @@ func TestInstallInstructionsWholeFileUnchangedWhenIdentical(t *testing.T) {
 	}
 }
 
-func TestInstructionsTemplateEmbedded(t *testing.T) {
-	// The embed directive pulls agent_instructions.md into the
-	// binary. Verify the template is non-empty + contains the
-	// expected structural heading so we catch empty-embed bugs.
-	if len(instructionsTemplate) == 0 {
-		t.Fatal("instructionsTemplate is empty — //go:embed directive broken")
+func TestTemplateBaseEmbedded(t *testing.T) {
+	// The embed directives pull templates/*.md into the binary.
+	// Verify the base template is non-empty + contains the expected
+	// structural heading so we catch empty-embed bugs.
+	if len(templateBase) == 0 {
+		t.Fatal("templateBase is empty — //go:embed directive broken")
 	}
-	if !strings.Contains(instructionsTemplate, "## Knowledge Store (Gramaton)") {
-		t.Error("instructionsTemplate missing canonical heading")
+	if !strings.Contains(templateBase, "## Knowledge Store (Gramaton)") {
+		t.Error("templateBase missing canonical heading")
 	}
-	if !strings.Contains(instructionsTemplate, "gramaton_search") {
-		t.Error("instructionsTemplate missing retrieval guidance")
+	if !strings.Contains(templateBase, "gramaton_search") {
+		t.Error("templateBase missing retrieval guidance")
+	}
+}
+
+func TestTemplateForClientClaudeIncludesRoutingBlock(t *testing.T) {
+	got := templateForClient("Claude Code")
+	if !strings.Contains(got, "## Knowledge Store (Gramaton)") {
+		t.Error("Claude template missing base content")
+	}
+	if !strings.Contains(got, "Memory routing: Claude Code's auto-memory vs Gramaton") {
+		t.Error("Claude template missing routing block heading")
+	}
+	if !strings.Contains(got, "Decision rule:") {
+		t.Error("Claude template missing decision-rule wording")
+	}
+}
+
+func TestTemplateForClientKiroOmitsRoutingBlock(t *testing.T) {
+	got := templateForClient("kiro-cli")
+	if !strings.Contains(got, "## Knowledge Store (Gramaton)") {
+		t.Error("Kiro template missing base content")
+	}
+	if strings.Contains(got, "Memory routing: Claude Code") {
+		t.Error("Kiro template should NOT carry the Claude-only routing block")
+	}
+	if strings.Contains(got, clientAddendumMarker) {
+		t.Error("Kiro template still carries the unfilled CLIENT_ADDENDUM marker")
+	}
+}
+
+func TestTemplateForClientUnknownReturnsBaseAlone(t *testing.T) {
+	got := templateForClient("future-codex-cli")
+	if !strings.Contains(got, "## Knowledge Store (Gramaton)") {
+		t.Error("unknown client should still receive base content")
+	}
+	if strings.Contains(got, "Memory routing: Claude Code") {
+		t.Error("unknown client should not get Claude addendum")
+	}
+	if strings.Contains(got, clientAddendumMarker) {
+		t.Error("unknown client template still carries the CLIENT_ADDENDUM marker")
+	}
+}
+
+func TestClaudeAutoMemoryPresent(t *testing.T) {
+	home := t.TempDir()
+	// No auto-memory layout yet.
+	if claudeAutoMemoryPresent(home) {
+		t.Error("expected false on empty home")
+	}
+
+	// Materialize a MEMORY.md file under the expected layout.
+	dir := filepath.Join(home, ".claude", "projects", "some-slug", "memory")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("- thing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !claudeAutoMemoryPresent(home) {
+		t.Error("expected true once MEMORY.md exists")
+	}
+}
+
+func TestClaudeAutoMemoryPresentEmptyHomeArg(t *testing.T) {
+	if claudeAutoMemoryPresent("") {
+		t.Error("empty home arg should return false")
 	}
 }

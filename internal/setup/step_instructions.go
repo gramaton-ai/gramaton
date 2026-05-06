@@ -11,14 +11,67 @@ import (
 	"strings"
 )
 
-// instructionsTemplate is the canonical Gramaton agent-usage guide
-// installed into each MCP client's user-scope instructions file
-// (Claude Code: ~/.claude/CLAUDE.md; Kiro TBD). Content lives in a
-// sibling .md file so editors syntax-highlight it and diffs read as
-// prose rather than escaped Go strings.
+// templateBase is the shared agent-usage guide installed into every
+// MCP client's user-scope instructions file. Per-client divergence is
+// expressed via addendum files (see templateForClient). Content lives
+// in sibling .md files so editors syntax-highlight it and diffs read
+// as prose rather than escaped Go strings.
 //
-//go:embed agent_instructions.md
-var instructionsTemplate string
+//go:embed templates/base.md
+var templateBase string
+
+// templateClaudeAddendum is appended to the base template when
+// installing for Claude Code. Currently carries the auto-memory
+// routing rule that disambiguates Claude Code's harness-level
+// MEMORY.md store from Gramaton.
+//
+//go:embed templates/claude_addendum.md
+var templateClaudeAddendum string
+
+// templateKiroAddendum is appended to the base template when
+// installing for Kiro. Intentionally empty for now: Kiro has no
+// auto-memory analogue, and the planned multi-file install split
+// (per-topic steering files) is tracked as a separate follow-up.
+// Reserved here so future Kiro-specific guidance has a clear home.
+//
+//go:embed templates/kiro_addendum.md
+var templateKiroAddendum string
+
+// clientAddendumMarker is the placeholder in base.md where each
+// client's addendum slots in. Keeping it just after the introductory
+// framing (and before the deeper "### Retrieval" / "### Capture"
+// sections) lets the routing rule register before the agent dives
+// into specific tool guidance.
+const clientAddendumMarker = "<!-- CLIENT_ADDENDUM -->"
+
+// templateForClient returns the agent-usage template body to install
+// for the named MCP client: the shared base, with the client's
+// addendum substituted at the CLIENT_ADDENDUM marker. Unknown
+// clients get the base template alone (graceful default for forward
+// compatibility).
+//
+// Adding a new client is dropping in a new addendum file and a case
+// here; install logic stays untouched.
+func templateForClient(clientName string) string {
+	var addendum string
+	switch clientName {
+	case "Claude Code":
+		addendum = strings.TrimSpace(templateClaudeAddendum)
+	case "kiro-cli":
+		addendum = strings.TrimSpace(templateKiroAddendum)
+	}
+
+	body := templateBase
+	if addendum == "" {
+		// Strip the marker line and the surrounding blank lines so
+		// the file doesn't carry a dangling HTML comment when no
+		// addendum applies.
+		body = strings.Replace(body, "\n"+clientAddendumMarker+"\n\n", "\n", 1)
+	} else {
+		body = strings.Replace(body, clientAddendumMarker, addendum, 1)
+	}
+	return strings.TrimSpace(body) + "\n"
+}
 
 // Fence markers bound the Gramaton-managed block inside the user's
 // CLAUDE.md. Content outside the fence is preserved verbatim across
@@ -104,13 +157,28 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 			continue
 		}
 
-		action, err := installInstructions(path, instructionsTemplate, layout)
+		template := templateForClient(c.Name)
+		action, err := installInstructions(path, template, layout)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: write failed: %v", c.Name, err))
 			continue
 		}
 		w.writer.Check(fmt.Sprintf("%s: %s %s", c.Name, action, path))
 		installed++
+
+		if c.Name == "Claude Code" {
+			home, herr := os.UserHomeDir()
+			if herr == nil && claudeAutoMemoryPresent(home) {
+				w.writer.Blank()
+				w.writer.Paragraph(
+					"Detected existing Claude Code auto-memory at",
+					"~/.claude/projects/*/memory/. The routing rule in the",
+					"installed instructions tells the agent to prefer Gramaton",
+					"for new captures; existing auto-memory entries are",
+					"unchanged.",
+				)
+			}
+		}
 	}
 
 	if installed > 0 {
@@ -307,6 +375,26 @@ func replaceOrAppendFence(existing []byte, fenced string) ([]byte, string, error
 		return existing, "unchanged", nil
 	}
 	return newContent, "updated", nil
+}
+
+// claudeAutoMemoryPresent reports whether the given home dir holds at
+// least one Claude Code auto-memory file
+// (~/.claude/projects/*/memory/MEMORY.md). Used to print a one-line
+// notice during init so users aren't confused about which store
+// captures land in -- separate stores, separate access patterns.
+//
+// Existence is sufficient signal; we don't try to count entries or
+// peek at content. The notice is informational, not authoritative.
+func claudeAutoMemoryPresent(home string) bool {
+	if home == "" {
+		return false
+	}
+	pattern := filepath.Join(home, ".claude", "projects", "*", "memory", "MEMORY.md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return false
+	}
+	return len(matches) > 0
 }
 
 // writeAtomic writes data to path via tmp + rename for durability.
