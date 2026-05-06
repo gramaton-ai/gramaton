@@ -63,17 +63,17 @@ func addTestRecord(t *testing.T, eng *core.Engine, content, summary, temporality
 	return n.ID
 }
 
-func TestExportJSON(t *testing.T) {
+func TestExportJSONL(t *testing.T) {
 	eng := setupTestEngine(t)
 	id := addTestRecord(t, eng, "Test content", "Test summary", "durable", 0.9, []string{"test", "export"})
 
 	var buf bytes.Buffer
 	eng.RLock()
-	err := ExportJSON(&buf, eng)
+	err := ExportJSONL(&buf, eng)
 	eng.RUnlock()
 
 	if err != nil {
-		t.Fatalf("ExportJSON: %v", err)
+		t.Fatalf("ExportJSONL: %v", err)
 	}
 
 	// Parse JSON Lines.
@@ -97,6 +97,51 @@ func TestExportJSON(t *testing.T) {
 	}
 }
 
+// TestExportJSON pins the new JSON array shape: a single parseable
+// document containing every record. Distinct from ExportJSONL which
+// writes line-delimited records.
+func TestExportJSON(t *testing.T) {
+	eng := setupTestEngine(t)
+	id := addTestRecord(t, eng, "Array test content", "summary", "durable", 0.85, nil)
+
+	var buf bytes.Buffer
+	eng.RLock()
+	err := ExportJSON(&buf, eng)
+	eng.RUnlock()
+	if err != nil {
+		t.Fatalf("ExportJSON: %v", err)
+	}
+
+	var arr []ExportRecord
+	if err := json.Unmarshal(buf.Bytes(), &arr); err != nil {
+		t.Fatalf("parse array: %v\nbody: %q", err, buf.String())
+	}
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 record in array, got %d", len(arr))
+	}
+	if arr[0].ID != id {
+		t.Errorf("expected ID %q, got %q", id, arr[0].ID)
+	}
+}
+
+// TestExportJSONEmptyStoreIsEmptyArray pins the empty-store
+// contract on the array form: no records produces a valid empty
+// array "[]" rather than an error.
+func TestExportJSONEmptyStoreIsEmptyArray(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	var buf bytes.Buffer
+	eng.RLock()
+	err := ExportJSON(&buf, eng)
+	eng.RUnlock()
+	if err != nil {
+		t.Fatalf("ExportJSON empty: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "[]" {
+		t.Errorf("empty-store JSON array: got %q, want \"[]\"", got)
+	}
+}
+
 func TestExportJSONExcludesEmbeddings(t *testing.T) {
 	eng := setupTestEngine(t)
 	addTestRecord(t, eng, "Test", "Test", "durable", 0.9, nil)
@@ -112,7 +157,7 @@ func TestExportJSONExcludesEmbeddings(t *testing.T) {
 
 	var buf bytes.Buffer
 	eng.RLock()
-	ExportJSON(&buf, eng)
+	ExportJSONL(&buf, eng)
 	eng.RUnlock()
 
 	if strings.Contains(buf.String(), "embedding_full") {
@@ -137,7 +182,7 @@ func TestExportJSONExcludesChunks(t *testing.T) {
 
 	var buf bytes.Buffer
 	eng.RLock()
-	ExportJSON(&buf, eng)
+	ExportJSONL(&buf, eng)
 	eng.RUnlock()
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -225,11 +270,11 @@ func TestExportEmptyStore(t *testing.T) {
 
 	var buf bytes.Buffer
 	eng.RLock()
-	err := ExportJSON(&buf, eng)
+	err := ExportJSONL(&buf, eng)
 	eng.RUnlock()
 
 	if err != nil {
-		t.Fatalf("ExportJSON: %v", err)
+		t.Fatalf("ExportJSONL: %v", err)
 	}
 	if strings.TrimSpace(buf.String()) != "" {
 		t.Fatalf("expected empty output, got %q", buf.String())

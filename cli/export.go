@@ -18,20 +18,30 @@ var (
 var exportCmd = &cobra.Command{
 	Use:   "export [query]",
 	Short: "Export records from the knowledge store",
-	Long: `Exports records in JSON Lines, CSV, or Markdown format.
-Accepts the same search filters as the search command.
-Without filters, exports all records.
+	Long: `Exports records in JSON Lines, JSON array, CSV, or Markdown format.
+Accepts the same search filters as the search command. Without
+filters, exports all records.
+
+Format names:
+  jsonl     One JSON object per line (default; streaming-friendly).
+            Content-Type: application/x-ndjson.
+  json      A single JSON array. Content-Type: application/json.
+            Useful for ` + "`jq`" + ` consumption and one-shot tools.
+  csv       Comma-separated values with a header row.
+  markdown  Human-readable markdown.
 
 Examples:
-  gramaton export --format json > backup.jsonl
+  gramaton export > backup.jsonl                         # default jsonl
+  gramaton export --format json > backup.json            # array form
   gramaton export --format csv --output records.csv
-  gramaton export --format markdown --keywords auth`,
+  gramaton export --format markdown --keywords auth
+  gramaton export --keywords auth --temporality durable  # filtered`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runExport,
 }
 
 func init() {
-	exportCmd.Flags().StringVar(&exportFormat, "format", "json", "output format: json, csv, markdown")
+	exportCmd.Flags().StringVar(&exportFormat, "format", "jsonl", "output format: jsonl, json, csv, markdown")
 	exportCmd.Flags().StringVar(&exportOutput, "output", "", "output file (default: stdout)")
 	addSearchFlags(exportCmd)
 	rootCmd.AddCommand(exportCmd)

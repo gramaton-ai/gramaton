@@ -424,7 +424,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 	if truncated {
 		resp.Warnings = append(resp.Warnings,
-			fmt.Sprintf("ranked candidate set capped at %d (more matches may exist). Use cursor pagination via 'pages' to walk the snapshot, or refine the query.",
+			fmt.Sprintf("ranked candidate set capped at %d (more matches may exist). Use cursor pagination via 'pages' to walk the snapshot, refine the query, or run 'gramaton export --query \"...\" --output results.jsonl' for the full set.",
 				len(results)))
 	}
 
@@ -524,7 +524,7 @@ func (a *API) searchCursor(req SearchRequest, requestPageSize int) (SearchRespon
 	}
 	if snap.Truncated {
 		resp.Warnings = append(resp.Warnings,
-			fmt.Sprintf("snapshot is truncated (capped at %d candidates; more matches may exist). Refine the original query if you need a different slice.",
+			fmt.Sprintf("snapshot is truncated (capped at %d candidates; more matches may exist). Refine the original query, or run 'gramaton export --query \"...\" --output results.jsonl' for the full set.",
 				snap.Total))
 	}
 	return resp, nil

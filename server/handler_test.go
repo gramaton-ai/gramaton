@@ -240,7 +240,29 @@ func TestDuplicates(t *testing.T) {
 
 // --- Export ---
 
+func TestExportJSONL(t *testing.T) {
+	// "jsonl" is the canonical name for line-delimited JSON
+	// (Content-Type application/x-ndjson). What was previously
+	// named "json" produces this shape.
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "Export this")
+
+	w := doRequest(t, srv, "POST", "/v1/export", map[string]any{
+		"format": "jsonl",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("expected ndjson content type, got %q", w.Header().Get("Content-Type"))
+	}
+}
+
 func TestExportJSON(t *testing.T) {
+	// "json" now produces a parseable JSON array
+	// (Content-Type application/json). Distinct from the
+	// pre-rename "json" which was JSONL — that's now under
+	// the "jsonl" name. New default name for `--format json`.
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "Export this")
 
@@ -250,9 +272,20 @@ func TestExportJSON(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if w.Header().Get("Content-Type") != "application/x-ndjson" {
-		t.Fatalf("expected ndjson content type, got %q", w.Header().Get("Content-Type"))
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("expected application/json content type, got %q", w.Header().Get("Content-Type"))
 	}
+	body := w.Body.String()
+	if len(body) == 0 || body[0] != '[' {
+		t.Errorf("expected JSON array body starting with '[', got %q", body[:min(50, len(body))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func TestExportCSV(t *testing.T) {
