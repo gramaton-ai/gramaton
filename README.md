@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
-**Gramaton is a local, versioned knowledge store for AI agents.** It stores facts, decisions, context, and tasks in a property graph with semantic search, epistemic metadata, and automatic curation. Agents capture knowledge during their sessions and retrieve it later — across conversations, across tools, across time.
+**Gramaton is an experimental local, versioned knowledge store for AI agents.** It stores facts, decisions, context, and tasks in a property graph with semantic search, epistemic metadata, and automatic curation. Agents capture knowledge during their sessions and retrieve it later — across conversations, across tools, across time.
 
 ## Why Gramaton
 
@@ -36,7 +36,7 @@ Gramaton's differences:
 What Gramaton isn't:
 
 - **Searchable surface is distilled, not verbatim.** Search retrieves committed Session segments and Memory records — extracted knowledge, not a full chat log. Raw transcripts can be archived alongside a session (compressed, path-addressable on disk); the session state points at the archive so an agent can decompress and read it if something seems missing. Archiving is opt-in at the Gramaton layer — the shipped Claude Code and Kiro hooks under [`hooks/`](hooks/) wire it up automatically at compaction boundaries, and the `gramaton session archive` CLI covers manual or custom workflows. The archive itself isn't indexed for search today.
-- **Not a multi-user service.** v0.1 is single-user and local. Auth and tenancy are future work.
+- **Not a multi-user service.** Current versions are single-user and local. Auth and tenancy are future work.
 - **Not a managed RAG solution.** It's infrastructure you run, not a hosted API.
 
 ## Quick Start
@@ -169,13 +169,14 @@ For the full layered package map, lock discipline, and data flow, see [Architect
 
 ## MCP Tools
 
-Gramaton's primary interface is MCP. The 38 tools register into clusters matched to the three storage paths plus versioning and admin. For live descriptions and schemas, call `gramaton_guide(topic=...)` from any MCP-aware agent.
+Gramaton's primary interface is MCP, organized into clusters matched to the three storage paths plus versioning and admin. For live descriptions and schemas, call `gramaton_guide(topic=...)` from any MCP-aware agent.
 
 ### Records (Memory)
 
 | Tool | What it does |
 |------|-------------|
 | `gramaton_capture` | Store a knowledge record with epistemic metadata |
+| `gramaton_capture_batch` | Submit many records in one call. Sync mode returns per-item results inline (failures land in a `failed[]` array; the batch keeps going). Async mode returns a job id with `_status`, `_result`, `_cancel` companions for polling |
 | `gramaton_inspect` | Full content, metadata, and one-hop related edges for a record |
 | `gramaton_update` | Modify properties on an existing record |
 | `gramaton_classify` | Assign or update classification metadata on a pending record |
@@ -218,6 +219,7 @@ Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`,
 | `gramaton_backup` | Create a backup archive of the store |
 | `gramaton_curation` | View curation status, trigger a sweep, or dry-run |
 | `gramaton_reembed` | Re-embed records after an embedding model change |
+| `gramaton_jobs_list` | List active async jobs (capture batches and future async ops) |
 | `gramaton_guide` | Live topic-addressable reference (capture, search, sessions, collections, metadata, curation, temporal-queries) |
 
 Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
@@ -229,7 +231,7 @@ A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curate
 
 | Command | Description |
 |---------|-------------|
-| `gramaton init [--force]` | Interactive setup wizard (embed provider, LLM, MCP clients, hooks, agent-usage instructions, verify). `--force` re-runs the wizard on an existing install (preserves API keys). `--non-interactive` runs the scripted defaults path. |
+| `gramaton init [--force]` | Interactive setup wizard (embed provider, LLM, MCP clients, agent-usage instructions, hooks, verify). `--force` re-runs the wizard on an existing install (preserves API keys). `--non-interactive` runs the scripted defaults path. |
 | `gramaton preflight` | Verify daemon health, embedding model, LLM connectivity, and config sanity. Exits non-zero on blocking issues. |
 | `gramaton serve` | Run the server in the foreground (otherwise auto-started on first use) |
 | `gramaton status` | Server and store health |

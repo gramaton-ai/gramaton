@@ -14,6 +14,14 @@ internals fit together, see [docs/architecture.md](docs/architecture.md).
 All examples below use invented content — none of it represents real
 data from any specific user.
 
+If you installed Gramaton via `gramaton init` into Claude Code, the
+installed `~/.claude/CLAUDE.md` block also tells the agent how to
+route between Gramaton and Claude Code's built-in auto-memory: thin
+behavior rules that should shape every response stay in
+auto-memory; everything else (decisions, facts, research, tasks,
+context) goes to Gramaton. Default: Gramaton. Existing auto-memory
+entries are unchanged; the rule governs future captures only.
+
 ## The 30-second mental model
 
 Gramaton is a knowledge store with three buckets. Knowing which bucket
@@ -147,6 +155,32 @@ match:
 - **Literal text match.** "Find any record mentioning 'RWMutex' as a
   literal substring" → ask for `match=` rather than vector search.
 
+### Paging through large result sets
+
+By default search returns the first page of ranked results (20 per
+page). When the result set is large, the response carries a
+`next_cursor` token plus a `pages` table — the cursors for every
+page in the snapshot:
+
+- "Page through the auth records." → agent walks pages via
+  `next_cursor`.
+- "Get me page 5 of the search results." → agent uses the
+  matching cursor from the `pages` table.
+- "Export the full result set." → agent runs `gramaton export`
+  with the same filters; export skips pagination entirely (see
+  below).
+
+Pagination is snapshotted: a fresh search materializes up to ~500
+candidates and pins them with a 20-minute TTL keyed by `query_id`.
+Subsequent paged calls slice into the same snapshot at the encoded
+boundaries — record content is fetched fresh per page so any edits
+surface immediately, but the match set stays stable for the
+snapshot's lifetime.
+
+If a snapshot expires while you're still paging, the cursor returns
+an error; the agent should re-run the original query to materialize
+a new snapshot.
+
 ### "What did I tell you yesterday?"
 
 Sessions index the conversation itself. If you're trying to recall
@@ -158,6 +192,25 @@ specifically:
 
 The agent's `gramaton_search` call with `store=sessions` (singular `session` accepted as alias) narrows to
 conversation-derived content.
+
+### Exporting matched records
+
+When you want every matching record on disk — for offline
+analysis, sharing, or feeding another tool — use `gramaton export`
+rather than search pagination. Export runs the same filters as
+search but is exhaustive: no candidate cap, no top-N truncation,
+no snapshot TTL.
+
+- "Export every record about authentication to authrecords.jsonl."
+- "Dump all durable records to a CSV."
+- "Give me a JSON array of the dev backlog's items for the report."
+
+Format is controlled by `--format`: `jsonl` (line-delimited,
+default, streaming-friendly), `json` (a single parseable JSON
+array), `csv`, or `markdown`. Filters mirror the most useful
+`gramaton_search` arguments — text, match, keywords, temporality,
+knowledge_type, since, etc. With no filters, the export is a
+full-store dump.
 
 ## Backlogs, TODOs, and tickets
 
@@ -195,15 +248,27 @@ picks an appropriate schema (or none) based on your description:
   decision date."
 
 For common shapes there are starter **templates** — `backlog`,
-`todo`, `reading-list`, `shopping-list`, `packing-list` — each with
-a sensible default schema. The agent picks one when your phrasing
-matches; you can also ask for a specific template by name ("create
-a backlog template called X"). For unique shapes, describe the
-fields and the agent builds the schema.
+`todo`, `reading-list`, `shopping-list`, `packing-list`, `journal`,
+`references` — each with a sensible default schema. The agent picks
+one when your phrasing matches; you can also ask for a specific
+template by name ("create a backlog template called X"). For unique
+shapes, describe the fields and the agent builds the schema.
+
+Templates also preset the collection's behavior knobs: whether items
+get LLM curation (classification, summary, contradiction detection),
+whether duplicate items get auto-superseded, and what "close item"
+means for that shape. Most active-tracking templates (backlog, todo,
+reading-list, journal, references) opt in to curation; transient
+shapes (shopping-list, packing-list) skip it. You don't normally
+think about these — the template handles them.
 
 If you skip the schema entirely, the collection accepts arbitrary
-fields per item — fine for ad-hoc lists, less helpful when you want
-exhaustive filtered views later.
+fields per item — fine for ad-hoc lists. Schemaless collections
+default to no LLM curation since there's no declared content shape
+for the model to summarize against. If you want curation on a
+custom collection, declare a schema with `content_fields`
+identifying which fields the LLM should treat as the item's
+content.
 
 ### Filing items
 
@@ -257,6 +322,9 @@ ranked. This is the difference vs Memory.
 - "List all open tickets in the dev backlog."
 - "Show me everything in the reading list, including read items."
 - "Filter the dev backlog to severity=P1 or P0."
+- "Find tickets in the dev backlog mentioning 'auth'." → uses
+  `match` for case-insensitive substring search across item
+  fields; composes with status / severity filters.
 
 The output includes every match. If you want a top-N, your agent
 sorts after retrieval; the tool itself doesn't truncate.
@@ -334,7 +402,7 @@ If a record is *missing* and not stuck:
 
 - Curation may not have run yet — wait, or check status.
 - The capture may have failed silently — ask the agent to retry,
-  or check the server log (`~/.gramaton/data/server.log`).
+  or check the server log (`~/.gramaton/data/gramaton.log`).
 - The classification may have produced a different
   knowledge_type than you expected — try a broader search.
 
@@ -352,7 +420,7 @@ A few diagnostic asks:
   want to wait the full minute.
 
 If problems persist, the server log lives at
-`~/.gramaton/data/server.log` (or wherever your `data_dir` points).
+`~/.gramaton/data/gramaton.log` (or wherever your `data_dir` points).
 Curation errors and LLM-call failures are logged at WARN with the
 record ID; that's enough to triage most issues.
 

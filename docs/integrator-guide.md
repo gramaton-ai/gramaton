@@ -76,7 +76,7 @@ If the answer is ambiguous, start with Memory. It's easier to escalate a Memory 
 - Information already in the codebase or git history ("file X exists", "function Y is called from Z")
 - Temporary debugging state
 - Intermediate reasoning that got superseded inside the same session
-- Near-duplicates of existing records (the server auto-suprecedes at ≥0.92 cosine — don't pre-check)
+- Near-duplicates of existing records (the server auto-supersedes at ≥0.92 cosine — don't pre-check)
 
 ### Capture raw content, not summaries
 
@@ -211,9 +211,34 @@ With a schema — enforces typed fields and required fields:
 
 Field names must match `^[a-zA-Z_][a-zA-Z0-9_]*$` — they become property keys on the underlying graph node. See `api/collection_schema.go` for the full validation rules.
 
+### `content_fields` — what the LLM treats as the item's content
+
+Schemas may declare an ordered `content_fields` list naming the fields that constitute the canonical text representation of an item. When set, `content_fields` drives both BM25 indexing and the vector embedding for that item: the server joins those field values (in the declared order) and the joined string is what gets embedded and tokenized. Editing a `content_fields`-listed field flips `processing_status` back to `captured` and queues a re-embed; editing other fields (status, dates, assignee) doesn't touch the index.
+
+```json
+{
+  "schema": {
+    "fields": [
+      {"name": "title", "type": "string", "required": true},
+      {"name": "details", "type": "string", "required": false},
+      {"name": "status", "type": "enum", "required": true, "values": ["open", "in_progress", "done"]}
+    ],
+    "content_fields": ["title", "details"]
+  }
+}
+```
+
+Each name must reference a declared `type=string` field; non-string types are rejected at schema validation. The standard templates ship with explicit declarations (e.g. `backlog: ["title", "details"]`, `todo: ["title", "notes"]`, `reading-list: ["title", "author", "notes"]`, `journal: ["title", "entry"]`, `references: ["title", "description", "notes"]`).
+
+`curation: standard` requires `content_fields` to be declared (via template or custom schema). `gramaton_collection_create` rejects schemaless `curation: standard` requests with a clear input error — the LLM has nothing structured to summarize against. `curation: none` collections (`shopping-list`, `packing-list`, ad-hoc schemaless) don't need `content_fields`; their items skip the LLM pipeline entirely.
+
 ### Adding, listing, updating, moving
 
-- `gramaton_collection_create` — create a collection. Optional `schema` for field types and required fields, optional `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`) to seed schema + behaviour fields, optional behaviour fields (`curation`, `clear_mode`, `supersession`).
+- `gramaton_collection_create` — create a collection. Optional `schema` for field types and required fields (with optional `content_fields` declaration; see above), optional `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`, `journal`, `references`) to seed schema + behavior fields, optional behavior fields. The four orthogonal knobs:
+  - `curation` — `none` (skip the LLM pipeline; default for ad-hoc collections) or `standard` (classify, summarize, observation_extract, concept synthesis on items; requires `content_fields`).
+  - `supersession` — `off` (no auto-supersede), `on` (auto-supersede within the collection at ≥0.92 cosine), `store` (auto-supersede against the whole store).
+  - `contradictions` — `off` or `on` (gate this collection's items into the LLM contradiction-detection pipeline).
+  - `clear_mode` — `resolve` (default; `gramaton_resolve` flips item status) or `unlink` (item is removed from the collection rather than resolved; useful for transient lists).
 - `gramaton_collection_add` — validates fields against schema, creates an item node, returns its ID.
 - `gramaton_collection_add_batch` — up to 500 items in one call. Schema-validated and dedup-checked per item; passing items commit atomically in one engine save, failing items are reported in the `Failed` array with per-item `{index, client_ref, code, message}`. Use instead of repeated `_add` when loading more than ~10 items.
 - `gramaton_collection_items` — exhaustive list. `fields: [...]` projects a subset; `filter: {...}` narrows by exact field match or any-of. Pass `as_of=T` (RFC3339 or `YYYY-MM-DD`) to return membership at a historical commit; the response carries `semantics: point_in_time`.
@@ -233,7 +258,7 @@ Duplicate-title handling depends on the collection's `curation` profile:
 item with title "Buy milk" already exists in this collection (existing id: 01ABC...)
 ```
 
-This is the post-T-02 behavior — the server rejects the duplicate. The caller decides what to do: update the existing item via `_update`, add under a different title, or skip. The error message carries the existing item's ID so the caller doesn't need a second lookup.
+The server rejects the duplicate. The caller decides what to do: update the existing item via `_update`, add under a different title, or skip. The error message carries the existing item's ID so the caller doesn't need a second lookup.
 
 ### Patterns that work well
 
@@ -250,7 +275,7 @@ This is intentional. Closure is a deliberate state change with audit consequence
 
 The pattern for an agent wrapping up a topic:
 
-1. Call `gramaton_resolve` for each completed item explicitly. The system honors heuristic auto-flip of the schema's status field where one exists (see `df2ab44` for the heuristic) — pass `auto_close_collection_status: true` if the caller hasn't already flipped the field.
+1. Call `gramaton_resolve` for each completed item explicitly. When the resolved record is a collection item AND the schema declares an enum field named `status`, the server auto-flips that field to a closed-equivalent value (first `resolved` / `done` / `finished` / `abandoned` in the schema's enum, whichever appears first). This is `auto_close_collection_status: true` by default; pass `false` to skip the collection-side write and only stamp `valid_until` + `resolution`. Records in collections whose status field has no closed-equivalent value emit `CollectionWarning` so the agent can prompt the operator to call `gramaton_collection_update` manually.
 2. THEN call `gramaton_session_prepare` + `gramaton_session_commit`.
 
 Order doesn't matter mechanically (independent subgraphs, engine serializes commits), but closure-first gives the session a clean view of the post-state. If you forget closure entirely, the user has visible drift: session-extracted Memory records say the work shipped, the collection still shows the items open.

@@ -170,7 +170,7 @@ GC is disabled by default — the "never delete" posture means commit history is
 
 ## Curation
 
-Controls the deterministic + autonomous background maintenance pipeline.
+Controls the deterministic + autonomous background maintenance pipeline. **Note**: this section governs the global *runner* — its cadence, retry caps, and per-task budgets. Whether a given record actually flows through curation depends on the per-collection eligibility knobs (`curation`, `supersession`, `contradictions`, `clear_mode`) set at collection-create time on the collection node, not in `config.yaml`. New ad-hoc collections default to `curation: none`; the standard templates opt their items into `curation: standard`. See [docs/integrator-guide.md](integrator-guide.md) for the per-collection knob shape and template defaults.
 
 ```yaml
 curation:
@@ -214,6 +214,11 @@ llm:
       max_similarity: 0.85
       batch_size: 5                         # pairs per LLM call (~5x call reduction at saturation)
       check_reverse_edges: true
+      # Note: contradiction detection only runs against collections whose
+      # `contradictions` knob is set to `on`. Memory records (no collection)
+      # use a default that orphan-style records still get checked. The
+      # config above tunes the runner; per-collection eligibility lives on
+      # the collection node.
 
     concept:
       max_per_run: 5
@@ -297,6 +302,21 @@ search:
 Below `hnsw_threshold`, vector search uses exact brute-force (FlatIndex). Above it, HNSW provides O(log N) approximate nearest-neighbor search. The HNSW parameters rarely need tuning — defaults follow the original paper.
 
 `session_dedup_enabled: true` (the default) means when a Memory record and the Session segment it was extracted from both match a query, only the Memory record is returned — the segment is suppressed to avoid visible duplication across the two stores.
+
+### Pagination
+
+```yaml
+search:
+  pagination:
+    snapshot_ttl: 20m              # how long a fresh search snapshot stays valid
+    candidate_cap: 500             # max candidates materialized per fresh search (hard ceiling 1000)
+    page_size_default: 20          # page size when the request omits page_size
+    page_size_max: 100             # cap on requested page_size
+```
+
+`gramaton_search` materializes up to `candidate_cap` ranked candidates on a fresh query and pins them in an in-engine snapshot keyed by an opaque `query_id`. Subsequent calls with `cursor` slice into the same snapshot at the encoded boundaries, so paged retrieval stays consistent even as the underlying graph mutates. Snapshots evict after `snapshot_ttl`; an expired cursor returns `{error: "snapshot_expired"}` so the caller knows to re-run the original query.
+
+The hard ceiling on `candidate_cap` is 1000 (`config.MaxCandidateCapHard`); the runtime clamps higher values down to that. The legacy hardcoded cap on the `top` request field — used when callers ask for more results than the system will return — remains 1000 (`api.MaxSearchTop`). For exhaustive retrieval beyond the candidate cap, use `gramaton_export` with the same filters: it skips pagination entirely and streams every match.
 
 ---
 
