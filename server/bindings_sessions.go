@@ -142,6 +142,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_prepare",
 		Description: api.SessionPrepareDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionPrepareArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_prepare")
 		defer done(nil)
@@ -159,6 +160,7 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_commit",
 		Description: api.SessionCommitDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_commit")
 		defer done(nil)

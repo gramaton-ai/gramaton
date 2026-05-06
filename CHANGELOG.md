@@ -9,6 +9,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Hot-path MCP tools pinned as `alwaysLoad` to bypass tool-search
+  deferral.** Claude Code's tool-search (on by default) defers MCP
+  tool schemas until the agent calls `ToolSearch` to fetch them,
+  paying ~50-100ms per tool per session on first use. Pin the 12
+  tools the agent reaches for on every substantive session
+  (`gramaton_search`, `gramaton_inspect`, `gramaton_capture`,
+  `gramaton_session_prepare`, `gramaton_session_commit`,
+  `gramaton_collection_add`, `gramaton_collection_items`,
+  `gramaton_collection_update`, `gramaton_collection_list`,
+  `gramaton_resolve`, `gramaton_link`, `gramaton_curation`) via
+  `_meta: {"anthropic/alwaysLoad": true}` in their MCP registration.
+  Added `mcpAlwaysLoadMeta()` helper in `server/mcp.go` so the pin
+  reads cleanly at each registration site.
+  - The remaining ~24 tools (branch / backup / reembed / classify /
+    pending / status / duplicates / stats / explore / log / diff /
+    history / collection lifecycle ops / unlink / update /
+    session_get / session_start / collection_add_batch / ...) stay
+    deferred so context budget isn't burned on tools the agent uses
+    rarely or never in a typical session. Net split: ~1.8K tokens
+    eager / ~3.7K tokens still deferred.
+  - Forward-compatible: clients that don't implement tool-search
+    (older Claude Code, other MCP clients) ignore the `_meta` field
+    and behave as before.
+  - `TestMCPHotPathToolsHaveAlwaysLoadMeta` enforces the pinned set.
+    Asymmetric check: every named hot-path tool MUST carry the meta
+    flag; no other tool may. Catches both dropped pins (refactor
+    nukes Meta) and creep (new tool quietly pins itself without
+    weighing the context-budget tradeoff).
+  - Tracker: `01KQZ5MEKHEX4DA20HR10V3WKM`.
+
 - **Claude Code auto-memory routing block + per-client template
   scaffolding.** `gramaton init` now installs a routing rule into
   Claude Code's CLAUDE.md telling the agent to prefer Gramaton over

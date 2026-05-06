@@ -261,6 +261,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_list",
 		Description: api.CollectionListDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args listArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_list")
 		defer done(nil)
@@ -284,6 +285,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_items",
 		Description: api.CollectionItemsDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args itemsArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_items")
 		defer done(nil)
@@ -309,6 +311,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_add",
 		Description: api.CollectionAddDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args addArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_add")
 		defer done(nil)
@@ -344,6 +347,7 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_update",
 		Description: api.CollectionUpdateDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args updateArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_update")
 		defer done(nil)
