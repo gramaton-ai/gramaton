@@ -216,6 +216,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_capture",
 		Description: api.CaptureDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_capture")
 		defer done(nil)
@@ -306,6 +307,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_inspect",
 		Description: api.InspectDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args inspectArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_inspect")
 		defer done(nil)
@@ -391,6 +393,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
 		Description: api.ResolveDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args resolveArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_resolve")
 		defer done(nil)
@@ -417,6 +420,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_link",
 		Description: api.LinkDescription,
+		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args linkArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_link")
 		defer done(nil)

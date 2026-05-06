@@ -56,6 +56,26 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerMCPGuideTools(mcpServer)
 }
 
+// mcpAlwaysLoadMeta returns the `_meta` payload that pins an MCP
+// tool as always-loaded for clients that implement tool-search
+// deferral (Claude Code v2.1.121+). With tool search on (the default
+// in current Claude Code), tool schemas are deferred until the agent
+// calls ToolSearch to fetch them; pinning saves that round-trip on
+// hot-path tools the agent uses on most substantive sessions.
+//
+// Forward-compatible: clients that don't implement tool search (or
+// haven't shipped the per-tool alwaysLoad feature) ignore the
+// metadata and behave as before.
+//
+// We pin a curated subset (search/inspect/capture/session_*/
+// collection_{add,items,update,list}/resolve/link/curation) rather
+// than every tool to avoid bloating the system prompt with infrequent
+// administrative or diagnostic tools (branch, backup, reembed,
+// classify, log, etc.); those stay deferred and load on demand.
+func mcpAlwaysLoadMeta() mcp.Meta {
+	return mcp.Meta{"anthropic/alwaysLoad": true}
+}
+
 // mcpToolStart records the start of an MCP tool call and returns a
 // function that logs the completion. Usage:
 //
