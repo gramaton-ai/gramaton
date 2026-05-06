@@ -7,6 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Pre-public-release docs sweep.** Comprehensive re-read of every
+  user-facing and integrator-facing doc against the current code,
+  catching drift the recent feature work left behind. Specific
+  fixes: tool-count claims aligned with the actual MCP tool registry;
+  log-filename references corrected (`gramaton.log`, not
+  `server.log`); `gramaton_capture_batch` description rewritten
+  (sync mode is per-item failure isolation, not all-or-nothing);
+  `gramaton init` wizard step order corrected in the CLI table;
+  `gramaton_search` data flow in `architecture.md` extended with
+  the snapshot / cursor pagination paths; `clear_mode` collection
+  knob explained instead of waved at; four-knob curation framing
+  used consistently where collections are introduced; `content_fields`
+  schema field documented end-to-end; `auto_close_collection_status`
+  resolve flag spelled out. Also future-proofed the README's
+  "single-user / no auth" caveat (was bound to `v0.1`).
+- **Internal phase identifiers scrubbed from docs and code comments.**
+  Internal Gramaton-development phase markers (T-NN, P[0-3]-NN,
+  F1 Layer N, Phase N follow-on) and parenthetical tickets like
+  `(P2-08)` removed from doc files, `CHANGELOG.md` entries, and
+  ~30 Go source files' comments. They were Gramaton-internal
+  shorthand that was cryptic to public readers; sentences that
+  referenced them were rewritten to preserve the technical context
+  without the identifier (e.g., "regression for P2-08 fix #1: a
+  hung task..." → "regression for the per-task-timeout fix: a
+  hung task..."). The `D-NN` numbering inside
+  `docs/project-design/design-decisions.md` is preserved — those
+  are heading anchors for the doc, not tracker references. Test
+  fixture content using fictional ticket strings as record titles
+  is preserved (test data, not phase IDs). Also removed the
+  misplaced internal `p2-06-writesession-plan.md` plan doc from
+  `docs/project-design/`.
+- **Public-readiness scrub: removed Amazon-internal `Isengard` tool
+  reference** from `docs/providers.md`. Replaced the credential-
+  manager refresh discussion with a generic phrasing that doesn't
+  signal employer-specific tooling.
+
 ### Added
 
 - **Hot-path MCP tools pinned as `alwaysLoad` to bypass tool-search
