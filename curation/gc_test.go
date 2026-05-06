@@ -8,7 +8,7 @@ import (
 )
 
 // TestCollectGarbageDeletesUnclassifiedDebris is the load-bearing
-// regression for P2-07 fix #2. Pre-fix, collectGarbage required the
+// regression for the GC unclassified-debris fix. Pre-fix, collectGarbage required the
 // record to have temporality=="ephemeral", which is set by LLM
 // classification. But the captured-status filter immediately above
 // requires the record to be UNCLASSIFIED, so temporality is unset.

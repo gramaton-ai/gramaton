@@ -345,7 +345,7 @@ func cycleCostSoFar(ctx context.Context, cfg config.Config) float64 {
 // code back to a concrete model name via config. Labels that don't
 // correspond to a curation task (or the contradiction_batch synonym)
 // fall back to the medium tier via ModelAtEffort so the direct
-// tier-map access stays confined to config.go (P1-76).
+// tier-map access stays confined to config.go.
 func modelForTaskLabel(cfg config.Config, task string) string {
 	switch task {
 	case "classify":
@@ -1081,7 +1081,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	// epistemic / temporality / confidence histograms are part of the
 	// fingerprint because bulk reclassification (e.g. 50 records moving
 	// speculative -> well_established) is exactly the kind of store
-	// shift the cached manifest summary should NOT survive. (P1-59.)
+	// shift the cached manifest summary should NOT survive.
 	fp := fmt.Sprintf("records=%d|types=%s|epistemic=%s|temporality=%s|confidence=%s|keywords=%s|span=%s..%s",
 		totalRecords,
 		typesStr,

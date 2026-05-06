@@ -65,7 +65,6 @@ func Load(ctx context.Context, region, profile, accessKeyIDEnv, secretKeyEnv str
 	// lose classification work on a contentious hour. The SDK
 	// honors Retry-After and handles ThrottlingException /
 	// RequestLimitExceeded automatically within this budget.
-	// (P1-23.)
 	opts = append(opts, awsconfig.WithRetryer(func() aws.Retryer {
 		return retry.NewStandard(func(o *retry.StandardOptions) {
 			o.MaxAttempts = 5

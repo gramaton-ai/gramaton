@@ -23,7 +23,7 @@ func TestIsWeakConceptKeyword(t *testing.T) {
 		{"summary", true}, {"reference", true}, {"document", true},
 		{"note", true}, {"notes", true}, {"todo", true},
 
-		// Generic LLM/agent vocabulary (P2-09 fix #5 additions).
+		// Generic LLM/agent vocabulary.
 		// These were the load-bearing leak: every other record
 		// captured during agent flows mentions "context" or
 		// "content", so without filtering they dominated concept

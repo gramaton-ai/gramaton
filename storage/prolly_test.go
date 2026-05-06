@@ -462,7 +462,7 @@ func TestProllyTreeDiffDeepIdenticalSubtreesSkipped(t *testing.T) {
 	}
 }
 
-// BenchmarkProllyDiffSmallChange is the P1-54 perf evidence. Diffs
+// BenchmarkProllyDiffSmallChange is the perf evidence. Diffs
 // two 2000-entry trees differing by a single key. Before the fix the
 // diff walked all 2000 entries on both sides (the allEntries fallback
 // in the internal-vs-internal branch). After the fix the merge-walk

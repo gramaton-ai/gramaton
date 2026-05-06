@@ -12,7 +12,7 @@ import (
 )
 
 // TestEnrichConceptsSkipsRedundantUpdates is the load-bearing
-// regression for P2-07 fix #3. Pre-fix, the update gate was
+// regression for the redundant-update gate fix. Pre-fix, the update gate was
 // `count != existingCount || count > 0`, which always fired once a
 // concept had any inbound edge — so every concept with evidence got
 // re-written every cycle even when nothing had changed. Post-fix:

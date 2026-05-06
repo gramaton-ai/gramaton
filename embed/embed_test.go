@@ -77,7 +77,7 @@ func (m *mockQueryEmbedder) EmbedQuery(_ context.Context, text string) ([]float3
 
 // TestEmbedForQueryPrefersQueryPath verifies that when a provider
 // implements QueryEmbedder, EmbedForQuery routes through EmbedQuery
-// instead of falling back to the document-embedding path. (P1-40.)
+// instead of falling back to the document-embedding path.
 func TestEmbedForQueryPrefersQueryPath(t *testing.T) {
 	m := &mockQueryEmbedder{mockEmbedder: mockEmbedder{dim: 4}}
 	vec, err := EmbedForQuery(context.Background(), m, "what is a gramaton")

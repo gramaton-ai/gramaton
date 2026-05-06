@@ -35,7 +35,7 @@ type ImportResult struct {
 // type tag determines coercion in buildSafeProps. Previously a
 // safeProperties map and a buildSafeProps switch listed the same
 // fields independently, with no compile-time check that they stayed
-// in sync. (Wave 7 P1-74.)
+// in sync.
 type safePropType int
 
 const (
@@ -152,7 +152,7 @@ func ImportJSON(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, err
 	// passes: node creation + property indexing first, then edge
 	// creation referencing the fresh IDs. For a bulk import of N
 	// nodes with ~K edges each, edge-creation cost drops from
-	// O(N*K) fsyncs to O(1). (P2-06.)
+	// O(N*K) fsyncs to O(1).
 	idMap := make(map[string]string, len(records))
 	batchErr := e.WithWriteBatch("import", func(ws *core.WriteSession) (bool, error) {
 		// Pass 1: create nodes, build old-to-new ID map.

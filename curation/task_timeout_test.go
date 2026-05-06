@@ -11,7 +11,7 @@ import (
 )
 
 // TestRunTaskWithTimeoutCancelsHungTask is the load-bearing
-// regression for P2-08 fix #1: a single hung task must NOT prevent
+// regression for the per-task-timeout fix: a single hung task must NOT prevent
 // downstream tasks from running. The pre-fix runner called each
 // task under the parent ctx, so a stuck LLM call (HTTP 120s
 // timeout) consumed the entire 1-minute curation cycle and

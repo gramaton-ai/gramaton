@@ -34,7 +34,7 @@ type embedder interface {
 // embedding a user query. Providers that distinguish query-time
 // embeddings (Cohere on Bedrock) implement this; others fall through
 // to Embed. Mirrors embed.QueryEmbedder but kept local so search
-// doesn't import embed. (P1-40.)
+// doesn't import embed.
 type queryEmbedder interface {
 	EmbedQuery(ctx context.Context, text string) ([]float32, error)
 }

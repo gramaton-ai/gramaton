@@ -772,7 +772,7 @@ func TestQualityAuditShortSummary(t *testing.T) {
 }
 
 // TestRunDeterministicMergedLoopBranchesByNodeType pins the
-// behavioral invariants the P2-07 iterator merge had to preserve:
+// behavioral invariants the iterator merge had to preserve:
 //
 //   - regular records contribute to manifest.TotalRecords +
 //     non-concept lifecycle / orphan checks + quality Rules 2/3

@@ -45,7 +45,7 @@ type Provider interface {
 // Search-time code should type-assert its embedder for QueryEmbedder
 // and prefer EmbedQuery when available; non-implementing providers
 // (OpenAI, Ollama, Titan) treat queries and documents identically and
-// can fall back to Embed. (P1-40.)
+// can fall back to Embed.
 type QueryEmbedder interface {
 	EmbedQuery(ctx context.Context, text string) ([]float32, error)
 }

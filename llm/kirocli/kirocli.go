@@ -47,14 +47,12 @@ var ansiRe = regexp.MustCompile(
 // "Credits: <num>" or "Time: <num>" shape so model output that happens
 // to mention "Credits:" mid-sentence isn't clipped. The optional
 // leading " ▸ " bullet is accepted because kiro-cli emits it.
-// (P1-69.)
 var footerRe = regexp.MustCompile(`^(?:\s*[\x{25b8}\x{2022}]\s*)?(?:Credits|Time):\s`)
 
 // trustWarningPrefixes are the line shapes kiro-cli emits as a
 // trust/security banner BEFORE any model content. The filter only
 // strips a line if it starts with one of these prefixes; prior code
 // used strings.Contains, which would also match mid-response text.
-// (P1-69.)
 var trustWarningPrefixes = []string{
 	"All tools are now trusted",
 	"Agents can sometimes",
@@ -147,7 +145,7 @@ func (c *Client) run(ctx context.Context, model, prompt string) (string, error) 
 // (optionally after a bullet glyph) and match a regex with a digit-
 // grouped number; trust warnings must start the line. Mid-response
 // text that incidentally contains "Credits:" or "kiro.dev/docs"
-// survives. (P1-69.)
+// survives.
 func extractResponse(raw string) (string, error) {
 	// Strip ANSI escape sequences.
 	clean := ansiRe.ReplaceAllString(raw, "")

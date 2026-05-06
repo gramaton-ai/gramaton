@@ -1939,7 +1939,7 @@ func TestManifestCacheInvalidatesOnChange(t *testing.T) {
 	}
 }
 
-// TestManifestCacheInvalidatesOnEpistemicShift covers P1-59: the
+// TestManifestCacheInvalidatesOnEpistemicShift covers the fingerprint requirement: the
 // fingerprint must distinguish stores that differ only in the
 // epistemic_status / temporality / confidence distributions, so a
 // bulk reclassification (e.g. 50 records sliding speculative ->
@@ -1975,7 +1975,7 @@ func TestManifestCacheInvalidatesOnEpistemicShift(t *testing.T) {
 	// Bulk reclassification: every record moves speculative -> well_established
 	// AND confidence drops from 0.9 (high) to 0.3 (low). Top keywords,
 	// knowledge-type histogram, record count, and date span are all
-	// unchanged -- the pre-P1-59 fingerprint would treat this as the
+	// unchanged -- the earlier fingerprint would treat this as the
 	// same store and serve the stale "baseline summary".
 	eng.Lock()
 	for _, id := range ids {
@@ -2033,7 +2033,7 @@ func TestManifestCacheInvalidatesOnTemporalityShift(t *testing.T) {
 	}
 }
 
-// TestManifestCacheIgnoresHistoricalRecords pins P2-09 fix #4: the
+// TestManifestCacheIgnoresHistoricalRecords pins the historical-record exclusion: the
 // manifest summary describes the CURRENT state of the store, so
 // records whose valid_until is in the past must be excluded from
 // the fingerprint inputs. Pre-fix (initial), adding a historical
@@ -2249,7 +2249,7 @@ func TestMeanCosineToCentroidEmpty(t *testing.T) {
 }
 
 // TestEnrichConceptSynthesesLogsDimMismatch pins the user-visible
-// payoff of P2-09 fix #2: when meanCosineToCentroid skips members
+// payoff of the dimension-mismatch warning: when meanCosineToCentroid skips members
 // for embedding-dimension mismatch, enrichConceptSyntheses must
 // emit a Warn-level log with the "gramaton reembed" hint so
 // operators see the embedding-model drift.
@@ -2529,7 +2529,7 @@ func TestSynthesizeSuccessClearsAttempts(t *testing.T) {
 }
 
 // TestMeanCosineToCentroidDimMismatchSurfaced is the regression for
-// P2-09 fix #2: when concept members have heterogeneous embedding
+// the dimension-mismatch fix: when concept members have heterogeneous embedding
 // dimensions (e.g. embedding model changed mid-store), the function
 // must report the count of skipped members so the caller can warn
 // instead of silently producing a misleadingly-low n.
@@ -3015,7 +3015,7 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 }
 
 // TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural
-// pins P2-07 fix #4: the unified edge walk in generateSummaries
+// pins the structural-vs-semantic edge distinction: the unified edge walk in generateSummaries
 // must distinguish structural (chunk_of / section_of) from semantic
 // (related_to / supersedes / etc.) edges. A record with semantic
 // edges only is NOT structural and must hit Priority 1 (no-summary).
