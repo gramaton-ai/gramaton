@@ -9,6 +9,39 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Claude Code auto-memory routing block + per-client template
+  scaffolding.** `gramaton init` now installs a routing rule into
+  Claude Code's CLAUDE.md telling the agent to prefer Gramaton over
+  Claude Code's built-in `~/.claude/projects/<slug>/memory/`
+  auto-memory for new captures. Decision rule: would the agent fail
+  at its job if this content weren't loaded into every conversation?
+  Yes (behavioral rule) → auto-memory. No (specific fact, decision,
+  context) → Gramaton. Existing auto-memory entries are unchanged;
+  the rule governs future routing only. Routing block sits between
+  the introductory framing and the deeper retrieval/capture sections
+  so the agent registers it before specific tool guidance.
+  - Per-client template architecture: `internal/setup/templates/`
+    holds a shared `base.md` plus per-client addenda
+    (`claude_addendum.md`, `kiro_addendum.md`).
+    `templateForClient` substitutes the client's addendum at a
+    `<!-- CLIENT_ADDENDUM -->` marker in the base; unfilled markers
+    are stripped cleanly. Adding a new client (Codex, Cursor, etc.)
+    is dropping in a new addendum file plus a `case` statement;
+    install code stays untouched.
+  - Init-time detection of existing auto-memory at
+    `~/.claude/projects/*/memory/MEMORY.md` prints a one-line notice
+    so users aren't confused about which store new captures land in.
+  - `integration/claude-code/CLAUDE.md` (the user-readable snapshot
+    referenced from README and integrator-guide) is now drift-tested
+    against the canonical template via
+    `TestIntegrationSnapshotsMatchCanonical`. Refresh after
+    canonical edits with
+    `go test ./internal/setup -update-integration`. Closes the
+    snapshot/canonical drift class that left the file weeks-stale.
+  - Kiro's addendum is reserved as a placeholder; idiomatic
+    multi-file Kiro install is tracked separately.
+  - Tracker: GitHub issue #3.
+
 - **Filtered `gramaton export` + new `json` array format.** The
   CLI's `--format`, `--keywords`, etc. now actually filter
   server-side (previously the body fields were silently ignored).
