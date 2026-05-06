@@ -12,7 +12,7 @@ import (
 // handler_intake.go still depends on. Coverage of the other record
 // operations (Inspect/Update/Classify/Resolve/Link/Unlink/Delete) moved
 // to api/records_test.go when the dead server-level services were
-// removed in the T-02 cascade cleanup.
+// removed in the canonical-api cascade cleanup.
 
 func TestServiceCaptureBasic(t *testing.T) {
 	srv, _ := setupTestServer(t)

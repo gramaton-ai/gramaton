@@ -33,7 +33,7 @@ import (
 // transaction is threaded via the call graph rather than stashed
 // on the struct. Non-Tx methods open their own db.Update; in-batch
 // callers use the *Tx variants. Read methods open their own
-// db.View inline. Removes the P2-06 stashed-pointer race class.
+// db.View inline. Removes the stashed-pointer race class.
 type BboltPropertyIndex struct {
 	db *bolt.DB
 

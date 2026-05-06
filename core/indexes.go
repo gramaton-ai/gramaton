@@ -241,7 +241,7 @@ func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content 
 // node fsync overhead would dominate runtime.
 //
 // A non-nil return means the transaction was rolled back -- index
-// writes inside fn did not persist. Callers must check. (P2-06.)
+// writes inside fn did not persist. Callers must check.
 func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 	return s.boltDB.Update(func(tx *bolt.Tx) error {
 		ws := &WriteSession{

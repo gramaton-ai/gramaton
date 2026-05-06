@@ -477,8 +477,8 @@ func TestCurationInEnvelope(t *testing.T) {
 	}
 }
 
-// TestCurationStatusUnderWriteLock exercises the P1-45 collapse:
-// writeJSON must not deadlock even when the caller already holds
+// TestCurationStatusUnderWriteLock exercises the writeJSON/curationStatus
+// collapse: writeJSON must not deadlock even when the caller already holds
 // the engine write lock. curationStatus' TryRLock gate returns the
 // cached (possibly zero) value instead of blocking.
 func TestCurationStatusUnderWriteLock(t *testing.T) {

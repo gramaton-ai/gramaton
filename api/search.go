@@ -274,7 +274,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	// Pre-embed outside any engine lock. Uses embed.EmbedForQuery so
 	// providers that distinguish query-time embeddings (e.g. Cohere
 	// on Bedrock, which needs input_type="search_query") pick the
-	// right path; others fall back to Embed. (P1-40.)
+	// right path; others fall back to Embed.
 	a.log.Debug("search: embedding query", "component", "search", "text_len", len(q.Text))
 	embedStart := time.Now()
 	var queryVec []float32

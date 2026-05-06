@@ -205,7 +205,7 @@ func TestBboltBM25IncrementalTotalLen(t *testing.T) {
 }
 
 // TestBboltBM25Batch exercises the AddTx + FlushBatchTx path that
-// replaced the old SetBatch/idx.Batch pattern in P2-06.
+// replaced the old SetBatch/idx.Batch pattern.
 func TestBboltBM25Batch(t *testing.T) {
 	idx := newTestBboltBM25(t)
 

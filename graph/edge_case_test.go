@@ -118,8 +118,8 @@ func TestDeleteNodeSelfEdge(t *testing.T) {
 
 // TestNodeCountTracksAddDeleteCycles pins that NodeCount stays in sync
 // with the live node set across interleaved add/delete cycles in eager
-// mode. The tracker hypothesis (P2-02 sub-fix 4) was that nodeTotal
-// could drift below the true count, but current code increments
+// mode. An earlier audit hypothesised that nodeTotal could drift below
+// the true count, but current code increments
 // nodeTotal in AddNode and decrements in DeleteNode in both modes.
 // This test stays as a regression guard against that drift returning.
 func TestNodeCountTracksAddDeleteCycles(t *testing.T) {

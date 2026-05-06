@@ -312,7 +312,8 @@ func TestProllyTreeDiffEmptyToFull(t *testing.T) {
 	}
 }
 
-// TestProllyTreeDiffSmallChangeInLargeTree exercises the P1-54 fix:
+// TestProllyTreeDiffSmallChangeInLargeTree exercises the merge-walk
+// Diff fix:
 // diffing two large trees that differ by a single key in the middle
 // must walk only the path down to that change, not both entire trees.
 // Correctness assertion is the visible one; the benchmark

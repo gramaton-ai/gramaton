@@ -1,9 +1,9 @@
 package api
 
 // Typed response shapes for the collections cluster + SessionCommit.
-// Each method's response was map[string]any pre-T-02; this file
-// replaces those with named structs whose JSON shapes match the
-// prior wire output byte-for-byte.
+// Each method's response was map[string]any before the canonical-api
+// refactor; this file replaces those with named structs whose JSON
+// shapes match the prior wire output byte-for-byte.
 //
 // Conventions:
 //   - omitempty on every optional field so present/absent on the wire

@@ -57,7 +57,7 @@ type Server struct {
 	runner     *curation.Runner
 
 	// api is the canonical operations surface. Methods migrate here
-	// from the server layer one cluster at a time (T-02); transports
+	// from the server layer one cluster at a time; transports
 	// (HTTP / MCP / CLI proxy) will consume api via binding tables.
 	// Currently constructed but only used where operations have been
 	// migrated.
@@ -253,9 +253,9 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 
 	// Warn on partial LLM.Models configuration at startup so operators
 	// discover effort-tier gaps before curation silently falls back to
-	// the provider default. (P1-76.) Only relevant when an LLM is
-	// actually configured -- otherwise all tier fields are empty by
-	// design and the warning would be noise.
+	// the provider default. Only relevant when an LLM is actually
+	// configured -- otherwise all tier fields are empty by design and
+	// the warning would be noise.
 	if engineCfg.LLM.Provider != "" {
 		var emptyTiers []string
 		if engineCfg.LLM.Models.Low == "" {
@@ -307,7 +307,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		panicDedup:       newPanicLogDedup(time.Minute),
 	}
 	// Construct the canonical API surface. As operations migrate into
-	// the api package (T-02), transports will call s.api.X instead of
+	// the api package, transports will call s.api.X instead of
 	// s.serviceX. Kept on Server for now; lives past migration as the
 	// shared reference all three transports (HTTP/MCP/CLI-proxy)
 	// consume via binding tables.
@@ -706,11 +706,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// of admin-cluster migration). Shims in bindings_maintenance.go.
 	s.registerMaintenanceRoutes(mux)
 
-	// Collections cluster: migrated to api package (T-02). Shims in
+	// Collections cluster: migrated to api package. Shims in
 	// bindings_collections.go.
 	s.registerCollectionsRoutes(mux)
 
-	// Sessions cluster: migrated to api package (T-02). Shims in
+	// Sessions cluster: migrated to api package. Shims in
 	// bindings_sessions.go. Covers /v1/sessions,
 	// /v1/sessions/{id}, /v1/sessions/{id}/prepare,
 	// /v1/sessions/{id}/commit, /v1/sessions/{id}/archive.
@@ -907,7 +907,7 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 // callers already holding the engine lock (write or otherwise) do
 // not deadlock -- in that case the stale (possibly zero) value is
 // used. Stale data on the 5s window is fine; counters shift on the
-// curation tick (~1 minute). (T-06 step 4 + P1-45 collapse.)
+// curation tick (~1 minute).
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	curation := s.curationStatus()
 	s.writeJSONRaw(w, status, data, curation)

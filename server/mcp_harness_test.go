@@ -8,16 +8,16 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestMCPToolRegistry is the foundation of the MCP test harness (T-03).
+// TestMCPToolRegistry is the foundation of the MCP test harness.
 // It boots a server, registers every MCP tool, lists them via an
 // in-memory client, and asserts the registered set matches the expected
 // snapshot. Adding or removing a tool intentionally requires updating
 // the snapshot here -- which makes accidental drops visible in PR
 // review and forces conscious additions.
 //
-// Until T-02 (shared api/ package) lands, drift between MCP input
-// schemas and HTTP service inputs is still possible at the field level.
-// This test catches drift at the tool level (presence/absence) only.
+// Drift between MCP input schemas and HTTP service inputs is still
+// possible at the field level. This test catches drift at the tool
+// level (presence/absence) only.
 func TestMCPToolRegistry(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
@@ -51,7 +51,7 @@ func TestMCPToolRegistry(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	// Snapshot of registered tools as of the T-03 baseline.
+	// Snapshot of registered tools.
 	// Adding a new MCP tool: append to this list AND ensure the tool
 	// is registered in server/mcp.go's registerMCPTools.
 	// Removing a tool: drop from this list AND remove the registration.
