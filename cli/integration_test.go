@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -38,6 +39,21 @@ func (noopTestLLM) CompleteStructured(_ context.Context, _ map[string]any, _ str
 }
 
 func TestMain(m *testing.M) {
+	// CLI integration suite: 80+ tests that share one HTTP server,
+	// each doing an in-process command + roundtrip. Under -race on
+	// Windows this routinely runs ~10 min and trips the package
+	// timeout. -short skips the entire suite (race-detector CI uses
+	// it); non-race CI on every platform still hits the full suite.
+	// testing.Short() requires test flags to be parsed; testing.Init
+	// + flag.Parse must run before the call (TestMain is the only
+	// place where flags aren't auto-parsed).
+	testing.Init()
+	flag.Parse()
+	if testing.Short() {
+		fmt.Fprintln(os.Stderr, "cli integration: skipping in -short mode")
+		os.Exit(0)
+	}
+
 	// Create engine without testutil.NewEngine (needs *testing.T).
 	dir, err := os.MkdirTemp("", "gramaton-cli-test-*")
 	if err != nil {

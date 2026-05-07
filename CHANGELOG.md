@@ -7,6 +7,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI's race-detector job now runs `go test -race -short ./...`.**
+  Three test-package timeouts (TestScaleMeasurement at 1000-record
+  default, TestCaptureBatchAsyncLargerThanSyncCap at MaxSyncBatchSize+50,
+  the cli/integration suite at 81 in-process command tests) were
+  routinely blowing through Go's 10-minute per-package alarm on
+  Windows under race-detector overhead. These tests are now gated
+  behind `testing.Short()` and skipped under `-short`. Functional CI
+  (non-race) on every platform still exercises them at full scale, so
+  real regressions in heavy paths still surface; the race-CI signal
+  is preserved on the ~95% of test code that doesn't have scale-
+  derived runtime. TestScaleMeasurement's CI default also drops from
+  1000 to 100 records (its assertions are structural, not threshold-
+  based; `GRAMATON_SCALE` env var stays for real measurements).
+  Closes #17.
+
 ### Fixed
 
 - **Test stability sweep: order-dependent assertions in concurrent tests.**
