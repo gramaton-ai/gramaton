@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -59,9 +60,16 @@ func TestWizardImportBranchEmptyPath(t *testing.T) {
 func TestWizardImportBranchMissingFile(t *testing.T) {
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
+	// Construct the path via filepath.Join so the OS-native separator
+	// is used. The wizard echoes the absolute path back in its error
+	// message; a hardcoded "/tmp/..." substring assertion would miss
+	// on Windows where the rendered path is "D:\path\..." with
+	// backslashes. Production correctness here is unchanged: it uses
+	// os.IsNotExist for the missing-file check, which is portable.
+	missing := filepath.Join(t.TempDir(), "definitely-not-a-real-archive.tar.gz")
 	prompter := NewScriptedPrompter(
 		"2",
-		"/tmp/definitely-not-a-real-archive.tar.gz",
+		missing,
 		"5", "n", "n",
 	)
 
@@ -76,7 +84,7 @@ func TestWizardImportBranchMissingFile(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "No file at /tmp/definitely-not-a-real-archive.tar.gz") {
+	if !strings.Contains(out, "No file at "+missing) {
 		t.Errorf("missing-file error not reported:\n%s", out)
 	}
 }

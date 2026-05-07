@@ -18,6 +18,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Two Windows-only test flakes from the Phase D backlog.**
+  (1) `internal/setup/TestWizardImportBranchMissingFile` asserted
+  on a literal `"No file at /tmp/..."` substring against wizard
+  output. Production code is portable (uses `os.IsNotExist`); the
+  bug was test-side. The wizard's `expandUserPath` runs `filepath.Abs`
+  on the user-supplied path, which converts `/tmp/...` to
+  `D:\tmp\...` on Windows, so the substring never matched. Fix
+  constructs the test path via `filepath.Join(t.TempDir(), ...)` so
+  the assertion uses the same OS-native shape the wizard echoes.
+  Closes #34. (2) `TestCaptureBatchWallClockSpeedup` hard-asserted
+  parallel-batch wall-clock < serial wall-clock with `t.Errorf`,
+  which flaked on a loaded ubuntu-latest run (par=1.4s, seq=944ms,
+  ratio=0.67) even though batch correctness was unaffected. Softened
+  to `t.Logf` — same shape as PR #14's softening of
+  `TestEmbedConcurrentScratchDistinct`. Extended CONTRIBUTING.md's
+  "scheduler-observable behavior" anti-pattern entry with a third
+  bullet covering wall-clock comparisons across execution modes.
+  Closes #36.
+
 - **`/v1/restore` (and CLI `gramaton restore`, which proxies to it)
   was silently broken on Windows.** The handler called
   `backup.Restore(...)` while the engine still held bbolt + mmap
