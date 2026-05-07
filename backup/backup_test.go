@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 func TestCreateAndRestore(t *testing.T) {
@@ -41,9 +43,7 @@ func TestCreateAndRestore(t *testing.T) {
 	if info.Size() == 0 {
 		t.Fatal("archive is empty")
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("expected 0600, got %o", info.Mode().Perm())
-	}
+	testutil.AssertFileMode(t, archivePath, 0o600)
 
 	// Verify filename format.
 	base := filepath.Base(archivePath)
@@ -398,17 +398,19 @@ func TestExcludedFilesSnapshot(t *testing.T) {
 		{".gramaton-tmp-123", true},
 		{".chunk-abc", true},
 		// Snapshot-injected (excluded from walk -- re-added from memory).
+		// shouldExcludeSnapshot is called by filepath.Walk with OS-native
+		// rel paths, so use filepath.Join to produce the right separator.
 		{"HEAD", true},
 		{"FORMAT", true},
 		{"refs", true},
-		{"refs/main", true},
-		{"refs/experiment", true},
+		{filepath.Join("refs", "main"), true},
+		{filepath.Join("refs", "experiment"), true},
 		// Derived index state (excluded -- rebuilt on restore).
 		{"indexes.db", true},
 		{"vec.flat", true},
 		// Content-addressed chunks (kept).
-		{"ab/abc123hash", false},
-		{"00/000dd47654af104be2c54ac4e9028749e0fc114fb9ade0e8df88bd4e354dd909", false},
+		{filepath.Join("ab", "abc123hash"), false},
+		{filepath.Join("00", "000dd47654af104be2c54ac4e9028749e0fc114fb9ade0e8df88bd4e354dd909"), false},
 	}
 
 	for _, tt := range tests {

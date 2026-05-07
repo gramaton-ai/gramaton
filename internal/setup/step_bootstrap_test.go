@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 // newWizardForBootstrapTest builds a wizard reaching Step 1 with the
@@ -83,13 +84,7 @@ func TestStepBootstrapOpenAIBranch(t *testing.T) {
 	if wiz.cfg.Embedding.APIKeyFile != keyPath {
 		t.Errorf("APIKeyFile: got %q, want %q", wiz.cfg.Embedding.APIKeyFile, keyPath)
 	}
-	info, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatalf("key file missing: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("key file perms: got %o, want 0600", info.Mode().Perm())
-	}
+	testutil.AssertFileMode(t, keyPath, 0o600)
 	body, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatalf("read key file: %v", err)
@@ -192,14 +187,5 @@ func TestStepBootstrapDataDirCreated(t *testing.T) {
 	if err := wiz.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	info, err := os.Stat(wiz.cfg.DataDir)
-	if err != nil {
-		t.Fatalf("DataDir not created: %v", err)
-	}
-	if !info.IsDir() {
-		t.Errorf("DataDir is not a directory: %q", wiz.cfg.DataDir)
-	}
-	if mode := info.Mode().Perm(); mode != 0o700 {
-		t.Errorf("DataDir perms: got %o, want 0700", mode)
-	}
+	testutil.AssertDirMode(t, wiz.cfg.DataDir, 0o700)
 }

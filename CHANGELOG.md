@@ -7,6 +7,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows test correctness sweep: file-mode + path-separator + timeout
+  helpers.** Three classes of Windows-portability bugs in tests had
+  been masked by the package-timeout cascade closed in PR #20.
+  Bundled fix: introduce `testutil.AssertFileMode`,
+  `testutil.AssertDirMode`, and `testutil.Timeout` helpers; replace
+  the four POSIX-mode assertions in `backup/` and `internal/setup/`
+  with the new helpers (Windows reports a fixed 0o666/0o444 based on
+  the read-only flag, not POSIX bits — the helpers verify
+  existence + type but skip the mode check on Windows); fix the
+  `shouldExcludeSnapshot` test to use `filepath.Join` for inputs
+  (the function uses `filepath.Separator` correctly, but the test
+  was hardcoding `"refs/main"` forward-slashes); scale
+  `pollUntilTerminal` and `waitEntered` test-helper deadlines via
+  `testutil.Timeout` so Windows under -race gets 3x the budget. Per-
+  callsite literals stay; only the helpers themselves apply the
+  multiplier so future call sites benefit automatically. Closes #21,
+  #22, #23.
+
 ### Changed
 
 - **CI's race-detector job now runs `go test -race -short ./...`.**

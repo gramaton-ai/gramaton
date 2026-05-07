@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 // newVerifyFixture constructs a minimal Wizard targeting a
@@ -75,13 +76,7 @@ func TestStepVerifyConfigPermsAre0600(t *testing.T) {
 	wiz, _, _ := newVerifyFixture(t)
 	wiz.stepVerify(context.Background())
 
-	info, err := os.Stat(wiz.cfgPath)
-	if err != nil {
-		t.Fatalf("stat config: %v", err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("config perms: got %o, want 0600", mode)
-	}
+	testutil.AssertFileMode(t, wiz.cfgPath, 0o600)
 }
 
 // TestStepVerifyBERTEmbedding confirms the BERT check renders the

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/jobs"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 // blockingInjector is a FaultInjector test seam that BLOCKS inside
@@ -52,6 +53,7 @@ func (b *blockingInjector) setErr(phase string, err error) {
 
 func (b *blockingInjector) waitEntered(t *testing.T, phase string, within time.Duration) {
 	t.Helper()
+	within = testutil.Timeout(within)
 	deadline := time.Now().Add(within)
 	for {
 		b.mu.Lock()
