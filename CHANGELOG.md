@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`internal/version` falls back to `runtime/debug.BuildInfo` when
+  ldflags aren't injected.** Binaries installed via `go install
+  github.com/gramaton-ai/gramaton@latest` previously reported
+  `Version: dev`, `Commit: unknown`, `Date: unknown` because Go's
+  install path doesn't pass our build-tag ldflags. The package now
+  reads the embedded BuildInfo at startup and fills sentinel values
+  from the module's `Main.Version` and the binary's VCS settings
+  (`vcs.revision` -> short commit, `vcs.time` -> build date).
+  Explicit ldflags-set values still win — hand-built and
+  release-pipeline binaries are unchanged. Net: `go install` users
+  now see accurate version output without any change to their
+  install command.
+
 ## [0.3.0-alpha.1] - 2026-05-07
 
 Third foundational era. Gramaton evolved from a single Memory store
