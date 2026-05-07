@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`TestCaptureBatchAsyncCancelBeforeFirstChunk` now accepts the
+  documented partial-commit-on-cancel outcome.** The chunked async
+  runner explicitly supports partial commits: when cancel arrives
+  mid-flight, the runner finalizes Job with whatever has committed
+  so far. The test only handled `cancelled-with-0-items` and
+  `completed`; on loaded CI runners the 2-item single-chunk batch
+  often lands before cancel can short-circuit it, producing a third
+  legitimate state (`cancelled-with-N>0-items`) the test rejected.
+  The test now verifies the in-store count matches `Job.Result.Added`
+  rather than asserting 0 items.
+
 - **`TestEmbedConcurrentScratchDistinct` no longer fails on loaded CI
   runners.** The test asserted that `pool.maxLive >= 2` to prove
   concurrency, but whether the Go scheduler actually runs the 8
