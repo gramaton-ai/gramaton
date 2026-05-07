@@ -1,7 +1,9 @@
 package index
 
 import (
+	"encoding/binary"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -336,6 +338,46 @@ func TestMmapFlatDimensionMismatch(t *testing.T) {
 	_, err := NewMmapFlatIndex(path, 128)
 	if err == nil {
 		t.Fatal("expected dimension mismatch error")
+	}
+}
+
+// TestMmapFlatInvalidMagic exercises the magic-check error path in
+// NewMmapFlatIndex. The leak this pins is Windows-specific: until
+// UnmapViewOfFile runs, the file mapping holds a kernel page-lock that
+// blocks t.TempDir's RemoveAll cleanup with ERROR_ACCESS_DENIED.
+// POSIX hides the leak via inode-unlink semantics, so this test only
+// fails on Windows when the constructor leaks.
+func TestMmapFlatInvalidMagic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vec.flat")
+
+	if err := os.WriteFile(path, make([]byte, flatHeaderSize), 0600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	if _, err := NewMmapFlatIndex(path, 384); err == nil {
+		t.Fatal("expected invalid-magic error")
+	}
+}
+
+// TestMmapFlatTruncatedEntries exercises the buildOffsetMap error path:
+// header advertises N entries but the file lacks entry bytes. Same
+// Windows-cleanup invariant as TestMmapFlatInvalidMagic.
+func TestMmapFlatTruncatedEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vec.flat")
+
+	hdr := make([]byte, flatHeaderSize)
+	copy(hdr[:4], flatMagic)
+	binary.LittleEndian.PutUint16(hdr[4:6], flatVersion)
+	binary.LittleEndian.PutUint16(hdr[6:8], 384)
+	binary.LittleEndian.PutUint32(hdr[8:12], 10)
+	if err := os.WriteFile(path, hdr, 0600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	if _, err := NewMmapFlatIndex(path, 384); err == nil {
+		t.Fatal("expected truncated-entries error")
 	}
 }
 
