@@ -649,7 +649,16 @@ func TestJobsListOffsetCap(t *testing.T) {
 // cap. After review-pass A reorders the cap selection, MaxAsyncBatchSize
 // (1000) is the active limit for async mode. Skip supersession to keep
 // the test fast (O(N) vs O(N²) dedup check).
+//
+// Skipped under -short. The test's contract IS the scale (verify
+// MaxSyncBatchSize+50 items pass through async cleanly), so we can't
+// reduce the count without erasing the test. Race-detector CI uses
+// -short to avoid the multi-minute Windows timeout this test
+// otherwise hits; non-race CI still exercises it on every platform.
 func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping large-batch test in -short mode (race CI)")
+	}
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	f := false

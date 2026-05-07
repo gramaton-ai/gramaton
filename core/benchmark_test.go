@@ -15,17 +15,20 @@ import (
 
 // TestScaleMeasurement creates a synthetic dataset and measures key
 // metrics: disk usage, memory (RSS proxy via HeapInuse), search
-// latency, capture latency, and startup time. This is the Phase 8
-// validation test per the build plan.
+// latency, capture latency, and startup time.
 //
-// Default: 1000 records (fast, runs in CI).
-// Set GRAMATON_SCALE=10000 or GRAMATON_SCALE=100000 for real measurements.
+// Default: 100 records (fast enough for CI on every platform under
+// race detector). The default is sized to catch structural
+// regressions (engine load, reload count match, no errors) -- the
+// `t.Logf` perf numbers it prints are noisy at this scale, so use
+// GRAMATON_SCALE=10000 or GRAMATON_SCALE=100000 for real
+// measurements (the documented "is the system fast enough" runs).
 func TestScaleMeasurement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping scale measurement in -short mode")
 	}
 
-	scale := 1000
+	scale := 100
 	if s := os.Getenv("GRAMATON_SCALE"); s != "" {
 		fmt.Sscanf(s, "%d", &scale)
 	}

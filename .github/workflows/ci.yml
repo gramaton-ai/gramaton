@@ -56,7 +56,12 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
-      - run: go test -race ./...
+      # -short skips the scale-derived heavy tests (TestScaleMeasurement
+      # at non-default sizes, TestCaptureBatchAsyncLargerThanSyncCap, the
+      # full cli/integration suite) which trip Windows' 10-min per-package
+      # alarm under race-detector overhead. Non-race CI still exercises
+      # them at full scale on every platform.
+      - run: go test -race -short ./...
 
   vet:
     name: vet
