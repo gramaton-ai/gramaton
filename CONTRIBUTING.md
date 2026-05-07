@@ -737,6 +737,50 @@ against the configured backup directory.
 If your operation takes a filesystem path from the user, it
 **must** be confined to a safe parent directory.
 
+### Don't assert positional or scheduler-observable behavior in concurrent tests
+
+Tests that fan out parallel work (`parallelLLM`, `errgroup.Group`,
+`sync.WaitGroup`, raw `go func`) can pass reliably on a developer
+machine and flake on loaded CI runners. Three real failures observed
+on 2026-05-07 led to GH issues #16 and the test-stability sweep:
+
+1. `TestEmbedConcurrentScratchDistinct` asserted `maxLive >= 2` to
+   prove concurrency. Under race detector load, the scheduler may
+   serialize the goroutines despite the lock permitting parallelism,
+   leaving `maxLive == 1`.
+2. `TestCaptureBatchAsyncCancelBeforeFirstChunk` only handled two
+   terminal states (`cancelled-with-0`, `completed`) — but the
+   chunked runner explicitly supports a third (`cancelled-with-N>0`).
+   `pollUntilTerminal` returned when status flipped, racing the
+   runner's `Result` write.
+3. `TestCompleteWithModelAnthropicFallback` asserted
+   `models[0] == "" && models[1] == "override-model"` — but the
+   slice is appended to under a mutex from two parallel goroutines,
+   so the order of appends depends on which goroutine acquires the
+   lock first.
+
+**The anti-patterns:**
+- **Lower-bound timing/concurrency assertions** ("must observe peak
+  concurrency", "must complete within X ms"). Hard fails on slow
+  runners. Soften to `t.Logf` if the underlying invariant is
+  scheduler-dependent; or use a wall-clock check generous enough to
+  comfortably exceed real serialization (so the *only* failure mode
+  is genuine non-parallelism).
+- **Positional assertions on parallel-collected slices.** Use SET
+  semantics (count occurrences of each expected value) or
+  ID-keyed maps (the `parallelLLM` results slice is index-preserving
+  by design — but mock-side recorders that append in call-order are
+  not).
+- **Reading post-cancel state without waiting for runner finalization.**
+  `pollUntilTerminal` waits for *status*; a separate `ShutdownAsync`
+  (or equivalent runner-drain) call waits for the runner to publish
+  whatever it was going to publish.
+
+**Upper-bound assertions are fine** — `maxLive > N` (don't exceed
+expected concurrency) and `elapsed > generous_bound` (don't block
+the unblocking path) are correctness checks; slow scheduling can't
+trigger them.
+
 ---
 
 ## Pre-merge checklist
