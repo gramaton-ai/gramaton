@@ -32,6 +32,18 @@ func NewEngine(t *testing.T) *core.Engine {
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
+	// Close the engine before t.TempDir's auto-RemoveAll fires.
+	// t.Cleanup is LIFO: registering after t.TempDir means our close
+	// runs FIRST, draining bbolt handles so the subsequent RemoveAll
+	// can actually unlink them. Without this, Windows' refusal to
+	// unlink files held by another process turned engine-using tests
+	// into a portability flake (POSIX hides the bug behind permissive
+	// inode semantics on Linux/macOS).
+	t.Cleanup(func() {
+		if err := eng.Close(); err != nil {
+			t.Logf("testutil: engine close: %v", err)
+		}
+	})
 	return eng
 }
 
