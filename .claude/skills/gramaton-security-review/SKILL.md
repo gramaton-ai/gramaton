@@ -1,6 +1,6 @@
 ---
 name: gramaton-security-review
-description: Use for security review of Gramaton changes. Checks Gramaton-specific vulnerability classes: path traversal in user-supplied filesystem paths, loopback gates on destructive endpoints, input validation at the api layer, APIError.Message information leakage, optional-body parse sentinels, SwapGraph + edge-store sharing, MCP tool arg bounds, and public-repo hygiene (maintainer PII, employer name, third-party attribution, reputational tone). Triggers include "security review this branch", "security review this PR", "audit for security issues", or when the diff touches filesystem paths/auth gates/user identifiers/error surfaces/prose-bearing files. Extends the generic /security-review with Gramaton-specific checks.
+description: Use for security review of Gramaton changes. Checks Gramaton-specific vulnerability classes: path traversal in user-supplied filesystem paths, loopback gates on destructive endpoints, input validation at the api layer, APIError.Message information leakage, optional-body parse sentinels, SwapGraph + edge-store sharing, MCP tool arg bounds, and public-repo hygiene (maintainer PII, employer name, third-party attribution, reputational tone, inclusive language, internal tracker / phase identifiers). Triggers include "security review this branch", "security review this PR", "audit for security issues", or when the diff touches filesystem paths/auth gates/user identifiers/error surfaces/prose-bearing files. Extends the generic /security-review with Gramaton-specific checks.
 ---
 
 # gramaton-security-review
@@ -141,11 +141,49 @@ Grep the diff (across code, tests, fixtures, docs, README, CHANGELOG, and the pe
 
 **Reputational tone** (read added prose, not grep):
 - [ ] Comments, doc prose, error messages, test names, CHANGELOG entries, and commit-message bodies contain no snark, ad hominem, or named-party criticism. CHANGELOG entries are public release notes — same bar as docs.
+- [ ] No internal-chat-sounding phrasing in public docs/comments: "ping me", "@here", "let's huddle", "circle back", "FWIW just shipping this", "yolo".
+- [ ] No mentions of internal teams, internal meeting names, internal product nicknames, or internal architecture terms attributable to any employer.
+- [ ] No defensive comparisons to specific commercial products by name ("better than X", "unlike Y"). Class-level comparisons are fine ("vs vector stores generally", "unlike most agent-memory tools").
+- [ ] No casual swearing in user-facing prose, comments, or test names. (Internal-feeling expletives are tonally jarring in public OSS.)
 
 **Fixture / sample-data hygiene:**
 - [ ] Capture examples, session transcripts, README walkthroughs, and test fixtures contain only synthetic content. Real conversations or records from the maintainer's personal store must not be copied in.
 
-**Severity: HIGH** for any maintainer-PII, employer-name, or API-key leak (bright-line). **MEDIUM** for unvetted third-party references and reputational-tone issues — flag and ask, don't silently proceed.
+**Internal tracker / phase identifiers** (grep-driven):
+
+Gramaton-development-internal markers that are cryptic to public readers and make the docs feel like internal artifacts that escaped. None of these leak privacy or security, but they're public-readiness clutter.
+
+- [ ] No `T-NN` (e.g. `T-02`, `T-08`) — internal task IDs.
+- [ ] No `P[0-3]-NN` (e.g. `P2-06`, `P1-78`) — phase ticket IDs.
+- [ ] No `F[0-9] Layer N` or `F1-Layer N` (e.g. `F1 Layer 6`) — feature-phase markers.
+- [ ] No `"Phase N follow-on"`, `"Wave N"`-style multi-commit-series labels.
+- [ ] No raw 26-char Crockford-base32 ULIDs (`01[A-HJKMNP-TV-Z0-9]{24}`) used as `Tracker:` / `tracker` references in comments, CHANGELOG entries, or doc prose.
+
+Apply across: `*.go` comments (production AND test), `CHANGELOG.md`, `docs/**/*.md`, `server/guide/*.md`, `README.md`, `HOW_TO_USE_GRAMATON.md`, `CONTRIBUTING.md`, `integration/**/*.md`, commit-message bodies in scope.
+
+**Distinguish from things that should NOT be scrubbed:**
+- `D-NN` (`D40`, `D33`) used as section / decision-record headings in `docs/project-design/design-decisions.md` — those are doc-internal anchors, not tracker references.
+- `Phase 0/1/2/3` describing **algorithmic phases** of operations (e.g., "Phase 1: snapshot under read lock; Phase 2: do slow work off-lock") — those describe code structure, not project history.
+- Test fixture content where a ULID or `T-NN` string is the literal *value* being stored / asserted (record id, content_full, title field) rather than a tracker reference in a comment. Test data, not tracker references.
+- Example ULIDs in docs that explain the ULID format (e.g., `01H5K9E2GJ7A8NQXR5VT3M4BCW` shown as "this is what a ULID looks like").
+
+When stripping a tracker reference, preserve the surrounding technical context. e.g., `// Tracker 01K... covers the unrelated dedup follow-up` → `// the unrelated dedup follow-up is covered separately`. Don't just delete sentences that mentioned a tracker — rewrite to keep the meaning.
+
+**Inclusive language** (grep-driven):
+
+Standard public-OSS inclusive-language scrub. Apply to code comments, identifier names (variables / functions / types), test names, doc prose, CHANGELOG entries, and commit-message bodies. Third-party-dep symbol names you're calling are out of scope; only Gramaton-authored content.
+
+- [ ] `whitelist` / `blacklist` → `allowlist` / `blocklist`.
+- [ ] `master` / `slave` → `primary` / `replica` (DB / replication), `main` / `branch` (version control), or `controller` / `worker` (job queues).
+- [ ] `dummy` (placeholder) → `placeholder` or `stub`. (`dummy data` → `sample data` or `synthetic data`.)
+- [ ] `sanity check` → `smoke test`, `quick check`, or `confidence check`.
+- [ ] `grandfathered` → `legacy exception` or `pre-existing`.
+- [ ] `man-hours` / `man-day` → `person-hours` or `engineering-hours`.
+
+**Severity:**
+- **HIGH** for any maintainer-PII, employer-name, or API-key leak (bright-line).
+- **MEDIUM** for unvetted third-party references, reputational-tone issues, and inclusive-language violations — flag and ask, don't silently proceed.
+- **LOW** for internal tracker / phase identifiers — clutter, not danger; flag for batch cleanup.
 
 ## Output
 

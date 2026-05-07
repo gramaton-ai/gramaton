@@ -28,10 +28,10 @@ gramaton --version
 
 ### Pre-built binary
 
-Official pre-built binaries are planned for post-OSS release; track
-[01KPVD4YF3YXA6H4QHF1PBT6KS] (GoReleaser) for status. Until then,
-build from source via the `go install` path above, or cross-compile
-from a non-Windows machine:
+Official pre-built binaries (via GoReleaser) are planned for a
+post-public-release milestone. Until then, build from source via
+the `go install` path above, or cross-compile from a non-Windows
+machine:
 
 ```bash
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o gramaton.exe .
@@ -106,12 +106,12 @@ itself as a Windows Service — that's a post-v1 feature.
 
 ## Limitations deferred to later releases
 
-- **Signed installers** (`.msi`, code-signed `.exe`). Tracker
-  `01KPVD4YF4PZT8CHSCKYV89PTJ`. Install via `go install` for now.
-- **Windows package managers** (winget, Scoop, Chocolatey). Tracker
-  `01KPVD4YF4PZT8CHSCKS3NK2NM`.
-- **Windows Credential Manager** integration for API keys. Tracker
-  `01KPVD4YF4PZT8CHSCM6H5P3JF`. API keys are currently read from
+- **Signed installers** (`.msi`, code-signed `.exe`) — planned for a
+  later milestone. Install via `go install` for now.
+- **Windows package managers** (winget, Scoop, Chocolatey) — planned
+  for a later milestone.
+- **Windows Credential Manager** integration for API keys — planned
+  for a later milestone. API keys are currently read from
   `~/.gramaton/config.yaml` or env vars on every OS.
 - **Windows Service** registration. Use Task Scheduler or run
   `gramaton serve --fg` from a terminal session for now.
@@ -132,7 +132,3 @@ When reporting a Windows-specific bug, please include:
   `%USERPROFILE%\.gramaton\gramaton.log`
 - The output of `gramaton init` if the bug was during setup
 
-[01KPVD4YF3YXA6H4QHF1PBT6KS]: # "Publish pre-built binaries via GoReleaser on every tag"
-[01KPVD4YF4PZT8CHSCKYV89PTJ]: # "Signed installers: macOS .pkg + Windows .msi"
-[01KPVD4YF4PZT8CHSCKS3NK2NM]: # "Windows package manifests (Winget + Scoop)"
-[01KPVD4YF4PZT8CHSCM6H5P3JF]: # "OS keychain integration for API keys"
