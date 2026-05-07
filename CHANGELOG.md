@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`testutil.NewEngine` now closes the engine before its temp dir is
+  removed.** The helper called `t.TempDir()` (which auto-registers
+  `os.RemoveAll` cleanup) and `core.LoadEngineWithOptions` (which
+  opens bbolt files for `indexes.db`, jobstore, etc.) but never
+  registered cleanup to call `eng.Close()`. On Linux/macOS, POSIX
+  inode semantics let `RemoveAll` unlink files with open handles
+  (the inode persists until the handle closes). On Windows, the OS
+  refuses to unlink files held by another process, making every
+  testutil-using test fail at teardown. The new `t.Cleanup` runs
+  LIFO before `t.TempDir`'s cleanup, draining bbolt handles before
+  `RemoveAll` fires. Closes the testutil half of #12.
+
 - **`TestCaptureBatchAsyncCancelBeforeFirstChunk` now accepts the
   documented partial-commit-on-cancel outcome.** The chunked async
   runner explicitly supports partial commits: when cancel arrives
