@@ -74,6 +74,14 @@ type Engine struct {
 	// query. TTL configured via cfg.Search.Pagination.SnapshotTTL.
 	// Lifetime tied to the engine; Close stops the eviction loop.
 	searchSnapshots *SnapshotStore
+
+	// opts retains the EngineOptions slice from construction so
+	// OpenFiles can re-apply them after a CloseFiles. Required because
+	// reload operations (Restore) rebuild the indexSet and providers
+	// from scratch; without replay, a test using WithVectorIndex would
+	// silently get the default mmap'd index after a restore. Each
+	// option is an idempotent pointer assignment, so replay is safe.
+	opts []EngineOption
 }
 
 // EngineOption configures an engine at construction time. Options are
@@ -126,6 +134,11 @@ func LoadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 // A v1 store can only be opened by migration; everything else must
 // refuse to boot so temporal queries never run against unindexed
 // history.
+//
+// Split into config/storage/providers (this function) and openFiles
+// (the bolt+indexes+graph+jobs init). Restore re-uses openFiles after
+// closeFiles + on-disk swap; the prov/store/cfg/opts state survives
+// across the cycle so they live above the split.
 func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineOption, skipFormatCheck bool) (*Engine, error) {
 	cfgPath := filepath.Join(cfgDir, "config.yaml")
 
@@ -150,17 +163,55 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
 
+	prov, err := newProviders(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create embedding provider: %w", err)
+	}
+
+	e := &Engine{
+		cfg:   cfg,
+		store: s,
+		prov:  prov,
+		opts:  opts,
+	}
+
+	if err := e.openFiles(skipFormatCheck); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// OpenFiles opens the engine's file-backed resources (bbolt indexes,
+// mmap vec index, jobs store) and rebuilds the dependent in-memory
+// state (graph from HEAD, searcher subsystem, in-flight job recovery,
+// background sweeper, search-snapshot store). EngineOptions retained
+// from construction are re-applied so test-injected indexes/providers
+// survive a reload.
+//
+// Used during initial construction and after Restore swaps the data
+// directory. Caller MUST hold the engine write lock and MUST have
+// closed the prior file-backed state via CloseFiles first; openFiles
+// trusts the relevant Engine fields to be nil.
+//
+// On error, all partially-opened resources are closed before returning,
+// so the engine's file-backed fields are guaranteed nil and a
+// subsequent CloseFiles is a no-op.
+func (e *Engine) OpenFiles() error {
+	return e.openFiles(false)
+}
+
+func (e *Engine) openFiles(skipFormatCheck bool) error {
 	if !skipFormatCheck {
-		if err := CheckFormatVersion(cfg.DataDir); err != nil {
-			return nil, fmt.Errorf("store format: %w", err)
+		if err := CheckFormatVersion(e.cfg.DataDir); err != nil {
+			return fmt.Errorf("store format: %w", err)
 		}
 	}
 
 	// Open the shared bbolt database for property index and edge store.
-	boltPath := filepath.Join(cfg.DataDir, "indexes.db")
+	boltPath := filepath.Join(e.cfg.DataDir, "indexes.db")
 	boltDB, err := bolt.Open(boltPath, 0600, nil)
 	if err != nil {
-		return nil, fmt.Errorf("open bbolt: %w", err)
+		return fmt.Errorf("open bbolt: %w", err)
 	}
 	// Deferred cleanup-on-failure: every resource opened below is
 	// registered here so that any subsequent error returns a clean
@@ -176,50 +227,54 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 			return
 		}
 		// Run in reverse order (LIFO) so dependents close before
-		// their backing store.
+		// their backing store. After cleanup the engine's file-backed
+		// fields are guaranteed nil so a follow-up CloseFiles is safe.
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			cleanups[i]()
 		}
+		e.boltDB = nil
+		e.indexes = nil
+		e.graph = nil
+		e.searcher = nil
+		e.headHash = ""
+		e.jobStore = nil
+		e.jobSweepCancel = nil
+		e.jobSweepDone = nil
+		e.searchSnapshots = nil
 	}()
 
-	idx, err := newIndexSet(boltDB, cfg)
+	idx, err := newIndexSet(boltDB, e.cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
 
 	// Load HEAD commit if it exists.
 	var headHash string
-	headPath := filepath.Join(cfg.DataDir, "HEAD")
+	headPath := filepath.Join(e.cfg.DataDir, "HEAD")
 	if data, err := os.ReadFile(headPath); err == nil {
 		headHash = strings.TrimSpace(string(data))
 		if headHash != "" {
-			if _, err := g.Load(s, headHash); err != nil {
-				return nil, fmt.Errorf("load HEAD commit: %w", err)
+			if _, err := g.Load(e.store, headHash); err != nil {
+				return fmt.Errorf("load HEAD commit: %w", err)
 			}
 		}
 	}
 
-	prov, err := newProviders(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create embedding provider: %w", err)
-	}
-
-	e := &Engine{
-		cfg:      cfg,
-		store:    s,
-		graph:    g,
-		boltDB:   boltDB,
-		indexes:  idx,
-		prov:     prov,
-		headHash: headHash,
-	}
+	// Publish indexes/graph onto the engine before option apply so
+	// WithVectorIndex (which assigns to e.indexes.vecIdx) sees the new
+	// indexSet rather than a stale prior one.
+	e.boltDB = boltDB
+	e.indexes = idx
+	e.graph = g
+	e.headHash = headHash
 
 	// Apply options before creating the vector index. This lets
-	// WithVectorIndex inject an in-memory index for tests,
-	// avoiding the disk I/O of MmapFlatIndex creation.
-	for _, opt := range opts {
+	// WithVectorIndex inject an in-memory index for tests, avoiding
+	// the disk I/O of MmapFlatIndex creation. On reload the same
+	// option list is replayed so test injections survive Restore.
+	for _, opt := range e.opts {
 		if opt != nil {
 			opt(e)
 		}
@@ -227,9 +282,9 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// If no option provided a vector index, open the mmap'd flat
 	// vector index.
-	vecCleanup, err := idx.openDefaultVecIdx(cfg)
+	vecCleanup, err := idx.openDefaultVecIdx(e.cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if vecCleanup != nil {
 		cleanups = append(cleanups, vecCleanup)
@@ -241,21 +296,21 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 
 	// Build searcher after all indexes are finalized.
 	e.searcher = &searcherSubsystem{}
-	e.searcher.rebuild(g, idx.propIdx, idx.vecIdx, idx.bm25Full, idx.secIdx, e.prov.embedder, e.prov.llm, cfg)
+	e.searcher.rebuild(g, idx.propIdx, idx.vecIdx, idx.bm25Full, idx.secIdx, e.prov.embedder, e.prov.llm, e.cfg)
 
 	// Open the F1 jobs store. Separate bbolt file from indexes.db so
 	// it survives backup/restore (indexes.db is excluded as derived
 	// state). Restart recovery: any in-flight job from a prior run
 	// is flipped to failed/server_restart before any HTTP listener
 	// can accept calls.
-	jobsPath := filepath.Join(cfg.DataDir, "jobs.db")
+	jobsPath := filepath.Join(e.cfg.DataDir, "jobs.db")
 	jobStore, err := jobs.New(jobsPath)
 	if err != nil {
-		return nil, fmt.Errorf("open jobs store: %w", err)
+		return fmt.Errorf("open jobs store: %w", err)
 	}
 	cleanups = append(cleanups, func() { _ = jobStore.Close() })
 	if err := recoverInFlightJobs(jobStore); err != nil {
-		return nil, fmt.Errorf("jobs restart recovery: %w", err)
+		return fmt.Errorf("jobs restart recovery: %w", err)
 	}
 	e.jobStore = jobStore
 
@@ -263,20 +318,20 @@ func loadEngineWithOptions(cfgDir string, globalCfgDirs []string, opts []EngineO
 	// disables the sweeper; jobs then accumulate until manually
 	// pruned. We use a dedicated context so Engine.Close can cancel
 	// it cleanly; jobSweepDone closes when the goroutine exits.
-	if cfg.Jobs.SweepInterval > 0 {
+	if e.cfg.Jobs.SweepInterval > 0 {
 		sweepCtx, cancel := context.WithCancel(context.Background())
 		e.jobSweepCancel = cancel
 		e.jobSweepDone = make(chan struct{})
-		go runJobSweeper(sweepCtx, e.jobSweepDone, jobStore, cfg.Jobs)
+		go runJobSweeper(sweepCtx, e.jobSweepDone, jobStore, e.cfg.Jobs)
 	}
 
 	// Search snapshot store for paginated gramaton_search. Owns its
 	// own background eviction goroutine; Close stops it.
-	e.searchSnapshots = NewSnapshotStore(cfg.Search.Pagination.SnapshotTTL)
+	e.searchSnapshots = NewSnapshotStore(e.cfg.Search.Pagination.SnapshotTTL)
 	cleanups = append(cleanups, func() { e.searchSnapshots.Stop() })
 
 	success = true // disarm the deferred cleanup
-	return e, nil
+	return nil
 }
 
 // recoverInFlightJobs flips any pending/running job from a prior
@@ -792,7 +847,29 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 // Close releases resources held by the engine (bbolt DB, mmap files).
 // Flushes buffered vectors and closes the bbolt database.
 // Returns the first error encountered; all resources are closed regardless.
+//
+// Equivalent to CloseFiles for terminal shutdown. After Close the
+// engine struct still owns cfg/store/prov/opts but its file-backed
+// state is gone; callers should not reuse it.
 func (e *Engine) Close() error {
+	return e.CloseFiles()
+}
+
+// CloseFiles releases just the file-backed resources (bbolt indexes,
+// mmap vec idx, jobs store) and stops their dependent goroutines (job
+// sweeper, snapshot eviction). Used by both terminal Close and the
+// Restore lifecycle (where it is paired with a subsequent OpenFiles
+// against the post-swap data directory). Caller MUST hold the engine
+// write lock.
+//
+// Returns the first error encountered; all resources are closed
+// regardless. Idempotent: every field is nil-checked and re-nilled,
+// so a second call is a no-op.
+//
+// Drops in-memory state that depends on the closed file-backed
+// resources (graph, searcher, headHash) so OpenFiles starts from a
+// clean slate. cfg, store, prov, opts survive across CloseFiles.
+func (e *Engine) CloseFiles() error {
 	var firstErr error
 
 	// Stop the search-snapshot eviction loop; idempotent.
@@ -804,7 +881,7 @@ func (e *Engine) Close() error {
 	// Stop the job sweeper first so it can't fire mid-close. The
 	// goroutine respects sweepCtx and exits cleanly; we wait for
 	// it via jobSweepDone. Idempotent: cancel func is set to nil
-	// after first call so a second Close skips the wait.
+	// after first call so a second CloseFiles skips the wait.
 	if e.jobSweepCancel != nil {
 		e.jobSweepCancel()
 		<-e.jobSweepDone
@@ -833,6 +910,16 @@ func (e *Engine) Close() error {
 		}
 		e.boltDB = nil
 	}
+
+	// Drop in-memory state tied to the now-closed file-backed
+	// resources. graph holds the bbolt-backed edge store; searcher
+	// holds graph + indexes refs. Nil them so OpenFiles starts from
+	// a clean state and stale reads after a botched lifecycle fail
+	// loudly rather than silently returning corrupt data.
+	e.graph = nil
+	e.searcher = nil
+	e.headHash = ""
+
 	return firstErr
 }
 

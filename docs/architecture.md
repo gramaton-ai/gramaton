@@ -175,13 +175,12 @@ No package in `core/` or below imports `api/` or `server/`. No `embed/xxx` or `l
 
 1. Load `config.yaml` with optional named-store fallback (`config.LoadWithFallback`).
 2. Open the prolly tree at `data_dir/store/`.
-3. Rebuild the in-memory graph from the current commit's chunks.
-4. Open the bbolt database and reattach BM25, property, secondary, and collections indexes. Load the BM25 index from disk if a `bm25_root` is present in the commit; otherwise rebuild from content.
-5. Open the mmap'd vector index (or the FlatIndex in memory).
-6. Instantiate the embedding and LLM providers from config; nil providers are legal (embedding/LLM are both optional).
-7. Construct `core.Engine` → `api.API` → `server.Server`.
-8. Start the curation `Runner` goroutine and the prepared-sessions sweeper.
-9. Bind the HTTP listener; mount the MCP Streamable HTTP handler at `/mcp` (loopback-only).
+3. Instantiate the embedding and LLM providers from config; nil providers are legal (embedding/LLM are both optional).
+4. Construct the partial `core.Engine` (cfg, store, prov, opts) and call `Engine.OpenFiles` for the file-init half: bbolt + indexes + graph rebuild + vector index + jobs store + sweeper. `OpenFiles` is also the entry point for re-opening after a Restore swap.
+5. Start the curation `Runner` goroutine and the prepared-sessions sweeper.
+6. Bind the HTTP listener; mount the MCP Streamable HTTP handler at `/mcp` (loopback-only).
+
+The `OpenFiles` body, in order: format-version check, bbolt open, index set construction, graph rebuild from HEAD, EngineOption replay (for test-injected vec/embedder/llm), default vector index open if not injected, partial-rebuild of primary indexes, searcher subsystem build, jobs store open + in-flight job recovery, sweeper goroutine spawn, search-snapshot store. Mirrored by `CloseFiles` for the destructive operations (Restore) that must release file handles before the on-disk swap.
 
 **Request**: transport handler → `api` method → engine primitives → response → serialized back out. Lock is held only inside the api method, only for the mutation window.
 

@@ -222,25 +222,50 @@ func (a *API) BackupRestore(ctx context.Context, req RestoreRequest) (RestoreRes
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
+	// Close the engine's file-backed resources before backup.Restore
+	// touches dataDir. On Windows, bbolt handles + the mmap'd vec.flat
+	// file hold mandatory locks that block os.Rename of the live data
+	// directory; releasing them here is what makes the rename succeed.
+	// POSIX papers over the leak via inode-rename semantics, but we
+	// close on both platforms for behavioral parity. CloseFiles is
+	// idempotent and surfaces any sub-resource Close errors.
+	if err := a.engine.CloseFiles(); err != nil {
+		a.log.Warn("restore: close files reported error; proceeding",
+			"component", "backup", "err", err)
+	}
+
 	if err := backup.Restore(req.Path, dataDir); err != nil {
 		a.log.Error("restore failed", "component", "backup", "err", err)
+		// backup.Restore rolls back its own rename pair on internal
+		// failure, so dataDir is intact. Reopen against the original
+		// dataDir so the engine is usable again. If reopen also fails
+		// the engine is genuinely gutted -- nothing left to recover.
+		if reopenErr := a.engine.OpenFiles(); reopenErr != nil {
+			a.log.Error("restore: reopen after failure also failed; engine is gutted",
+				"component", "backup", "err", reopenErr)
+			return RestoreResponse{}, ErrInternal("restore failed and engine reopen also failed; restart server")
+		}
 		return RestoreResponse{}, ErrInternal("restore failed")
 	}
 
-	// Reload graph from restored HEAD.
-	headData, err := os.ReadFile(filepath.Join(dataDir, "HEAD"))
-	if err != nil {
-		a.log.Error("restore: no HEAD after extraction", "component", "backup", "err", err)
-		return RestoreResponse{}, ErrInternal("no HEAD after restore")
+	// Reopen against the (now-restored) dataDir. Internals: see
+	// Engine.OpenFiles. If reopen fails after a successful extract
+	// the engine is gutted -- old dataDir was nuked by backup.Restore,
+	// no rollback target left.
+	if err := a.engine.OpenFiles(); err != nil {
+		a.log.Error("restore: extract succeeded but reopen failed; engine is gutted",
+			"component", "backup", "err", err)
+		return RestoreResponse{}, ErrInternal("restore extracted data but engine reopen failed; restart server")
 	}
-	headHash := strings.TrimSpace(string(headData))
-	if headHash != "" {
-		if _, err := a.engine.Graph().Load(a.engine.Store(), headHash); err != nil {
-			a.log.Error("restore: graph load failed", "component", "backup", "err", err)
-			return RestoreResponse{}, ErrInternal("failed to load graph after restore")
-		}
-		a.engine.RebuildAllIndexes()
-	}
+
+	// Force a full index rebuild after the swap. OpenFiles does only
+	// the partial-rebuild check (skip when Len()>0), which is correct
+	// for fresh boots but wrong after a Restore: any test using
+	// WithVectorIndex injects an in-memory FlatIndex that survives the
+	// close+open cycle and carries stale entries from the pre-restore
+	// graph. RebuildAllIndexes always walks every node, so the vec
+	// idx is reseated against the restored graph regardless.
+	a.engine.RebuildAllIndexes()
 
 	a.log.Info("restore complete",
 		"component", "backup",

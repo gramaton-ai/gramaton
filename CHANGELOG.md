@@ -18,23 +18,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **`index.NewMmapFlatIndex` constructor leaked the mmap region on
-  every post-`remap()` error path (invalid magic, dimension mismatch,
-  truncated entries).** All three branches called `f.Close()` only
-  and returned without `idx.region.Close()`. POSIX hides the leak via
-  inode-unlink semantics + munmap-at-process-exit, so the bug was
-  invisible on macOS/Linux; on Windows the file mapping is a separate
-  kernel object that holds a page-lock until `UnmapViewOfFile` runs,
-  so any subsequent unlink (including `t.TempDir`'s `RemoveAll`) failed
-  with `ERROR_ACCESS_DENIED`. User-visible: any time a vec.flat file
-  fails to load (corruption, dim-mismatch from a model swap, truncation),
-  the mapping leaks until process exit and Windows can't manually
-  delete the file to recover. Fix applies the same `fail` closure
-  pattern that `embed/bert/safetensors.go` already uses. Surfaced as
-  Windows-only `TestMmapFlatDimensionMismatch` failure in the round-2
-  Windows audit; the magic and `buildOffsetMap` paths had no test
-  coverage at all and now do (`TestMmapFlatInvalidMagic`,
-  `TestMmapFlatTruncatedEntries`). Closes #31.
+- **`/v1/restore` (and CLI `gramaton restore`, which proxies to it)
+  was silently broken on Windows.** The handler called
+  `backup.Restore(...)` while the engine still held bbolt + mmap
+  handles inside `dataDir`; on Windows, mandatory file locks made
+  `os.Rename(dataDir, replacedDir)` fail with
+  ERROR_SHARING_VIOLATION. POSIX papered over the leak via
+  inode-rename semantics, so the bug was invisible on macOS/Linux
+  but every Windows user trying to restore a backup hit it. Fix:
+  split `core.LoadEngineWithOptions` into a config/storage/providers
+  half and a new `Engine.OpenFiles` body covering bolt + indexes +
+  graph + jobs + sweeper. `Engine.CloseFiles` releases just the
+  file-backed pieces (mirror of OpenFiles). `api.BackupRestore` now
+  closes the engine's files, runs the on-disk swap, then re-opens
+  against the restored data dir; on extract failure it re-opens
+  against the (untouched) original dir so subsequent requests
+  succeed. The injected `EngineOption` slice is retained on the
+  Engine struct so `WithVectorIndex` / `WithEmbedder` / `WithLLM`
+  survive the close+reopen cycle (otherwise tests using these would
+  silently lose them after a restore). Closes #35.
 
 - **Windows portability sweep round 2: CRLF in templateForClient,
   remaining engine-cleanup misses, hooks exec-bit assertion,
