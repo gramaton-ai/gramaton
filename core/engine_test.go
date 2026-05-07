@@ -30,6 +30,15 @@ func setupTestEngine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
+	// Inline rather than testutil.RegisterEngineCleanup: testutil
+	// imports core, so we'd cycle if we imported back. Same pattern
+	// the helper applies. LIFO order means this fires before t.TempDir's
+	// auto-RemoveAll, draining bbolt handles in time for Windows.
+	t.Cleanup(func() {
+		if err := eng.Close(); err != nil {
+			t.Logf("setupTestEngine: engine close: %v", err)
+		}
+	})
 	return eng
 }
 

@@ -18,6 +18,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`testutil.RegisterEngineCleanup` + sweep of test setups missing
+  `engine.Close`.** PR #15 fixed the bbolt-handle leak in
+  `testutil.NewEngine` (engine never closed before `t.TempDir`'s
+  `RemoveAll` ran), but other packages reimplemented the same pattern
+  inline without the cleanup — `backup/export_test.go`'s
+  `setupTestEngine` was the loudest victim, leaking handles into
+  Windows TempDir cleanup and producing the cluster of `unlinkat
+  ...indexes.db: process cannot access the file because it is being
+  used by another process` failures across `backup/`'s `TestExport*`
+  / `TestImport*`. Adds `testutil.RegisterEngineCleanup(t, eng)` as
+  a one-call API; updated `backup/export_test.go` and
+  `curation/curation_test.go` (the two with no existing cleanup) to
+  use it. Other test setups already had ad-hoc `t.Cleanup(eng.Close)`
+  calls; left as-is. Future test setups should call the helper rather
+  than reimplementing.
+
 - **Windows test correctness sweep: file-mode + path-separator + timeout
   helpers.** Three classes of Windows-portability bugs in tests had
   been masked by the package-timeout cascade closed in PR #20.
