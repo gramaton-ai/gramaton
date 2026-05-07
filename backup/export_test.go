@@ -12,6 +12,7 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 func setupTestEngine(t *testing.T) *core.Engine {
@@ -33,6 +34,7 @@ func setupTestEngine(t *testing.T) *core.Engine {
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
+	testutil.RegisterEngineCleanup(t, eng)
 	return eng
 }
 

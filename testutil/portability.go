@@ -5,7 +5,32 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/gramaton-ai/gramaton/core"
 )
+
+// RegisterEngineCleanup attaches a t.Cleanup that calls eng.Close
+// before the test's TempDir auto-cleanup runs. Required for any test
+// that constructs an engine via core.LoadEngineWithOptions on a
+// directory created by t.TempDir: without this, the engine's bbolt
+// file handles outlive the test and Windows refuses to unlink them
+// (POSIX inode semantics paper over the leak on Linux/macOS).
+//
+// t.Cleanup runs LIFO -- registering this AFTER t.TempDir's auto-
+// cleanup means engine.Close fires FIRST, draining bbolt handles
+// before RemoveAll.
+//
+// engine.Close is idempotent. Errors during close are surfaced via
+// t.Logf rather than t.Errorf so a teardown hiccup doesn't fail an
+// otherwise-healthy test.
+func RegisterEngineCleanup(t *testing.T, eng *core.Engine) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := eng.Close(); err != nil {
+			t.Logf("testutil: engine close: %v", err)
+		}
+	})
+}
 
 // Timeout scales a base test timeout for the host platform. Windows
 // runners (especially under race detector) are 3-5x slower than Linux
