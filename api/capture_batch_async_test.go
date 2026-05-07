@@ -435,9 +435,17 @@ func TestJobsListInvalidStatus(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncCancelBeforeFirstChunk: cancel arrives before
-// the runner advances to running. Status reaches cancelled with
-// ProcessedCount=0; no items in the store.
+// TestCaptureBatchAsyncCancelBeforeFirstChunk: cancel races with the
+// runner; three outcomes are documented and acceptable:
+//
+//  1. Cancel beats the runner entirely -> Status=cancelled, 0 items.
+//  2. Cancel lands mid-flight after a chunk has committed ->
+//     Status=cancelled, N>0 items committed (chunked runner contract:
+//     "finalize Job with whatever has committed so far"). On loaded
+//     CI runners, the 2-item single-chunk batch frequently lands
+//     before the cancel signal can short-circuit it; the in-store
+//     items must equal the count Job.Result reports as added.
+//  3. Cancel loses the race entirely -> Status=completed.
 func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
@@ -450,19 +458,33 @@ func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("CaptureBatch: %v", apiErr)
 	}
-	// Best-effort: cancel as fast as possible. The runner may or may
-	// not have started; either path is correct.
 	c, _ := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
+	// CaptureBatchCancel flips Status to cancelled but does NOT
+	// populate Result; the runner does that asynchronously via
+	// finalizeCancelledWithProgress. pollUntilTerminal returns when
+	// Status is terminal, which can race ahead of the runner's
+	// Result write. Wait for the runner to fully exit so Result is
+	// stable before we read it. ShutdownAsync is idempotent
+	// (t.Cleanup calls it again at test exit, which becomes a no-op).
+	if err := a.ShutdownAsync(context.Background()); err != nil {
+		t.Fatalf("ShutdownAsync: %v", err)
+	}
 	j, _ := a.engine.JobStore().Get(resp.JobID)
 	switch j.Status {
 	case jobs.StatusCancelled:
-		// Expected for the early-cancel path.
 		eng.RLock()
 		count := len(eng.Graph().AllNodeIDs())
 		eng.RUnlock()
-		if count != 0 {
-			t.Errorf("expected 0 items in store after early cancel, got %d", count)
+		// Items in the store must match what Result reports as added.
+		// The chunked runner explicitly supports partial commits when
+		// cancel arrives mid-flight; both 0 (early cancel won) and N>0
+		// (cancel landed after a chunk commit) are valid, as long as
+		// the store and Result agree.
+		res, _ := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{JobID: resp.JobID})
+		if count != len(res.Added) {
+			t.Errorf("store/result mismatch: store has %d items, Result.Added has %d",
+				count, len(res.Added))
 		}
 	case jobs.StatusCompleted:
 		// Race lost: runner finished before cancel landed. Acceptable.
