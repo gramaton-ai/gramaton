@@ -794,6 +794,32 @@ expected concurrency) and `elapsed > generous_bound` (don't block
 the unblocking path) are correctness checks; slow scheduling can't
 trigger them.
 
+### Tar header names must use forward slashes, not `filepath.Join`
+
+The POSIX tar spec mandates forward slashes in `header.Name`,
+regardless of host OS. `filepath.Join` is OS-native: it produces
+backslashes on Windows. A backup written with
+`header.Name = filepath.Join("data", rel)` is malformed on Windows
+— restore extracts entries to bogus paths or skips them entirely,
+leaving downstream consumers with empty files (real symptom: GH
+#18, where `bolt.Open` succeeded on a zero-byte extraction and the
+next `tx.Bucket("jobs")` returned nil and panicked).
+
+Use `path.Join` (always forward slashes) and run any walker-supplied
+relative path through `filepath.ToSlash` first:
+
+```go
+import "path"
+
+header.Name = path.Join("data", filepath.ToSlash(rel))
+```
+
+The same rule covers `tar.Header.Linkname` and any other
+slash-separated archive identifier. The bug is silent on Linux
+and macOS (where `filepath.Separator` is already `/`) so it must
+be caught by Windows CI or a regression test that asserts no
+backslash appears in any entry name.
+
 ---
 
 ## Pre-merge checklist

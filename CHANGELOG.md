@@ -55,6 +55,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Tar header names now use forward slashes on every host OS.** The
+  archive walker in `backup/backup.go` set `header.Name` via
+  `filepath.Join("data", rel)`, which is OS-native and produced
+  `data\jobs.db` on Windows. The POSIX tar spec requires forward
+  slashes in header names regardless of host OS, so the resulting
+  archive was malformed: `Restore` on Windows extracted entries to
+  bogus paths or skipped them, leaving callers with empty bbolt
+  files. The visible symptom was `TestRestoreRestoresJobs` panicking
+  with a nil-bucket dereference (the bbolt file was zero-bytes after
+  extraction, so `bolt.Open` succeeded but `tx.Bucket("jobs")`
+  returned nil). Switched the three header-name callsites to
+  `path.Join("data", filepath.ToSlash(rel))`. Adds a regression
+  test that creates a nested chunk path, scans every entry name in
+  the resulting archive for backslashes, and verifies the file
+  lands at the OS-native restored path. CONTRIBUTING.md gains a
+  matching anti-pattern entry. Closes #18.
+
 - **Test stability sweep: order-dependent assertions in concurrent tests.**
   Two more instances of the timing-fragile test pattern surfaced
   during the GH #12 PR runs: `TestCompleteWithModelAnthropicFallback`
