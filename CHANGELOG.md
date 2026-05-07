@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`TestEmbedConcurrentScratchDistinct` no longer fails on loaded CI
+  runners.** The test asserted that `pool.maxLive >= 2` to prove
+  concurrency, but whether the Go scheduler actually runs the 8
+  goroutines in parallel during their `Embed` calls is timing-
+  dependent — on loaded runners they can serialize and the assertion
+  fails despite no real regression. The hard `t.Errorf` is now a
+  soft `t.Logf` warning; the test's correctness contract (Get/Put
+  balance, no deadlock, no buffer corruption) is unchanged. Closes
+  the bert-pool flake observed on PR #13's first CI run.
+
 ### Changed
 
 - **`internal/version` falls back to `runtime/debug.BuildInfo` when
