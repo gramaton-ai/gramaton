@@ -316,6 +316,23 @@ See [docs/configuration.md](docs/configuration.md) for all fields and [docs/prov
 - [Code of Conduct](CODE_OF_CONDUCT.md) — Contributor Covenant v2.1.
 - [Security](SECURITY.md) — vulnerability disclosure process. Do not file public issues for security bugs.
 
+## Acknowledgments
+
+Gramaton draws from many projects in this space, with special
+acknowledgment to:
+
+- **[Dolt](https://github.com/dolthub/dolt)** — git-for-data: a SQL
+  database with branches, commits, diff, and merge. Gramaton's
+  versioned storage follows the same philosophy at smaller scale.
+
+- **[Beads](https://github.com/gastownhall/beads)** — a graph issue
+  tracker for AI agents, built on Dolt. The agent-as-primary-user
+  framing, typed graph edges, and persistent-memory primitives all
+  echo through Gramaton's design.
+
+We're excited by the continuing evolution of AI memory across
+projects and ideas.
+
 ## License
 
 [Apache 2.0](LICENSE)

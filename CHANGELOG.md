@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.1] - 2026-05-07
+
+Third foundational era. Gramaton evolved from a single Memory store
+through three shape changes: Memory only → +Collections (exhaustive
+structured lists) → +Sessions (automatic conversation extraction).
+This is the first publicly-announced release.
+
 ### Changed
 
 - **Pre-public-release docs sweep.** Comprehensive re-read of every
@@ -4739,5 +4746,6 @@ property graph storage, vector search, and versioned persistence.
 - **Configuration** -- YAML config with all design doc defaults, prolly
   tree tuning parameters, activation settings, storage paths
 
-[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/gramaton-ai/gramaton/compare/v0.1.0...v0.3.0-alpha.1
 [0.1.0]: https://github.com/gramaton-ai/gramaton/releases/tag/v0.1.0
