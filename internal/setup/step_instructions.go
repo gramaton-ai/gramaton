@@ -53,15 +53,23 @@ const clientAddendumMarker = "<!-- CLIENT_ADDENDUM -->"
 // Adding a new client is dropping in a new addendum file and a case
 // here; install logic stays untouched.
 func templateForClient(clientName string) string {
+	// Normalize embedded templates to LF. The .md files live in the
+	// repo and may be checked out with CRLF on Windows (git's
+	// autocrlf=true is the default for Windows installs). The
+	// substitution patterns below use literal "\n", and the canonical
+	// integration/<client>/*.md snapshots are LF on disk, so writing
+	// CRLF here would both break the marker-strip Replace and
+	// produce host-dependent output.
+	base := strings.ReplaceAll(templateBase, "\r\n", "\n")
 	var addendum string
 	switch clientName {
 	case "Claude Code":
-		addendum = strings.TrimSpace(templateClaudeAddendum)
+		addendum = strings.TrimSpace(strings.ReplaceAll(templateClaudeAddendum, "\r\n", "\n"))
 	case "kiro-cli":
-		addendum = strings.TrimSpace(templateKiroAddendum)
+		addendum = strings.TrimSpace(strings.ReplaceAll(templateKiroAddendum, "\r\n", "\n"))
 	}
 
-	body := templateBase
+	body := base
 	if addendum == "" {
 		// Strip the marker line and the surrounding blank lines so
 		// the file doesn't carry a dangling HTML comment when no

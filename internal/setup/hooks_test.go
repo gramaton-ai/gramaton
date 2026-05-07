@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -401,7 +402,11 @@ func TestDefaultHookBackendMaterializeRoundtrip(t *testing.T) {
 			continue
 		}
 		// Exec bit must be set (user / group / other — any).
-		if info.Mode().Perm()&0o111 == 0 {
+		// Windows has no POSIX exec bit; os.Stat reports 0o666 or
+		// 0o444 regardless of the actual permission, so the
+		// assertion is meaningless on Windows. The shebang check
+		// below still covers script integrity cross-platform.
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 			t.Errorf("%s is not executable: mode %o", p, info.Mode().Perm())
 		}
 		// Script should start with a shebang.

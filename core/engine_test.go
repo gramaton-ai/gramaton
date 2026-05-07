@@ -101,6 +101,15 @@ func TestWrapLLMReplacesProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
+	// Windows fails t.TempDir's RemoveAll if bbolt files are still
+	// open; t.Cleanup is LIFO, so this fires before t.TempDir's
+	// auto-cleanup. testutil's helper isn't available in package
+	// core (it would create an import cycle), so use the inline form.
+	t.Cleanup(func() {
+		if err := eng.Close(); err != nil {
+			t.Logf("engine close: %v", err)
+		}
+	})
 
 	if eng.LLM() != inner {
 		t.Fatalf("pre-wrap: engine.LLM() = %v, want inner stub", eng.LLM())
@@ -175,6 +184,13 @@ func TestSaveAndReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
+	// Same Windows-tempdir-cleanup reason as setupTestEngine: drain
+	// eng2's bbolt handles before t.TempDir's RemoveAll fires.
+	t.Cleanup(func() {
+		if err := eng2.Close(); err != nil {
+			t.Logf("engine close: %v", err)
+		}
+	})
 
 	eng2.RLock()
 	defer eng2.RUnlock()
