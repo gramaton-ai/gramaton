@@ -460,6 +460,16 @@ func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 	}
 	c, _ := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
+	// CaptureBatchCancel flips Status to cancelled but does NOT
+	// populate Result; the runner does that asynchronously via
+	// finalizeCancelledWithProgress. pollUntilTerminal returns when
+	// Status is terminal, which can race ahead of the runner's
+	// Result write. Wait for the runner to fully exit so Result is
+	// stable before we read it. ShutdownAsync is idempotent
+	// (t.Cleanup calls it again at test exit, which becomes a no-op).
+	if err := a.ShutdownAsync(context.Background()); err != nil {
+		t.Fatalf("ShutdownAsync: %v", err)
+	}
 	j, _ := a.engine.JobStore().Get(resp.JobID)
 	switch j.Status {
 	case jobs.StatusCancelled:
