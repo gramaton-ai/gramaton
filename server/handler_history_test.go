@@ -2,6 +2,8 @@ package server
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -185,6 +187,103 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 	results := data3["results"].([]any)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 record after restore, got %d", len(results))
+	}
+}
+
+// TestBackupRestoreEngineUsableAfterReopen verifies the engine answers
+// queries AND accepts new writes after the close+restore+reopen
+// lifecycle. The original TestBackupAndRestoreRoundTrip exercises only
+// a filter-only search, which goes through propIdx -- a stale jobs
+// store, broken sweeper goroutine, or corrupt searcher subsystem
+// would slip past it. This test issues a write post-restore so the
+// re-opened jobStore + indexSet + searcher are all on the live path.
+func TestBackupRestoreEngineUsableAfterReopen(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "pre-restore record")
+
+	// Backup + corrupting write + restore.
+	w := doRequest(t, srv, "POST", "/v1/backup", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("backup: %d %s", w.Code, w.Body.String())
+	}
+	archivePath := parseResponse(t, w)["data"].(map[string]any)["path"].(string)
+
+	addRecord(t, eng, "should disappear")
+
+	w2 := doRequest(t, srv, "POST", "/v1/restore", map[string]any{
+		"path":  archivePath,
+		"force": true,
+	})
+	if w2.Code != http.StatusOK {
+		t.Fatalf("restore: %d %s", w2.Code, w2.Body.String())
+	}
+
+	// Engine should answer queries (proves boltDB + indexes reopened).
+	w3 := doRequest(t, srv, "POST", "/v1/search", map[string]any{"top": 10})
+	if w3.Code != http.StatusOK {
+		t.Fatalf("post-restore search: %d %s", w3.Code, w3.Body.String())
+	}
+	if got := len(parseResponse(t, w3)["data"].(map[string]any)["results"].([]any)); got != 1 {
+		t.Fatalf("post-restore: expected 1 record, got %d", got)
+	}
+
+	// Engine should accept a new write (proves jobStore + writers work).
+	addRecord(t, eng, "post-restore record")
+
+	w4 := doRequest(t, srv, "POST", "/v1/search", map[string]any{"top": 10})
+	if w4.Code != http.StatusOK {
+		t.Fatalf("post-write search: %d %s", w4.Code, w4.Body.String())
+	}
+	if got := len(parseResponse(t, w4)["data"].(map[string]any)["results"].([]any)); got != 2 {
+		t.Fatalf("post-write: expected 2 records, got %d", got)
+	}
+}
+
+// TestBackupRestoreCorruptArchiveLeavesEngineUsable pins the failure
+// path: when backup.Restore fails (corrupt archive), the engine must
+// reopen against the original (unswapped) dataDir so subsequent
+// requests succeed. Pre-fix this only had to worry about an in-flight
+// engine; the lifecycle refactor introduced an explicit close+reopen
+// pair that has to survive the restore-failure branch too.
+func TestBackupRestoreCorruptArchiveLeavesEngineUsable(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	addRecord(t, eng, "survivor")
+
+	// Stage a corrupt archive under the configured backup directory so
+	// the path-confinement check passes but extraction fails.
+	cfg := eng.Config()
+	if err := os.MkdirAll(cfg.Backup.Dir, 0o700); err != nil {
+		t.Fatalf("mkdir backup dir: %v", err)
+	}
+	corrupt := filepath.Join(cfg.Backup.Dir, "corrupt.tar.gz")
+	if err := os.WriteFile(corrupt, []byte("not a real gzip stream"), 0o600); err != nil {
+		t.Fatalf("seed corrupt: %v", err)
+	}
+
+	w := doRequest(t, srv, "POST", "/v1/restore", map[string]any{
+		"path":  corrupt,
+		"force": true,
+	})
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected non-200 from corrupt restore, got %d", w.Code)
+	}
+
+	// Engine must still serve queries: reopen-after-failure path should
+	// have re-bound bbolt + vec idx against the (still original)
+	// dataDir.
+	w2 := doRequest(t, srv, "POST", "/v1/search", map[string]any{"top": 10})
+	if w2.Code != http.StatusOK {
+		t.Fatalf("post-failure search: %d %s", w2.Code, w2.Body.String())
+	}
+	if got := len(parseResponse(t, w2)["data"].(map[string]any)["results"].([]any)); got != 1 {
+		t.Fatalf("post-failure: expected 1 record, got %d", got)
+	}
+
+	// And accept new writes.
+	addRecord(t, eng, "after-failure")
+	w3 := doRequest(t, srv, "POST", "/v1/search", map[string]any{"top": 10})
+	if got := len(parseResponse(t, w3)["data"].(map[string]any)["results"].([]any)); got != 2 {
+		t.Fatalf("post-failure-add: expected 2 records, got %d", got)
 	}
 }
 
