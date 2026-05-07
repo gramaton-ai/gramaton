@@ -10,7 +10,7 @@ import (
 // TestScanConceptMatchesAboveThreshold pins Phase 1 telemetry: a
 // concept whose embedding has cosine >= threshold against the query
 // is returned with its keyword and live member IDs. Concepts below
-// threshold are skipped. Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+// threshold are skipped.
 func TestScanConceptMatchesAboveThreshold(t *testing.T) {
 	g := graph.New()
 	now := time.Now().UTC()

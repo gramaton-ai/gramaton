@@ -345,7 +345,7 @@ func (m *taskRecordingMockLLM) SupportsStructuredOutput() bool                  
 // fast path in parallelLLM correctly attaches w.task to the context
 // so downstream telemetry sees the label. Pre-fix this logic was
 // duplicated between the single-item and worker-loop paths; the
-// dedup in P2-08 collapsed both to a shared taskCtx helper, and
+// dedup collapsed both to a shared taskCtx helper, and
 // this test guards against silent drift on either path.
 func TestTaskCtxAttachesLabelOnSinglePath(t *testing.T) {
 	rec := &taskRecordingMockLLM{}

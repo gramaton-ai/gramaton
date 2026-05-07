@@ -136,7 +136,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 // different vectors for query vs document inputs, and using the
 // document path for a query degrades cosine similarity measurably.
 // For Titan (no query/document distinction in the API), delegates to
-// Embed. Implements embed.QueryEmbedder. (P1-40.)
+// Embed. Implements embed.QueryEmbedder.
 func (c *Client) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	switch c.family {
 	case familyCohere:

@@ -139,4 +139,4 @@ Never mix both in the same surface. Pick one per context.
 |------|-----------|
 | **api (canonical surface)** | The `api/` Go package. One file per operation, each declaring `XxxRequest`, `XxxResponse`, `XxxDescription`, and `func (a *API) Xxx(...)`. Every transport (HTTP, MCP, CLI proxy) consumes these types and methods via hand-written binding tables. Locking discipline lives here. |
 | **Transport** | Any of the three surfaces that expose the api layer to clients: HTTP routes (`server/bindings_*.go`), MCP tool registrations (`server/mcp.go` + bindings clusters, or `cli/mcp_proxy_*.go` for stdio proxy), or Cobra CLI commands (`cli/*.go`). |
-| **MCP cluster registrar** | A function in `server/bindings_*.go` or `server/mcp_*.go` that registers a cluster of related MCP tools. Nine clusters as of T-02: records, search, intake, maintenance, history, admin, collections, sessions, guide. |
+| **MCP cluster registrar** | A function in `server/bindings_*.go` or `server/mcp_*.go` that registers a cluster of related MCP tools. The clusters cover records, search, intake, maintenance, history, admin, collections, sessions, and guide. |

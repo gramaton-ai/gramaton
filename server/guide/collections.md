@@ -44,13 +44,13 @@ Each name must reference a declared `type=string` field; non-string types are re
 | `journal` | `[title, entry]` |
 | `references` | `[title, description, notes]` |
 
-`curation=standard` requires `content_fields` declared (via template or custom schema). `gramaton_collection_create` rejects schemaless `curation=standard` requests with a clear error. `curation=none` collections (`shopping-list`, `packing-list`) don't declare `content_fields`; their items skip the LLM pipeline entirely.
+`curation=standard` requires `content_fields` declared (via template or custom schema). `gramaton_collection_create` rejects schemaless `curation=standard` requests with a clear error. `curation=none` collections (`shopping-list`, `packing-list`, plus all schemaless ad-hoc collections by default) don't declare `content_fields`; their items skip the LLM pipeline entirely. New schemaless collections default to `curation=none`; explicitly pass `curation=standard` only when paired with a schema that declares `content_fields`.
 
 When an item's `content_fields`-output text changes via `gramaton_collection_update`, the BM25 index and vector embedding refresh and `processing_status` flips to `captured` so the next curation cycle reclassifies the item. Updates to non-`content_fields` fields (status enums, dates) leave the indexes and pipeline state untouched.
 
-## Behaviour fields (the three-knob curation model)
+## Behaviour fields (per-collection knobs)
 
-Three orthogonal knobs control how curation treats records in a collection. Set them per-collection at create time, or rely on the template defaults.
+Four orthogonal knobs control how curation and clear semantics treat records in a collection. Set them per-collection at create time, or rely on the template defaults.
 
 - `curation` (`standard` | `none`) — LLM analysis intensity. `standard` runs classify, summarize, observation_extract, concept synthesis on items. `none` disables all LLM work; use for shopping/packing-list shapes where classification adds no value. On `curation=none`, `collection_add` is also idempotent (duplicate title returns the existing id).
 
@@ -58,7 +58,7 @@ Three orthogonal knobs control how curation treats records in a collection. Set 
 
 - `contradictions` (`on` | `off`) — whether the system generates `contradicts` edges from records in this collection. `on` runs the LLM-driven contradiction stage. `off` skips it; useful for reference shapes (bookmarks, recipes, places) where two recommendations don't contradict each other.
 
-- `clear_mode` (`resolve` | `unlink`) — how `clear` semantics work for transient lists.
+- `clear_mode` (`resolve` | `unlink`) — what "clearing" or resolving an item does to its membership. `resolve` (default) keeps the item as a member of the collection but stamps `valid_until` and (when the schema has an enum `status` field) flips that field to a closed-equivalent value -- the item stays in the historical record so "what did I do last week" still works. `unlink` removes the `member_of` edge so the underlying record stays in the graph but is no longer a collection member; useful when items represent reusable entities (an unread book stays a record you can re-add to the reading-list later). Resolved items remain searchable as historical records; unlinked items keep their identity outside the collection.
 
 ### Multi-collection resolution
 
@@ -74,17 +74,17 @@ One-line principle: never irreversibly modify a record without unanimous agreeme
 
 ## Templates
 
-Seven starter templates seed schema + the three behaviour knobs:
+Seven starter templates seed schema + the four behavior knobs:
 
-| Template | curation | supersession | contradictions | Use case |
-|---|---|---|---|---|
-| `backlog` | standard | collection | on | Engineering/product backlog with priority + status. Surface design conflicts. |
-| `todo` | standard | collection | on | Generic actions list with status + due-by. |
-| `reading-list` | standard | collection | off | Articles/books with notes. Two recommendations aren't contradictions. |
-| `shopping-list` | none | collection | off | Short-content list ("milk", "eggs"). Same-list dedup; no LLM work. |
-| `packing-list` | none | collection | off | Trip checklist. Same shape as shopping-list. |
-| `journal` | standard | none | off | Daily entries / observation logs. Append-only (no supersession); no contradiction-checking. |
-| `references` | standard | collection | off | Bookmarks, recipes, places, contacts, snippets. Lookup-data shape. |
+| Template | curation | supersession | contradictions | clear_mode | Use case |
+|---|---|---|---|---|---|
+| `backlog` | standard | collection | on | resolve | Engineering/product backlog with priority + status. Surface design conflicts. |
+| `todo` | standard | collection | on | resolve | Generic actions list with status + due-by. |
+| `reading-list` | standard | collection | off | unlink | Articles/books with notes. An unread book stays a record you can re-add later. |
+| `shopping-list` | none | collection | off | resolve | Short-content list ("milk", "eggs"). Resolve preserves "when did I last buy eggs" history. |
+| `packing-list` | none | collection | off | resolve | Trip checklist. Same shape as shopping-list. |
+| `journal` | standard | none | off | resolve | Daily entries / observation logs. Append-only (no supersession); no contradiction-checking. |
+| `references` | standard | collection | off | resolve | Bookmarks, recipes, places, contacts, snippets. Lookup-data shape. |
 
 Pass `template=<name>` to `gramaton_collection_create`; caller-supplied fields override template defaults.
 

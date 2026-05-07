@@ -312,7 +312,8 @@ func TestProllyTreeDiffEmptyToFull(t *testing.T) {
 	}
 }
 
-// TestProllyTreeDiffSmallChangeInLargeTree exercises the P1-54 fix:
+// TestProllyTreeDiffSmallChangeInLargeTree exercises the merge-walk
+// Diff fix:
 // diffing two large trees that differ by a single key in the middle
 // must walk only the path down to that change, not both entire trees.
 // Correctness assertion is the visible one; the benchmark
@@ -461,7 +462,7 @@ func TestProllyTreeDiffDeepIdenticalSubtreesSkipped(t *testing.T) {
 	}
 }
 
-// BenchmarkProllyDiffSmallChange is the P1-54 perf evidence. Diffs
+// BenchmarkProllyDiffSmallChange is the perf evidence. Diffs
 // two 2000-entry trees differing by a single key. Before the fix the
 // diff walked all 2000 entries on both sides (the allEntries fallback
 // in the internal-vs-internal branch). After the fix the merge-walk

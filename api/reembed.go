@@ -92,7 +92,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		// fails (oversized after halving truncation, content-policy
 		// refusal, persistent dimension issue) would re-enter the
 		// candidate set every gramaton_reembed invocation and re-pay
-		// the full embed cost. Tracker 01KQ408WXSTDN5X15TGE24X416.
+		// the full embed cost.
 		if maxEmbedAttempts > 0 {
 			if attempts, ok := n.Properties.GetInt64("embed_attempts"); ok && attempts >= int64(maxEmbedAttempts) {
 				continue

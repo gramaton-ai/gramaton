@@ -100,8 +100,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// branches on node_type to feed the right phase: concept nodes
 	// populate `existingConcepts` and run the concept-quality rule;
 	// non-concept records feed the manifest stats, lifecycle/orphan
-	// checks, and the two non-concept quality rules. Tracker
-	// 01KPEDCAAP4EV93ZS9GD0Z8C9E.
+	// checks, and the two non-concept quality rules.
 	type qualityIssue struct {
 		nodeID string
 		fix    string // "concept_summary" | "extract_short" | "flag_embed"
@@ -230,7 +229,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// structural). Treating them as orphans makes the linking
 			// pass below add weak related_to edges against arbitrary
 			// similar records every cycle, polluting the graph.
-			// Tracker 01KQ62SRYP2ZKYR40JKSHJAC69.
 			if nodeType != "observation" {
 				ec := nonChunkEdgeCount(g, id)
 				if ec == 0 {
@@ -322,7 +320,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		// concept's evidence_count and add redundant instance_of edges
 		// from sub-records. Observations are projections of their
 		// parent; the parent is the canonical instance.
-		// Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
 		rawIDs := e.PropIdx().LookupKeyword("content_keywords", kw)
 		ids := rawIDs[:0]
 		for _, id := range rawIDs {
@@ -911,7 +908,7 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 		// not been classified yet, so temporality is always unset (LLM
 		// classification is what assigns it). Treating unset+ephemeral
 		// as the GC-eligible band lets aged-out unclassified debris
-		// actually reach deletion. Tracker 01KPEDCAAP4EV93ZS9GD0Z8C9E.
+		// actually reach deletion.
 		temp, _ := n.Properties.GetString("temporality")
 		if temp != "" && temp != "ephemeral" {
 			continue
@@ -1002,7 +999,7 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		// Observations are excluded: they're sub-records of their
 		// parent and the parent is the canonical evidence; counting
 		// both inflates evidence_count by the per-parent observation
-		// fan-out. Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
+		// fan-out.
 		inbound := e.Graph().EdgesTo(id)
 		count := 0
 		var latestEvidence time.Time
@@ -1032,7 +1029,6 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		// real change. Post-fix: only update when evidence_count
 		// actually changed OR last_evidence_at drifted (new edge from
 		// a source whose created_at exceeds the stored timestamp).
-		// Tracker 01KPEDCAAP4EV93ZS9GD0Z8C9E.
 		existingCount, _ := n.Properties.GetInt64("evidence_count")
 		existingLatest, _ := n.Properties.GetTimestamp("last_evidence_at")
 		countChanged := int64(count) != existingCount
@@ -1100,7 +1096,7 @@ const (
 // discriminating than the same score on a long pair. The previous
 // behaviour (skip Jaccard entirely when both sides <200 chars and trust
 // cosine) was load-bearing for false-positive supersession on short
-// records — see tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
+// records.
 func verifyDedupJaccard(g graph.NodeReader, a, b *graph.Node) bool {
 	textA := curationNodeText(g, a)
 	textB := curationNodeText(g, b)
@@ -1374,7 +1370,7 @@ func isWeakConceptKeyword(kw string) bool {
 		// Generic LLM/agent vocabulary that appears across nearly
 		// every record without distinguishing concepts. Pre-fix these
 		// were leaking into concept clusters and producing muddled
-		// "context"-themed concepts. Tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
+		// "context"-themed concepts.
 		"context": true, "content": true, "system": true,
 	}
 	return weak[strings.ToLower(kw)]

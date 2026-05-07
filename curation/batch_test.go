@@ -71,8 +71,6 @@ func TestFindMeteredRawProviderReturnsNil(t *testing.T) {
 // then succeeded via batch mode would keep a stale classify_attempts
 // counter and (incorrectly) push to "stuck" on its next autonomous
 // failure.
-//
-// Regression guard for tracker 01KQ40AA1C1C95JG5VETFR20M7.
 func TestApplyClassificationClearsAttempts(t *testing.T) {
 	eng := setupEngine(t)
 

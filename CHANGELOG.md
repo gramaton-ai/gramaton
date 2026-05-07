@@ -7,6 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Pre-public-release docs sweep.** Comprehensive re-read of every
+  user-facing and integrator-facing doc against the current code,
+  catching drift the recent feature work left behind. Specific
+  fixes: tool-count claims aligned with the actual MCP tool registry;
+  log-filename references corrected (`gramaton.log`, not
+  `server.log`); `gramaton_capture_batch` description rewritten
+  (sync mode is per-item failure isolation, not all-or-nothing);
+  `gramaton init` wizard step order corrected in the CLI table;
+  `gramaton_search` data flow in `architecture.md` extended with
+  the snapshot / cursor pagination paths; `clear_mode` collection
+  knob explained instead of waved at; four-knob curation framing
+  used consistently where collections are introduced; `content_fields`
+  schema field documented end-to-end; `auto_close_collection_status`
+  resolve flag spelled out. Also future-proofed the README's
+  "single-user / no auth" caveat (was bound to `v0.1`).
+- **Internal phase identifiers scrubbed from docs and code comments.**
+  Internal Gramaton-development phase markers (T-NN, P[0-3]-NN,
+  F1 Layer N, Phase N follow-on) and parenthetical tickets like
+  `(P2-08)` removed from doc files, `CHANGELOG.md` entries, and
+  ~30 Go source files' comments. They were Gramaton-internal
+  shorthand that was cryptic to public readers; sentences that
+  referenced them were rewritten to preserve the technical context
+  without the identifier (e.g., "regression for P2-08 fix #1: a
+  hung task..." → "regression for the per-task-timeout fix: a
+  hung task..."). The `D-NN` numbering inside
+  `docs/project-design/design-decisions.md` is preserved — those
+  are heading anchors for the doc, not tracker references. Test
+  fixture content using fictional ticket strings as record titles
+  is preserved (test data, not phase IDs). Also removed the
+  misplaced internal `p2-06-writesession-plan.md` plan doc from
+  `docs/project-design/`.
+- **Public-readiness scrub: removed Amazon-internal `Isengard` tool
+  reference** from `docs/providers.md`. Replaced the credential-
+  manager refresh discussion with a generic phrasing that doesn't
+  signal employer-specific tooling.
+
 ### Added
 
 - **Hot-path MCP tools pinned as `alwaysLoad` to bypass tool-search
@@ -37,7 +75,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     flag; no other tool may. Catches both dropped pins (refactor
     nukes Meta) and creep (new tool quietly pins itself without
     weighing the context-budget tradeoff).
-  - Tracker: `01KQZ5MEKHEX4DA20HR10V3WKM`.
 
 - **Claude Code auto-memory routing block + per-client template
   scaffolding.** `gramaton init` now installs a routing rule into
@@ -95,8 +132,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `gramaton_search` truncation messages now point at
     `gramaton export --query "..." --output results.jsonl` for
     the genuine-exhaustion path, complementing cursor pagination.
-  - Tracker: `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR C of search-
-    ergonomics work).
+  - Part of the search-ergonomics work (PR C).
 
 - **`gramaton_search` cursor pagination + page table.** Fresh
   searches materialize up to `search.pagination.candidate_cap`
@@ -128,9 +164,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Legacy `top` field falls back to `page_size` when the new
     field isn't supplied, preserving back-compat for existing
     callers. `MaxSearchTop = 1000` cap unchanged.
-  - Tracker: `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR B of search-
-    ergonomics work; the filtered CLI export half is a separate
-    follow-up PR).
+  - Part of the search-ergonomics work (PR B; the filtered CLI
+    export half is a separate follow-up PR).
 
 ### Changed
 
@@ -158,8 +193,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mentioning "auth". Mirrors `gramaton_search`'s `match` semantics
   (literal substring, distinct from vector similarity), scoped to a
   single collection. Preserves the exhaustive-by-contract guarantee
-  — items just have to satisfy filter + match. Tracker:
-  `01KQTGSQD1NDSDJEKH9YEWXKYN` (PR A of search-ergonomics work).
+  — items just have to satisfy filter + match. Part of the
+  search-ergonomics work (PR A).
 
 - **`content_fields` declaration on collection schemas.** Schemas
   may now declare an ordered `content_fields: [name1, name2, ...]`
@@ -172,8 +207,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   templates ship with explicit declarations: `backlog`
   `[title, details]`, `todo` `[title, notes]`, `reading-list`
   `[title, author, notes]`, `journal` `[title, entry]`,
-  `references` `[title, description, notes]`. Tracker:
-  `01KQT5DPW2PQNDY08ANW1NMQB2`.
+  `references` `[title, description, notes]`.
 
 - **RecordContent activation: collection items now flow through
   the autonomous curation pipeline.** Previously, `curation=standard`
@@ -189,8 +223,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   synthesis, and contradiction detection now read through these
   helpers. The result: collection items in `curation=standard`
   collections actually get classified, get `content_short`
-  generated, and participate in concept synthesis. Tracker:
-  `01KQT5DPW2PQNDY08ANW1NMQB2`.
+  generated, and participate in concept synthesis.
 
 ### Changed
 
@@ -237,15 +270,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   previously only vector proximity caught it (and only when the
   collection's domain semantically overlapped). Existing items
   aren't reindexed retroactively; new items get the prefix going
-  forward. Tracker: `01KQTHJRQB9RVBD6YXFA5JCJSA`.
+  forward.
 
-- **Phase 5 follow-on: three-knob curation model + Layer 1 cross-collection
+- **Three-knob curation model + Layer 1 cross-collection
   supersession filter.** Decomposes the single `curation` field into three
   orthogonal collection-level knobs:
   - `curation`: `none | standard` (LLM analysis intensity — controls
     classify, summarize, observation_extract, concept synthesis)
-  - `supersession`: `none | collection | store` (unchanged from
-    Phase 4)
+  - `supersession`: `none | collection | store` (unchanged)
   - `contradictions`: `on | off` (new — controls whether `contradicts`
     edges are generated from records in this collection)
 
@@ -261,7 +293,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collection records at `supersession=collection` now consolidate
   on duplicates (the shopping-list dedup contract); cross-collection
   records at `supersession=collection` correctly do not supersede
-  each other (the original Phase 5 cross-collection-contamination
+  each other (the original cross-collection-contamination
   fix). Memory orphans (effective `supersession=store`) keep today's
   global dedup behaviour.
 
@@ -285,8 +317,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collections are now eligible for the autonomous pipeline pool, but
   still bounce at every stage's `content_full` guard because
   collection items don't populate `content_full`. Activation of
-  collection items in the LLM pipeline is tracked separately as
-  follow-up `01KQT5DPW2PQNDY08ANW1NMQB2` (P1).
+  collection items in the LLM pipeline is tracked separately as a
+  P1 follow-up.
 
   New starter templates: `journal` (standard / none / off — daily
   entries / observation logs) and `references` (standard / collection /
@@ -304,7 +336,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/integrator-guide.md` (rewrites of curation=minimal / full
   references), `README.md` (per-collection knob pointer).
 
-- **F1 final pre-merge sweep.** Three parallel review agents
+- **Final pre-merge sweep for the async-jobs feature.** Three parallel review agents
   (correctness, security, test coverage) reviewed the full L1-L6
   branch and signed off as ready to merge. Mechanical fixes from
   their findings:
@@ -328,9 +360,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **F1 Layer 6: multi-chunk async runner + cross-chunk edge fixup.**
-  L5 shipped the async path as a single-chunk runner with edges in
-  the same Save call as items. L6 makes it actually chunk:
+- **Multi-chunk async runner + cross-chunk edge fixup.**
+  The earlier landing shipped the async path as a single-chunk runner with edges in
+  the same Save call as items. This change makes it actually chunk:
 
   - Items split into chunks of `MaxSyncBatchSize` (500 by default;
     overridable in tests via `SetChunkSizeForTests`). Each chunk
@@ -375,7 +407,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **F1 review-pass B: test hardening.** Closes the test gaps the
+- **Async-jobs review-pass B: test hardening.** Closes the test gaps the
   L3-L5 review flagged. Adds `go.uber.org/goleak` (test-only dep)
   via `api/main_test.go`'s `TestMain` so a leaked async runner
   goroutine fails the suite with a named stack instead of silently
@@ -445,8 +477,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     so cancel races a non-terminal job; the retry test asserts
     `onceInjector.fired == true`.
 
-- **F1 review-pass A: hardening + multi-tenancy foundation.** Lands
-  before F1 Layer 6 to address the critical and medium findings from
+- **Async-jobs review-pass A: hardening + multi-tenancy foundation.** Lands
+  before the multi-chunk runner to address the critical and medium findings from
   the L3-L5 review.
 
   Critical fix:
@@ -519,8 +551,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Async mode for `gramaton_capture_batch` + 4 companion MCP tools**
-  (F1 Layer 5). Setting `wait=false` returns a `job_id` immediately
+- **Async mode for `gramaton_capture_batch` + 4 companion MCP tools.**
+  Setting `wait=false` returns a `job_id` immediately
   and runs the commit in a background goroutine; the new tools poll
   and control the job:
 
@@ -553,9 +585,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   won and the runner exits cleanly), and propagates context to the
   embedder so cancellation during embed is observed.
 
-  L5 single-chunk runner: the entire batch commits in one Save call
+  Single-chunk runner: the entire batch commits in one Save call
   inside the goroutine. Multi-chunk processing + cross-chunk edge
-  fixup move to L6. The async path unblocks larger batches
+  fixup land separately. The async path unblocks larger batches
   (`MaxAsyncBatchSize` = 1000) and removes the "HTTP timeout vs
   server completion" race for clients on slow networks; lock-hold
   semantics are unchanged from sync.
@@ -569,7 +601,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `POST /v1/capture/batch/{job_id}/cancel`,
   `GET /v1/capture/batch/{job_id}/result`, `GET /v1/jobs`.
 
-- **Intra-batch edges in `gramaton_capture_batch`** (F1 Layer 4).
+- **Intra-batch edges in `gramaton_capture_batch`.**
   `Edges []EdgeSpec` in the request body lets the caller create
   intra-batch and to-existing-record edges in the same commit as
   the items they connect. Each EdgeSpec resolves source and
@@ -597,7 +629,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reuse.
 
 - **`gramaton_capture_batch` MCP tool + `POST /v1/capture/batch`
-  HTTP route + CLI proxy** (F1 Layer 3). Sync mode: stores up to
+  HTTP route + CLI proxy.** Sync mode: stores up to
   500 records in a single call sharing one engine write lock and
   one batch-embed call. Each item follows the `gramaton_capture`
   shape with an optional `client_ref` echoed back in the response;
@@ -616,7 +648,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Job `failed/chunk_1_save_failed`; a JobStore.Update failure
   after Save logs loudly and leaves the records on disk for
   caller-side recovery. Async mode (`wait=false`) is reserved for
-  Layer 5 and currently rejected.
+  a later landing and currently rejected.
 
   New `api.FaultInjector` + `SetFaultInjector` test seam exposes
   named phases (`chunk_save`, `jobstore_update`,
@@ -624,7 +656,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without disturbing real storage.
 
 - **`core.Engine` opens the `jobs.Store` and runs restart recovery
-  on init** (F1 Layer 2). `(*Engine).JobStore()` exposes the live
+  on init.** `(*Engine).JobStore()` exposes the live
   handle. In-flight jobs (status pending/running) from a prior run
   are flipped to `failed/server_restart` BEFORE engine init returns,
   so the HTTP listener can never observe stale running jobs after
@@ -657,7 +689,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   automatically.
 
 - **New `jobs/` package: persistent tracking for long-running async
-  operations** (F1 Layer 1 — prereq for `gramaton_capture_batch`).
+  operations** (prereq for `gramaton_capture_batch`).
   Bbolt-backed store in a dedicated `jobs.db` file separate from
   the engine's index store and graph commit log. Search isolation
   by construction: jobs are not graph nodes, so curation and search
@@ -703,9 +735,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TTL and skips in-flight; Supersedes chain walks; concurrent
   readers + writer.
 
-  ~1634 LOC (675 impl + 959 test). Standalone-mergeable; no
-  engine wiring yet (Layer 2). Build plan at
-  `~/workspaces/gramaton-inspection/F1-build.md`.
+  ~1634 LOC (675 impl + 959 test). Standalone-mergeable; engine
+  wiring lands in a follow-up.
 
 ### Changed
 
@@ -781,10 +812,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first error per the APIError contract, so the slice is reserved.
   Touches `api/collections.go`, `api/sessions.go`, the new
   `api/collection_responses.go`, and the test files that switched
-  from map indexing to struct field access. P3-B + P3-C in the
-  api debt sweep.
+  from map indexing to struct field access.
 
-- **Phase 3 follow-on landed: every Save site now emits structured
+- **Every Save site now emits structured
   `graph.CommitAction` descriptors, enforced by a CI lint.** Three
   layers:
 
@@ -820,8 +850,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `testutil/` directories. Wired into the `pre-merge-check`
     skill as step 9.
 
-  Phase 3 follow-on tracker `01KPY32VFEQAH0TMCTEK7DWH5C`. Two
-  in-flight design questions resolved (Q1 fine-grained
+  Two in-flight design questions resolved (Q1 fine-grained
   colon-separated taxonomy, Q2 emit one action per affected
   record, Q3 pragma + skip-tests + hard-error).
 
@@ -939,8 +968,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tests at
   `curation/self_heal_test.go:TestDetectAndRepairSummaryClearsStaleFlagOn{Tier1Clean,Tier2Stripped,Tier3Fallback}`
   plus a no-op-when-not-flagged test that pins the commit chain
-  doesn't advance on clean+unflagged records. Tracker
-  01KQ7WGDN37Y8AYBD2J8A017TY.
+  doesn't advance on clean+unflagged records.
 
 ### Added
 
@@ -959,8 +987,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   paths that key on the type keep working. Per-model dedup map
   prevents a tight curation loop on a non-enabled model from
   flooding the log. Tests cover the wrap, the dedup, and the
-  pass-through-other-errors path. Tracker
-  01KPYDE45Q7T91DNTQNMEGTX74.
+  pass-through-other-errors path.
 
 - **`docs/providers.md` documents the five AWS auth patterns +
   the static-keys-rewrite gotcha.** New "AWS auth patterns"
@@ -988,9 +1015,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fail silently in the first curation cycle. Verification is
   injected through a `Wizard.awsVerifier` field; production wires
   the real `verifyAWSProfile` impl, tests use a stub returning a
-  synthetic identity. Tracker
-  01KPYDE45Q7T91DNTQNMEGTX74 (partial -- model-access-error
-  detection + docs are follow-ups).
+  synthetic identity. Partial — model-access-error detection +
+  docs are follow-ups.
 
 ### Added
 
@@ -1030,7 +1056,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collection-layer write while still expiring the record). 11
   regression tests at `api/resolve_test.go` cover all 5 shipped
   templates plus the opt-out, multi-collection, and unit cases.
-  Tracker 01KPRZ33EV6X88674S1PVFV928.
 
 - **Self-heal cascade short-circuits when a record was already
   Tier-4 flagged against the same `content_short`.** Pre-fix,
@@ -1044,7 +1069,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is bounded by Tier-4 record count × 3 SetProp/boot. Regression
   test at
   `curation/self_heal_test.go:TestDetectAndRepairSummarySkipsRedundantFlag`.
-  Tracker 01KQ40B2KEF8P6JK6SDB00FWQ3.
 
 - **`Engine.FlushAccess` dedups consecutive Save-failure logs.**
   Pre-fix, a stuck disk would emit one Error log + full err
@@ -1056,7 +1080,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Counter is per-engine (not per-process); guarded by the existing
   engine write lock that FlushAccess already holds. Regression test
   at `core/engine_test.go:TestFlushAccessResetsFailureCounterOnSuccess`.
-  Tracker 01KQ40ANMHK7JQH66D0RXR44GW.
 
 - **`securityHeaders` panic-recover dedups repeated stack dumps.**
   Pre-fix, a buggy client retrying a panic-trigger flooded the
@@ -1068,7 +1091,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on overflow to bound memory under a flood of unique panics.
   Regression tests at
   `server/middleware_test.go:TestSecurityHeadersDedupsRepeatedPanics`
-  + unit tests on the dedup struct. Tracker 01KQ3PBFR9MNAMAAD6JSX5F9TG.
+  + unit tests on the dedup struct.
 
 - **Manifest qualitative_summary no longer cites record counts.**
   The LLM-generated `manifest_summary` text occasionally cited
@@ -1078,7 +1101,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inferred or paraphrased rather than copied. Updated the system
   prompt to instruct: describe shape qualitatively, do not include
   record counts, percentages, or numeric values; numeric stats are
-  surfaced separately. Tracker 01KQ62TXCZ7T3N8WR2C766E5F8.
+  surfaced separately.
 
 - **`StatsResponse` and `EnhancedStatus` now document the
   conceptual-count and pending-vs-candidates distinctions inline.**
@@ -1092,7 +1115,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   different questions and the docstring on `EnhancedStatus` calls
   that out. Tool descriptions for `gramaton_stats` and
   `gramaton_curation` updated correspondingly.
-  Trackers 01KQ62TP9F80G580MH9BRRK4CD, 01KQ62W8M80K6H6DGBJ4F4DE3F.
 
 ### Fixed
 
@@ -1108,7 +1130,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `instance_of` edges added by the same emergence pass also counted
   toward `evidence_count`. The audit on this store flagged
   concepts with evidence_count = parents + observations rather than
-  parents alone (tracker 01KQ62W3EPCRM4ARQG85AQP94S). Now the
+  parents alone. Now the
   emergence candidate filter and the evidence_count audit both
   skip nodes with `node_type=="observation"`. Existing observation
   instance_of edges become unused (still in the graph, but
@@ -1130,7 +1152,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   similarity search. `Manifest.OrphanCount` no longer over-counts.
   Regression test at
   `curation/runner_test.go:TestOrphanLinkerSkipsObservations`.
-  Tracker 01KQ62SRYP2ZKYR40JKSHJAC69.
 
 - **Concepts are now embedded inline during LLM synthesis instead of
   waiting for `gramaton reembed` to catch up.**
@@ -1148,7 +1169,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   concept to the vec index. Embed failure is logged-and-skipped so
   reembed remains the back-fill safety net. Regression test at
   `curation/enrich_concepts_test.go:TestEnrichConceptSynthesesEmbedsConcept`.
-  Tracker 01KQ60N4ZCCQDKM17XWQMZAX9C.
 
 - **`propIdx` now always rebuilds from graph at engine startup.**
   The previous gate (`propLoaded := s.propIdx.Count() > 0` in
@@ -1165,7 +1185,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fix). `propIdx.AddTx` is idempotent via the dedup in `addToIDSet`,
   so re-walking is cheap when the index is already complete.
   Regression test at `core/engine_test.go:TestRebuildPrimaryIfMissingAlwaysRebuildsProp`.
-  Tracker 01KQ60MQMFSKTW2Z9PV4Z4W8T3.
 
 - **`ExcludeConcepts` filter now reads `node_type` directly off graph
   nodes instead of going through `propIdx.Lookup`.** The property
@@ -1180,8 +1199,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   appearing in `top_k` despite the new filter. Tests pass with both
   the old and new approaches; production fix bypasses the index
   partial-load bug. The underlying property-index load logic is its
-  own bug (filed separately if it bites again). Tracker
-  01KQ5JVJ8WWFH14MWH5MG1ZQ4Y followup.
+  own bug (filed separately if it bites again).
 
 ### Added
 
@@ -1202,8 +1220,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   queries before committing to ship it. Cost is bounded (~1ms per
   query at <100 concepts) and events only fire on matches. Tests at
   `search/concept_telemetry_test.go` pin threshold gating, live-vs-
-  historical member filtering, dimension mismatch fail-silent. Tracker
-  01KQ5JVY5DY7B0WNGBMKG1C3ND.
+  historical member filtering, dimension mismatch fail-silent.
 
 - **Default search now excludes concept nodes; opt-in via
   `include_concepts=true`.** New `SearchRequest.IncludeConcepts` field
@@ -1217,8 +1234,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gramaton_explore` and `gramaton_inspect` are unchanged — concepts
   remain walkable and inspectable when their IDs are known. Tests at
   `search/search_test.go` (`TestSearchExcludeConcepts`) pin both
-  default-exclude and opt-in-include behavior. Tracker
-  01KQ5JVJ8WWFH14MWH5MG1ZQ4Y.
+  default-exclude and opt-in-include behavior.
 
 - **Member-set overlap gate at concept emergence.** New
   `concepts.member_overlap_threshold` config (default 0.6,
@@ -1235,8 +1251,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DeterministicResult.ConceptsAliased` counter and a `concept alias
   added` log line surface the merge. Setting the threshold to 0 reverts
   to legacy behavior. Lives in `curation/deterministic.go`; tests at
-  `curation/emerge_concepts_test.go`. Tracker
-  01KQ5JVCMB4C9H4Z1BPME2E4P7.
+  `curation/emerge_concepts_test.go`.
 
 - **`gramaton_search` and `gramaton search` CLI gain a
   `processing_status` filter.** New `SearchRequest.ProcessingStatus`
@@ -1255,7 +1270,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Curation per-task timeout default raised from 30s to 90s.**
-  `curation.task_timeout` (P2-08) wraps each autonomous phase
+  `curation.task_timeout` wraps each autonomous phase
   (classify, summarize, concept, contradict, manifest) so one hung
   LLM call can't starve a cycle. The 30s default was tight for
   multi-wave phases — `classify` and `summarize` can do up to 3
@@ -1288,7 +1303,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     removed the retired /v1/observe), replaced "When to Observe" section
     with intake/sessions guidance.
   - `integration/claude-code/CLAUDE.md`: dropped soft-deprecation note
-    for `gramaton_observe` (tool retired in T-02).
+    for `gramaton_observe` (tool retired).
   - `integration/claude-code/subagent-capture.md`: added legacy/fallback
     banner — the autonomous-classify-via-subagent pattern conflicts with
     the user-initiated capture rule and the autonomous-curation /
@@ -1313,8 +1328,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `securityHeaders` (commit 910b268), updated curation row with
     1-minute default cadence + `task_timeout` + startup self-heal,
     updated LLM provider row with `CompleteStructured` capability.
-  - `docs/configuration.md`: added `llm.max_response_tokens` (P2-18)
-    and `curation.task_timeout` (P2-08) yaml entries; cleaned up stale
+  - `docs/configuration.md`: added `llm.max_response_tokens`
+    and `curation.task_timeout` yaml entries; cleaned up stale
     "doc older than 2026-04: was 5m" parenthetical on
     `curation.interval`.
   - `docs/providers.md`: noted `gramaton init --force` re-run path
@@ -1349,7 +1364,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retry bugs but a different cost class -- embedding is CPU/GPU on
   local providers (bert/ollama) and billed input tokens on paid
   providers, so the counter prevents quiet token burn even though
-  no LLM is involved. Tracker `01KQ409W2XDSSWBTZ66WBTFVD1`.
+  no LLM is involved.
   Fix: a new `Curation.MaxObservationAttempts` field (yaml:
   `curation.max_observation_attempts`, default 5, 0 disables).
   Default is higher than the LLM-cost counters (3) because
@@ -1371,8 +1386,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **gramaton_reembed no longer re-pays for the same failing records on
   every invocation; session-commit promotion now writes
-  embedding_model on success.** Two coupled fixes for tracker
-  01KQ408WXSTDN5X15TGE24X416.
+  embedding_model on success.** Two coupled fixes.
 
   Main fix: api.Reembed's failure path at api/reembed.go:159 logged
   the error and continued without writing per-record state. The
@@ -1457,9 +1471,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MaxContradictionAttempts` (yaml: `llm_curation.
   max_contradiction_attempts`, default 3, 0 disables → legacy
   infinite-retry).
-  Decision deferred (filed as `01KQ46QQ7ESC4ADW1PJZQ1ZQ0A`):
-  no first-class operator API to discover and bulk-reset stuck
-  contradiction pairs. Today's triage flow is `gramaton_explore`
+  Decision deferred: no first-class operator API to discover and
+  bulk-reset stuck contradiction pairs. Today's triage flow is
+  `gramaton_explore`
   from one record → find `contradiction_check_skipped` edges →
   `gramaton_unlink` per pair. Mediocre UX; matches the alpha-
   software bar. Will revisit if a real workflow emerges.
@@ -1469,7 +1483,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MaxContradictionAttempts=0 disables; whole-batch LLM error in
   batched mode marks all pairs. data-model.md gained a "Curation
   markers" edge category covering `no_contradiction` and the new
-  `contradiction_check_skipped`. Tracker `01KQ407VR599E2CGAGJ0FBVGJZ`.
+  `contradiction_check_skipped`.
 
 - **Manifest summary no longer recomputes on the same failing fingerprint.**
   `generateManifestSummary` (curation/autonomous.go) maintains a
@@ -1497,8 +1511,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Tests in `curation/autonomous_test.go` cover four cases: bounds
   retries on persistent failure, clears on success, clears on hash
   change (fresh budget per distinct store state), empty-after-trim
-  treated identically to LLM error. Tracker
-  `01KQ4089VFQBE2T47H5GGKB5VC`.
+  treated identically to LLM error.
 
 - **Anthropic batch classification path inherits the per-record retry
   bound.** `RunBatchClassification` (curation/batch.go) submits all
@@ -1532,8 +1545,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Regression test: `TestApplyClassificationClearsAttempts` in
   `curation/batch_test.go` seeds a record with `classify_attempts=2`,
   calls `applyClassification`, asserts the counter cleared to 0 and
-  status flipped to `processed`. Tracker
-  `01KQ40AA1C1C95JG5VETFR20M7`.
+  status flipped to `processed`.
 
 - **Concept synthesis no longer infinite-retries on persistent failure;
   `recordTaskFailure` / `recordTaskSuccess` helpers factored out.**
@@ -1568,9 +1580,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   guard checks `summary_attempts >= max` directly); the synthesis
   case mirrors classify. Pure refactor for the existing two sites
   -- their tests still pass without modification. Helps the next
-  HIGH trackers in the codebase-wide sweep (batch path, reembed,
+  HIGH issues in the codebase-wide sweep (batch path, reembed,
   contradictions) reuse the same primitive instead of duplicating
-  it again. Tracker `01KQ407BPRJF8AVT7CBKQ6VJDB`.
+  it again.
 
 - **Summary generation no longer infinite-retries on persistent failure.**
   `generateSummaries` selects records with `content_full` and no
@@ -1597,7 +1609,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the legacy infinite-retry behavior. Tests in
   `curation/autonomous_test.go` cover failure-bumps,
   skips-at-threshold, max-zero-disables, success-clears-attempts.
-  Tracker `01KQ406Z12VKRGRT3HEER0ZT1A`.
 
 - **Auto-backup no longer retries every curation cycle on failure.**
   `runAutoBackup` runs as a post-curation-cycle hook (default ~1 min
@@ -1617,7 +1628,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Regression test: `TestAutoBackupAdvancesLastBackupOnFailure` in
   `server/server_test.go` sabotages the configured backup dir
   (writes a regular file at the path) and asserts `s.lastBackup` was
-  updated post-failure. Tracker `01KQ409C61Y9SQRAZFAYJEXV1X`.
+  updated post-failure.
 
 - **`docs/project-design/data-model.md` `processing_status`
   enumeration corrected.** Pre-fix listed `captured | processed |
@@ -1657,8 +1668,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   manually. Same shape exists in `generateSummaries`; filed as
   separate follow-up. Tests in `curation/autonomous_test.go` cover
   failure-bumps-counter, marks-stuck-at-threshold, max-zero-disables,
-  success-clears-attempts. Tracker
-  `01KQ3X9EBX4WKVJQ56W1C31V97`.
+  success-clears-attempts.
 
 - **Panic-recover at the HTTP transport boundary; structured 500 instead
   of broken-pipe.** Pre-fix, a panic in any api/ method (unchecked type
@@ -1687,7 +1697,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (P2: panic-recover middleware.)
 
 - **LLM provider inconsistencies: pricing prefixes, ignored-override
-  warnings, configurable Anthropic max_tokens.** P2-18 named seven
+  warnings, configurable Anthropic max_tokens.** Audit named seven
   issues; addressed four:
   (1) `bedrock` and `openai` clients silently dropped the
   `CompleteWithModel(model, ...)` override -- callers expecting the
@@ -1718,10 +1728,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   curation), (6) openai response-size LLM-vs-embed inconsistency
   (10MB vs 50MB are tuned to their respective payload shapes; not
   the same axis), (7) ratelimit interface-loses-concrete-methods
-  (T-07 territory). (P2-18.)
+  (deferred to a separate cleanup).
 
 - **CLI server-spawn fd leak; lock-free liveness probe; clean Ctrl-C
-  on the MCP transport.** P2-16 named six issues; three were real
+  on the MCP transport.** Audit named six issues; three were real
   production bugs:
   (1) `cli/serve.go::startBackground` opened
   `gramaton.stderr` for the spawned child but never closed the
@@ -1742,7 +1752,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   global state, one-level flag reset, brittle SDK-shape assertion)
   -- they affect test infrastructure rigor, not production
   correctness, and the existing tests pass under the current
-  parallel constraints. (P2-16.)
+  parallel constraints.
 
 ### Changed
 
@@ -1752,7 +1762,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   printing JSON to stdout AND returning an error that Cobra ALSO
   printed to stderr (dual-output -- pipe consumers saw both
   streams), (c) the `fmt.Errorf("input_error: %s", ...)` that capture
-  used (already normalized in P2-14). Two structural fixes:
+  used (already normalized in an earlier pass). Two structural fixes:
   (1) `writeError` now returns a `*silentError` sentinel; `Execute`
   detects it via `errors.As` and skips the redundant stderr print so
   the JSON on stdout is the only error artefact pipe consumers see.
@@ -1767,11 +1777,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `branch_error` ad-hoc code that branch.go used is replaced by the
   server's actual code (or "request_failed" for transport errors)
   -- a real improvement: callers can now distinguish "branch
-  already exists" (ErrConflict) from "server unreachable". (P2-15.)
+  already exists" (ErrConflict) from "server unreachable".
 
 - **CLI record subcommands share two new helpers; mcp_proxy split was
-  already done.** P2-14 had two complaints: cli/mcp_proxy.go monolith
-  (already split into 7 cluster files during T-02 -- one piece of the
+  already done.** Audit had two complaints: cli/mcp_proxy.go monolith
+  (already split into 7 cluster files during the canonical-api refactor — one piece of the
   tracker is stale), and ~80% structural duplication across capture/
   classify/update/resolve. Added two helpers in `cli/input.go`:
   `readCommandInput(filePath)` (file-or-stdin reader returning
@@ -1783,7 +1793,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Skipped: branch.go's 5 subcommands -- each is 6-8 lines of
   serverGet/Post/Delete + writeError + printEnvelope. The
   consolidation would replace clear short functions with a
-  closure-passing helper; not worth the indirection. (P2-14.)
+  closure-passing helper; not worth the indirection.
 
 - **Server bootstrap drift fixed; Run() and StartHTTP() share helpers.**
   Pre-fix, `server.Run()` and `server.StartHTTP()` had ~50 lines of
@@ -1802,11 +1812,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tweak has the rationale (race is theoretical: 30 min TTL vs
   seconds-to-minutes realistic agent flow). The idleWatcher
   hot-reload concern in the tracker is speculative future work --
-  no live config-reload feature, no fix needed today. (P2-12.)
+  no live config-reload feature, no fix needed today.
 
 - **Server preEmbedContent + ingest now thread request context.**
-  P2-11 was filed in the pre-T-02 era when most service methods
-  didn't take ctx. The T-02 review (commit f874cab) already wired
+  An earlier audit (pre-canonical-api refactor) flagged that most service methods
+  didn't take ctx. The canonical-api refactor review (commit f874cab) already wired
   ctx through every Session/Collection method and api/sessions.go,
   but a residual gap remained in `server/handler_records.go`:
   `preEmbedContent` called `Embed(context.Background(), ...)` on the
@@ -1820,7 +1830,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remaining `context.Background()` callsites in server/ are
   long-running background tasks (curation, sweepers, auto-backup)
   whose lifetime is bound to their own cancel function -- those are
-  correct uses. (P2-11.)
+  correct uses.
 
 - **Log-level discipline pass demotes 11 INFO sites to DEBUG.** The
   default INFO level was too chatty on hot paths and engine
@@ -1840,7 +1850,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **T-10 documentation sweep — fix docs that promised behaviour code
+- **Documentation sweep — fix docs that promised behaviour code
   doesn't deliver.** Five doc fixes; four other tracker items
   verified already-correct or not reproducing.
   (1) `integration/claude-code/CLAUDE.md` said the curation cycle
@@ -1862,7 +1872,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anthropic honours overrides, openai/bedrock IGNORE the model arg
   entirely (model is fixed at client construction), claude-cli /
   kiro-cli route through subprocess. Doc now spells out per-provider
-  semantics. (T-10.)
+  semantics.
 
   Verified already-correct or not reproducing: `prolly.Diff`
   docstring (now accurately describes mark+fallback semantics);
@@ -1913,7 +1923,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   truncated anyway), but the new code is correct as-stated.
   Helpers have unit tests covering CJK, emoji, accented Latin, and
   invalid trailing bytes. New `TestSplitSentencesUTF8Boundary`
-  exercises the ideographic-space boundary path. (T-08.)
+  exercises the ideographic-space boundary path.
 
 - **Storage GC now refuses to sweep when prolly-tree marking is
   incomplete.** Pre-fix, `markProllyTree` swallowed `Read` and
@@ -1931,11 +1941,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TestGCRefusesToSweepWhenTreeChunkCorrupt` pins the invariant by
   pointing a commit at a non-existent NodeTreeRoot, then asserting
   Errors > 0, DeletedCount == 0, and that an orphan chunk
-  survives. (P2-03 sub-fix 3.)
+  survives.
 
 ### Changed
 
-- **Search internals tightened across five small fixes from P2-05.**
+- **Search internals tightened across five small fixes.**
   None of these change observable behavior; the tracker's perf
   framings were mostly stale, but small structural improvements
   were worth landing in one pass:
@@ -1973,11 +1983,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Deprecated kiro `gramaton-observe.md` integration doc deleted.**
   The `gramaton_observe` MCP tool was retired during the
-  T-02/sessions migration (replaced by the
+  canonical-api / sessions migration (replaced by the
   `gramaton_session_prepare` / `gramaton_session_commit` two-phase
   flow). The kiro guide for it remained on disk and led future
-  agents to the dead tool. Removed alongside other T-10 docstring
-  fixes. (T-10.)
+  agents to the dead tool. Removed alongside other docstring
+  fixes.
 
 - **Dead `PropertyIndex.Range` and `BboltSecondaryIndex.NodesMissingField`
   APIs.** Both had zero production callers — `Range` was exposed via
@@ -1992,10 +2002,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   range-index handling in Add/Remove, the `deserializeValue` helper),
   and 13 tests that exercised the dead surface. `Property.Compare`
   remains because tests still assert its behavior; nothing in
-  production calls it after this change. Surfaced during P2-04 deep
-  read; the perf concerns the tracker named were investigated and
-  did not reproduce — see resolution note on tracker
-  01KPEDBSN7QT6HX1FZKWV3WB4E.
+  production calls it after this change. Surfaced during a deep
+  read; the perf concerns originally raised were investigated and
+  did not reproduce.
 
 ### Changed
 
@@ -2014,7 +2023,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Prepare without a successful Write preserves dirty state for
   retry. `RewriteCommit` is removed (sole caller migrated). Two
   regression tests pin the deferred-hash/dirty contract and the
-  single-chunk landing. (P2-02 sub-fix 6.)
+  single-chunk landing.
 
 - **Skill editorial touch-ups** (`new-operation`, `benchmark-extract`,
   `store-health`). `new-operation`'s done-check now explicitly chains
@@ -2029,7 +2038,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   When-to-use vs When-NOT-to-use guidance.
 
 - **Review skills (`gramaton-review`, `gramaton-security-review`,
-  `pre-merge-check`) hardened against the bug shapes the post-P2-07
+  `pre-merge-check`) hardened against the bug shapes the post-curation-refactor
   review caught.** Two HIGH regressions of stated intent shipped past
   the original skill walks because the mechanical 12-check list and
   pre-merge gates didn't have framing for behavior preservation in
@@ -2045,7 +2054,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (3) `gramaton-review` gets a new Section 13 "Refactor preservation"
   describing how to walk pre-image branches against the new structure
   for diffs with refactor signature, with a real example from the
-  P2-07 concept Rule 2/3 fall-through bug.
+  curation-refactor concept Rule 2/3 fall-through bug.
   (4) `gramaton-security-review` Section 4 (input validation) gains
   a bullet requiring DIRTY-input fixtures for any added validator —
   same vacuous-test guard, security-flavored.
@@ -2068,7 +2077,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   full-save path is only first-save before any commit exists, where
   `g.nodes` is authoritative. Regression test pins the rejection.
   Defensive guard against future caller-side bugs; no current code
-  path triggers the bad state. (P2-02 sub-fix 5.)
+  path triggers the bad state.
 
 - **`graph.Property.String()` no longer shadows `fmt.Stringer` and
   panics on non-string values.** Previously the typed accessor
@@ -2081,14 +2090,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   callers in `index/property.go`, `index/bbolt_property.go`, and
   `api/collections.go` migrated to `StringValue()`. Regression test
   pins that `fmt.Sprintf("%v", prop)` returns a non-empty string for
-  every Property type. (P2-02 sub-fix 1.)
+  every Property type.
 
-- **Curation review-pass cleanups (post-P2-07 / P2-08 / P2-09 review).**
-  Six follow-up fixes from a deep review of the P2-07/P2-08/P2-09
+- **Curation review-pass cleanups (post-deep-review).**
+  Six follow-up fixes from a deep review of the curation cycle
   commits:
   (1) `generateManifestSummary` keyword counts now come from the
   same live-only loop as the other manifest stats. Pre-fix, the
-  P2-09 fix #4 historical-record filter only protected
+  historical-record filter only protected
   totalRecords/typeMap/etc. — `kwCounts` was sourced from
   `PropIdx().KeywordCounts()` which includes historical records, so
   adding/removing a historical record could still bust the
@@ -2100,7 +2109,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cache; post-fix the live-only count keeps it stable.
   (2) `RunDeterministic` merged loop now restores the original
   `it2` semantics where Quality Rules 2/3 fall through for concept
-  nodes when Rule 1 doesn't fire. Pre-fix (P2-07 fix #1's first
+  nodes when Rule 1 doesn't fire. Pre-fix (curation-refactor first
   cut), the concept branch unconditionally `continue`d, so fresh
   concept nodes with template-style content_short and missing
   `embedding_short` no longer triggered Rule 3 (flag_embed) →
@@ -2123,7 +2132,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no race in practice, but the convention-violation could mask a
   real race on a future change.
   (5) New `TestEnrichConceptSynthesesLogsDimMismatch` exercises
-  the user-visible payoff of P2-09 fix #2: when a concept cluster
+  the user-visible payoff of the dim-mismatch surfacing fix: when a concept cluster
   has mixed-dimension embeddings, the warn log emits with
   "embedding dimension mismatch" + "gramaton reembed" hint. The
   pre-existing `TestMeanCosineToCentroidDimMismatchSurfaced` only
@@ -2140,8 +2149,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TestRunTaskWithTimeoutCancelsHungTask` upper-bound check
   (50ms→1s tolerance for slow CI under -race).
 
-- **Curation autonomous tasks no longer block each other on a hung LLM call
-  (`01KPEDCF8T9NXTRMJ04HFE93K2`).** Three targeted fixes:
+- **Curation autonomous tasks no longer block each other on a hung LLM call.**
+  Three targeted fixes:
   (1) Each task in the cycle (classify, summarize, concept,
   contradict, manifest) now runs under its own per-task sub-context
   with a wall-clock timeout (default 30s, configurable via
@@ -2171,9 +2180,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   invariant — second task gets a fresh sub-ctx after the first one
   times out).
 
-- **Curation cycle: redundant full-graph iteration + dead GC criterion + always-fire enrichment trigger
-  (`01KPEDCAAP4EV93ZS9GD0Z8C9E`).** Four targeted fixes in
-  `curation/`:
+- **Curation cycle: redundant full-graph iteration + dead GC criterion + always-fire enrichment trigger.**
+  Four targeted fixes in `curation/`:
   (1) `RunDeterministic` now collects manifest stats, lifecycle
   staleness, orphan candidates, quality issues, AND existingConcepts
   in a single pass (was three separate full-graph iterators: it,
@@ -2212,9 +2220,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TestGenerateSummariesNonStructuralWithEdges pins that records with
   semantic edges (related_to) correctly hit Priority 1.
 
-- **Curation dedup safeguards + multi-dim embedding handling
-  (`01KPEDCPMXR23V1SSGTNXGRS7T`).** Five targeted fixes in
-  `curation/`:
+- **Curation dedup safeguards + multi-dim embedding handling.**
+  Five targeted fixes in `curation/`:
   (1) `verifyDedupJaccard` no longer skips the token-overlap check
   for short content. The previous behaviour returned true (= "yes,
   consolidate") whenever both sides were <200 chars, so cosine ≥
@@ -2252,13 +2259,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `meanCosineToCentroid` updated to consume the new third return.
 
 - **api.Diff regression coverage + timezone-fragile date tests
-  (`01KPKNK4AV6F61S9CN4ESE553Q` resolved as already-fixed).** The
-  tracker reported `api.Diff` returning empty buckets even when
-  records were added between two commits. Investigation showed
-  the underlying full-scan-degradation bug had already been fixed
-  by commit `0207485` (storage: merge-walk prolly Diff, P1-54)
-  on 2026-04-23. Confirmed via two new positive-assertion
-  regression tests that the original tracker was missing:
+  (resolved as already-fixed).** A report had `api.Diff` returning
+  empty buckets even when records were added between two commits.
+  Investigation showed the underlying full-scan-degradation bug had
+  already been fixed by commit `0207485` (storage: merge-walk prolly
+  Diff) on 2026-04-23. Confirmed via two new positive-assertion
+  regression tests that the original report was missing:
   `TestAPIDiffAddedNodeAppears` (added record surfaces in
   `resp.Added` for an empty-topic diff) and
   `TestAPIDiffTopicFilterPositive` (kafka record surfaces when
@@ -2283,8 +2289,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`gramaton preflight` environment-verification command
-  (`01KPVD4YF4PZT8CHSCM345S1TX`).** A diagnostic command that
+- **`gramaton preflight` environment-verification command.**
+  A diagnostic command that
   answers "is my Gramaton install healthy?" in plain English.
   Pairs with `gramaton init`: init sets up first-time, preflight
   verifies every-time-before-use. Scope is the install/environment
@@ -2300,15 +2306,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one-line remediation on warn/error. Non-zero exit on any error
   so CI / pre-flight scripts can gate on a clean run. 16 unit
   tests cover the per-check logic against pre-seeded
-  filesystems. The `--fix` auto-remediation stretch goal from
-  the original tracker is deferred to a P3 follow-up — diagnose
-  first, fix-flag once we have specific remediations per check.
+  filesystems. The `--fix` auto-remediation stretch goal is
+  deferred to a follow-up — diagnose first, fix-flag once we have
+  specific remediations per check.
 
 ### Fixed
 
 - **Ctrl+C during `gramaton init --force` no longer destroys the
-  user's pre-existing API key (`01KQ0DNH8S97F13R4ZS2EDDWH4`
-  follow-up).** The wizard registers a rollback cleanup after
+  user's pre-existing API key (Windows-support follow-up).**
+  The wizard registers a rollback cleanup after
   writing each key file so that a mid-wizard interrupt undoes the
   write. Previously that cleanup was `os.Remove`, which on a
   --force re-run (where the key file already existed and was
@@ -2328,7 +2334,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Step 0 menu clarifies that the "First time" branch is safe
-  on re-runs (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** Now reads
+  on re-runs.** Now reads
   `[1] First time  (or re-running to reconfigure — won't touch
   your existing data)` and `[2] Import a backup from another
   computer  (replaces data with the archive)`. Surfaces the
@@ -2338,7 +2344,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Step 2 detects existing LLM API keys on re-run and offers to keep
-  them (`01KQ0DNH8S97F13R4ZS2EDDWH4` follow-up).** Previously
+  them (Windows-support follow-up).** Previously
   `gramaton init --force` forced users to re-paste their API key on
   every re-run even when the key file already existed at
   `~/.gramaton/anthropic.key` or `~/.gramaton/openai.key`. Now the
@@ -2353,7 +2359,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Step 4 asks once per detected client instead of one omnibus Y/n
-  (`01KQ0RWSSSBD18CD83776G6XXH` follow-up).** Previously a single
+  (agent-usage-instructions follow-up).** Previously a single
   "install for all?" prompt installed to every detected MCP client.
   Now each detected client (Claude Code, Kiro) gets its own Y/n so
   users can install for one and skip the other — useful when a user
@@ -2368,7 +2374,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Kiro CLI support added to the agent-usage instructions install
-  step (`01KQ0RWSSSBD18CD83776G6XXH` follow-up).** Now when the
+  step (agent-usage-instructions follow-up).** Now when the
   wizard detects both Claude Code and kiro-cli, both get their
   user-scope instruction files installed. Kiro's model is different
   enough to deserve its own layout discriminator:
@@ -2386,7 +2392,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both clients now install cleanly.
 
 - **New wizard Step 4: install agent-usage instructions into
-  ~/.claude/CLAUDE.md (`01KQ0RWSSSBD18CD83776G6XXH`).** Surfaces the
+  ~/.claude/CLAUDE.md.** Surfaces the
   onboarding gap discovered on the Windows end-to-end test: Gramaton
   hooks were wired and MCP was registered, but Claude Code had no
   CLAUDE.md telling it when to autonomously call `gramaton_search`,
@@ -2410,7 +2416,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Gramaton server failed to start on Windows: fsync on directory
-  returns "Access is denied" (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** The
+  returns "Access is denied".** The
   atomic-write discipline used in `core/refs.go`, `storage/store.go`,
   and `backup/backup.go` (write → fsync file → rename → fsync parent
   dir) worked on Unix but broke the server's startup path on Windows:
@@ -2433,7 +2439,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`gramaton init --force` re-runs the wizard on an already-
-  initialized install (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** Previously
+  initialized install.** Previously
   the init command bailed unconditionally when
   `~/.gramaton/config.yaml` existed, requiring users to delete the
   config file (losing their provider + API-key setup) to pick up
@@ -2447,7 +2453,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Claude Code hooks failed to fire on Windows: path backslashes
-  eaten by Git Bash (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** The hook
+  eaten by Git Bash.** The hook
   proxy paths `gramaton init` wrote to `~/.claude/settings.json`
   (e.g. `C:\Users\op\.gramaton\hooks\claude-code\session-start.sh`)
   reached Claude Code's bundled Git Bash, which then treated the
@@ -2470,7 +2476,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **CONTRIBUTING + architecture.md polish to close Phase 3 of
-  Windows support (`01KQ0DNH8S97F13R4ZS2EDDWH4`).** CONTRIBUTING
+  Windows support.** CONTRIBUTING
   line 118 no longer says "A Unix-like filesystem (macOS or
   Linux). Windows isn't tested." — the three-OS CI matrix now
   covers Linux, macOS, and Windows. A new "Platform-guarded
@@ -2488,7 +2494,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`docs/windows.md` — Windows-user documentation (Phase 3 of
-  Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Covers
+  Windows support).** Covers
   installation via `go install`, first-run setup, per-OS hook
   proxy behavior (Claude Code uses `.sh` via bundled Git Bash;
   Kiro uses `.cmd` natively), known Windows-specific caveats
@@ -2501,7 +2507,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Removed
 
 - **Legacy shell hook scripts + embed_hooks duplication (Phase 2
-  of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Deletes
+  of Windows support).** Deletes
   `hooks/claude-code/*.sh` (4 files, 265 LOC), `hooks/kiro/*.sh`
   (3 files, 127 LOC), the entire `internal/setup/embed_hooks/`
   duplicate tree, and `hooks/hooks_test.go` (bash-invocation
@@ -2517,7 +2523,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Hook installation switches to Go-generated proxies (Phase 2
-  of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** The wizard's
+  of Windows support).** The wizard's
   `DefaultHookBackend.Materialize` no longer extracts embedded `.sh`
   files from `internal/setup/embed_hooks/` — it now synthesizes
   one-line proxy scripts from Go string templates at init time.
@@ -2548,8 +2554,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`gramaton hook <event>` CLI subcommand — wires the Go hook
-  handlers to the binary (Phase 2 of Windows support,
-  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New `cli/hook.go` registers
+  handlers to the binary (Phase 2 of Windows support).** New
+  `cli/hook.go` registers
   a hidden cobra subcommand that dispatches one of seven
   positional-arg events (session-start, stop, pre-compact,
   post-compact, kiro-agent-spawn, kiro-user-prompt-submit,
@@ -2564,7 +2570,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   contract for unknown event names.
 
 - **`hooks/kiro.go` — Go port of the three Kiro hook scripts (Phase
-  2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  2 of Windows support).**
   `KiroAgentSpawn`, `KiroUserPromptSubmit`, `KiroStop` replicate
   `hooks/kiro/*.sh`. Two Kiro-specific quirks preserved exactly:
   (1) `session_id` falls back to `agent_id` when absent (Kiro
@@ -2582,7 +2588,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   -race on macOS; cross-compiles for windows/amd64.
 
 - **`hooks/claude_code.go` — Go port of the four Claude Code hook
-  scripts (Phase 2 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  scripts (Phase 2 of Windows support).**
   `ClaudeCodeSessionStart`, `ClaudeCodeStop`, `ClaudeCodePreCompact`,
   `ClaudeCodePostCompact` replicate the behavior of the legacy
   `hooks/claude-code/*.sh` scripts: decode stdin JSON, validate the
@@ -2601,8 +2607,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   subcommand that dispatches to these.
 
 - **`hooks` Go package — shared state helpers for the upcoming
-  `gramaton hook <event>` subcommand (Phase 2 of Windows support,
-  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Introduces `hooks/state.go`
+  `gramaton hook <event>` subcommand (Phase 2 of Windows support).**
+  Introduces `hooks/state.go`
   with the primitives that every Claude Code / Kiro hook handler
   needs: `HookInput` stdin decoder (session_id with agent_id
   fallback for Kiro), `ValidSessionID` regex guard against path-
@@ -2624,8 +2630,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **D34 + BERT matmul benchmark comments reality-calibrated from
-  real AMD64 Windows hardware validation
-  (`01KPVBNJGNQFJF5KN7TS9RS9M7`).** The AVX2+FMA3 kernel was
+  real AMD64 Windows hardware validation.** The AVX2+FMA3 kernel was
   validated on a Ryzen 7 5800X3D (Zen 3): all scalar-vs-SIMD
   parity tests pass including tile-boundary edge cases, and
   measured throughput is ~90 GFLOPS single-core (~63% of
@@ -2640,8 +2645,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   AttnScores ~21µs (target <50µs — holds).
 
 - **`server/info.go` split + `RequestShutdown` refactored for
-  cross-platform shutdown (Phase 1 of Windows support,
-  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** `IsProcessAlive` moves into
+  cross-platform shutdown (Phase 1 of Windows support).**
+  `IsProcessAlive` moves into
   per-OS files: `server/info_unix.go` uses `syscall.Signal(0)`,
   `server/info_windows.go` uses `windows.OpenProcess` with
   `PROCESS_QUERY_LIMITED_INFORMATION`. `Server.RequestShutdown`
@@ -2658,7 +2663,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and passes race tests on macOS.
 
 - **`index/flat_mmap.go` migrated to `internal/mmap` (Phase 1 of
-  Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** Four direct
+  Windows support).** Four direct
   `syscall.Mmap`/`Munmap` callsites (remap + rewrite-path unmap +
   Close-path unmap + initial Mmap) replaced with `mmap.Region`.
   The remap-after-Flush flow is preserved exactly: unmap the old
@@ -2668,7 +2673,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   GOARCH=amd64` — Phase 1's load-bearing blocker is clear.
 
 - **`embed/bert/safetensors.go` migrated to `internal/mmap`
-  (Phase 1 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).**
+  (Phase 1 of Windows support).**
   Six direct `syscall.Mmap`/`Munmap` callsites replaced with
   `mmap.Region` from the new internal package. Per-error-path
   cleanup consolidated into a small `fail` closure so we never
@@ -2679,7 +2684,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`internal/mmap` package: cross-platform read-only file mapping
-  (Phase 1 of Windows support, `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New
+  (Phase 1 of Windows support).** New
   `Region` type with `Open`, `Bytes`, `Close`. Unix implementation
   wraps `syscall.Mmap`/`Munmap` (MAP_SHARED, PROT_READ); Windows
   implementation wraps `CreateFileMapping` + `MapViewOfFile` via
@@ -2690,8 +2695,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commits 3-4 (safetensors + flat_mmap migrations) without
   touching the existing syscall callsites yet.
 
-- **GitHub Actions CI with three-OS matrix (Phase 1 of Windows support,
-  `01KQ0DNH8S97F13R4ZS2EDDWH4`).** New `.github/workflows/ci.yml`
+- **GitHub Actions CI with three-OS matrix (Phase 1 of Windows support).**
+  New `.github/workflows/ci.yml`
   runs `build`, `test`, and `test -race` on `ubuntu-latest`,
   `macos-latest`, and `windows-latest`; `vet` on ubuntu only (static
   analysis is portable). Go 1.26, 20-minute per-job timeout,
@@ -2702,7 +2707,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   meantime.
 
 - **Structured-output implementation for OpenAI and Bedrock
-  (Cluster 2 Phases 2b + 2c, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** Both
+  (Cluster 2 Phases 2b + 2c).** Both
   providers now return `SupportsStructuredOutput()=true` and have
   real `CompleteStructured` implementations.
   OpenAI uses `response_format: {type: "json_schema", json_schema:
@@ -2727,7 +2732,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   using the same Smithy-skip guard the existing `TestComplete` uses).
 
 - **Structured-output shortcut for classification — Anthropic path
-  live (Cluster 2 Phase 2a, `01KQ05MEQE2VMNG0SWSV0ZR9RH`).** New
+  live (Cluster 2 Phase 2a).** New
   `SupportsStructuredOutput()` + `CompleteStructured(ctx, schema,
   prompt)` methods on `llm.Provider`. Anthropic implementation uses
   the tool-use API with `ToolChoice: {type: tool, name: emit_output}`
@@ -2768,8 +2773,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   op). Manual on-demand sweeps remain available via
   `gramaton repair --content-quality`.
 
-- **Content-quality self-heal pass (Cluster 2 Phase 3,
-  `01KPZZNG45PC7D6HC8SQH3P9N1`).** New `curation.RunSelfHeal` walks
+- **Content-quality self-heal pass (Cluster 2 Phase 3).**
+  New `curation.RunSelfHeal` walks
   every Memory + Session record, detects LLM tool-use-format
   contamination in `content_short` via the same `internal/sanitize`
   helper used at Phase 1 write sites, and applies a deterministic
@@ -2796,8 +2801,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `firstSentences` helper edge cases (no-punctuation input,
   maxChars truncation at sentence boundaries).
 
-- **`internal/sanitize` package (Cluster 2 Phase 1,
-  `01KPZZNG45PC7D6HC8SQH3P9N1`).** New helper `sanitize.Field(s)` and
+- **`internal/sanitize` package (Cluster 2 Phase 1).**
+  New helper `sanitize.Field(s)` and
   `sanitize.Validate(orig, cleaned, name, max)` strip LLM tool-use-
   format tail leakage (`</summary_short>`, `<parameter name=`, model
   stop tokens) from short metadata fields without mangling legitimate
@@ -2876,7 +2881,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the non-nil-error branch of `RecordCall`.
 
 - **All LLM paths now flow through the `Metered` wrapper, not just
-  curation (`01KPZYSJFRW8P41SWQC750FK4B`, `01KPZZAS2580FBEPPVQHVER64C`).**
+  curation.**
   Previously only `curationLLM` was wrapped with `llm.NewMetered`
   (`server/server.go:312`, `:413`), so rerank, query decompose, and
   the classification Message Batches API made LLM calls that were
@@ -2904,8 +2909,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`SECURITY.md`** (`01KPV62W41C44YKMX9K782AEE9`): responsible-
-  disclosure policy. Routes vulnerability reports through GitHub's
+- **`SECURITY.md`**: responsible-disclosure policy. Routes
+  vulnerability reports through GitHub's
   private vulnerability reporting (Security tab → Report a
   vulnerability), keeping the maintainer's email off the repo. Lists
   supported versions (alpha: `main` only), triage expectations
@@ -2914,8 +2919,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   policy. GitHub surfaces this on the Security tab and the
   Community profile.
 
-- **`CODE_OF_CONDUCT.md`** (`01KPV62W41C44YKMX9K8TCK9MM`):
-  Contributor Covenant v2.1, fetched verbatim from the canonical
+- **`CODE_OF_CONDUCT.md`**: Contributor Covenant v2.1, fetched
+  verbatim from the canonical
   source at github.com/EthicalSource/contributor_covenant with the
   `[INSERT CONTACT METHOD]` placeholder replaced by
   `brandonlattin@gmail.com`. `CONTRIBUTING.md` no longer links out
@@ -2926,17 +2931,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **`gramaton_collection_add_batch` now mirrors single-add's
-  curation-profile dedup semantics (P1-78 follow-up,
-  `01KPEERMWYTFPJSDCNAH148B7W`).** On `curation=minimal` collections
+  curation-profile dedup semantics.** On `curation=minimal` collections
   (shopping-list / packing-list shape), duplicate titles land in
   `Added` with `deduplicated=true` pointing at the existing item's
   ID instead of `Failed` with `code=duplicate`. This matches the
-  Phase 5 Layer 2 behavior already shipped for single-add, so a
+  behavior already shipped for single-add, so a
   loader batch-importing into a minimal-curation collection gets
   idempotent results rather than spurious per-item failures.
   Intra-batch dedupes on minimal collections follow the same rule.
   On any other profile (standard / default), duplicates still land
-  in `Failed` — T-02 semantics preserved.
+  in `Failed` — original semantics preserved.
   Dedup now also uses a shared `normalizeTitle` helper (trim +
   lowercase) across both paths. Previously batch used `ToLower`
   only, so `"foo"` would fail to dedupe against an existing
@@ -2948,8 +2952,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   engine `Save` entirely.
 
 - **`storage.ProllyTree.Diff` no longer degrades to a full scan on
-  internal-vs-internal subtree differences (P1-54,
-  `01KPED3C7C8S1MWTSF9ZZ1AD68`).** Previously the diff short-circuited
+  internal-vs-internal subtree differences.** Previously the diff short-circuited
   only when the root hashes matched or both nodes were leaves; any
   internal-vs-internal case with differing hashes fell through to
   `allEntries` on both sides, reading every leaf chunk regardless of
@@ -3011,10 +3014,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collection-member skip already blocks cross-collection
   contamination at the auto-supersession path. Structured
   collections (default `standard` curation -- backlog, todo, etc.)
-  keep the T-02 `ErrConflict` behaviour: same-title-different-
+  keep the original `ErrConflict` behaviour: same-title-different-
   context is legitimate there. Layer 3 (context-enriched embedding
   input) and per-stage curation-profile skip logic stay deferred
-  to a Phase 5 follow-on.
+  to a follow-on.
 
 - **Collection templates + five starter templates (temporal-queries
   Phase 7).** `gramaton_collection_create` now accepts a
@@ -3429,15 +3432,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for (a) references to files/symbols/tickets that no longer exist,
   (b) comments that contradict current code, and (c) task-specific
   chatter that a public reader can't resolve. Results:
-  - Stripped ~100 internal ticket/Wave-phase tags from code comments
-    (shapes like `(Wave 5 P1-58.)`, `(P1-07: <explanation>)`, and
-    inline `before P1-24 landed`). These referenced a private
-    internal tracking system with no public analogue. Substantive
-    WHY rationale around the tags was preserved -- only the dead
-    pointer itself was removed. Tickets that DO resolve in
-    CHANGELOG.md or `docs/project-design/design-decisions.md`
-    (P1-23, P1-40, P1-45, P1-59, P1-69, P1-74, P1-76, P1-78, P2-06,
-    T-06, D12, D40, etc.) were kept.
+  - Stripped ~100 internal ticket and phase tags from code comments.
+    These referenced a private internal tracking system with no
+    public analogue. Substantive WHY rationale around the tags was
+    preserved -- only the dead pointer itself was removed.
   - Dropped a stale "ported from server/service_collections_test.go"
     lineage comment in `api/collections_test.go` (the cited file was
     removed long ago).
@@ -3469,7 +3467,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **P1-59: manifest-summary cache key now reflects epistemic /
+- **Manifest-summary cache key now reflects epistemic /
   temporality / confidence shifts** -- `generateManifestSummary`'s
   state fingerprint was `records=N|types=...|keywords=top15|span=...`,
   which silently treated two very different stores as "same" if they
@@ -3485,8 +3483,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on the kind of bulk shift that matters. Two new regression tests
   in `curation/autonomous_test.go`.
 
-- **P3-07 nits batch (cluster A wrap-up)** -- two surviving items
-  from the original P3-07 bundle, the rest were resolved or absorbed
+- **Nits batch (cluster A wrap-up)** -- two surviving items
+  from the original bundle; the rest were resolved or absorbed
   by other work in this Unreleased window:
   - `logging.RotatingWriter.enforcebudget` -> `enforceBudget` to
     match Go method-naming convention.
@@ -3494,10 +3492,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (0700 dirs, 0600 files for everything under `~/.gramaton/`,
     since these may carry credentials).
   Bullets already addressed elsewhere: yaml.Decoder strict-mode
-  (P1-38, commit 1c8b665), Observe.Enabled default (config-drift
-  sweep, commit 34b3fb8), safeProperties indentation (Wave 7
-  P1-74), truncate maxLen byte/rune (T-08, separate item),
-  three integration-doc drifts (T-10, separate item).
+  (commit 1c8b665), Observe.Enabled default (config-drift
+  sweep, commit 34b3fb8), safeProperties indentation, truncate
+  maxLen byte/rune (separate item), three integration-doc drifts
+  (separate item).
 
 - **`limits.max_json_size` is now honored by HTTP bindings** -- the
   cap was hardcoded to 1 MB in `server/validation.go` behind a TODO,
@@ -3564,7 +3562,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **P1-38: config `Validate()` + strict YAML decoding** -- config/config.go
+- **Config `Validate()` + strict YAML decoding** -- config/config.go
   gains an exported `Validate(*Config) error` that runs after `normalize`
   in `Load` and `LoadWithFallback`. Enforces: LLM provider allowlist
   (`anthropic`, `openai`, `bedrock`, `claude-cli`, `kiro-cli`, or empty),
@@ -3606,7 +3604,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/project-design/glossary.md`, and D35 in design-decisions.md
   all updated; the "copy the full global as a workaround" guidance
   is gone.
-- **P2-06 Stages 2+3: WriteSession pattern for batched index writes** --
+- **WriteSession pattern for batched index writes** --
   closes the stashed `*bolt.Tx` race hazard across five bbolt-backed
   types (`BboltPropertyIndex`, `BboltBM25Index`, `BboltSecondaryIndex`,
   `BboltCollectionCache`, `BboltEdgeStore`) by threading the
@@ -3630,9 +3628,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inside `WithWriteBatch` closures changes (~10 call sites total).
   Closes all three hazard classes (torn pointer read, stale-pointer
   cross-goroutine use, companion-map race). See D40 for architectural
-  rationale and `docs/project-design/p2-06-writesession-plan.md`
-  for the stage-by-stage plan.
-- **kirocli output filtering anchored to line-start (P1-69)** -- the
+  rationale.
+- **kirocli output filtering anchored to line-start** -- the
   Credits / Time footer and trust-warning lines were filtered via
   `strings.Contains` on any substring match, which would silently
   drop legitimate model responses containing those phrases mid-
@@ -3642,8 +3639,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   assert mid-line occurrences of "Credits:", "Time:", and
   "kiro.dev/docs" survive; the existing tests for footer/warning
   stripping continue to pass.
-- **Bedrock Cohere embedder distinguishes query vs document (P1-40)**
-  -- new optional `embed.QueryEmbedder` interface. Bedrock Cohere
+- **Bedrock Cohere embedder distinguishes query vs document.**
+  New optional `embed.QueryEmbedder` interface. Bedrock Cohere
   implements `EmbedQuery` with `input_type="search_query"`; the
   existing `Embed` continues to use `search_document` for indexed
   content. Cohere's retrieval benchmarks show measurable cosine-
@@ -3653,7 +3650,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   type-assertion in `search.Tool.Execute`. Providers that don't
   distinguish (OpenAI, Ollama, Titan, BERT) fall back to `Embed`
   unchanged.
-- **LLM.Model vs LLM.Models.* time-bomb reduced (P1-76)** -- curation
+- **LLM.Model vs LLM.Models.* time-bomb reduced.** Curation
   path stops reaching into `cfg.LLM.Models.Medium` directly;
   `modelForTaskLabel` now goes through `cfg.ModelAtEffort` so the
   tier-map access is confined to `config.go`. Server startup logs a
@@ -3665,7 +3662,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **HTTP LLM provider retry on 429 / 5xx (P1-23)** -- new
+- **HTTP LLM provider retry on 429 / 5xx.** New
   `llm/httpretry` package implements exponential backoff + decorrelated
   jitter with Retry-After parsing (seconds or HTTP-date). Wired into
   `llm/anthropic` and `llm/openai` via `DoWithRetry`, which handles
@@ -3678,14 +3675,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Context cancellation breaks the retry loop promptly. Non-retryable
   status codes (4xx other than 429) return to the caller after a
   single attempt.
-- **`Engine.TryRLock` + writeJSON/writeJSONLocked collapse (P1-45)**
-  -- `writeJSONLocked` is gone. `writeJSON` is now safe to call from
+- **`Engine.TryRLock` + writeJSON/writeJSONLocked collapse.**
+  `writeJSONLocked` is gone. `writeJSON` is now safe to call from
   any handler regardless of engine lock state: `curationStatus` uses
   an opportunistic `engine.TryRLock` to refresh the cache when
   possible, falling back to the stale (possibly zero) cached value
   rather than deadlocking when a caller holds the write lock. Closes
-  the RWMutex-not-reentrant footgun and finishes T-06 step 4.
-- **`Engine.WithWriteBatch` helper (T-06)** -- consolidates the
+  the RWMutex-not-reentrant footgun.
+- **`Engine.WithWriteBatch` helper.** Consolidates the
   write-phase recipe (Lock -> bbolt index batch -> Save -> Unlock)
   into a single call so curation and bulk-insert paths stop drifting
   on error handling, logging, and the "skip save when nothing
@@ -3697,10 +3694,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unbatched -- every SetProp / AddEdge / IndexNode did its own
   bbolt fsync under the monolithic write lock; a busy cycle with
   hundreds of mutations now lands in a single bbolt transaction)
-  and `curation/observe.go` observation extraction. Closes portions
-  of P1-30, P1-31, P1-45; step 4 (curation envelope cache) was
-  already done when writeJSON grew the 5s cache.
-- **USD-denominated LLM cost caps (T-07 step 2)** -- two new config
+  and `curation/observe.go` observation extraction. The curation
+  envelope cache step was already done when writeJSON grew the 5s cache.
+- **USD-denominated LLM cost caps.** Two new config
   fields: `llm_curation.max_cost_usd_per_run` bounds a single curation
   cycle, `llm.max_cost_usd_per_day` bounds the daily aggregate. Both
   default to 0 (disabled) and complement the existing count caps
@@ -3716,7 +3712,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **CLI provider telemetry (T-07 step 4)** -- `claudecli` now parses
+- **CLI provider telemetry.** `claudecli` now parses
   the per-model token block from `claude -p --output-format json`
   (`modelUsage.<model>.{inputTokens, outputTokens,
   cacheReadInputTokens, cacheCreationInputTokens}`) and records it
@@ -3726,13 +3722,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   USD or tokens), and cross-provider aggregation expects tokens --
   operators relying on `kirocli` should use `max_calls_per_day` as
   the cost safety net.
-- **Cycle summary log polish (T-07 step 5)** -- the "autonomous
+- **Cycle summary log polish.** The "autonomous
   curation complete" log now includes per-model cost (`cost:<model>
   $0.1234`) alongside the existing per-model classification counts,
   and the per-task breakdown gains a cost field (`tokens:<task>
   in=.../out=.../cache=.../cost=$X`). Map iteration is sorted so log
   lines are deterministic across cycles.
-- **Per-provider LLM telemetry (T-07 steps 1+3)** -- token usage is now
+- **Per-provider LLM telemetry.** Token usage is now
   reported by every HTTP-based LLM provider, not just Anthropic.
   `telemetry.Record(ctx, CallUsage)` is the canonical recorder entry
   point; `openai` populates input/output/cache-read tokens from the
@@ -3744,11 +3740,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provider's name into `CallMetrics.Provider` instead of hardcoding
   `"metered"`, so per-provider accounting is meaningful when multiple
   backends run in one process. CLI providers (claude-cli, kiro-cli)
-  still report zero -- their cost/credit parsing lands in T-07 step 4.
+  still report zero -- their cost/credit parsing lands in a future step.
 
 ### Added
 
-- **Bulk collection_add (P1-78)** -- new MCP tool
+- **Bulk collection_add.** New MCP tool
   `gramaton_collection_add_batch` and HTTP route
   `POST /v1/collections/{id}/items/batch` add up to 500 items in a
   single call. Batches schema validation + embedding + save into one
@@ -3854,7 +3850,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **docs/project-design sunset pass.** Removed nine design docs
   under `docs/project-design/` that described superseded pipelines
   or were duplicates of top-level `docs/` content:
-  `server-design.md` (pre-T-02 "v0.2" daemon spec, superseded by
+  `server-design.md` (pre-canonical-api "v0.2" daemon spec, superseded by
   the `api/` unified surface); `observe-pipeline.md` (the
   `gramaton_observe` flow, soft-deprecated and replaced by the
   session prepare/commit two-tier model); `capture-and-processing.md`
@@ -3877,25 +3873,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/architecture.md`, `integrator-guide.md`, and root `README.md`
   (which still reference the removed `gramaton_observe` tool) are
   tracked in `gramaton-inspection/documentation-plan.md`.
-- **T-02 cascade cleanup stage C3 (collections).** Deleted
+- **Canonical-api cascade cleanup stage C3 (collections).** Deleted
   `server/service_collections.go` (928 lines) and
   `server/service_collections_test.go` (967 lines), plus the
   duplicate `server/collections.go` (289 lines) whose schema
   types and field-type constants already live in
   `api/collection_schema.go`. All 12 server-level collection
-  methods were unreachable via bindings after T-02 routed
+  methods were unreachable via bindings after the canonical-api refactor routed
   `bindings_collections.go` through `s.api.CollectionXxx`.
   Coverage ported to `api/collections_test.go`: 27 tests over
   Create/List/Items/Add/Remove/Update/Move/Rename/Delete/
   SchemaUpdate/Migrate, including schema validation, projection
   + filter edge cases, multi-membership, dedup, and schema
-  evolution. Two tests pinned T-02 behavior changes: duplicate
+  evolution. Two tests pinned the canonical-api behavior changes: duplicate
   name and duplicate title now surface as `conflict` rather
   than `duplicate`-code or success-with-`duplicate=true` maps.
   The HTTP-boundary test (`TestCollectionItemsHTTPProjectionAndFilter`)
   stayed in `bindings_collections_test.go`; the
   `TestCollectionPerformance` test was preserved too.
-- **T-02 cascade cleanup stage C2 (records).** Removed seven dead
+- **Canonical-api cascade cleanup stage C2 (records).** Removed seven dead
   server-level record services from `server/service_records.go`
   (`serviceInspect`, `serviceUpdate`, `serviceClassify`,
   `serviceResolve`, `serviceLink`, `serviceDeleteEdge`,
@@ -3915,9 +3911,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `server/validation.go` that became unused after `serviceSearch`
   went in stage C1: `maxSearchTop`, `maxMissingFields`,
   `maxMatchLength`, `maxSearchHops`.
-- **T-02 cascade cleanup stage C1 (search + test rewires).** Deleted
+- **Canonical-api cascade cleanup stage C1 (search + test rewires).** Deleted
   `server/service_search.go` (the last method `serviceSearch` was
-  unreachable via bindings since T-02 routed `bindings_search.go`
+  unreachable via bindings since the canonical-api refactor routed `bindings_search.go`
   through `s.api.Search`). Rewired the one test reference in
   `server/handler_sessions_test.go` to `srv.api.Search`. Also
   rewired `bindings_collections_test.go` helpers (`makeCollection`,
@@ -3925,10 +3921,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `srv.api.Collection{Create,Add}`. Deleted the unused `searchRequest`
   type in `server/handler_search.go`; kept `parseDateArg` (used by
   remaining server-level services).
-- **T-02 cascade cleanup stage B (sessions).** Deleted
+- **Canonical-api cascade cleanup stage B (sessions).** Deleted
   `server/service_sessions.go` (1255 lines) and
   `server/service_sessions_test.go` (1659 lines): the server-level
-  session subsystem was fully dead after T-02 routed
+  session subsystem was fully dead after the canonical-api refactor routed
   `bindings_sessions.go` through `s.api.SessionXxx`. Tests ported to
   `api/sessions_test.go` (47 tests, package `api`) using a new
   `setupTestAPI` helper. Also removed the `preparedSessions` and
@@ -3943,9 +3939,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Dropped: seven tests that exercised internal AddTopic/AddSegment/
   UpdateSegmentCapture helpers (not user-facing); ReadArchive tests
   (the function was never wired to HTTP/MCP and was flagged as a
-  latent footgun in the T-02 security review).
-- **T-02 cascade cleanup stage A (isolated orphans).** Deleted the
-  three T-02 service orphans that were safely isolated (no test
+  latent footgun in the canonical-api security review).
+- **Canonical-api cascade cleanup stage A (isolated orphans).** Deleted the
+  three service orphans that were safely isolated (no test
   references): `serviceExplore` (`server/service_search.go`) and
   its `exploreRequest` type (`server/handler_search.go`);
   `servicePending` (entire `server/service_ops.go` file, 46 lines);
@@ -3960,13 +3956,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before deleting `server/service_sessions.go`) and stage C
   (records/search/collections equivalents) tracked as separate
   tasks.
-- **T-02 dead code cleanup (server handlers + mcp wrappers).** Deleted
-  941 lines across 8 files that were orphaned by the T-02 api/
+- **Canonical-api dead code cleanup (server handlers + mcp wrappers).** Deleted
+  941 lines across 8 files that were orphaned by the canonical-api
   migration: `server/mcp_records.go`, `server/mcp_collections.go`
   (both entirely unreachable; `registerMCPTools` in `server/mcp.go`
   routes exclusively through the `bindings_*.go` path), plus
   `server/handler_sessions.go` and `server/handler_collections.go`
-  (all contained only pre-T02 HTTP handlers with no live callers).
+  (all contained only pre-canonical-api HTTP handlers with no live callers).
   Surgical deletes from `server/handler_records.go` (8 dead
   `handle*Record` / `handle*Edge` methods; kept the captureRequest/
   updateRequest/classifyRequest/resolveRequest/edgeRequest types and
@@ -4062,17 +4058,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DedupConfig.Action` and is unchanged. Full reasoning, including
   why two alternative shapes (a real warn-only `flag` mode, a
   `NearDuplicates` response field) were rejected, is documented as
-  D37 in `docs/project-design/design-decisions.md`. Resolves dev
-  collection item 01KPPXGF8FETMYWQDQC5H7VKYN.
+  D37 in `docs/project-design/design-decisions.md`.
 - **Phase 3 of the documentation consolidation: targeted updates to
   the surviving `docs/project-design/` files.** Not rewrites -- each
   doc stays as historical design rationale but is scrubbed of stale
-  claims and extended where post-T-02 material has a load-bearing
+  claims and extended where post-canonical-api material has a load-bearing
   story worth preserving. Changes:
     - **`design-decisions.md`**: added D31-D36 covering the three
       storage paths / decision rule (D31), the two-tier session model
       with `promote_to_memory` (D32), the `api/` canonical operations
-      surface from T-02 (D33), pure-Go BERT as default embedder
+      surface (D33), pure-Go BERT as default embedder
       superseding D21's Ollama-as-default (D34), named stores via
       `LoadWithFallback` (D35), and tiered LLM models with per-task
       effort dials (D36). Each follows the existing Decision/Why
@@ -4150,9 +4145,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `observation_min_content_length`, and `search.session_dedup_enabled`.
   Adds a new top-level "Named stores" section documenting the
   `~/.gramaton/stores/<name>/config.yaml` layout and calling out the
-  full-replace-not-merge silent-fail trap (dev collection item
-  01KPMQ0N2KY2XY6KAMPW3WXF52): partial per-store configs can silently
-  zero out sections and cause startup refusal. Marks the `observe:`
+  full-replace-not-merge silent-fail trap: partial per-store configs
+  can silently zero out sections and cause startup refusal. Marks
+  the `observe:`
   section as soft-deprecated in favor of the Sessions flow. Restructures
   the file around the user-facing vs internal-tuning distinction that
   config/config.go itself uses. Surfaces one code/config-comment
@@ -4160,12 +4155,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `supersede` behave identically in `api/capture.go:142-174` (both
   mark the older record historical and add a supersedes edge; only
   `reject` differs), contrary to the config comment that describes
-  `flag` as 'mark but don't delete'. Documented in the doc and tracked
-  as dev collection item 01KPPXGF8FETMYWQDQC5H7VKYN.
+  `flag` as 'mark but don't delete'. Documented in the doc.
 - **`docs/integrator-guide.md` rewritten around the three storage
   paths.** Previous version was organized around "two retrieval
   modes" (Knowledge Graph vs Collections) and gave `gramaton_observe`
-  as a first-class tool. Neither matches reality: T-02 introduced
+  as a first-class tool. Neither matches reality: the canonical-api refactor introduced
   the three-way split (Memory / Sessions / Collections) and
   `gramaton_observe` is soft-deprecated in favor of the session
   prepare/commit flow. Rewrite reorganizes around the current
@@ -4178,7 +4172,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Collections depth (schema field types verified against
   `api/collection_schema.go`, current `ErrConflict` dedup
   behavior replacing the soft `{duplicate: true}` response the old
-  doc described -- that was the pre-T-02 shape), retrieval funnel
+  doc described -- that was the pre-canonical-api shape), retrieval funnel
   (search -> inspect -> explore), agent prompt guidance, live
   reference pointer to `gramaton_guide(topic=...)`. Search-filter
   table expanded to match the actual `api.SearchRequest` fields
@@ -4187,10 +4181,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `random`, `sort` with the verified sort keys). Surfaced one
   code rough edge during the audit: the `store` filter takes
   plural `sessions` but result rows emit singular `session`.
-  Called out in the doc as a known rough edge and tracked as
-  Gramaton development collection item 01KPPX53EHSQ0884FW0Z857PTQ.
-- **`docs/architecture.md` rewritten for the post-T-02 layered
-  architecture.** Previous version predated T-02 and described a
+  Called out in the doc as a known rough edge.
+- **`docs/architecture.md` rewritten for the post-canonical-api layered
+  architecture.** Previous version predated the canonical-api refactor and described a
   three-layer stack (CLI/MCP -> Server -> Engine) in which service
   methods lived inside the server package and held engine locks
   directly. Rewrite documents the four-layer stack that actually
@@ -4235,7 +4228,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `matmul_amd64.go:3` is real and tracked in the Gramaton development
   collection. Apple Silicon has the arm64 NEON kernel and is
   unaffected.
-- **`README.md` rewritten for the post-T-02 surface.** Added a "Why
+- **`README.md` rewritten for the post-canonical-api surface.** Added a "Why
   Gramaton" section motivating the project against built-in agent
   memory and generic vector stores (without naming them) and listing
   the concrete questions the system is designed to answer. Added a
@@ -4280,7 +4273,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   duplicating literal strings. Aligns with the existing convention used
   by capture + collections; structurally prevents the two MCP surfaces
   from drifting on help text. Also deleted `server/mcp_sessions.go`
-  (dead code since the T-02 api/ migration -- `registerMCPTools` in
+  (dead code since the canonical-api migration -- `registerMCPTools` in
   `server/mcp.go` routes via `registerSessionsMCPTools` in bindings, not
   the older `registerMCPSessionTools`).
 - **Leaner `session_prepare` extraction prompt.** The prompt returned
@@ -4324,7 +4317,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the same trigger list + scheduled cadence + anti-pattern
   callout. Behavior change: LLM agents using the MCP surface should
   call prepare/commit more frequently during real-dev conversations.
-- **Engine god-object split (P2-01)** -- `core/engine.go` reorganised
+- **Engine god-object split.** `core/engine.go` reorganised
   into named subsystems and sibling pipeline packages across two PRs.
   PR1 extracted `providers`, `searcher`, and `indexSet` subsystems
   (engine shrank 1207 -> 952 LOC); `indexSet.applyToNode` consolidates

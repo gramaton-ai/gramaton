@@ -64,8 +64,6 @@ type State struct {
 //     below the specificity ceiling). A telemetry signal showing how
 //     much candidate-detection work the deterministic phase is
 //     producing; not work to be drained.
-//
-// Tracker 01KQ62W8M80K6H6DGBJ4F4DE3F.
 type EnhancedStatus struct {
 	PendingCount      int        `json:"pending_count"`
 	Overdue           bool       `json:"overdue"`

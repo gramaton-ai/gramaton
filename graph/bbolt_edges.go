@@ -31,7 +31,7 @@ var (
 //
 // Concurrency: Put/Delete take no *bolt.Tx (open their own Update);
 // PutTx/DeleteTx accept the caller's tx + an optional *EdgeBatch
-// adjacency cache. Removes the P2-06 stashed-pointer race class.
+// adjacency cache. Removes the stashed-pointer race class.
 type BboltEdgeStore struct {
 	db    *bolt.DB
 	cache *edgeLRU

@@ -107,11 +107,11 @@ func addObserveCandidate(t *testing.T, eng *core.Engine) string {
 	return n.ID
 }
 
-// TestObserveFailureBumpsAttemptCounter pins the fix for tracker
-// 01KQ409W2XDSSWBTZ66WBTFVD1. Pre-fix, an embed failure on the
-// observation batch left the parent without an observation_of edge,
-// so the next cycle re-extracted it and re-paid the embedding cost.
-// Post-fix, the failure writes observation_extract_attempts=1.
+// TestObserveFailureBumpsAttemptCounter pins the observation-extract
+// retry-budget fix. Pre-fix, an embed failure on the observation
+// batch left the parent without an observation_of edge, so the next
+// cycle re-extracted it and re-paid the embedding cost. Post-fix,
+// the failure writes observation_extract_attempts=1.
 func TestObserveFailureBumpsAttemptCounter(t *testing.T) {
 	emb := &configurableObsEmbedder{
 		errors: []error{fmt.Errorf("API timeout")},

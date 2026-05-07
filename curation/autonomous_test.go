@@ -221,7 +221,7 @@ func TestClassifyPendingParseError(t *testing.T) {
 // failed classify run writes classify_attempts=1 and last_classify_error
 // without flipping processing_status.
 //
-// Regression guard for tracker 01KQ3X9EBX4WKVJQ56W1C31V97 — without
+// Regression guard for the classify-attempts counter — without
 // this counter, a record that cannot be classified (oversized content,
 // content-policy refusal, persistent parse failures) re-enters the
 // FIFO pending queue every minute and bills tokens forever.
@@ -636,7 +636,7 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 // failed summary call writes summary_attempts=1 and last_summary_error
 // without skipping the record yet.
 //
-// Regression guard for tracker 01KQ406Z12VKRGRT3HEER0ZT1A: without this
+// Regression guard for the summary-attempts counter: without this
 // counter, a record the LLM consistently can't summarize re-enters the
 // summary candidate set every cycle and bills input tokens forever.
 func TestSummarizeFailureBumpsAttemptCounter(t *testing.T) {
@@ -1384,12 +1384,12 @@ func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
 	}
 }
 
-// TestManifestNegativeCacheBoundsRetries pins the negative-cache fix
-// for tracker 01KQ4089VFQBE2T47H5GGKB5VC. Pre-fix, generateManifestSummary's
-// LLM-error path returned without updating the cache, so the next
-// cycle (with the same store-state fingerprint) recomputed the same
-// hash, hit "cache miss" again, and re-called the LLM. Post-fix, the
-// negative-cache counter advances and skips the LLM after the threshold.
+// TestManifestNegativeCacheBoundsRetries pins the negative-cache fix.
+// Pre-fix, generateManifestSummary's LLM-error path returned without
+// updating the cache, so the next cycle (with the same store-state
+// fingerprint) recomputed the same hash, hit "cache miss" again, and
+// re-called the LLM. Post-fix, the negative-cache counter advances
+// and skips the LLM after the threshold.
 func TestManifestNegativeCacheBoundsRetries(t *testing.T) {
 	eng := setupEngine(t)
 	for i := 0; i < 6; i++ {
@@ -1680,11 +1680,11 @@ func findContradictionCheckSkippedEdge(t *testing.T, eng *core.Engine, idA, idB 
 }
 
 // TestDetectContradictionsFailureCreatesSoftFailEdge pins the
-// fix for tracker 01KQ407VR599E2CGAGJ0FBVGJZ. Pre-fix an LLM
-// failure on a contradiction check left no state on the pair, so
-// the pair re-entered the candidate pool every cycle and burned
-// tokens forever. Post-fix, the failure writes a
-// contradiction_check_skipped edge with attempts=1.
+// soft-fail-edge fix. Pre-fix an LLM failure on a contradiction
+// check left no state on the pair, so the pair re-entered the
+// candidate pool every cycle and burned tokens forever. Post-fix,
+// the failure writes a contradiction_check_skipped edge with
+// attempts=1.
 func TestDetectContradictionsFailureCreatesSoftFailEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
@@ -1939,7 +1939,7 @@ func TestManifestCacheInvalidatesOnChange(t *testing.T) {
 	}
 }
 
-// TestManifestCacheInvalidatesOnEpistemicShift covers P1-59: the
+// TestManifestCacheInvalidatesOnEpistemicShift covers the fingerprint requirement: the
 // fingerprint must distinguish stores that differ only in the
 // epistemic_status / temporality / confidence distributions, so a
 // bulk reclassification (e.g. 50 records sliding speculative ->
@@ -1975,7 +1975,7 @@ func TestManifestCacheInvalidatesOnEpistemicShift(t *testing.T) {
 	// Bulk reclassification: every record moves speculative -> well_established
 	// AND confidence drops from 0.9 (high) to 0.3 (low). Top keywords,
 	// knowledge-type histogram, record count, and date span are all
-	// unchanged -- the pre-P1-59 fingerprint would treat this as the
+	// unchanged -- the earlier fingerprint would treat this as the
 	// same store and serve the stale "baseline summary".
 	eng.Lock()
 	for _, id := range ids {
@@ -2033,7 +2033,7 @@ func TestManifestCacheInvalidatesOnTemporalityShift(t *testing.T) {
 	}
 }
 
-// TestManifestCacheIgnoresHistoricalRecords pins P2-09 fix #4: the
+// TestManifestCacheIgnoresHistoricalRecords pins the historical-record exclusion: the
 // manifest summary describes the CURRENT state of the store, so
 // records whose valid_until is in the past must be excluded from
 // the fingerprint inputs. Pre-fix (initial), adding a historical
@@ -2249,7 +2249,7 @@ func TestMeanCosineToCentroidEmpty(t *testing.T) {
 }
 
 // TestEnrichConceptSynthesesLogsDimMismatch pins the user-visible
-// payoff of P2-09 fix #2: when meanCosineToCentroid skips members
+// payoff of the dimension-mismatch warning: when meanCosineToCentroid skips members
 // for embedding-dimension mismatch, enrichConceptSyntheses must
 // emit a Warn-level log with the "gramaton reembed" hint so
 // operators see the embedding-model drift.
@@ -2381,7 +2381,7 @@ func addPendingConcept(t *testing.T, eng *core.Engine, keyword string, memberCou
 // transport error during concept synthesis writes synthesis_attempts
 // + last_synthesis_error on every concept in the batch (not just one).
 //
-// Regression guard for tracker 01KQ407BPRJF8AVT7CBKQ6VJDB: pre-fix
+// Regression guard for the synthesis-attempts counter: pre-fix
 // concepts with synthesis_status=pending re-entered the candidate set
 // every cycle on persistent failure, billing input tokens forever.
 func TestSynthesizeBatchFailureBumpsAttemptCounter(t *testing.T) {
@@ -2529,7 +2529,7 @@ func TestSynthesizeSuccessClearsAttempts(t *testing.T) {
 }
 
 // TestMeanCosineToCentroidDimMismatchSurfaced is the regression for
-// P2-09 fix #2: when concept members have heterogeneous embedding
+// the dimension-mismatch fix: when concept members have heterogeneous embedding
 // dimensions (e.g. embedding model changed mid-store), the function
 // must report the count of skipped members so the caller can warn
 // instead of silently producing a misleadingly-low n.
@@ -2820,8 +2820,8 @@ func TestParseClassificationKeywordLengthTruncation(t *testing.T) {
 // the classification LLM emits JSON where summary_short contains
 // tool-use-format tail fragments, the parser strips them before
 // returning. Regression against the Cluster 2 bug class observed on
-// 2026-04-24 (01KPZZNG45PC7D6HC8SQH3P9N1): corruption inside the
-// JSON string value for summary_short was being stored verbatim.
+// 2026-04-24: corruption inside the JSON string value for
+// summary_short was being stored verbatim.
 func TestParseClassificationStripsTailContamination(t *testing.T) {
 	// Embed the tail pattern inside the JSON string value.
 	input := `{"temporality":"durable","confidence":0.9,"summary_short":"Good summary here.</summary_short>\n<parameter name=\"keywords\">[\"a\"]"}`
@@ -3015,7 +3015,7 @@ func TestGenerateSummariesForTruncatedSections(t *testing.T) {
 }
 
 // TestGenerateSummariesRelatedToEdgesNotMisclassifiedAsStructural
-// pins P2-07 fix #4: the unified edge walk in generateSummaries
+// pins the structural-vs-semantic edge distinction: the unified edge walk in generateSummaries
 // must distinguish structural (chunk_of / section_of) from semantic
 // (related_to / supersedes / etc.) edges. A record with semantic
 // edges only is NOT structural and must hit Priority 1 (no-summary).

@@ -41,6 +41,58 @@ Default = both. Narrow only when you know what you want.
   speculative" or "records missing a classification" -- structural
   queries.
 
+## Pagination
+
+Search returns a paged response keyed to a snapshot of the ranked
+candidate set:
+
+- `page`, `page_size` -- the slice you got back. Default page_size
+  is 20; max is 100.
+- `total` -- size of the candidate set (capped server-side at
+  `search.pagination.candidate_cap`, default 500, hard ceiling 1000).
+- `next_cursor` -- opaque token; pass back as `cursor` to get the
+  next page.
+- `query_id` -- ULID identifying the snapshot; use for telemetry
+  or session-attached pagination flows.
+- `pages` -- a table of `{page, cursor}` entries for every page in
+  the snapshot. Random access (jump to page 5) and parallel
+  fan-out (subagents process non-adjacent pages) both work via
+  this table.
+
+Snapshots evict after `search.pagination.snapshot_ttl` (default
+20m). An expired cursor returns
+`{error: "snapshot_expired"}` -- re-run the original query to
+materialize a new snapshot.
+
+When you call back with `cursor`, the cursor wins: any `text`,
+`match`, `filter`, etc. you pass alongside is ignored. The response
+echoes back `ignored_params` listing what was dropped so the caller
+knows. To change the filters, omit `cursor` and run a fresh query.
+
+If you genuinely need every record (more than `candidate_cap`),
+switch to `gramaton_export` -- same filter set, no candidate cap,
+exhaustive. See "Exporting" below.
+
+## Exporting
+
+`gramaton_export` runs the same filters as `gramaton_search`
+(text, match, store, keywords, temporality, knowledge_type, since,
+etc.) but is exhaustive: no candidate cap, no top-N truncation, no
+snapshot TTL.
+
+Format is controlled by `--format`:
+
+- `jsonl` (default) -- one JSON object per line; streaming-friendly.
+- `json` -- a single parseable JSON array. Useful for `jq` and
+  one-shot tools.
+- `csv` -- comma-separated with a header row.
+- `markdown` -- human-readable.
+
+With no filters, the export is a full-store dump. Use this when
+search pagination's `total` indicates the full result set is too
+large to page through, or when the caller wants an offline
+snapshot.
+
 ## Useful Patterns
 
 - Newest records: `sort="created_at"`

@@ -30,8 +30,8 @@ func (noopLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string)
 	return nil, nil
 }
 
-// TestServerNewAcceptsNilLLM is the regression guard for backlog
-// item 01KPVP9HDJM9YZ37QB4315KGAF: a server that would have refused
+// TestServerNewAcceptsNilLLM is the regression guard for the
+// nil-LLM construction path: a server that would have refused
 // to construct without LLM broke the wizard's "skip LLM" path, made
 // `gramaton serve` fail with an opaque timeout, and contradicted
 // the documented deterministic-only curation contract. After the
@@ -130,8 +130,8 @@ func addRecord(t *testing.T, eng *core.Engine, content string) string {
 	return n.ID
 }
 
-// TestAutoBackupAdvancesLastBackupOnFailure pins the fix for tracker
-// 01KQ409C61Y9SQRAZFAYJEXV1X: pre-fix, runAutoBackup did NOT advance
+// TestAutoBackupAdvancesLastBackupOnFailure pins the auto-backup
+// retry-cadence fix: pre-fix, runAutoBackup did NOT advance
 // s.lastBackup on a BackupCreate failure, so a deterministic failure
 // (disk full, permission denied, configured backup dir is a regular
 // file) re-attempted on every post-curation-cycle hook (~1 minute
@@ -477,8 +477,8 @@ func TestCurationInEnvelope(t *testing.T) {
 	}
 }
 
-// TestCurationStatusUnderWriteLock exercises the P1-45 collapse:
-// writeJSON must not deadlock even when the caller already holds
+// TestCurationStatusUnderWriteLock exercises the writeJSON/curationStatus
+// collapse: writeJSON must not deadlock even when the caller already holds
 // the engine write lock. curationStatus' TryRLock gate returns the
 // cached (possibly zero) value instead of blocking.
 func TestCurationStatusUnderWriteLock(t *testing.T) {

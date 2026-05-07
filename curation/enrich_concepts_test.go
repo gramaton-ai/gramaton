@@ -12,7 +12,7 @@ import (
 )
 
 // TestEnrichConceptsSkipsRedundantUpdates is the load-bearing
-// regression for P2-07 fix #3. Pre-fix, the update gate was
+// regression for the redundant-update gate fix. Pre-fix, the update gate was
 // `count != existingCount || count > 0`, which always fired once a
 // concept had any inbound edge — so every concept with evidence got
 // re-written every cycle even when nothing had changed. Post-fix:
@@ -85,13 +85,13 @@ func TestEnrichConceptsSkipsRedundantUpdates(t *testing.T) {
 	}
 }
 
-// TestEnrichConceptSynthesesEmbedsConcept pins the fix for
-// 01KQ60N4ZCCQDKM17XWQMZAX9C: concept nodes were created during
-// emergence with nil vectors and only got embeddings when
-// `gramaton reembed` caught up. Concept telemetry and PRF were
-// blind for any concept the reembed pipeline had not yet processed.
-// The synthesis flow now embeds each completed concept inline and
-// registers it in the vec index.
+// TestEnrichConceptSynthesesEmbedsConcept pins the inline-embed
+// fix: concept nodes were created during emergence with nil
+// vectors and only got embeddings when `gramaton reembed` caught
+// up. Concept telemetry and PRF were blind for any concept the
+// reembed pipeline had not yet processed. The synthesis flow
+// now embeds each completed concept inline and registers it in
+// the vec index.
 func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 	emb := &configurableObsEmbedder{dim: 3}
 
@@ -172,9 +172,8 @@ func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 }
 
 // TestEnrichConceptsExcludesObservationSources pins the
-// observation-vs-parent double-counting fix
-// (01KQ62W3EPCRM4ARQG85AQP94S). Pre-fix, evidence_count counted
-// every inbound non-structural edge -- including instance_of
+// observation-vs-parent double-counting fix. Pre-fix, evidence_count
+// counted every inbound non-structural edge -- including instance_of
 // edges sourced from observations (which inherit their parent's
 // content_keywords and so get pulled into the same emergence
 // cluster). The audit on this store flagged concepts where

@@ -90,8 +90,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 		// retry budget. Without this guard, a parent whose embedding
 		// consistently fails (oversized, content-policy refusal, model
 		// dimension change without reembed) gets re-extracted every
-		// cycle, paying the embedding cost forever. Tracker
-		// 01KQ409W2XDSSWBTZ66WBTFVD1.
+		// cycle, paying the embedding cost forever.
 		maxObsAttempts := cfg.Curation.MaxObservationAttempts
 		if maxObsAttempts > 0 {
 			if attempts, ok := n.Properties.GetInt64("observation_extract_attempts"); ok && attempts >= int64(maxObsAttempts) {

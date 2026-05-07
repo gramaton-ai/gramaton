@@ -16,10 +16,10 @@ import (
 //	collmembers -> collectionID -> encoded list of item node IDs
 //
 // Concurrency: Mutating methods take an explicit *bolt.Tx so the
-// transaction is threaded via the call graph. The P1-78 deadlock
+// transaction is threaded via the call graph. The bulk-add deadlock
 // gotcha (AddMember opening its own bbolt tx inside BatchIndexWrites)
 // is now a compile-time concern: callers that hold a tx MUST use
-// AddMemberTx, not AddMember. Removes the P2-06 stashed-pointer
+// AddMemberTx, not AddMember. Removes the stashed-pointer
 // race class.
 type BboltCollectionCache struct {
 	db *bolt.DB

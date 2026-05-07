@@ -102,7 +102,7 @@ func isRetired(n *graph.Node) bool {
 // input) so a query mentioning the collection's name surfaces its
 // items even when the items' own fields don't contain that name.
 //
-// Example: an item titled "Phase 5 follow-on" lives in a collection
+// Example: an item titled "implement caching" lives in a collection
 // named "Gramaton development". Without context-prepending, searching
 // "Gramaton" misses the item via BM25 (its fields don't contain the
 // word) and only finds it via vector proximity (luck). With the
@@ -169,7 +169,7 @@ func (a *API) setFieldProps(nodeID string, fields map[string]any) {
 
 // setFieldPropsIn is setFieldProps routed through a WriteSession so
 // property writes share the batch's bbolt tx instead of opening one
-// per call. Used inside WithWriteBatch closures. (P2-06.)
+// per call. Used inside WithWriteBatch closures.
 func (a *API) setFieldPropsIn(ws *core.WriteSession, nodeID string, fields map[string]any) {
 	for k, v := range fields {
 		propKey := "field." + k
@@ -277,10 +277,10 @@ func joinCollectionNames(names []string) string {
 }
 
 // Description constants shared by every transport (HTTP binding MCP
-// tool, CLI MCP proxy). Keeping them with the api package is the T-02
-// anti-drift convention: one source of truth for "what does this tool
-// do", so the server-registered description and the CLI proxy's
-// description can't diverge over time.
+// tool, CLI MCP proxy). Keeping them with the api package is the
+// canonical anti-drift convention: one source of truth for "what does
+// this tool do", so the server-registered description and the CLI
+// proxy's description can't diverge over time.
 
 const CollectionCreateDescription = "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research."
 
@@ -1169,9 +1169,9 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	//     idempotent return of the existing item's ID with
 	//     deduplicated=true in the response. No ErrConflict.
 	//   - curation=standard (structured data): ErrConflict with the
-	//     existing ID in the message. Preserves T-02 semantics for
-	//     backlog/todo-style collections where same-title-different-
-	//     context is legitimate.
+	//     existing ID in the message. Preserves the canonical-api
+	//     semantics for backlog/todo-style collections where same-
+	//     title-different-context is legitimate.
 	if title, ok := req.Fields["title"]; ok {
 		titleStr, isStr := title.(string)
 		if isStr {

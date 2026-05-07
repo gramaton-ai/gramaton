@@ -951,9 +951,9 @@ func TestCollectionAddBatchProcessingStatusGatedByCuration(t *testing.T) {
 	}
 }
 
-// TestCollectionDedup pins the T-02 behavior change: CollectionAdd
+// TestCollectionDedup pins the canonical-api behavior: CollectionAdd
 // rejects a duplicate-title add with ErrConflict (instead of the
-// pre-T-02 success-with-duplicate=true map). The existing item's ID
+// older success-with-duplicate=true map). The existing item's ID
 // is surfaced in the error message.
 func TestCollectionDedup(t *testing.T) {
 	a, _ := setupTestAPI(t)

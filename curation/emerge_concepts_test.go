@@ -9,12 +9,12 @@ import (
 )
 
 // TestEmergeOverlapGateMergesAliasesIntoNewConcept pins Phase F's
-// behavior on the duplicate-burst case from tracker
-// 01KQ5JVCMB4C9H4Z1BPME2E4P7. Three records share three content
-// keywords; without the overlap gate three concepts emerged on the
-// same evidence set ("TZ-fragile tests", "parseDateArg UTC midnight",
-// "test timezone bugs"-style fragmentation). Post-fix only one concept
-// emits, with the peer keywords folded into its content_keywords.
+// behavior on the duplicate-burst case. Three records share three
+// content keywords; without the overlap gate three concepts emerged
+// on the same evidence set ("TZ-fragile tests", "parseDateArg UTC
+// midnight", "test timezone bugs"-style fragmentation). Post-fix
+// only one concept emits, with the peer keywords folded into its
+// content_keywords.
 func TestEmergeOverlapGateMergesAliasesIntoNewConcept(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

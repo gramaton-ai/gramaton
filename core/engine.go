@@ -537,7 +537,7 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	// not yet written. We attach engine-managed index roots before
 	// the single chunk write in WriteCommit -- this avoids the
 	// per-save orphan chunk that the prior write+rewrite flow
-	// produced. (P2-02 sub-fix 6.)
+	// produced.
 	commit, err := e.graph.PrepareCommit(e.store, e.headHash, message, actions, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
 		SplitBits:       e.cfg.Storage.ProllySplitBits,
@@ -716,8 +716,8 @@ func (e *Engine) TSIndex() *graph.TSIndex { return e.indexes.tsIndex }
 // Prefer WithWriteBatch for write-phase callers that also need Lock +
 // Save. BatchIndexWrites remains the right call for code paths that
 // are already under the write lock and want to batch a sub-section
-// of their work. (P2-06: fn now receives a *WriteSession, matching
-// the WithWriteBatch closure shape.)
+// of their work. fn receives a *WriteSession, matching the
+// WithWriteBatch closure shape.
 func (e *Engine) BatchIndexWrites(fn func(*WriteSession)) error {
 	return e.indexes.batch(e, func(ws *WriteSession) error {
 		fn(ws)
@@ -746,7 +746,7 @@ func (e *Engine) BatchIndexWrites(fn func(*WriteSession)) error {
 // observable per phase. fn receives a *WriteSession with the
 // session's tx and companion caches; call ws.SetProp, ws.AddEdge,
 // ws.IndexNode etc. inside to thread tx through the bbolt-backed
-// indexes. (T-06, P2-06.)
+// indexes.
 func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated bool, err error)) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

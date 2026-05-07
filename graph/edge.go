@@ -30,7 +30,7 @@ func (g *Graph) AddEdge(sourceID, targetID, edgeType string, weight float64, pro
 // the edge store opening its own Update (non-batched path). When
 // non-nil, writes go through the bbolt-backed store's PutTx so the
 // shared tx is used and the adjacency cache amortizes re-encode cost.
-// In-memory edge stores ignore tx/batch. (P2-06, D40.)
+// In-memory edge stores ignore tx/batch. See D40.
 func (g *Graph) AddEdgeTx(tx *bolt.Tx, batch *EdgeBatch, sourceID, targetID, edgeType string, weight float64, props Properties) (*Edge, error) {
 	if _, ok := g.GetNode(sourceID); !ok {
 		return nil, fmt.Errorf("graph: source node %s: %w", sourceID, ErrNotFound)

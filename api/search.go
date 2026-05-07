@@ -274,7 +274,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	// Pre-embed outside any engine lock. Uses embed.EmbedForQuery so
 	// providers that distinguish query-time embeddings (e.g. Cohere
 	// on Bedrock, which needs input_type="search_query") pick the
-	// right path; others fall back to Embed. (P1-40.)
+	// right path; others fall back to Embed.
 	a.log.Debug("search: embedding query", "component", "search", "text_len", len(q.Text))
 	embedStart := time.Now()
 	var queryVec []float32
@@ -353,7 +353,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	// gather data on whether concept-based query expansion (PRF) would
 	// help before committing to ship it. Sampled review by the
 	// operator over weeks of real usage answers "are concepts earning
-	// their slot." Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+	// their slot."
 	if queryVec != nil {
 		cfg := a.engine.Config()
 		if cfg.Telemetry.ConceptMatchEnabled {

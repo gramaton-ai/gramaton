@@ -120,7 +120,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 |---------|---------|
 | `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
 | `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
-| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. |
+| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. Per-collection eligibility is gated by orthogonal behavior knobs on the collection node (`curation`, `supersession`, `contradictions`, `clear_mode`); `EffectiveCurationFor(record)` resolves the effective level by walking `member_of` edges. New ad-hoc collections default to `curation=none`; the standard templates (`backlog`, `todo`, `reading-list`, `journal`, `references`) opt in to `curation=standard` and declare a `content_fields` list naming the fields the LLM treats as the item's content. |
 | `dedup/` | Near-duplicate detection via vector similarity + Jaccard guard. |
 | `chunking/` | Long-content splitting before embedding. |
 
@@ -149,6 +149,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_capture_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
 | `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop). Exposed as `gramaton hook <event>` subcommands; one-line proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them. `.cmd` on Windows for Kiro, `.sh` everywhere else. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
+| `internal/setup/` | Interactive setup wizard (`gramaton init`) used to register MCP entries and install per-client agent guidance. Templates live in `internal/setup/templates/` as a shared `base.md` plus per-client addenda (`claude_addendum.md`, `kiro_addendum.md`); `templateForClient(clientName)` substitutes the matched addendum at a `<!-- CLIENT_ADDENDUM -->` marker in `base.md`, so adding a future client (codex, cursor, etc.) is dropping in a new addendum file plus one `case` in the switch. `integration/<client>/` snapshots are drift-tested against the canonical via `TestIntegrationSnapshotsMatchCanonical` (refresh with `go test ./internal/setup -update-integration`). |
 | `internal/mmap/` | Cross-platform read-only file mmap: `syscall.Mmap` on Unix, `CreateFileMapping` + `MapViewOfFile` on Windows via `golang.org/x/sys/windows`. Consumed by `embed/bert/safetensors.go` (model weights) and `index/flat_mmap.go` (vector index). In-house to preserve Gramaton's frugal-deps posture — `edsrzf/mmap-go` carries 500+ LOC of features we don't use. |
 | `internal/version/` | Build-time version injection. |
 
@@ -250,20 +251,36 @@ Companion endpoints:
   GET  /v1/jobs                            → enumerate jobs (tenant-filtered, paginated)
 ```
 
-### Search
+### Search (fresh query)
 
 ```
-Client → POST /v1/search → api.Search
+Client → POST /v1/search → api.Search (no cursor in request)
   1. Pre-embed query text outside the lock (if embedding configured)
   2. engine.RLock()
   3. Filter candidates by metadata (property index, resolution, lifecycle, epistemic status, temporality, ...)
   4. Hybrid rank: vector similarity + BM25 keyword, fused via RRF
   5. Composite score per candidate: similarity, knowledge freshness (temporality-keyed exponent), access recency, confidence. Importance acts as a floor.
-  6. Sort, take top N, optionally expand via single-hop traversal
-  7. Record access (bump access_count / last_accessed / activation_boost on neighbors; flushed later by access-dirty timer)
-  8. engine.RUnlock()
-  9. Assemble result rows with metadata summaries and store origin (memory / sessions)
+  6. Materialize the top-`candidate_cap` (default 500, hard ceiling 1000) IDs + scores into a SearchSnapshot keyed by a fresh ULID query_id; pin in core.SnapshotStore with `snapshot_ttl` (default 20m)
+  7. Slice page 1 from the snapshot at the requested page_size (default 20, max 100); fetch record content + neighbor traversal for that page only
+  8. Record access (bump access_count / last_accessed / activation_boost on neighbors; flushed later by access-dirty timer)
+  9. engine.RUnlock()
+ 10. Assemble result rows with metadata summaries + store origin (memory / sessions); response carries `page`, `page_size`, `total`, `next_cursor`, `query_id`, and a `pages` table of `{page, cursor}` for every page in the snapshot
 ```
+
+### Search (paginated — cursor in request)
+
+```
+Client → POST /v1/search → api.Search (cursor encoded as `query_id:start:page_size`)
+  1. Decode cursor; look up SearchSnapshot by query_id in core.SnapshotStore
+     - Miss / expired: return {error: "snapshot_expired"}; caller re-runs the original query
+  2. engine.RLock()
+  3. Slice the encoded page from the snapshot's frozen ID list — match set is the same one the original query produced
+  4. Fetch record content per ID (fresh; mutations since the snapshot are visible)
+  5. engine.RUnlock()
+  6. Assemble result rows; response echoes the same `query_id`, the next/previous cursors from the same `pages` table, and `ignored_params` listing any text/match/filter args that were dropped (the cursor's snapshot wins over fresh filter args)
+```
+
+For exhaustive retrieval beyond `candidate_cap`, callers route to `gramaton_export` instead — same filter set, no candidate cap, streaming three-phase (RLock → collect IDs; per-record RLock → fetch + write) so a long export doesn't hold a single read lock across all I/O.
 
 ### Session commit
 

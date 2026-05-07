@@ -288,7 +288,7 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	// consistently errors in batch mode flips processing_status="stuck"
 	// at threshold, the same as if it had failed in the inline cycle.
 	// The selection at line 44 already excludes stuck records, so we
-	// don't need a pre-flight skip. Tracker 01KQ40AA1C1C95JG5VETFR20M7.
+	// don't need a pre-flight skip.
 	classifyRetry := taskRetryPolicy{
 		AttemptsKey:      "classify_attempts",
 		ErrorKey:         "last_classify_error",

@@ -4,7 +4,7 @@ Design documents for Gramaton. These cover the research foundations, data model,
 
 These documents were written during design and reflect the reasoning behind the system as-built. They are **historical rationale**, not live API references. When a document here conflicts with the current code or the top-level `docs/` surface, the code and top-level docs win.
 
-A larger sunset pass on 2026-04-20 removed nine documents that described superseded pipelines (pre-T-02 server design, the `gramaton_observe` flow replaced by sessions, the early subagent-classification capture model, a validation methodology replaced by the LongMemEval benchmark) or were straight duplicates of top-level `docs/` content. Git history preserves them at commits prior to that date if needed.
+A larger sunset pass on 2026-04-20 removed nine documents that described superseded pipelines (the pre-canonical-api server design, the `gramaton_observe` flow replaced by sessions, the early subagent-classification capture model, a validation methodology replaced by the LongMemEval benchmark) or were straight duplicates of top-level `docs/` content. Git history preserves them at commits prior to that date if needed.
 
 ## Reading Order
 
@@ -33,9 +33,3 @@ Start with foundations for context, then read the design docs in order. The rema
 | [Data Integrity](data-integrity.md) | Threat model, agent misuse, failure modes, defenses |
 | [Design Decisions](design-decisions.md) | Decision log with rationale |
 | [Glossary](glossary.md) | Terminology reference |
-
-### Pending refactors
-
-| Document | What It Covers |
-|----------|---------------|
-| [P2-06 WriteSession plan](p2-06-writesession-plan.md) | Stage-by-stage plan to replace the stashed `*bolt.Tx` pattern with an explicit `WriteSession` type |

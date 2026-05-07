@@ -19,8 +19,8 @@ import (
 // All indexes are derived data, rebuildable from the graph.
 //
 // Concurrency: Mutating methods take an explicit *bolt.Tx; Non-Tx
-// methods open their own db.Update. Removes the P2-06 stashed-
-// pointer race class.
+// methods open their own db.Update. Removes the stashed-pointer
+// race class.
 type BboltSecondaryIndex struct {
 	db *bolt.DB
 }

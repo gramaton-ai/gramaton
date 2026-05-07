@@ -19,7 +19,7 @@ import (
 // directly (those open their own bbolt Update per call).
 //
 // The fields are unexported; the type exposes caller-facing methods
-// that mirror the engine's non-batched mutation API. (P2-06, D40.)
+// that mirror the engine's non-batched mutation API. See D40.
 type WriteSession struct {
 	tx      *bolt.Tx
 	bm25    *index.BM25Batch

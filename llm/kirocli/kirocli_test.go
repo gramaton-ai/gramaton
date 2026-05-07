@@ -87,7 +87,7 @@ func TestModelAliases(t *testing.T) {
 	}
 }
 
-// TestExtractResponsePreservesCreditsInMidLine confirms the P1-69
+// TestExtractResponsePreservesCreditsInMidLine confirms the
 // tightened filter: a response sentence containing "Credits:" mid-
 // line survives, because the footer filter requires the chrome
 // pattern at line start.

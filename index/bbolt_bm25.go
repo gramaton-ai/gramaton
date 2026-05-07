@@ -29,7 +29,7 @@ import (
 // serialising every caller. Mutating methods take an explicit
 // *bolt.Tx; the in-batch write cache is a *BM25Batch passed as a
 // parameter (nil disables caching and falls back to per-call
-// encode/decode). Removes the P2-06 stashed-pointer race class.
+// encode/decode). Removes the stashed-pointer race class.
 type BboltBM25Index struct {
 	db *bolt.DB
 	k1 float64

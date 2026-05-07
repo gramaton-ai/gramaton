@@ -204,7 +204,7 @@ Long-lived `AKIA...` access keys in `~/.aws/credentials` or via the `aws_access_
 
 #### The static-keys-rewrite gotcha
 
-If your credential manager refreshes by **rewriting `~/.aws/credentials` in place** (the Isengard-on-developer-laptop pattern), a long-running Gramaton daemon will **NOT** pick up the new credentials. The SDK reads static credentials from the file once at startup and caches them for the life of the process.
+If your credential manager refreshes by **rewriting `~/.aws/credentials` in place** (a common pattern for IAM-based dev workflows where a helper periodically refreshes the static-key block in your credentials file), a long-running Gramaton daemon will **NOT** pick up the new credentials. The SDK reads static credentials from the file once at startup and caches them for the life of the process.
 
 Two clean fixes:
 

@@ -4,17 +4,17 @@ Every major decision with the reasoning behind it. Newest first.
 
 ---
 
-### D40: `WriteSession` Pattern for Batched Index Writes (P2-06)
+### D40: `WriteSession` Pattern for Batched Index Writes
 
 **Decision:** The stashed `batch *bolt.Tx` field on BboltPropertyIndex / BboltBM25Index / BboltSecondaryIndex / BboltCollectionCache / BboltEdgeStore is replaced by an explicit `core.WriteSession` type that owns the shared bbolt transaction and the BM25/Edge companion caches. Mutating methods on the five types grow `*Tx`-suffixed variants that take the tx directly. `Engine.WithWriteBatch`'s fn signature changes from `func() (bool, error)` to `func(*WriteSession) (bool, error)` so callers inside a batch operate through the session. `Graph.AddEdge` gains an `AddEdgeTx(tx, batch, ...)` companion used internally by `WriteSession.AddEdge`. The 139 existing `Graph.AddEdge` call sites outside batches are unchanged. Engine-level methods (`SetProp`, `IndexNode`, etc.) retain their current signatures — callers outside a batch continue to use them as before; callers inside a batch use `WriteSession` methods instead.
 
 The refactor lands in three stages: (1) hoist companion caches into value types (landed in commit `2994c30`), (2) add Tx-suffixed variants to the five types + Graph and remove the stashed `batch` field + `SetBatch`/`ClearBatch`, (3) introduce `WriteSession`, flip `WithWriteBatch`'s fn signature, and migrate curation/observe and curation/deterministic.
 
-**Why:** The `SetBatch(tx)` + stashed-pointer pattern was flagged as a race hazard (P2-06) under hypothetical finer-grained locking, with three distinct failure modes: (A) torn pointer read of `idx.batch`, (B) stale-pointer use by a goroutine outside the batch-owning goroutine, (C) companion-map race for BM25 posting cache and EdgeStore adjacency cache. The current engine write lock makes all three impossible today, but the pattern has already caused one concrete incident (P1-78 `CollCache.AddMember` deadlock inside `BatchIndexWrites`), the implicit invariant ("caller must hold the engine write lock for the full batch lifetime") lives in doc comments and rots, and every new index joining the batch pattern extends the tax.
+**Why:** The `SetBatch(tx)` + stashed-pointer pattern was flagged as a race hazard under hypothetical finer-grained locking, with three distinct failure modes: (A) torn pointer read of `idx.batch`, (B) stale-pointer use by a goroutine outside the batch-owning goroutine, (C) companion-map race for BM25 posting cache and EdgeStore adjacency cache. The current engine write lock makes all three impossible today, but the pattern has already caused one concrete incident (a `CollCache.AddMember` deadlock inside `BatchIndexWrites`), the implicit invariant ("caller must hold the engine write lock for the full batch lifetime") lives in doc comments and rots, and every new index joining the batch pattern extends the tax.
 
 Four options were weighed:
 
-(a) **Document the invariant, defer the fix to a future fine-grained-locking pass.** Zero LOC. Rejected because documented invariants are the first thing to rot, and the P1-78 incident showed the class is already producing real bugs rather than just hypothetical ones.
+(a) **Document the invariant, defer the fix to a future fine-grained-locking pass.** Zero LOC. Rejected because documented invariants are the first thing to rot, and the `CollCache.AddMember` deadlock incident showed the class is already producing real bugs rather than just hypothetical ones.
 
 (b) **`atomic.Pointer[bolt.Tx]` on the stashed field.** ~20 LOC, fixes failure mode A only. Rejected because it *looks* safer than it is — future readers see `atomic.Pointer` and assume the whole batch state is race-free, but the companion maps remain unprotected. Half-fixes are worse than documented fragile state because they invite misplaced confidence.
 
@@ -26,7 +26,6 @@ One architectural concession accepted: `Graph.AddEdgeTx` takes a `*bbolt.Tx` par
 
 The three-stage landing keeps each commit reviewable and reversible. Stage 1 was a pure refactor (no API change, internal restructure of companion caches); Stages 2 and 3 are coupled (interface signature changes require caller updates to compile) and land together in a single commit to avoid broken intermediate state.
 
-Detailed stage-by-stage execution plan: [p2-06-writesession-plan.md](p2-06-writesession-plan.md).
 
 ---
 
@@ -72,7 +71,7 @@ Option (b) is correct even if contradiction detection is rarely valuable: the co
 
 **Decision:** `DedupConfig.Action` accepts only `supersede` (default) and `reject`. The previous `flag` value was removed. Legacy configs with `action: flag` are silently coerced to `supersede` at load (`config.Load()`) for one release cycle; any other unrecognized value errors at load so typos surface. The three capture paths (`api/capture.go`, `api/sessions.go`, `server/service_records.go`'s `serviceCapture`) all explicitly describe the default behavior as "supersede" in their comments; curation's dedup pass (`curation/deterministic.go`) was already threshold-driven and unchanged.
 
-**Why:** A 2026-04 audit of the dedup pipeline surfaced that `flag` and `supersede` had identical behavior across all three capture readers — both wrote `valid_until` + `resolution=superseded` + a `supersedes` edge. The config comment described `flag` as "mark but don't delete," implying a warn-only mode, but no code implemented that intent. `config_test.go` asserted the default was `flag` and that `reject` round-tripped, but nothing exercised a behavioral difference between `flag` and `supersede`. The fused behavior predated T-02 (confirmed by diffing `server/service_records.go` at `3f37f48^`). So the enum carried two functionally-equivalent values whose config-level distinction was a lie to operators.
+**Why:** A 2026-04 audit of the dedup pipeline surfaced that `flag` and `supersede` had identical behavior across all three capture readers — both wrote `valid_until` + `resolution=superseded` + a `supersedes` edge. The config comment described `flag` as "mark but don't delete," implying a warn-only mode, but no code implemented that intent. `config_test.go` asserted the default was `flag` and that `reject` round-tripped, but nothing exercised a behavioral difference between `flag` and `supersede`. The fused behavior predated the api/ canonical-surface refactor (confirmed by diffing `server/service_records.go` at `3f37f48^`). So the enum carried two functionally-equivalent values whose config-level distinction was a lie to operators.
 
 Three resolution options were considered before picking (b):
 
@@ -114,11 +113,11 @@ Update 2026-04-24: AVX2+FMA3 kernel shipped (`embed/bert/matmul_amd64.s`) and va
 
 ---
 
-### D33: api/ as the Canonical Operations Surface (T-02)
+### D33: api/ as the Canonical Operations Surface
 
 **Decision:** Every operation Gramaton exposes — capture, search, session prepare/commit, collection lifecycle, versioning — is defined once in the `api/` package as a `XxxRequest` / `XxxResponse` / `XxxDescription` / `func (a *API) Xxx(...)` tuple. Every transport (HTTP, MCP stdio + Streamable HTTP, CLI MCP proxy) consumes those types and that method through a hand-written binding table. No per-transport request struct, no codegen, no reflection. Locking discipline (`engine.Lock()` / `Unlock()`) lives inside api methods; transport handlers never hold locks.
 
-**Why:** Before T-02, the same operation had up to three distinct shapes — an HTTP request struct in `server/`, an MCP tool args struct, a CLI flag set — which drifted. Bugs like "the MCP tool accepts this field but HTTP doesn't" were recurrent and expensive. Collapsing to one definition eliminates that whole bug class. Hand-written bindings (rather than codegen) keep the transport layer honest: when you add a transport, you read the api type, map the wire format, and call the method. The work is mechanical and local. The `jsonschema` tags on request fields double as MCP tool descriptions (the MCP SDK reads them via reflection when the struct is passed as a tool args type), which means a single tag update propagates to both HTTP and MCP simultaneously.
+**Why:** Before this refactor, the same operation had up to three distinct shapes — an HTTP request struct in `server/`, an MCP tool args struct, a CLI flag set — which drifted. Bugs like "the MCP tool accepts this field but HTTP doesn't" were recurrent and expensive. Collapsing to one definition eliminates that whole bug class. Hand-written bindings (rather than codegen) keep the transport layer honest: when you add a transport, you read the api type, map the wire format, and call the method. The work is mechanical and local. The `jsonschema` tags on request fields double as MCP tool descriptions (the MCP SDK reads them via reflection when the struct is passed as a tool args type), which means a single tag update propagates to both HTTP and MCP simultaneously.
 
 ---
 
