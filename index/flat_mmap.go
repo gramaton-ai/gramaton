@@ -106,22 +106,31 @@ func NewMmapFlatIndex(path string, dim int) (*MmapFlatIndex, error) {
 		return nil, err
 	}
 
+	// Windows holds a kernel page-lock on memory-mapped files until
+	// UnmapViewOfFile, so any post-remap error path that closes only
+	// the file leaks the mapping and blocks subsequent unlink. POSIX
+	// papers over this via inode-unlink semantics + munmap-at-exit.
+	fail := func(err error) error {
+		_ = idx.region.Close()
+		idx.region = nil
+		idx.data = nil
+		f.Close()
+		return err
+	}
+
 	// Validate header.
 	if string(idx.data[:4]) != flatMagic {
-		f.Close()
-		return nil, fmt.Errorf("flat index: invalid magic in %s", path)
+		return nil, fail(fmt.Errorf("flat index: invalid magic in %s", path))
 	}
 	fileDim := int(binary.LittleEndian.Uint16(idx.data[6:8]))
 	if fileDim != dim {
-		f.Close()
-		return nil, fmt.Errorf("flat index: dimension mismatch: file has %d, expected %d", fileDim, dim)
+		return nil, fail(fmt.Errorf("flat index: dimension mismatch: file has %d, expected %d", fileDim, dim))
 	}
 	idx.count = int(binary.LittleEndian.Uint32(idx.data[8:12]))
 
 	// Build the offset map by scanning entries.
 	if err := idx.buildOffsetMap(); err != nil {
-		f.Close()
-		return nil, err
+		return nil, fail(err)
 	}
 
 	return idx, nil

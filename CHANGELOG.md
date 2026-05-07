@@ -18,6 +18,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`index.NewMmapFlatIndex` constructor leaked the mmap region on
+  every post-`remap()` error path (invalid magic, dimension mismatch,
+  truncated entries).** All three branches called `f.Close()` only
+  and returned without `idx.region.Close()`. POSIX hides the leak via
+  inode-unlink semantics + munmap-at-process-exit, so the bug was
+  invisible on macOS/Linux; on Windows the file mapping is a separate
+  kernel object that holds a page-lock until `UnmapViewOfFile` runs,
+  so any subsequent unlink (including `t.TempDir`'s `RemoveAll`) failed
+  with `ERROR_ACCESS_DENIED`. User-visible: any time a vec.flat file
+  fails to load (corruption, dim-mismatch from a model swap, truncation),
+  the mapping leaks until process exit and Windows can't manually
+  delete the file to recover. Fix applies the same `fail` closure
+  pattern that `embed/bert/safetensors.go` already uses. Surfaced as
+  Windows-only `TestMmapFlatDimensionMismatch` failure in the round-2
+  Windows audit; the magic and `buildOffsetMap` paths had no test
+  coverage at all and now do (`TestMmapFlatInvalidMagic`,
+  `TestMmapFlatTruncatedEntries`). Closes #31.
+
 - **Windows portability sweep round 2: CRLF in templateForClient,
   remaining engine-cleanup misses, hooks exec-bit assertion,
   symlink Windows skips.** Phase B sweep on commit `3687e53` (after
