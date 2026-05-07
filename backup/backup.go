@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -160,7 +161,7 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 	// aborting the whole archive -- by definition the entry is no
 	// longer reachable from any commit anyway. ENOENT on excluded
 	// transients is not an error.
-	if err := filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(dataDir, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -169,7 +170,7 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 		}
 
 		// Relative path within the archive.
-		rel, err := filepath.Rel(dataDir, path)
+		rel, err := filepath.Rel(dataDir, walkPath)
 		if err != nil {
 			return err
 		}
@@ -190,7 +191,12 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 			if err != nil {
 				return err
 			}
-			header.Name = filepath.Join("data", rel)
+			// tar header names must be forward-slashed per the
+			// POSIX tar spec, even on Windows. filepath.Join here
+			// would produce data\foo on Windows and yield a
+			// malformed archive that breaks restore on every
+			// platform.
+			header.Name = path.Join("data", filepath.ToSlash(rel))
 			return tw.WriteHeader(header)
 		}
 
@@ -218,7 +224,7 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 			// when concurrent writers can grow or shrink files between
 			// Walk's stat and our read. Chunks are typically a few KB
 			// to a few MB; buffering is acceptable.
-			body, err = os.ReadFile(path)
+			body, err = os.ReadFile(walkPath)
 			if err != nil {
 				if os.IsNotExist(err) {
 					// Vanished between Walk and ReadFile. Skip silently --
@@ -233,7 +239,7 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 		if err != nil {
 			return err
 		}
-		header.Name = filepath.Join("data", rel)
+		header.Name = path.Join("data", filepath.ToSlash(rel))
 		header.Size = int64(len(body))
 		if err := tw.WriteHeader(header); err != nil {
 			return err
@@ -264,8 +270,8 @@ func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName
 		}
 		sort.Strings(refNames)
 		for _, name := range refNames {
-			path := filepath.Join("data", "refs", name)
-			if err := writeSnapshotFile(tw, path, []byte(snap.Refs[name])); err != nil {
+			refPath := path.Join("data", "refs", name)
+			if err := writeSnapshotFile(tw, refPath, []byte(snap.Refs[name])); err != nil {
 				return "", fmt.Errorf("archive ref %q: %w", name, err)
 			}
 		}
