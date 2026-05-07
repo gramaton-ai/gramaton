@@ -119,6 +119,19 @@ in doubt, those are the source of truth for "why is it like this?"
   (see `.github/workflows/ci.yml`). Windows-specific notes live in
   [docs/windows.md](docs/windows.md).
 
+**Required for `go test -race` on Windows:** the race detector needs
+CGO, which needs a C toolchain. Windows doesn't ship with one. Easiest
+install:
+
+```powershell
+winget install BrechtSanders.WinLibs.POSIX.UCRT
+```
+
+That bundles `gcc` (mingw-w64, UCRT runtime) at a path winget adds to
+your user `PATH`. Open a fresh shell after install so `go` picks it
+up. macOS and Linux both ship with usable C compilers; no extra step
+there.
+
 **Optional, depending on what you're working on:**
 
 - An Ollama install for local embeddings/LLM (`brew install ollama`

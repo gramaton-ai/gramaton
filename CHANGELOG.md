@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **CONTRIBUTING.md notes the C-toolchain prerequisite for
+  `go test -race` on Windows.** Race detector requires CGO; CGO
+  requires gcc; Windows doesn't ship with one. The doc now points
+  to `winget install BrechtSanders.WinLibs.POSIX.UCRT` as the
+  simplest install. Surfaced when the Windows debug session
+  installed it ad-hoc to verify a fix locally; doc gap closed.
+
 ### Fixed
 
 - **Windows test correctness sweep: file-mode + path-separator + timeout
