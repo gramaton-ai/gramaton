@@ -243,8 +243,7 @@ func (rt *retrievalTracker) pruneOldest() {
 // the documented deterministic-only contract and made the wizard's
 // Skip-LLM option silently lead to a broken `gramaton serve`
 // (CLI swallowed the server's startup error behind its 10s
-// timeout). Removed per backlog item
-// 01KPVP9HDJM9YZ37QB4315KGAF.
+// timeout). Removed.
 func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()

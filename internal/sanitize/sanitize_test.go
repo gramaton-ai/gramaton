@@ -6,10 +6,10 @@ import (
 )
 
 // TestFieldObservedPattern uses the exact corruption
-// pattern observed on 2026-04-24 in records 01KPVD7NW3YWB6ZZJ1JSN5J89Z
-// and 01KPVDAFBTPQA3GKKH5C9TZ0D3. Regression test: if this ever
-// fails to strip cleanly, those records (or new ones like them) are
-// back in the store with polluted embeddings.
+// pattern observed on 2026-04-24 in two production records.
+// Regression test: if this ever fails to strip cleanly, those
+// records (or new ones like them) are back in the store with
+// polluted embeddings.
 func TestFieldObservedPattern(t *testing.T) {
 	input := `Setup-wizard language principles for Gramaton (2026-04-22): lead with user benefit not concept; one-sentence concept explanations; "skip for now" on every optional step. Applies to wizard, doctor, error messages, any future GUI.</summary_short>
 <parameter name="keywords">["gramaton wizard language principles", "onboarding UX design"]`

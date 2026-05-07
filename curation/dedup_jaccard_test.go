@@ -54,8 +54,8 @@ func TestVerifyDedupJaccardLongContent(t *testing.T) {
 }
 
 // TestVerifyDedupJaccardShortContentRejectsFalsePositives is the
-// load-bearing regression for tracker 01KPEDCPMXR23V1SSGTNXGRS7T:
-// short pairs with high cosine similarity but distinct meaning must
+// load-bearing regression for the short-content dedup fix: short
+// pairs with high cosine similarity but distinct meaning must
 // not auto-consolidate. Pre-fix, the function returned true for any
 // pair where both sides were <200 chars, so cosine ≥ 0.92 alone was
 // enough to trigger supersession. The new threshold (0.5 for short

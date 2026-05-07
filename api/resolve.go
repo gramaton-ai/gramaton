@@ -106,8 +106,7 @@ func inferClosedStatus(schema *CollectionSchema, resolution string) string {
 //
 // When the record is a collection item, also flips the collection's
 // `status` enum field (when present) to a closed-equivalent value.
-// See inferClosedStatus for the heuristic. Tracker
-// 01KPRZ33EV6X88674S1PVFV928.
+// See inferClosedStatus for the heuristic.
 func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse, *APIError) {
 	if req.ID == "" {
 		return ResolveResponse{}, ErrMissing("id is required")

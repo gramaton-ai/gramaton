@@ -257,7 +257,7 @@ func TestSearchFilterByProcessingStatus(t *testing.T) {
 // is set, node_type=concept results are filtered out. Default search
 // at the api layer flips this on so concepts (LLM-synthesized
 // cross-record summaries) don't compete with their own member records
-// for top-N slots. Tracker 01KQ5JVJ8WWFH14MWH5MG1ZQ4Y.
+// for top-N slots.
 func TestSearchExcludeConcepts(t *testing.T) {
 	g := graph.New()
 	propIdx := index.NewPropertyIndex()

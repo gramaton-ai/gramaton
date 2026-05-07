@@ -50,8 +50,7 @@ type llmResult struct {
 
 // taskCtx attaches a telemetry task label to ctx when w carries one.
 // Single helper used by both the single-item fast path and the
-// worker loop in parallelLLM so the two stay in sync (tracker
-// 01KPEDCF8T9NXTRMJ04HFE93K2).
+// worker loop in parallelLLM so the two stay in sync.
 func taskCtx(ctx context.Context, w llmWork) context.Context {
 	if w.task == "" {
 		return ctx

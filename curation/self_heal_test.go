@@ -36,8 +36,8 @@ func setupSelfHealTest(t *testing.T) *core.Engine {
 }
 
 // seedContaminated adds a record with the exact observed pattern
-// from the 3 real contaminated records (01KPVD7NW3YWB6ZZJ1JSN5J89Z
-// and siblings). Returns the new node ID.
+// from the 3 real contaminated records observed in production.
+// Returns the new node ID.
 func seedContaminated(t *testing.T, eng *core.Engine, cleanPrefix, contentFull string) string {
 	t.Helper()
 	eng.Lock()
@@ -146,13 +146,12 @@ func TestDetectAndRepairSummaryFlagForLLM(t *testing.T) {
 	}
 }
 
-// TestDetectAndRepairSummarySkipsRedundantFlag pins the fix for
-// 01KQ40B2KEF8P6JK6SDB00FWQ3: once a record is Tier-4 flagged, a
-// re-run of the cascade against the SAME content_short must
-// short-circuit and not re-write repair_needed_llm / repaired_at /
-// repair_method. Pre-fix the cascade ran every server boot, churning
-// three properties per Tier-4 record. Stored hash detects the
-// already-flagged state.
+// TestDetectAndRepairSummarySkipsRedundantFlag pins the redundant-flag
+// short-circuit: once a record is Tier-4 flagged, a re-run of the
+// cascade against the SAME content_short must short-circuit and not
+// re-write repair_needed_llm / repaired_at / repair_method. Pre-fix
+// the cascade ran every server boot, churning three properties per
+// Tier-4 record. Stored hash detects the already-flagged state.
 func TestDetectAndRepairSummarySkipsRedundantFlag(t *testing.T) {
 	eng := setupSelfHealTest(t)
 	id := seedContaminated(t, eng, "Tiny.", "no punctuation here just words")
@@ -224,7 +223,7 @@ func TestDetectAndRepairSummaryCleanIsNoop(t *testing.T) {
 }
 
 // TestDetectAndRepairSummaryClearsStaleFlagOnTier1Clean pins the
-// fix for 01KQ7WGDN37Y8AYBD2J8A017TY: when a record was previously
+// stale-flag-clearing fix: when a record was previously
 // Tier-4 flagged but content_short has since been rewritten to a
 // clean value (manual edit, supersession, external repair), the
 // stale repair_needed_llm flag must be cleared so a future

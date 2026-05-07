@@ -983,7 +983,7 @@ type TelemetryConfig struct {
 	// on whether concept-based query expansion (PRF) would help before
 	// committing to ship it. Default true: cost is bounded (~1ms per
 	// query at <100 concepts) and the events only fire when concepts
-	// match. Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+	// match.
 	ConceptMatchEnabled bool `yaml:"concept_match_enabled"`
 
 	// ConceptMatchThreshold sets the cosine threshold above which

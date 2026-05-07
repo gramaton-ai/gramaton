@@ -14,7 +14,7 @@ import (
 // curation (`records_by_type` etc.) deliberately excludes concept
 // nodes since concepts are derived from clusters rather than
 // captured by the user; both counts are correct under their own
-// semantics. See tracker 01KQ62TP9F80G580MH9BRRK4CD.
+// semantics.
 type StatsResponse struct {
 	TotalRecords    int            `json:"total_records"`
 	Temporality     map[string]int `json:"temporality"`

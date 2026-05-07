@@ -221,7 +221,7 @@ func TestClassifyPendingParseError(t *testing.T) {
 // failed classify run writes classify_attempts=1 and last_classify_error
 // without flipping processing_status.
 //
-// Regression guard for tracker 01KQ3X9EBX4WKVJQ56W1C31V97 — without
+// Regression guard for the classify-attempts counter — without
 // this counter, a record that cannot be classified (oversized content,
 // content-policy refusal, persistent parse failures) re-enters the
 // FIFO pending queue every minute and bills tokens forever.
@@ -636,7 +636,7 @@ func TestGenerateSummariesHappyPath(t *testing.T) {
 // failed summary call writes summary_attempts=1 and last_summary_error
 // without skipping the record yet.
 //
-// Regression guard for tracker 01KQ406Z12VKRGRT3HEER0ZT1A: without this
+// Regression guard for the summary-attempts counter: without this
 // counter, a record the LLM consistently can't summarize re-enters the
 // summary candidate set every cycle and bills input tokens forever.
 func TestSummarizeFailureBumpsAttemptCounter(t *testing.T) {
@@ -1384,12 +1384,12 @@ func TestGenerateManifestSummaryTooFewRecords(t *testing.T) {
 	}
 }
 
-// TestManifestNegativeCacheBoundsRetries pins the negative-cache fix
-// for tracker 01KQ4089VFQBE2T47H5GGKB5VC. Pre-fix, generateManifestSummary's
-// LLM-error path returned without updating the cache, so the next
-// cycle (with the same store-state fingerprint) recomputed the same
-// hash, hit "cache miss" again, and re-called the LLM. Post-fix, the
-// negative-cache counter advances and skips the LLM after the threshold.
+// TestManifestNegativeCacheBoundsRetries pins the negative-cache fix.
+// Pre-fix, generateManifestSummary's LLM-error path returned without
+// updating the cache, so the next cycle (with the same store-state
+// fingerprint) recomputed the same hash, hit "cache miss" again, and
+// re-called the LLM. Post-fix, the negative-cache counter advances
+// and skips the LLM after the threshold.
 func TestManifestNegativeCacheBoundsRetries(t *testing.T) {
 	eng := setupEngine(t)
 	for i := 0; i < 6; i++ {
@@ -1680,11 +1680,11 @@ func findContradictionCheckSkippedEdge(t *testing.T, eng *core.Engine, idA, idB 
 }
 
 // TestDetectContradictionsFailureCreatesSoftFailEdge pins the
-// fix for tracker 01KQ407VR599E2CGAGJ0FBVGJZ. Pre-fix an LLM
-// failure on a contradiction check left no state on the pair, so
-// the pair re-entered the candidate pool every cycle and burned
-// tokens forever. Post-fix, the failure writes a
-// contradiction_check_skipped edge with attempts=1.
+// soft-fail-edge fix. Pre-fix an LLM failure on a contradiction
+// check left no state on the pair, so the pair re-entered the
+// candidate pool every cycle and burned tokens forever. Post-fix,
+// the failure writes a contradiction_check_skipped edge with
+// attempts=1.
 func TestDetectContradictionsFailureCreatesSoftFailEdge(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
@@ -2381,7 +2381,7 @@ func addPendingConcept(t *testing.T, eng *core.Engine, keyword string, memberCou
 // transport error during concept synthesis writes synthesis_attempts
 // + last_synthesis_error on every concept in the batch (not just one).
 //
-// Regression guard for tracker 01KQ407BPRJF8AVT7CBKQ6VJDB: pre-fix
+// Regression guard for the synthesis-attempts counter: pre-fix
 // concepts with synthesis_status=pending re-entered the candidate set
 // every cycle on persistent failure, billing input tokens forever.
 func TestSynthesizeBatchFailureBumpsAttemptCounter(t *testing.T) {
@@ -2820,8 +2820,8 @@ func TestParseClassificationKeywordLengthTruncation(t *testing.T) {
 // the classification LLM emits JSON where summary_short contains
 // tool-use-format tail fragments, the parser strips them before
 // returning. Regression against the Cluster 2 bug class observed on
-// 2026-04-24 (01KPZZNG45PC7D6HC8SQH3P9N1): corruption inside the
-// JSON string value for summary_short was being stored verbatim.
+// 2026-04-24: corruption inside the JSON string value for
+// summary_short was being stored verbatim.
 func TestParseClassificationStripsTailContamination(t *testing.T) {
 	// Embed the tail pattern inside the JSON string value.
 	input := `{"temporality":"durable","confidence":0.9,"summary_short":"Good summary here.</summary_short>\n<parameter name=\"keywords\">[\"a\"]"}`

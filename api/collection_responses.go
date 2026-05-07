@@ -151,9 +151,7 @@ type CollectionSchemaUpdateResponse struct {
 // Failed is omitempty and currently nil-emitted. The slot is
 // reserved for future partial-success work where caller-recoverable
 // failures (validation drift, contended writes) are recorded
-// alongside the items that did migrate. See tracker
-// 01KPHAR3KR5XBQZWBG3AB2FSEK for the partial-success contract
-// shift this would require.
+// alongside the items that did migrate.
 type CollectionMigrateResponse struct {
 	Migrated          int           `json:"migrated"`
 	Field             string        `json:"field"`

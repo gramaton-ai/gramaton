@@ -110,12 +110,11 @@ func TestSecurityHeadersPanicAfterWriteHeaderDoesNotDoubleWrite(t *testing.T) {
 	}
 }
 
-// TestSecurityHeadersDedupsRepeatedPanics pins the fix for
-// 01KQ3PBFR9MNAMAAD6JSX5F9TG: a buggy client retrying the same
-// panic-trigger pre-fix flooded the log with kilobyte stack dumps
-// at Warn on every request. Post-fix, the same fingerprint within
-// the dedup TTL emits only one Warn; subsequent occurrences drop
-// to Debug.
+// TestSecurityHeadersDedupsRepeatedPanics pins the dedup fix:
+// a buggy client retrying the same panic-trigger pre-fix flooded
+// the log with kilobyte stack dumps at Warn on every request.
+// Post-fix, the same fingerprint within the dedup TTL emits only
+// one Warn; subsequent occurrences drop to Debug.
 func TestSecurityHeadersDedupsRepeatedPanics(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

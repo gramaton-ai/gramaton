@@ -282,7 +282,6 @@ func runAutonomousInner(ctx context.Context, e *core.Engine, llmProv llm.Provide
 // task in the cycle starts with a fresh sub-context derived from the
 // parent. Without this, one stuck LLM call (e.g. a 120s HTTP timeout)
 // could starve every downstream task in a 1-minute curation cycle.
-// Tracker 01KPEDCF8T9NXTRMJ04HFE93K2.
 //
 // Bails immediately when the parent ctx is already cancelled (server
 // shutdown / cycle cancellation) so a cancelled cycle doesn't pay
@@ -372,7 +371,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	// Early ctx-cancel check: bail before grabbing RLock and walking the
 	// pending list. Pre-fix this check was after the read phase, so a
 	// cancelled cycle still iterated every pending record under RLock
-	// before noticing. Tracker 01KPEDCF8T9NXTRMJ04HFE93K2.
+	// before noticing.
 	select {
 	case <-ctx.Done():
 		return
@@ -743,7 +742,6 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 		// a record whose content the LLM consistently can't summarize
 		// (oversized, content-policy refusal, persistent empty-after-trim)
 		// re-enters every cycle and bills input tokens forever.
-		// Tracker 01KQ406Z12VKRGRT3HEER0ZT1A.
 		if maxSummaryAttempts > 0 {
 			if attempts, ok := n.Properties.GetInt64("summary_attempts"); ok && attempts >= int64(maxSummaryAttempts) {
 				continue
@@ -752,8 +750,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 
 		// Single edge walk per node (was: two — once in isChunkNode for
 		// Priority 1, again for the section check in Priority 2). Now
-		// we enumerate edges once and capture both signals. Tracker
-		// 01KPEDCAAP4EV93ZS9GD0Z8C9E.
+		// we enumerate edges once and capture both signals.
 		isStructural := false
 		isSection := false
 		for _, edge := range g.EdgesFrom(id) {
@@ -945,8 +942,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	// produces totalRecords/typeMap/etc., not from the unfiltered
 	// PropIdx().KeywordCounts() — that index includes historical
 	// (valid_until-past) records and would defeat the historical-
-	// filter cache stability guarantee. Tracker 01KPEDCPMXR23V1SSGTNXGRS7T
-	// follow-up.
+	// filter cache stability guarantee.
 	kwCounts := make(map[string]int)
 	var earliest, latest time.Time
 
@@ -968,7 +964,6 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 		// remains correctly invalidated when the *current* set
 		// changes — supersession adds valid_until, which moves the
 		// record out of this count, which changes the fingerprint.
-		// Tracker 01KPEDCPMXR23V1SSGTNXGRS7T.
 		if vu, ok := n.Properties.GetTimestamp("valid_until"); ok && vu.Before(now) {
 			continue
 		}
@@ -1495,7 +1490,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		// Phase 2: embed syntheses outside the engine lock so I/O does
 		// not stall writers. Concepts otherwise have no embedding until
 		// `gramaton reembed` catches up, leaving concept-embedding
-		// telemetry and PRF blind. Tracker 01KQ60N4ZCCQDKM17XWQMZAX9C.
+		// telemetry and PRF blind.
 		var vecs [][]float32
 		var modelID string
 		if emb := e.Embedder(); emb != nil && len(embedTexts) > 0 {
@@ -1563,7 +1558,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 // dimension mismatch (e.g. embedding model changed mid-store) are
 // skipped and counted in `dimMismatched` so the caller can surface it
 // — silently dropping mismatched members produced misleadingly-low n
-// counts at scale (tracker 01KPEDCPMXR23V1SSGTNXGRS7T).
+// counts at scale.
 //
 // Returns (0, n, dimMismatched) when fewer than 2 members have valid
 // embeddings (meaningful coherence requires at least two vectors).
@@ -1862,8 +1857,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	// Pairs whose LLM check failed (transport error or parse error).
 	// Each gets a contradiction_check_skipped edge in the write phase
 	// with an attempts counter, which the read-phase hasEdge guard
-	// honors as a soft-skip until the threshold (then hard-skip). See
-	// tracker 01KQ407VR599E2CGAGJ0FBVGJZ.
+	// honors as a soft-skip until the threshold (then hard-skip).
 	type checkedFailure struct {
 		idA, idB string
 		reason   string

@@ -353,7 +353,7 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	// gather data on whether concept-based query expansion (PRF) would
 	// help before committing to ship it. Sampled review by the
 	// operator over weeks of real usage answers "are concepts earning
-	// their slot." Tracker 01KQ5JVY5DY7B0WNGBMKG1C3ND.
+	// their slot."
 	if queryVec != nil {
 		cfg := a.engine.Config()
 		if cfg.Telemetry.ConceptMatchEnabled {

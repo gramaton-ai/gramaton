@@ -138,7 +138,6 @@ func TestDeterministicConceptCandidates(t *testing.T) {
 // `LookupKeyword("content_keywords", kw)` returned both the parent
 // and each observation child -- inflating the cluster size and the
 // resulting concept's evidence_count.
-// Tracker 01KQ62W3EPCRM4ARQG85AQP94S.
 func TestEmergeFiltersObservations(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

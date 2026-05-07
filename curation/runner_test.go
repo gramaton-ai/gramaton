@@ -246,15 +246,14 @@ func TestDeterministicOrphanLinking(t *testing.T) {
 	}
 }
 
-// TestOrphanLinkerSkipsObservations pins the fix for
-// 01KQ62SRYP2ZKYR40JKSHJAC69: observation nodes have an
-// observation_of edge to a parent, but observation_of is filtered
-// from SemanticEdgeCount as structural -- so they look orphaned.
-// Pre-fix, the orphan-linking pass added a `related_to` edge from
-// each observation to a similar real record every cycle (and also
-// chose observations as link TARGETS), polluting the graph.
-// Post-fix, observations are excluded from BOTH the orphan
-// candidate set and the link-target candidate set.
+// TestOrphanLinkerSkipsObservations pins the orphan-linker filter:
+// observation nodes have an observation_of edge to a parent, but
+// observation_of is filtered from SemanticEdgeCount as structural
+// -- so they look orphaned. Pre-fix, the orphan-linking pass added
+// a `related_to` edge from each observation to a similar real
+// record every cycle (and also chose observations as link TARGETS),
+// polluting the graph. Post-fix, observations are excluded from
+// BOTH the orphan candidate set and the link-target candidate set.
 func TestOrphanLinkerSkipsObservations(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

@@ -303,7 +303,6 @@ func hashContentShort(s string) string {
 //
 // Conditioned on the flag being set so we don't churn the bbolt
 // index writing zero values onto records that never had the flag.
-// Tracker 01KQ7WGDN37Y8AYBD2J8A017TY.
 func clearStaleRepairFlag(e *core.Engine, nodeID string, n *graph.Node) {
 	flagged, _ := n.Properties.GetBool("repair_needed_llm")
 	if !flagged {

@@ -108,8 +108,8 @@ func addReembedCandidate(t *testing.T, eng *core.Engine, content string) string 
 	return n.ID
 }
 
-// TestReembedFailureBumpsAttemptCounter pins the fix for tracker
-// 01KQ408WXSTDN5X15TGE24X416. Pre-fix, an embed failure left the
+// TestReembedFailureBumpsAttemptCounter pins the fix for the
+// reembed-cost-bleed bug. Pre-fix, an embed failure left the
 // record with no embedding_model, so every subsequent gramaton_reembed
 // invocation would re-pick it up and re-pay the embed cost. Post-fix,
 // the failure writes embed_attempts=1 and last_embed_error.

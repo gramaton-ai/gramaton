@@ -484,10 +484,9 @@ func TestRebuildPrimaryIfMissingAlwaysRebuildsProp(t *testing.T) {
 }
 
 // TestFlushAccessResetsFailureCounterOnSuccess pins the recovery
-// path of the accessFlusher dedup logic
-// (01KQ40ANMHK7JQH66D0RXR44GW). After consecutive failures bumped
-// the counter, a successful flush must reset it to 0 so the next
-// transient failure logs at Warn rather than Debug. Drives via
+// path of the accessFlusher dedup logic. After consecutive failures
+// bumped the counter, a successful flush must reset it to 0 so the
+// next transient failure logs at Warn rather than Debug. Drives via
 // MarkAccessDirty + simulated counter state because actually
 // forcing a Save failure mid-test requires closing bbolt under the
 // engine, which breaks teardown.
