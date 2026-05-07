@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Test stability sweep: order-dependent assertions in concurrent tests.**
+  Two more instances of the timing-fragile test pattern surfaced
+  during the GH #12 PR runs: `TestCompleteWithModelAnthropicFallback`
+  (curation) asserted `models[0] == "" && models[1] == "override-model"`
+  on a mock-LLM slice appended to from two parallel goroutines —
+  changed to set-based assertion. `TestParallelLLMConcurrency`
+  (curation) hard-asserted `peak > 1` on observed concurrency — the
+  elapsed-time bound (already in the test) is the authoritative
+  parallelism gate; the peak observation is now a soft `t.Logf`
+  signal. Pairs with the `TestEmbedConcurrentScratchDistinct` /
+  `TestCaptureBatchAsyncCancelBeforeFirstChunk` fixes that landed
+  earlier same-day. CONTRIBUTING.md gains an anti-pattern entry
+  documenting lower-bound concurrency assertions and positional
+  assertions on parallel-collected slices.
+
 - **`testutil.NewEngine` now closes the engine before its temp dir is
   removed.** The helper called `t.TempDir()` (which auto-registers
   `os.RemoveAll` cleanup) and `core.LoadEngineWithOptions` (which

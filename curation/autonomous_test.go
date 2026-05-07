@@ -551,13 +551,23 @@ func TestCompleteWithModelAnthropicFallback(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	// First should have used Complete (empty model).
-	if llm.models[0] != "" {
-		t.Errorf("expected empty model for first call, got %q", llm.models[0])
+	// Both Complete (empty model) and CompleteWithModel("override-model")
+	// should fire exactly once. The ORDER of the two appends to
+	// llm.models is non-deterministic under parallelLLM's worker
+	// pool — the mutex protects the append from data race, but the
+	// goroutine scheduler decides which work item lands first. Assert
+	// the SET of observed models, not their positions.
+	gotModels := map[string]int{}
+	for _, m := range llm.models {
+		gotModels[m]++
 	}
-	// Second should have used CompleteWithModel.
-	if llm.models[1] != "override-model" {
-		t.Errorf("expected 'override-model' for second call, got %q", llm.models[1])
+	if gotModels[""] != 1 {
+		t.Errorf("expected exactly 1 Complete call (empty model), got %d (all=%v)",
+			gotModels[""], llm.models)
+	}
+	if gotModels["override-model"] != 1 {
+		t.Errorf("expected exactly 1 CompleteWithModel(\"override-model\") call, got %d (all=%v)",
+			gotModels["override-model"], llm.models)
 	}
 }
 
