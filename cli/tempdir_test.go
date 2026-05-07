@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -123,6 +124,13 @@ func TestIsInTempDir_TraversalVariants(t *testing.T) {
 }
 
 func TestSweepRemovesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// os.Symlink on Windows requires the SeCreateSymbolicLink
+		// privilege (admin or Developer Mode), which CI runners
+		// don't provide. The sweep behavior is exercised on
+		// Linux/macOS CI; the production path is OS-agnostic.
+		t.Skip("os.Symlink on Windows requires admin or Developer Mode")
+	}
 	dir, err := TempDir()
 	if err != nil {
 		t.Fatalf("TempDir: %v", err)

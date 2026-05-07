@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,7 +63,11 @@ func TestIntegrationSnapshotsMatchCanonical(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", rel, err)
 			}
-			if string(got) != want {
+			// Normalize line endings so a Windows checkout with
+			// autocrlf=true (CRLF on disk) matches the LF-only output
+			// of templateForClient. Repository convention is LF.
+			gotLF := strings.ReplaceAll(string(got), "\r\n", "\n")
+			if gotLF != want {
 				t.Fatalf("%s is out of sync with templateForClient(%q).\nFix: go test ./internal/setup -update-integration",
 					rel, client)
 			}

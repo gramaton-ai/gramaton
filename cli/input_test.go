@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
@@ -62,6 +63,13 @@ func TestReadFileJSON_RejectsOutsideTempDir(t *testing.T) {
 }
 
 func TestReadFileJSON_RejectsSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// os.Symlink on Windows requires the SeCreateSymbolicLink
+		// privilege (admin or Developer Mode). Skip rather than
+		// rely on host configuration; the symlink-escape protection
+		// is exercised by the same code path on Linux/macOS CI.
+		t.Skip("os.Symlink on Windows requires admin or Developer Mode")
+	}
 	dir, err := TempDir()
 	if err != nil {
 		t.Fatalf("TempDir: %v", err)

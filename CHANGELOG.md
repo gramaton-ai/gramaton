@@ -18,6 +18,42 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Windows portability sweep round 2: CRLF in templateForClient,
+  remaining engine-cleanup misses, hooks exec-bit assertion,
+  symlink Windows skips.** Phase B sweep on commit `3687e53` (after
+  the round-1 cluster #25/#26/#27/#28 landed) exposed five
+  Windows-only failure classes that the round-1 helpers didn't
+  cover. (1) `internal/setup/templateForClient` uses
+  `strings.Replace` patterns with literal `\n`, but the embedded
+  template files (`templates/*.md`) are checked out CRLF on Windows
+  with git's autocrlf=true, so the addendum-marker strip silently
+  no-ops and the resulting templates carry an unfilled
+  `<!-- CLIENT_ADDENDUM -->`; root cause is in production code,
+  fix normalizes embedded inputs to LF and the integration drift
+  test normalizes the file-side compare. Clears
+  `TestTemplateForClientKiroOmitsRoutingBlock`,
+  `TestTemplateForClientUnknownReturnsBaseAlone`, and
+  `TestIntegrationSnapshotsMatchCanonical/Claude_Code`. (2)
+  `core.TestWrapLLMReplacesProvider` and `core.TestSaveAndReload`
+  open engines without `t.Cleanup(eng.Close)`, leaking bbolt
+  handles into `t.TempDir`'s `RemoveAll` (the same pattern PR #15
+  fixed for testutil but never swept here — `setupTestEngine`'s
+  inline pattern wasn't reused). (3) `internal/setup/hooks_test.go`
+  asserts `info.Mode().Perm()&0o111 != 0` on materialized hook
+  scripts; Windows reports `0o666` regardless of actual perms, so
+  the assertion always errors. Skipped on Windows; the shebang
+  check (which is OS-agnostic) still runs. (4) `cli/input_test.go`
+  and `cli/tempdir_test.go` use `os.Symlink` with `t.Fatalf` on
+  failure; Windows requires the `SeCreateSymbolicLink` privilege
+  (admin or Developer Mode), which CI Windows runners don't
+  provide. Skipped on Windows; the symlink-handling production
+  paths are still covered on Linux/macOS CI. The remaining 8
+  failures from the same Phase B sweep are deferred to follow-up
+  GH issues (mmap-unmap on Windows, JSON path encoding,
+  `step_verify` output divergence, `TestBackupAndRestoreRoundTrip`
+  engine-lifecycle around restore, etc.) — those need their own
+  investigation rather than another sweep.
+
 - **`testutil.RegisterEngineCleanup` + sweep of test setups missing
   `engine.Close`.** PR #15 fixed the bbolt-handle leak in
   `testutil.NewEngine` (engine never closed before `t.TempDir`'s
