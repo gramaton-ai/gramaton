@@ -7,13 +7,17 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/jobs"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 // pollUntilTerminal blocks (with bounded retries) until the named job
 // reaches a terminal status. Used to wait for async runners to finish
-// without sleeping a fixed duration.
+// without sleeping a fixed duration. The deadline is scaled via
+// testutil.Timeout so Windows runners (slower under -race) don't
+// trip the bound on otherwise-healthy paths.
 func pollUntilTerminal(t *testing.T, a *API, jobID string, timeout time.Duration) *jobs.Job {
 	t.Helper()
+	timeout = testutil.Timeout(timeout)
 	deadline := time.Now().Add(timeout)
 	for {
 		j, err := a.engine.JobStore().Get(jobID)
