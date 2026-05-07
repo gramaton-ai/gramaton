@@ -30,6 +30,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   balance, no deadlock, no buffer corruption) is unchanged. Closes
   the bert-pool flake observed on PR #13's first CI run.
 
+- **`storage.Write` no longer fails on Windows when the same content
+  is written concurrently.** Content-addressed dedup means two
+  goroutines writing identical data race to rename their temp files
+  into the same destination. On Linux/macOS, `os.Rename` silently
+  overwrites and the race is benign. On Windows, `os.Rename` returns
+  `EACCES` when the destination already exists or is held by another
+  process, so the second writer would fail. The new
+  `renameWithDedupRecovery` helper checks for the destination after
+  a rename failure: if dest exists, the dedup invariant means another
+  writer landed the same content first, so the operation succeeds
+  cleanly and the deferred temp cleanup removes the stale temp.
+  Closes the storage half of #12 (Windows CI flake under race
+  detector).
+
 ### Changed
 
 - **`internal/version` falls back to `runtime/debug.BuildInfo` when

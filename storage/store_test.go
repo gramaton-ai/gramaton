@@ -661,3 +661,55 @@ func TestDeduplicationAcrossFormats(t *testing.T) {
 		t.Fatal("dedup should not have rewritten the chunk")
 	}
 }
+
+// --- renameWithDedupRecovery ---
+
+func TestRenameWithDedupRecovery_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dest := filepath.Join(dir, "dest")
+	if err := os.WriteFile(src, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameWithDedupRecovery(src, dest); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src should be gone after rename, stat err = %v", err)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("dest should exist, stat err = %v", err)
+	}
+}
+
+func TestRenameWithDedupRecovery_DestExistsRecovers(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src-does-not-exist")
+	dest := filepath.Join(dir, "dest")
+	// Pre-create dest with content; src does not exist, so os.Rename
+	// will fail. Recovery sees dest is present and returns nil.
+	if err := os.WriteFile(dest, []byte("preexisting"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameWithDedupRecovery(src, dest); err != nil {
+		t.Errorf("recovery should have returned nil when dest exists, got %v", err)
+	}
+	// Dest content should still be the preexisting bytes (recovery
+	// did not overwrite or touch dest).
+	got, _ := os.ReadFile(dest)
+	if string(got) != "preexisting" {
+		t.Errorf("dest content = %q, want preexisting", got)
+	}
+}
+
+func TestRenameWithDedupRecovery_RealFailureBubbles(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src-does-not-exist")
+	dest := filepath.Join(dir, "dest-also-missing")
+	// Neither src nor dest exists. os.Rename fails, Stat(dest) fails,
+	// so the recovery does not kick in and the original error bubbles.
+	err := renameWithDedupRecovery(src, dest)
+	if err == nil {
+		t.Fatal("expected error when both src and dest are missing, got nil")
+	}
+}

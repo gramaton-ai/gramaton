@@ -103,7 +103,7 @@ func (s *Store) Write(data []byte) (string, error) {
 		return "", fmt.Errorf("storage: close temp file: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameWithDedupRecovery(tmpPath, path); err != nil {
 		return "", fmt.Errorf("storage: rename %q to %q: %w", tmpPath, path, err)
 	}
 	// Fsync the parent directory so the rename(2) is durable. Without
@@ -117,6 +117,26 @@ func (s *Store) Write(data []byte) (string, error) {
 
 	success = true
 	return hash, nil
+}
+
+// renameWithDedupRecovery atomically renames src to dest. If the
+// underlying rename fails AND dest now exists, treats the operation
+// as a successful no-op: content-addressed storage means whatever is
+// at dest holds the same content the caller was about to write.
+//
+// Linux/macOS: os.Rename silently overwrites an existing dest, so
+// this helper acts identically to a bare os.Rename in the common
+// case. Windows: os.Rename returns EACCES when dest exists or is
+// held by another process; the dedup-recovery branch turns that into
+// success when dest is present.
+func renameWithDedupRecovery(src, dest string) error {
+	if err := os.Rename(src, dest); err != nil {
+		if _, statErr := os.Stat(dest); statErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // fsyncDir opens the given directory and fsyncs it. Required after
