@@ -789,6 +789,12 @@ type JobsConfig struct {
 	// 30 minutes.
 	ResultDefaultTimeout time.Duration `yaml:"result_default_timeout"`
 
+	// MaxSyncBatchSize caps len(Items) on sync-mode capture.
+	// Default 500. 0 = use default. Mirrors MaxAsyncBatchSize so
+	// operators (and in-package tests) can tune the sync/async
+	// transition without touching code.
+	MaxSyncBatchSize int `yaml:"max_sync_batch_size"`
+
 	// MaxAsyncBatchSize caps len(Items) on async-mode capture.
 	// Default 1000. 0 = use default.
 	MaxAsyncBatchSize int `yaml:"max_async_batch_size"`

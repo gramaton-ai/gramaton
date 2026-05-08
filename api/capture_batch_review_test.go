@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/gramaton-ai/gramaton/testutil"
@@ -647,24 +648,26 @@ func TestJobsListOffsetCap(t *testing.T) {
 }
 
 // TestCaptureBatchAsyncLargerThanSyncCap: an async request with more
-// than MaxSyncBatchSize items used to be rejected by the sync envelope
-// cap. After review-pass A reorders the cap selection, MaxAsyncBatchSize
-// (1000) is the active limit for async mode. Skip supersession to keep
-// the test fast (O(N) vs O(N²) dedup check).
+// items than the configured sync cap used to be rejected by the sync
+// envelope cap. The fix reorders cap selection so async-mode validation
+// uses MaxAsyncBatchSize, not MaxSyncBatchSize.
 //
-// Skipped under -short. The test's contract IS the scale (verify
-// MaxSyncBatchSize+50 items pass through async cleanly), so we can't
-// reduce the count without erasing the test. Race-detector CI uses
-// -short to avoid the multi-minute Windows timeout this test
-// otherwise hits; non-race CI still exercises it on every platform.
+// Originally written with MaxSyncBatchSize+50 = 550 hard-coded items;
+// that took 5+ minutes on Windows under race + parallel-suite load and
+// blew through the 10-min per-package go-test budget. The contract
+// being verified ("items > sync cap accepted via async") is independent
+// of the cap's absolute value, so we now configure cfg.Jobs.MaxSyncBatchSize
+// = 10 and submit 11 items. Same proof, ~99% faster on every platform.
 func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping large-batch test in -short mode (race CI)")
-	}
-	a, _, _ := setupBatchAPI(t)
+	emb := &stubBatchEmbedder{dim: 4}
+	a, _ := setupReembedAPI(t, core.WithEmbedder(emb), func(cfg *config.Config) {
+		cfg.Jobs.MaxSyncBatchSize = 10
+	})
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+
 	f := false
-	items := make([]CaptureBatchItem, MaxSyncBatchSize+50)
+	const itemCount = 11 // > syncCap=10, must go async
+	items := make([]CaptureBatchItem, itemCount)
 	for i := range items {
 		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: fmt.Sprintf("item-%d", i)}}
 	}
@@ -674,12 +677,9 @@ func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
 		SkipSupersession: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("expected accept (async cap is %d), got %v", MaxAsyncBatchSize, apiErr)
+		t.Fatalf("expected accept in async mode (sync cap is 10, async cap is %d), got %v", MaxAsyncBatchSize, apiErr)
 	}
-	// Generous timeout: the single-chunk runner holds the engine lock
-	// for the duration; under parallel-test load this can take well
-	// over 60s. L6's chunker will reduce lock-hold dramatically.
-	pollUntilTerminal(t, a, resp.JobID, 180*time.Second)
+	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 }
 
 // TestCanonicalEdgeWeightDefaultNormalized: Weight=nil and Weight=&0.5

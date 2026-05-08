@@ -16,7 +16,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   simplest install. Surfaced when the Windows debug session
   installed it ad-hoc to verify a fix locally; doc gap closed.
 
+### Changed
+
+- **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
+  the existing `MaxAsyncBatchSize`. Default 0 (use the
+  `MaxSyncBatchSize = 500` constant). Operators can set it lower to
+  push more requests onto the async path; in-package tests use it
+  to exercise sync/async cap-boundary behavior without paying for
+  500+ records per test. Closes #49.
+
 ### Fixed
+
+- **`TestCaptureBatchAsyncLargerThanSyncCap` was over-sized for its
+  contract.** The test's purpose is to verify "items > sync cap
+  accepted via async" — a single boundary check. It used to submit
+  `MaxSyncBatchSize+50 = 550` items, taking 5+ minutes on Windows
+  under race + parallel-suite load and blowing through the 10-min
+  per-package go-test budget. Now configures
+  `cfg.Jobs.MaxSyncBatchSize = 10` and submits 11 items: same proof,
+  ~99% faster on every platform (0.89s on macOS in a quick check
+  vs the prior 5+ min on Windows). The cap-as-config plumbing
+  changes are independently useful as an operator dial. Closes #49.
 
 - **`TestCaptureBatchChunkedRefMapPersistedAcrossChunks` timed out
   on Windows under race because `chunkNumBlocker.waitParked` used

@@ -151,7 +151,10 @@ Per-item failures land in the response's failed[] array (the batch keeps going);
 func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (CaptureBatchResponse, *APIError) {
 	asyncMode := req.Wait != nil && !*req.Wait
 	cfg := a.engine.Config()
-	itemCap := MaxSyncBatchSize
+	itemCap := cfg.Jobs.MaxSyncBatchSize
+	if itemCap <= 0 {
+		itemCap = MaxSyncBatchSize
+	}
 	if asyncMode {
 		itemCap = cfg.Jobs.MaxAsyncBatchSize
 		if itemCap <= 0 {
