@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -50,10 +51,17 @@ func TestStepVerifySkipEverything(t *testing.T) {
 	wiz.stepVerify(context.Background())
 	out := buf.String()
 
+	// On Windows, the perm-bit check is skipped (NTFS ACL model);
+	// production emits a "skipped on Windows" line instead of the
+	// POSIX "0600" line.
+	permLine := "Config file permissions: 0600"
+	if runtime.GOOS == "windows" {
+		permLine = "Config file permissions: skipped on Windows"
+	}
 	mustContain := []string{
 		"Verification",
 		"Config saved:",
-		"Config file permissions: 0600",
+		permLine,
 		"Data directory writable:",
 		"Embedding: disabled",
 		"LLM: not configured",
@@ -144,7 +152,13 @@ func TestStepVerifyLLMWithGoodKeyFile(t *testing.T) {
 	wiz.stepVerify(context.Background())
 	out := buf.String()
 
-	if !strings.Contains(out, "LLM: anthropic (key file present, 0600 perms)") {
+	// Windows skips the 0600 perm check (NTFS ACL model); production
+	// emits the "skipped on Windows" variant of the ok line instead.
+	wantLine := "LLM: anthropic (key file present, 0600 perms)"
+	if runtime.GOOS == "windows" {
+		wantLine = "LLM: anthropic (key file present; perm check skipped on Windows"
+	}
+	if !strings.Contains(out, wantLine) {
 		t.Errorf("missing LLM ok line:\n%s", out)
 	}
 }
@@ -152,7 +166,15 @@ func TestStepVerifyLLMWithGoodKeyFile(t *testing.T) {
 // TestStepVerifyLLMWithKeyFileWrongPerms catches the 0644 case:
 // user hand-edited a key file without setting 0600. Wizard must
 // fail closed with a visible chmod hint.
+//
+// Skipped on Windows: production correctly skips the perm-bit check
+// (NTFS ACL model), so there's no "wrong perm" warn to assert on.
+// The corresponding production-side warning belongs to a future
+// Windows-equivalent ACL audit, not this test.
 func TestStepVerifyLLMWithKeyFileWrongPerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("perm-bit check is skipped on Windows (NTFS ACL model); no warning to assert")
+	}
 	wiz, buf, tmpDir := newVerifyFixture(t)
 	keyPath := filepath.Join(tmpDir, "anthropic.key")
 	if err := os.WriteFile(keyPath, []byte("sk-ant-test\n"), 0o644); err != nil {
@@ -197,7 +219,14 @@ func TestStepVerifyHooksInstalledAndExecutable(t *testing.T) {
 
 // TestStepVerifyHooksNonExecutable catches the chmod-forgot case:
 // hook script present but missing +x. Must warn with a fix hint.
+//
+// Skipped on Windows: production correctly does not check the exec
+// bit there (Windows doesn't model an exec bit; Claude Code's bundled
+// Git Bash invokes scripts via shebang regardless of mode bits).
 func TestStepVerifyHooksNonExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bit is meaningless on Windows; production correctly skips this check")
+	}
 	wiz, buf, tmpDir := newVerifyFixture(t)
 
 	hookDir := filepath.Join(tmpDir, "hooks", "claude-code")
