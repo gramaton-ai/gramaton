@@ -18,6 +18,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`core/TestConcurrentReadsAndWrites` exhausted its 10s context
+  budget on Windows under load, surfacing as a misleading "data
+  corruption" assertion.** The test seeded 10 nodes, then ran 10
+  readers + 3 writers (60 writes total) under a hard
+  `context.WithTimeout(10*time.Second)`. On Windows under race
+  detector + parallel-suite load, bbolt writes are dramatically
+  slower than POSIX; the budget ran out before all 60 writes
+  completed and writers exited early. The final node count came
+  back as ~40-50 instead of 70 and the test fired
+  `t.Fatalf("...(data corruption)")` -- but the data was consistent,
+  just incomplete relative to the test's optimistic budget. Fix:
+  inline `windowsTimeout` helper (3x scaling on Windows, no-op
+  elsewhere) and wrap the test's context timeout + deadlock
+  watchdog. Same shape as `testutil.Timeout`, inlined because
+  `core/` can't import `testutil/` (cycle). Closes #40.
+
 - **`server/panicLogDedup` LRU eviction was non-deterministic on
   Windows.** The dedup map stored `time.Now()` per fingerprint and
   picked the oldest by `t.Before(oldestTime)`. Windows' `time.Now`
