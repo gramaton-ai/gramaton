@@ -75,6 +75,7 @@ func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend Hook
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir) // Windows: os.UserHomeDir reads %USERPROFILE%, not $HOME
 	cfg := config.Defaults()
 	cfg.DataDir = tmpDir + "/data"
 
@@ -247,6 +248,7 @@ func TestStepHooksMaterializeFailure(t *testing.T) {
 func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp) // Windows: os.UserHomeDir reads %USERPROFILE%, not $HOME
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o700); err != nil {

@@ -18,6 +18,31 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Five Windows-only test failures from the Phase D backlog were
+  test-fixture bugs, not production bugs.** Three real root causes
+  across `internal/setup/`:
+  (1) `TestRegisterClaudeHooksIdempotentAndPreserving` used
+  `t.Setenv("HOME", tmp)` to redirect the home directory, but on
+  Windows `os.UserHomeDir` reads `%USERPROFILE%` not `$HOME`.
+  Production correctly wrote to the real runner's
+  `~/.claude/settings.json` (an empty map); the test re-read its
+  tmp seed and saw no change. Fix: also set `USERPROFILE` next to
+  every `t.Setenv("HOME", ...)` (two callsites in `hooks_test.go`).
+  Closes #32.
+  (2) `TestStepVerifySkipEverything` and
+  `TestStepVerifyLLMWithGoodKeyFile` asserted on POSIX-only output
+  lines (`"Config file permissions: 0600"`,
+  `"LLM: ... 0600 perms"`). Production already emits
+  Windows-equivalent lines (`"... skipped on Windows (NTFS ACL
+  model)"`, `"... perm check skipped on Windows"`); tests now
+  switch the expected substring on `runtime.GOOS`.
+  (3) `TestStepVerifyLLMWithKeyFileWrongPerms` and
+  `TestStepVerifyHooksNonExecutable` assert that production emits
+  warnings about perm-bit / exec-bit problems. On Windows those
+  checks are correctly skipped (NTFS ACL model; no exec bit), so
+  there's no warning to assert. Tests now `t.Skip` on Windows.
+  Closes #33.
+
 - **`core/TestConcurrentReadsAndWrites` exhausted its 10s context
   budget on Windows under load, surfacing as a misleading "data
   corruption" assertion.** The test seeded 10 nodes, then ran 10
