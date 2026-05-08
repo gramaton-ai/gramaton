@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -238,6 +239,16 @@ func populateStore(eng *core.Engine) *testutil.PopulatedStore {
 }
 
 // runCmd executes a CLI command and returns captured stdout.
+//
+// The reader (io.Copy in the goroutine) drains concurrently with the
+// command's writes. Without that draining, any output exceeding the OS
+// pipe buffer deadlocks: rootCmd.Execute writes synchronously into w,
+// nobody reads from r until Execute returns, so a Write that fills the
+// buffer blocks forever. POSIX anonymous pipes default to ~64KB and
+// most CLI outputs fit, so it's silent there. Windows anonymous pipes
+// default to ~4KB; any JSON output >4KB hangs the test for the full
+// per-package timeout. Surfaced as #50: TestCLISearchSort and
+// TestCLISearch both produced 4134-byte writes and hung on Windows CI.
 func runCmd(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
 
@@ -256,13 +267,21 @@ func runCmd(t *testing.T, args ...string) ([]byte, error) {
 	// Preserve the config-dir override on root's persistent flags.
 	rootCmd.PersistentFlags().Set("config-dir", testCfgDir)
 
+	// Drain the read end concurrently so writes never block on the
+	// pipe-buffer limit. See docstring above for the Windows deadlock.
+	var buf bytes.Buffer
+	copyDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(copyDone)
+	}()
+
 	err := rootCmd.Execute()
 
 	w.Close()
 	os.Stdout = old
 
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	<-copyDone
 	r.Close()
 
 	return buf.Bytes(), err
