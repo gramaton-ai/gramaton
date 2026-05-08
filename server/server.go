@@ -106,14 +106,26 @@ type Server struct {
 // failure mode the dedup was added for).
 type panicLogDedup struct {
 	mu      sync.Mutex
-	seen    map[string]time.Time
+	seen    map[string]panicEntry
+	nextSeq uint64
 	ttl     time.Duration
 	maxSize int
 }
 
+// panicEntry records when a fingerprint was last seen (for TTL
+// pruning) and its insertion sequence (for LRU eviction). The seq
+// is decoupled from the wall clock so eviction order stays
+// deterministic on platforms with coarse time.Now resolution
+// (notably Windows, ~15.6ms tick) where rapid sequential inserts
+// can collapse to the same timestamp.
+type panicEntry struct {
+	seenAt time.Time
+	seq    uint64
+}
+
 func newPanicLogDedup(ttl time.Duration) *panicLogDedup {
 	return &panicLogDedup{
-		seen:    make(map[string]time.Time),
+		seen:    make(map[string]panicEntry),
 		ttl:     ttl,
 		maxSize: 1024,
 	}
@@ -123,13 +135,15 @@ func newPanicLogDedup(ttl time.Duration) *panicLogDedup {
 // ttl. Records the timestamp on first-log so subsequent calls within
 // the window suppress. Prunes expired entries on each call; on
 // overflow past maxSize, drops the oldest entry to bound memory
-// against a flood of unique panics.
+// against a flood of unique panics. Eviction order is determined by
+// insertion sequence rather than timestamp so it stays
+// deterministic on coarse-clock platforms.
 func (d *panicLogDedup) shouldLog(fingerprint string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := time.Now()
-	for k, t := range d.seen {
-		if now.Sub(t) > d.ttl {
+	for k, e := range d.seen {
+		if now.Sub(e.seenAt) > d.ttl {
 			delete(d.seen, k)
 		}
 	}
@@ -138,15 +152,19 @@ func (d *panicLogDedup) shouldLog(fingerprint string) bool {
 	}
 	if len(d.seen) >= d.maxSize {
 		var oldestKey string
-		var oldestTime time.Time
-		for k, t := range d.seen {
-			if oldestKey == "" || t.Before(oldestTime) {
-				oldestKey, oldestTime = k, t
+		var oldestSeq uint64
+		first := true
+		for k, e := range d.seen {
+			if first || e.seq < oldestSeq {
+				oldestKey = k
+				oldestSeq = e.seq
+				first = false
 			}
 		}
 		delete(d.seen, oldestKey)
 	}
-	d.seen[fingerprint] = now
+	d.nextSeq++
+	d.seen[fingerprint] = panicEntry{seenAt: now, seq: d.nextSeq}
 	return true
 }
 

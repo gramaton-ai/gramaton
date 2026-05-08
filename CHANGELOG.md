@@ -18,6 +18,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`server/panicLogDedup` LRU eviction was non-deterministic on
+  Windows.** The dedup map stored `time.Now()` per fingerprint and
+  picked the oldest by `t.Before(oldestTime)`. Windows' `time.Now`
+  has ~15.6ms tick resolution; rapid sequential inserts could
+  collapse to the same timestamp, leaving Go's nondeterministic map
+  iteration to choose which entry got evicted. Test
+  `TestPanicLogDedupMaxSize` failed under race+load when the
+  expected-evicted entry happened to be iterated after another
+  same-timestamp entry. Fix: replace `map[string]time.Time` with
+  `map[string]panicEntry{seenAt time.Time; seq uint64}` and select
+  the eviction victim by minimum `seq` (per-instance monotonic
+  insertion counter). TTL pruning still uses `time.Now` since that's
+  a real-world deadline; only LRU ordering becomes clock-independent.
+  Closes #39.
+
 - **`cli/readFileJSON` left an open file handle when calling
   `os.Remove` on the just-read input file.** The function used a
   `defer f.Close()` set up after `os.Open`, then called `os.Remove`
