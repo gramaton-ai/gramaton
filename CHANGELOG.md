@@ -48,7 +48,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Windows test-budget nits surfaced after the more-visible Windows
-  failures cleared.** Three tiny fixes targeting Windows CI green:
+  failures cleared.** Four small fixes targeting Windows CI green:
   (1) `core/TestConcurrentReadsAndWrites` budget bumped from 10s base
   to 20s base (60s on Windows via `windowsTimeout`). 30s was tight
   on slow CI runners — got 67/70 nodes at 34s elapsed, meaning 3
@@ -62,8 +62,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (3) `api/TestCaptureBatchWallClockSpeedup` skipped on Windows.
   Already softened to `t.Logf` (informational only) in PR #41;
   ~10s on user's box, ~30-50s on CI. Same rationale.
-  Linux/macOS still run all three at full size; coverage there is
-  unchanged.
+  (4) CI test job now passes `-timeout 20m` to `go test`. Microsoft-
+  hosted Windows runners are 3-5x slower than Linux for our I/O-heavy
+  workload (NTFS small-file ops + Defender + Windows process spawn);
+  the default 10m per-package budget is too tight even after we've
+  trimmed the outliers in (1)-(3). The api package alone needs ~6-10
+  min on a slow Windows runner; 20m gives realistic headroom. Linux
+  and macOS finish well under 10m and are unaffected.
+  Linux/macOS still run all three skipped tests at full size;
+  coverage there is unchanged.
 
 - **`TestCaptureBatchAsyncLargerThanSyncCap` was over-sized for its
   contract.** The test's purpose is to verify "items > sync cap

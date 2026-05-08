@@ -40,7 +40,17 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
-      - run: go test ./...
+      # -timeout 20m: Microsoft-hosted Windows runners are 3-5x slower
+      # than Linux for our I/O-heavy workload (NTFS small-file ops +
+      # Defender real-time scanning + Windows process-spawn cost).
+      # The api package alone needs ~6-10 min on a slow Windows runner
+      # at current test sizing -- the default 10m per-package budget
+      # is too tight after we've already trimmed the obvious outliers
+      # (#51 fixed TestCaptureBatchAsyncLargerThanSyncCap; #53 skipped
+      # TestCollectionPerformance + TestCaptureBatchWallClockSpeedup
+      # on Windows). Linux/macOS finish well under 10m and are
+      # unaffected by the larger budget.
+      - run: go test -timeout 20m ./...
 
   test-race:
     name: test-race (${{ matrix.os }})
