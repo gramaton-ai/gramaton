@@ -43,6 +43,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Diagnosed by parallel Windows-side Claude Code session; macOS-side
   applied. Closes #50.
 
+- **`testutil.Timeout` Windows multiplier bumped from 3x to 5x.**
+  Comment already documented "Windows under race can be 3-5x slower
+  in practice"; the 3x choice was the conservative end. We hit
+  multiple legitimate flakes at the 30s/45s boundary
+  (`TestConcurrentReadsAndWrites`, `TestCaptureBatchChunkedCancelMidImport`'s
+  blockingInjector waitEntered, chunkNumBlocker waitParked) where
+  3x = 30s wasn't enough but 5x = 50s clears comfortably with margin
+  for runner variability. Same change in `core/concurrency_test.go`'s
+  inline `windowsTimeout` mirror. Linux/macOS unaffected.
+
 - **Windows test-budget nits surfaced after the more-visible Windows
   failures cleared.** Four small fixes targeting Windows CI green:
   (1) `core/TestConcurrentReadsAndWrites` budget bumped from 10s base

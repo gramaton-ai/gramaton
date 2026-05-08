@@ -21,10 +21,11 @@ import (
 // Inlined here because core/ can't import testutil/ (testutil
 // imports core, and splitting out a sub-package for one helper
 // isn't worth the indirection). Mirrors testutil.Timeout's
-// 3x-on-Windows policy.
+// 5x-on-Windows policy (originally 3x; bumped after multiple
+// legitimate flakes at the 30s boundary).
 func windowsTimeout(base time.Duration) time.Duration {
 	if runtime.GOOS == "windows" {
-		return base * 3
+		return base * 5
 	}
 	return base
 }

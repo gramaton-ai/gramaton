@@ -43,12 +43,16 @@ func RegisterEngineCleanup(t *testing.T, eng *core.Engine) {
 //	pollUntilTerminal(t, a, jobID, testutil.Timeout(5*time.Second))
 //
 // On Linux/macOS this returns base unchanged. On Windows it returns
-// 3 * base. The multiplier is conservative: Windows under race can
-// be ~5x slower in practice, but a tighter multiplier surfaces
-// genuine deadlocks faster while still clearing flakes.
+// 5 * base. We initially used 3x but observed multiple legitimate
+// flakes at the 30s/45s boundary (chunkNumBlocker waitParked,
+// blockingInjector waitEntered, TestConcurrentReadsAndWrites under
+// race). 5x is the documented upper end of "Windows under race can
+// be 3-5x slower in practice"; the 1.5x buffer over realistic max
+// gives genuine deadlocks ~50s to surface (still well under any
+// per-package go-test budget).
 func Timeout(base time.Duration) time.Duration {
 	if runtime.GOOS == "windows" {
-		return base * 3
+		return base * 5
 	}
 	return base
 }
