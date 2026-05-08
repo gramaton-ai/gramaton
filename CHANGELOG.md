@@ -16,6 +16,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   simplest install. Surfaced when the Windows debug session
   installed it ad-hoc to verify a fix locally; doc gap closed.
 
+### Fixed
+
+- **`cli/integration_test.go::runCmd` had a Windows-only pipe-buffer
+  deadlock that hung any cli integration test producing >4KB of JSON
+  output.** The helper redirected `os.Stdout` to a pipe write end
+  (`w`), ran `rootCmd.Execute()` synchronously, then read from the
+  pipe read end (`r`) AFTER Execute returned. POSIX anonymous pipes
+  default to ~64KB so most outputs fit and writes never block;
+  Windows anonymous pipes default to ~4KB, so any cli command
+  producing >4KB JSON would block in `Write` waiting for a reader
+  that hadn't started yet. Surfaced as `TestCLISearchSort` and
+  `TestCLISearch` consuming the full 10-min go-test budget on
+  Windows CI; the goroutine dump showed a 4134-byte write blocked
+  in `os.(*File).Write` from `cli.printJSON`. Fix: drain the read
+  end concurrently in a goroutine via `io.Copy`. Standard pattern,
+  no buffer-size dependency. Covers every cli integration test, not
+  just the two that were running at timeout-fire on prior CI runs.
+  Diagnosed by parallel Windows-side Claude Code session; macOS-side
+  applied. Closes #50.
+
 ### Changed
 
 - **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
