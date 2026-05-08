@@ -16,6 +16,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   simplest install. Surfaced when the Windows debug session
   installed it ad-hoc to verify a fix locally; doc gap closed.
 
+- **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
+  the existing `MaxAsyncBatchSize`. Default 0 (use the
+  `MaxSyncBatchSize = 500` constant). Operators can set it lower to
+  push more requests onto the async path; in-package tests use it
+  to exercise sync/async cap-boundary behavior without paying for
+  500+ records per test. Closes #49.
+
 ### Fixed
 
 - **`cli/integration_test.go::runCmd` had a Windows-only pipe-buffer
@@ -35,17 +42,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   just the two that were running at timeout-fire on prior CI runs.
   Diagnosed by parallel Windows-side Claude Code session; macOS-side
   applied. Closes #50.
-
-### Changed
-
-- **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
-  the existing `MaxAsyncBatchSize`. Default 0 (use the
-  `MaxSyncBatchSize = 500` constant). Operators can set it lower to
-  push more requests onto the async path; in-package tests use it
-  to exercise sync/async cap-boundary behavior without paying for
-  500+ records per test. Closes #49.
-
-### Fixed
 
 - **Windows test-budget nits surfaced after the more-visible Windows
   failures cleared.** Four small fixes targeting Windows CI green:
