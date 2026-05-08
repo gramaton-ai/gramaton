@@ -18,6 +18,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`cli/readFileJSON` left an open file handle when calling
+  `os.Remove` on the just-read input file.** The function used a
+  `defer f.Close()` set up after `os.Open`, then called `os.Remove`
+  in the success path while `f` was still open (defers fire on
+  return, after the body completes). On POSIX this works because
+  inode-unlink + open-handle is legal; on Windows mandatory file
+  locks block the remove until the handle closes, so the cleanup
+  silently no-opped and the temp file persisted. Fix: explicit
+  `f.Close()` immediately before `os.Remove` in the success path.
+  The deferred Close still runs after function return -- it
+  becomes an "already closed" no-op, error silently discarded by
+  the `defer` (consistent with the pre-fix behavior of the same
+  defer). Closes #30.
+
 - **Two Windows-only test flakes from the Phase D backlog.**
   (1) `internal/setup/TestWizardImportBranchMissingFile` asserted
   on a literal `"No file at /tmp/..."` substring against wizard
