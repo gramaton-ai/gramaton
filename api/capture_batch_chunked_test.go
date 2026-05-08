@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/jobs"
+	"github.com/gramaton-ai/gramaton/testutil"
 )
 
 // chunkedItems builds N CaptureBatchItems each with a unique
@@ -661,6 +662,11 @@ func (b *chunkNumBlocker) Inject(phase string) error {
 
 func (b *chunkNumBlocker) waitParked(t *testing.T, within time.Duration) {
 	t.Helper()
+	// Scale the budget for Windows runners under race detector. Same
+	// pattern as pollUntilTerminal in capture_batch_async_test.go:20.
+	// On POSIX this is a no-op; on Windows the underlying chunk Save +
+	// AdvanceStatus + chunk-2 prep can spill past 10s under load.
+	within = testutil.Timeout(within)
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
 		b.mu.Lock()
