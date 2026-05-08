@@ -819,6 +819,14 @@ func TestCaptureBatchWallClockSpeedup(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("skipping wall-clock gate: requires >=4 CPUs")
 	}
+	if runtime.GOOS == "windows" {
+		// Perf-shape test softened to t.Logf in PR #41 (#36) -- the
+		// wall-clock comparison is informational only on Windows under
+		// race + parallel-suite load, where ~10s of test time pushes
+		// the api package over its 10-min budget. Linux/macOS still
+		// runs full and exercises the par/seq path.
+		t.Skip("perf-shape, informational only since #36 softening; saves Windows CI budget")
+	}
 	const N = 50
 	a1, _, _ := setupBatchAPI(t)
 	tSeqStart := time.Now()

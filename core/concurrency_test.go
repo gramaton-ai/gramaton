@@ -21,10 +21,11 @@ import (
 // Inlined here because core/ can't import testutil/ (testutil
 // imports core, and splitting out a sub-package for one helper
 // isn't worth the indirection). Mirrors testutil.Timeout's
-// 3x-on-Windows policy.
+// 5x-on-Windows policy (originally 3x; bumped after multiple
+// legitimate flakes at the 30s boundary).
 func windowsTimeout(base time.Duration) time.Duration {
 	if runtime.GOOS == "windows" {
-		return base * 3
+		return base * 5
 	}
 	return base
 }
@@ -116,7 +117,11 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	eng.Unlock()
 
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), windowsTimeout(10*time.Second))
+	// Bumped from 10s base to 20s after PR #52 surfaced
+	// "expected 70 nodes, got 67" -- 30s on Windows wasn't enough for
+	// 60 writes through bbolt under race + parallel-suite load. 60s
+	// gives ~1s/write of headroom on slow Windows CI.
+	ctx, cancel := context.WithTimeout(context.Background(), windowsTimeout(20*time.Second))
 	defer cancel()
 
 	// 10 readers.
@@ -178,7 +183,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	select {
 	case <-done:
 		// Good -- no deadlock.
-	case <-time.After(windowsTimeout(15 * time.Second)):
+	case <-time.After(windowsTimeout(30 * time.Second)):
 		t.Fatal("concurrent reads+writes deadlocked")
 	}
 

@@ -16,6 +16,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   simplest install. Surfaced when the Windows debug session
   installed it ad-hoc to verify a fix locally; doc gap closed.
 
+- **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
+  the existing `MaxAsyncBatchSize`. Default 0 (use the
+  `MaxSyncBatchSize = 500` constant). Operators can set it lower to
+  push more requests onto the async path; in-package tests use it
+  to exercise sync/async cap-boundary behavior without paying for
+  500+ records per test. Closes #49.
+
 ### Fixed
 
 - **`cli/integration_test.go::runCmd` had a Windows-only pipe-buffer
@@ -36,16 +43,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Diagnosed by parallel Windows-side Claude Code session; macOS-side
   applied. Closes #50.
 
-### Changed
+- **`testutil.Timeout` Windows multiplier bumped from 3x to 5x.**
+  Comment already documented "Windows under race can be 3-5x slower
+  in practice"; the 3x choice was the conservative end. We hit
+  multiple legitimate flakes at the 30s/45s boundary
+  (`TestConcurrentReadsAndWrites`, `TestCaptureBatchChunkedCancelMidImport`'s
+  blockingInjector waitEntered, chunkNumBlocker waitParked) where
+  3x = 30s wasn't enough but 5x = 50s clears comfortably with margin
+  for runner variability. Same change in `core/concurrency_test.go`'s
+  inline `windowsTimeout` mirror. Linux/macOS unaffected.
 
-- **`config.JobsConfig` adds a `MaxSyncBatchSize` field**, mirroring
-  the existing `MaxAsyncBatchSize`. Default 0 (use the
-  `MaxSyncBatchSize = 500` constant). Operators can set it lower to
-  push more requests onto the async path; in-package tests use it
-  to exercise sync/async cap-boundary behavior without paying for
-  500+ records per test. Closes #49.
-
-### Fixed
+- **Windows test-budget nits surfaced after the more-visible Windows
+  failures cleared.** Four small fixes targeting Windows CI green:
+  (1) `core/TestConcurrentReadsAndWrites` budget bumped from 10s base
+  to 20s base (60s on Windows via `windowsTimeout`). 30s was tight
+  on slow CI runners — got 67/70 nodes at 34s elapsed, meaning 3
+  writes hit the deadline. 60s gives ~1s/write of headroom and the
+  watchdog stays ahead at `windowsTimeout(30s)` = 90s.
+  (2) `api/TestCollectionPerformance` skipped on Windows. Perf-shape
+  test where structural correctness is covered by sibling
+  `TestCollectionAdd*` + `TestCollectionItems*` tests; ~15s on the
+  user's Windows box, ~50s on CI under race + parallel-suite load.
+  Saves api package budget.
+  (3) `api/TestCaptureBatchWallClockSpeedup` skipped on Windows.
+  Already softened to `t.Logf` (informational only) in PR #41;
+  ~10s on user's box, ~30-50s on CI. Same rationale.
+  (4) CI test job now passes `-timeout 20m` to `go test`. Microsoft-
+  hosted Windows runners are 3-5x slower than Linux for our I/O-heavy
+  workload (NTFS small-file ops + Defender + Windows process spawn);
+  the default 10m per-package budget is too tight even after we've
+  trimmed the outliers in (1)-(3). The api package alone needs ~6-10
+  min on a slow Windows runner; 20m gives realistic headroom. Linux
+  and macOS finish well under 10m and are unaffected.
+  Linux/macOS still run all three skipped tests at full size;
+  coverage there is unchanged.
 
 - **`TestCaptureBatchAsyncLargerThanSyncCap` was over-sized for its
   contract.** The test's purpose is to verify "items > sync cap
