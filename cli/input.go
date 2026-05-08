@@ -122,7 +122,13 @@ func readFileJSON(path string, target any, limits config.LimitsConfig) error {
 		return fmt.Errorf("JSON parse error in input file: %w", err)
 	}
 
-	// Clean up -- we already verified we're in the temp dir.
+	// Close the handle before os.Remove. On Windows, mandatory file
+	// locks block os.Remove while a handle is open; the deferred Close
+	// fires only after this function returns -- too late for the
+	// Remove below. The deferred Close still runs and returns
+	// "already closed", silently discarded by the defer. On POSIX this
+	// is redundant but harmless.
+	f.Close()
 	_ = os.Remove(resolved)
 
 	return nil
