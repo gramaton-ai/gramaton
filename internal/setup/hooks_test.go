@@ -305,10 +305,17 @@ func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 	if !strings.Contains(content, "/user/custom/stop.sh") {
 		t.Errorf("user's custom stop hook was removed:\n%s", content)
 	}
-	// New-style gramaton paths present.
+	// New-style gramaton paths present. Production normalizes
+	// backslashes to forward slashes before writing settings.json
+	// (Claude Code's bundled Git Bash on Windows interprets backslashes
+	// as escapes; see hooks.go:209-222 for the rationale). So an
+	// assertion against the raw filepath.Join output -- which is
+	// backslash-formed on Windows -- would miss. Normalize the way
+	// production does, then assert.
 	for _, path := range scripts {
-		if !strings.Contains(content, path) {
-			t.Errorf("expected gramaton path %q in settings.json:\n%s", path, content)
+		want := strings.ReplaceAll(path, `\`, "/")
+		if !strings.Contains(content, want) {
+			t.Errorf("expected gramaton path %q in settings.json:\n%s", want, content)
 		}
 	}
 	// Old-style gramaton SessionStart hook should be gone.
