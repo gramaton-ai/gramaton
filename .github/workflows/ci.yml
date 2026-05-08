@@ -36,6 +36,19 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      # Defender real-time scanning intercepts every file write/read on
+      # NTFS, adding ~30-40% overhead to the test suite (we create
+      # thousands of small files via t.TempDir, bbolt, mmap setup, etc.).
+      # Safe to disable on the ephemeral CI runner because: (a) all Go
+      # deps are vetted + checksum-verified via go.sum, (b) the runner
+      # VM is destroyed after the job (no persistence), (c) Defender's
+      # signature-based scanning provides ~zero protection against the
+      # supply-chain attacks we'd actually care about. Reversible
+      # two-line revert if our threat model ever changes.
+      - name: Disable Defender real-time scanning (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -52,6 +65,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Disable Defender real-time scanning (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
