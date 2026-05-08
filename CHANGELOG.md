@@ -18,6 +18,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`TestCaptureBatchChunkedRefMapPersistedAcrossChunks` timed out
+  on Windows under race because `chunkNumBlocker.waitParked` used
+  a hard 10-second budget.** The test runs a 3-chunk async batch
+  and waits for the runner to park at chunk 2's chunk_save inject;
+  on Windows under race detector + parallel-suite load, chunk 1's
+  bbolt Save + jobs-store AdvanceStatus + chunk 2 prep can take
+  8-10 seconds, spilling past the budget. The existing
+  channel-based synchronization in the blocker is correct
+  (despite the issue title naming a "race") -- the only problem
+  was the wall-clock timeout being too short for Windows. Fix:
+  wrap the budget in `testutil.Timeout`, same one-line pattern
+  used by `pollUntilTerminal` in capture_batch_async_test.go:20.
+  Windows now gets 30 seconds; POSIX is unchanged. Closes #16.
+
 - **Five Windows-only test failures from the Phase D backlog were
   test-fixture bugs, not production bugs.** Three real root causes
   across `internal/setup/`:
