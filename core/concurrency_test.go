@@ -3,12 +3,31 @@ package core
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
 )
+
+// windowsTimeout scales a test timeout for the host platform.
+// Windows CI runners are 3-5x slower than Linux/macOS for I/O-heavy
+// paths under the race detector, so hard-coded short budgets that
+// fit POSIX timing exhaust on Windows and writers exit early --
+// surfacing as misleading "data corruption" assertion messages
+// when the actual problem is "didn't have time to do the writes".
+//
+// Inlined here because core/ can't import testutil/ (testutil
+// imports core, and splitting out a sub-package for one helper
+// isn't worth the indirection). Mirrors testutil.Timeout's
+// 3x-on-Windows policy.
+func windowsTimeout(base time.Duration) time.Duration {
+	if runtime.GOOS == "windows" {
+		return base * 3
+	}
+	return base
+}
 
 func TestConcurrentReads(t *testing.T) {
 	eng := setupTestEngine(t)
@@ -97,7 +116,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	eng.Unlock()
 
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), windowsTimeout(10*time.Second))
 	defer cancel()
 
 	// 10 readers.
@@ -159,8 +178,8 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 	select {
 	case <-done:
 		// Good -- no deadlock.
-	case <-time.After(15 * time.Second):
-		t.Fatal("concurrent reads+writes deadlocked (15s timeout)")
+	case <-time.After(windowsTimeout(15 * time.Second)):
+		t.Fatal("concurrent reads+writes deadlocked")
 	}
 
 	// Verify data integrity.
