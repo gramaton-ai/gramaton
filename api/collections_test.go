@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1098,6 +1099,15 @@ func TestCollectionNaNRejection(t *testing.T) {
 func TestCollectionPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping performance test")
+	}
+	if runtime.GOOS == "windows" {
+		// Perf-shape test; structural correctness is covered by smaller
+		// sibling tests (TestCollectionAdd*, TestCollectionItems*). On
+		// slow Windows CI runners this consumes ~15-50s of the api
+		// package's 10-min budget under race + parallel-suite load,
+		// pushing the package over its budget. Linux/macOS still run
+		// full size.
+		t.Skip("perf-shape test; structural correctness covered by smaller siblings; saves Windows CI budget")
 	}
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
