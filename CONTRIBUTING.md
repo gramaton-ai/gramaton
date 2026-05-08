@@ -788,6 +788,17 @@ on 2026-05-07 led to GH issues #16 and the test-stability sweep:
   `pollUntilTerminal` waits for *status*; a separate `ShutdownAsync`
   (or equivalent runner-drain) call waits for the runner to publish
   whatever it was going to publish.
+- **Wall-clock comparisons between two execution modes**
+  (`par < seq`, `concurrent < serial`). The relative timing of two
+  whole-process runs depends on goroutine scheduling, GC pauses, and
+  CI-runner load. Soften to `t.Logf` and keep the correctness contract
+  on the output, not the timing. The original incident:
+  `TestCaptureBatchWallClockSpeedup` hard-asserted `tPar < tSeq` and
+  flaked on a single loaded ubuntu-latest run (par=1.4s, seq=944ms,
+  ratio=0.67); the batch path was correct, just unlucky on that
+  scheduler. If you genuinely need a perf gate, compare against a
+  generous fixed bound (`elapsed < 5*expected_minimum`) so the only
+  failure mode is genuine pathological slowness.
 
 **Upper-bound assertions are fine** — `maxLive > N` (don't exceed
 expected concurrency) and `elapsed > generous_bound` (don't block
