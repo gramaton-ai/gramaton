@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.2] - 2026-05-08
+
+Windows joins the table.
+
+alpha.1's CI ran Linux + macOS only — Windows runs were opt-in and red
+more often than not. alpha.2 closes the gap: the full test suite passes
+on `windows-latest` under both `go test` and `go test -race`, sixteen
+POSIX-vs-Windows portability bugs are out, and CONTRIBUTING.md gained
+anti-pattern entries from the debug sessions. Windows test jobs aren't
+yet branch-protection-required (we want consistency-confirmation across
+multiple main builds first), but the coverage is real.
+
 ### Changed
 
 - **CONTRIBUTING.md notes the C-toolchain prerequisite for
@@ -22,6 +34,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   push more requests onto the async path; in-package tests use it
   to exercise sync/async cap-boundary behavior without paying for
   500+ records per test. Closes #49.
+
+- **CI's race-detector job now runs `go test -race -short ./...`.**
+  Three test-package timeouts (TestScaleMeasurement at 1000-record
+  default, TestCaptureBatchAsyncLargerThanSyncCap at MaxSyncBatchSize+50,
+  the cli/integration suite at 81 in-process command tests) were
+  routinely blowing through Go's 10-minute per-package alarm on
+  Windows under race-detector overhead. These tests are now gated
+  behind `testing.Short()` and skipped under `-short`. Functional CI
+  (non-race) on every platform still exercises them at full scale, so
+  real regressions in heavy paths still surface; the race-CI signal
+  is preserved on the ~95% of test code that doesn't have scale-
+  derived runtime. TestScaleMeasurement's CI default also drops from
+  1000 to 100 records (its assertions are structural, not threshold-
+  based; `GRAMATON_SCALE` env var stays for real measurements).
+  Closes #17.
+
+- **`internal/version` falls back to `runtime/debug.BuildInfo` when
+  ldflags aren't injected.** Binaries installed via `go install
+  github.com/gramaton-ai/gramaton@latest` previously reported
+  `Version: dev`, `Commit: unknown`, `Date: unknown` because Go's
+  install path doesn't pass our build-tag ldflags. The package now
+  reads the embedded BuildInfo at startup and fills sentinel values
+  from the module's `Main.Version` and the binary's VCS settings
+  (`vcs.revision` -> short commit, `vcs.time` -> build date).
+  Explicit ldflags-set values still win — hand-built and
+  release-pipeline binaries are unchanged. Net: `go install` users
+  now see accurate version output without any change to their
+  install command.
 
 ### Fixed
 
@@ -296,25 +336,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   multiplier so future call sites benefit automatically. Closes #21,
   #22, #23.
 
-### Changed
-
-- **CI's race-detector job now runs `go test -race -short ./...`.**
-  Three test-package timeouts (TestScaleMeasurement at 1000-record
-  default, TestCaptureBatchAsyncLargerThanSyncCap at MaxSyncBatchSize+50,
-  the cli/integration suite at 81 in-process command tests) were
-  routinely blowing through Go's 10-minute per-package alarm on
-  Windows under race-detector overhead. These tests are now gated
-  behind `testing.Short()` and skipped under `-short`. Functional CI
-  (non-race) on every platform still exercises them at full scale, so
-  real regressions in heavy paths still surface; the race-CI signal
-  is preserved on the ~95% of test code that doesn't have scale-
-  derived runtime. TestScaleMeasurement's CI default also drops from
-  1000 to 100 records (its assertions are structural, not threshold-
-  based; `GRAMATON_SCALE` env var stays for real measurements).
-  Closes #17.
-
-### Fixed
-
 - **Tar header names now use forward slashes on every host OS.** The
   archive walker in `backup/backup.go` set `header.Name` via
   `filepath.Join("data", rel)`, which is OS-native and produced
@@ -393,21 +414,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cleanly and the deferred temp cleanup removes the stale temp.
   Closes the storage half of #12 (Windows CI flake under race
   detector).
-
-### Changed
-
-- **`internal/version` falls back to `runtime/debug.BuildInfo` when
-  ldflags aren't injected.** Binaries installed via `go install
-  github.com/gramaton-ai/gramaton@latest` previously reported
-  `Version: dev`, `Commit: unknown`, `Date: unknown` because Go's
-  install path doesn't pass our build-tag ldflags. The package now
-  reads the embedded BuildInfo at startup and fills sentinel values
-  from the module's `Main.Version` and the binary's VCS settings
-  (`vcs.revision` -> short commit, `vcs.time` -> build date).
-  Explicit ldflags-set values still win — hand-built and
-  release-pipeline binaries are unchanged. Net: `go install` users
-  now see accurate version output without any change to their
-  install command.
 
 ## [0.3.0-alpha.1] - 2026-05-07
 
