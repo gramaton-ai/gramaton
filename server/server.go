@@ -456,6 +456,15 @@ func (s *Server) Run() error {
 		s.log.Error("shutdown error", "err", err)
 	}
 
+	// Drain the in-flight curation cycle. curationCancel above only
+	// signals "no new cycles" -- it does not wait for the cycle that
+	// may be deep in RunDeterministic -> Engine.Save right now. Without
+	// this drain, engine.Close below races the in-flight save and
+	// nil-derefs.
+	if s.runner != nil {
+		s.runner.Stop()
+	}
+
 	// Drain async batch runners before closing the engine. A runner
 	// touching engine.Save against a closed bbolt handle would panic
 	// or corrupt on-disk state; ShutdownAsync gates new submits and
@@ -540,6 +549,12 @@ func (s *Server) Shutdown() {
 	defer ctxCancel()
 	s.httpServer.Shutdown(ctx)
 	s.removeServerInfo()
+
+	// Drain the in-flight curation cycle before engine.Close. See
+	// Run() comment.
+	if s.runner != nil {
+		s.runner.Stop()
+	}
 
 	// Drain async batch runners before closing the engine. See Run()
 	// comment.

@@ -25,6 +25,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`server.Server.Shutdown` now drains the in-flight curation cycle
+  before closing the engine.** Pre-fix, both `Run` and `Shutdown`
+  only called `curationCancel()` to signal the runner -- but the
+  curation goroutine was synchronously executing
+  `RunDeterministic -> enrichConcepts -> engine.SaveOrLog` on its
+  own stack and didn't preempt on context cancel.
+  `s.engine.Close()` then ran concurrently with the in-flight save,
+  causing a `nil` deref on bbolt access. Reproduced on macOS as a
+  post-`PASS` panic at the end of `go test ./cli/`. Fix: insert
+  `s.runner.Stop()` between the HTTP drain and `engine.Close` in
+  both shutdown paths. `Runner.Stop` (which already had drain
+  semantics via `<-r.done` -- nothing was calling it) is now
+  idempotent via `sync.Once` guard. Closes #43.
+
 - **`cli/integration_test.go::runCmd` had a Windows-only pipe-buffer
   deadlock that hung any cli integration test producing >4KB of JSON
   output.** The helper redirected `os.Stdout` to a pipe write end

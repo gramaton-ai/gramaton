@@ -21,6 +21,7 @@ type Runner struct {
 	state         *State
 	logger        *slog.Logger
 	stopCh        chan struct{}
+	stopOnce      sync.Once
 	done          chan struct{}
 	postCycleHook func()
 }
@@ -117,9 +118,19 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 }
 
-// Stop signals the runner to stop and waits for it to finish.
+// Stop signals the runner to stop and waits for the in-flight cycle
+// to drain. Blocks until the Start goroutine returns. Idempotent --
+// safe to call multiple times.
+//
+// Stop intentionally has no timeout: returning while a cycle is still
+// touching the engine would race engine.Close. Deterministic curation
+// is not ctx-aware, so a hard ceiling here would either re-introduce
+// that race or require teaching every deterministic pass to honor
+// cancellation -- bigger surgery than this fix targets.
 func (r *Runner) Stop() {
-	close(r.stopCh)
+	r.stopOnce.Do(func() {
+		close(r.stopCh)
+	})
 	<-r.done
 }
 

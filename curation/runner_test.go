@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -520,4 +521,63 @@ func TestStartAndStop(t *testing.T) {
 	if status.LastCurated == nil {
 		t.Fatal("runner should have run at least once")
 	}
+}
+
+// TestRunnerStopWaitsForInFlightCycle pins the drain semantic that
+// server.Shutdown depends on to avoid the macOS panic in #43:
+// engine.Save deep in cycle racing engine.Close. The post-cycle hook
+// fires as the last step of cycle(); if Stop returns before the hook
+// has run, drain is broken and a server-level engine.Close after Stop
+// would race the in-flight save.
+func TestRunnerStopWaitsForInFlightCycle(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	// Add a record so deterministic curation has something to do
+	// (otherwise the cycle is a near-instant no-op and the race
+	// window is too small to be diagnostic either way).
+	addNode(t, eng, "drain test", "durable", 0.9, []string{"drain"}, time.Now().UTC())
+
+	var hookCount atomic.Int32
+	runner := NewRunner(eng, nil, cfg, testLogger())
+	runner.SetPostCycleHook(func() { hookCount.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.Start(ctx)
+
+	// Race straight to Stop: don't sleep, don't wait for the cycle to
+	// finish. Stop must drain the in-flight cycle before returning.
+	stopReturned := make(chan struct{})
+	go func() {
+		runner.Stop()
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Stop did not return within 30s")
+	}
+
+	if hookCount.Load() < 1 {
+		t.Fatal("Stop returned before in-flight cycle's post-cycle hook fired -- drain semantics broken")
+	}
+}
+
+// TestRunnerStopIdempotent guards against panic-on-second-Stop. Stop
+// closes stopCh; closing an already-closed channel panics. sync.Once
+// in Stop makes the call safe to repeat.
+func TestRunnerStopIdempotent(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+
+	runner := NewRunner(eng, nil, cfg, testLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.Start(ctx)
+
+	runner.Stop()
+	runner.Stop() // must not panic
 }
