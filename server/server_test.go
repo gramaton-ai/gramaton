@@ -598,3 +598,69 @@ func TestResponseEnvelopeMeta(t *testing.T) {
 		t.Fatal("expected version in meta")
 	}
 }
+
+// TestServerShutdownDrainsCuration is the server-level pin for #43:
+// pre-fix, Shutdown only canceled the curation context and did NOT
+// wait for the in-flight cycle to drain before closing the engine,
+// so engine.Close raced RunDeterministic -> enrichConcepts ->
+// engine.Save and nil-deref'd on bbolt access. Post-fix, Shutdown
+// calls runner.Stop() which blocks until the Start goroutine fully
+// returns, including any in-flight cycle.
+//
+// The store is populated with enough records that deterministic
+// curation does real work (concept enrichment, propagated edges) --
+// otherwise the cycle is a near-instant no-op and the race window
+// closes before Shutdown can lose it. Bare server, no setupTestServer
+// (which registers its own engine cleanup we don't want here).
+func TestServerShutdownDrainsCuration(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = ""
+	cfg.Backup.Dir = t.TempDir() + "/backups"
+	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
+		t.Fatalf("Save config: %v", err)
+	}
+
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopLLM{}),
+		core.WithVectorIndex(index.NewFlatIndex()),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+
+	for i := 0; i < 20; i++ {
+		addRecord(t, eng, "drain test record")
+	}
+
+	srvCfg := DefaultConfig()
+	srvCfg.ConfigDir = dir
+	srvCfg.Port = 0
+	srv, err := New(eng, srvCfg, slog.Default())
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
+
+	if err := srv.StartHTTP(); err != nil {
+		t.Fatalf("StartHTTP: %v", err)
+	}
+
+	// Race straight to Shutdown -- the runner.Start goroutine fires an
+	// immediate runIfIdle on launch, so a cycle is in flight by the
+	// time we get here. Without the drain in Shutdown, engine.Close
+	// would race the cycle's engine.Save.
+	done := make(chan struct{})
+	go func() {
+		srv.Shutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// No panic, Shutdown returned cleanly.
+	case <-time.After(30 * time.Second):
+		t.Fatal("Shutdown did not return within 30s")
+	}
+}
