@@ -63,6 +63,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Bedrock and OpenAI providers now actually deliver system prompts.**
+  Pre-fix, both providers silently dropped curation system instructions
+  on every call, leaving curation cycles to run with no role/format
+  framing -- just per-batch concept content. The Anthropic provider
+  was the only one that implemented `llm.SystemPromptSetter`. The
+  `Metered` decorator (`llm/metered.go:114`) declares `SetSystemPrompt`
+  unconditionally, which makes `*Metered` always satisfy the
+  `SystemPromptSetter` type assertion at the curation layer regardless
+  of inner-provider support. Combined with
+  `cfg.LLM.Curation.PromptCachingEnabled` defaulting to `true`,
+  curation entered the cache path (`autonomous.go:1284-1289`), skipped
+  the user-message-preamble fallback, and called `SetSystemPrompt` --
+  which `Metered` delegated to inner via type assertion, where it was
+  a no-op for Bedrock and OpenAI. Net: those providers received
+  curation user messages with no system instructions at all. Quality
+  of synthesis, classification, and contradiction detection materially
+  degraded for affected users. Fix: implement `SetSystemPrompt` on
+  both clients with the same RWMutex-protected single-string shape
+  used by Anthropic, and thread the prompt into Converse (Bedrock) and
+  chat-completions (OpenAI) request builders. The `Metered`
+  auto-satisfaction design footgun is tracked separately as a
+  follow-up. Closes #62.
+
 - **Concept-synthesis JSON parser hardened against prose preamble and
   non-`json` fence-language tags.** `parseBatchSynthesis`
   (`curation/autonomous.go`) was the lone outlier among the four
