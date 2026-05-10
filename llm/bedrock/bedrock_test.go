@@ -373,3 +373,72 @@ func TestCompleteIntegration(t *testing.T) {
 		t.Errorf("Complete() = %q, expected to contain PONG", got)
 	}
 }
+
+// TestSetSystemPromptStoresValue pins the SetSystemPrompt write
+// behavior on the client field. Bedrock SDK calls aren't mockable
+// without a custom HTTP transport (existing tests in this file
+// don't exercise the SDK round-trip either), so this and the
+// systemBlocks test below verify the path the SDK call would take.
+func TestSetSystemPromptStoresValue(t *testing.T) {
+	c := &Client{}
+	c.SetSystemPrompt("be terse")
+	if got := c.snapshotSystemPrompt(); got != "be terse" {
+		t.Fatalf("snapshotSystemPrompt() = %q, want %q", got, "be terse")
+	}
+	c.SetSystemPrompt("")
+	if got := c.snapshotSystemPrompt(); got != "" {
+		t.Fatalf("after clear: snapshotSystemPrompt() = %q, want empty", got)
+	}
+}
+
+// TestSystemBlocksOmitsWhenEmpty pins the wire-format contract: with
+// no system prompt set, systemBlocks() returns nil so the SDK omits
+// the System field from the Converse request entirely. Callers that
+// never set a system prompt see no wire-format change.
+func TestSystemBlocksOmitsWhenEmpty(t *testing.T) {
+	c := &Client{}
+	if blocks := c.systemBlocks(); blocks != nil {
+		t.Fatalf("systemBlocks() with empty prompt = %v, want nil", blocks)
+	}
+}
+
+// TestSystemBlocksIncludesPromptWhenSet pins the wire-format
+// contract for the populated case: the SystemContentBlock slice
+// carries a single text-typed block matching the configured prompt.
+// This is what the Converse API expects in ConverseInput.System.
+func TestSystemBlocksIncludesPromptWhenSet(t *testing.T) {
+	c := &Client{}
+	c.SetSystemPrompt("respond with json only")
+	blocks := c.systemBlocks()
+	if len(blocks) != 1 {
+		t.Fatalf("systemBlocks() len = %d, want 1", len(blocks))
+	}
+	textBlock, ok := blocks[0].(*types.SystemContentBlockMemberText)
+	if !ok {
+		t.Fatalf("systemBlocks()[0] type = %T, want *SystemContentBlockMemberText", blocks[0])
+	}
+	if textBlock.Value != "respond with json only" {
+		t.Errorf("text block value = %q, want %q", textBlock.Value, "respond with json only")
+	}
+}
+
+// TestSetSystemPromptConcurrentSafe smoke-tests that concurrent
+// SetSystemPrompt and snapshotSystemPrompt calls don't panic under
+// the race detector. Curation today does set/call/clear under defer
+// per goroutine, but the RWMutex protection matches the Anthropic
+// precedent and protects against any future caller pattern.
+func TestSetSystemPromptConcurrentSafe(t *testing.T) {
+	c := &Client{}
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			c.SetSystemPrompt("prompt")
+			_ = c.snapshotSystemPrompt()
+			done <- struct{}{}
+			_ = i
+		}(i)
+	}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
