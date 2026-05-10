@@ -696,6 +696,116 @@ func TestParseClassificationSummaryTruncation(t *testing.T) {
 	}
 }
 
+// TestParseBatchSynthesisHappyPath: bare JSON array unmarshals cleanly
+// and per-concept synthesis strings are returned in input order. Pins
+// the contract before the bracket-finding tolerance kicks in.
+func TestParseBatchSynthesisHappyPath(t *testing.T) {
+	input := `[
+		{"keyword": "auth", "synthesis": "Authentication mechanisms across the system."},
+		{"keyword": "logging", "synthesis": "Observability and structured logging conventions."}
+	]`
+
+	syntheses := parseBatchSynthesis(input)
+	if syntheses == nil {
+		t.Fatal("parseBatchSynthesis returned nil for a valid array")
+	}
+	if len(syntheses) != 2 {
+		t.Fatalf("expected 2 syntheses, got %d", len(syntheses))
+	}
+	if !strings.Contains(syntheses[0], "Authentication") {
+		t.Fatalf("syntheses[0] missing expected content: %q", syntheses[0])
+	}
+	if !strings.Contains(syntheses[1], "Observability") {
+		t.Fatalf("syntheses[1] missing expected content: %q", syntheses[1])
+	}
+}
+
+// TestParseBatchSynthesisWithCodeFences: a JSON array wrapped in the
+// canonical ```json fenced-block shape parses cleanly. Mirrors
+// TestParseClassificationWithCodeFences.
+func TestParseBatchSynthesisWithCodeFences(t *testing.T) {
+	input := "```json\n" +
+		`[{"keyword":"auth","synthesis":"Auth notes."},{"keyword":"logs","synthesis":"Log notes."}]` +
+		"\n```"
+
+	syntheses := parseBatchSynthesis(input)
+	if syntheses == nil {
+		t.Fatal("parseBatchSynthesis returned nil for fenced JSON array")
+	}
+	if len(syntheses) != 2 || syntheses[0] != "Auth notes." || syntheses[1] != "Log notes." {
+		t.Fatalf("unexpected syntheses: %v", syntheses)
+	}
+}
+
+// TestParseBatchSynthesisWithProsePreamble: the model prepends
+// narration before the array. Bracket-finding must locate the array
+// payload despite the leading prose -- json.Unmarshal would otherwise
+// reject the response as not-valid-JSON.
+func TestParseBatchSynthesisWithProsePreamble(t *testing.T) {
+	input := `Here are the syntheses you requested:
+
+[{"keyword":"auth","synthesis":"Auth notes."},{"keyword":"logs","synthesis":"Log notes."}]
+
+Let me know if you need adjustments.`
+
+	syntheses := parseBatchSynthesis(input)
+	if syntheses == nil {
+		t.Fatal("parseBatchSynthesis returned nil despite valid JSON array embedded in prose")
+	}
+	if len(syntheses) != 2 || syntheses[0] != "Auth notes." {
+		t.Fatalf("unexpected syntheses: %v", syntheses)
+	}
+}
+
+// TestParseBatchSynthesisWithFenceLanguageTagVariant: the prefix-strip
+// only removes ```json (or bare ```), but models sometimes emit other
+// language tags (```javascript, ```yaml). Bracket-finding makes those
+// cases parse cleanly without expanding the prefix-strip surface.
+func TestParseBatchSynthesisWithFenceLanguageTagVariant(t *testing.T) {
+	input := "```javascript\n" +
+		`[{"keyword":"auth","synthesis":"Auth notes."}]` +
+		"\n```"
+
+	syntheses := parseBatchSynthesis(input)
+	if syntheses == nil {
+		t.Fatal("parseBatchSynthesis returned nil for ```javascript-tagged fenced JSON")
+	}
+	if len(syntheses) != 1 || syntheses[0] != "Auth notes." {
+		t.Fatalf("unexpected syntheses: %v", syntheses)
+	}
+}
+
+// TestParseBatchSynthesisMalformedReturnsNil: when the response is not
+// a valid JSON array (and bracket-finding can't recover it), the parser
+// returns nil so the caller can mark the batch failed and increment
+// the per-concept retry counter.
+func TestParseBatchSynthesisMalformedReturnsNil(t *testing.T) {
+	input := `not even close to JSON, no brackets at all`
+	if syntheses := parseBatchSynthesis(input); syntheses != nil {
+		t.Fatalf("expected nil for malformed response, got %v", syntheses)
+	}
+
+	input = `[{"keyword":"auth","synthesis":"missing quote}]`
+	if syntheses := parseBatchSynthesis(input); syntheses != nil {
+		t.Fatalf("expected nil for unclosed-string JSON, got %v", syntheses)
+	}
+}
+
+// TestParseBatchSynthesisEmptyArray: an empty array unmarshals to an
+// empty slice (NOT nil). Distinguishes "model returned no syntheses"
+// from "parse failure" -- the caller treats nil as a batch-level
+// failure and an empty slice as a per-concept short-response case.
+func TestParseBatchSynthesisEmptyArray(t *testing.T) {
+	input := `[]`
+	syntheses := parseBatchSynthesis(input)
+	if syntheses == nil {
+		t.Fatal("empty array should parse to non-nil empty slice, not nil")
+	}
+	if len(syntheses) != 0 {
+		t.Fatalf("expected length 0, got %d", len(syntheses))
+	}
+}
+
 func TestQualityAuditConceptSummary(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()

@@ -7,6 +7,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concept-synthesis JSON parser hardened against prose preamble and
+  non-`json` fence-language tags.** `parseBatchSynthesis`
+  (`curation/autonomous.go`) was the lone outlier among the four
+  curation LLM-output parsers: it trimmed only edge-aligned ` ```json `
+  / ` ``` ` fences and then tried `json.Unmarshal` directly. Any model
+  response with leading narration ("Here are the syntheses..."),
+  closing remarks, or a fence with a language tag the prefix-strip
+  didn't anticipate (` ```javascript `, ` ```yaml `) would return nil
+  and trigger the per-concept retry counter. After three consecutive
+  parse failures, `synthesis_status` flips to `stuck` and the concept
+  is permanently excluded from future curation cycles -- silently
+  degrading retrieval quality. Fix: mirror
+  `parseContradictionBatchResult`'s bracket-finding step (`text =
+  text[firstIndex('['):lastIndex(']')+1]`) to locate the JSON array
+  payload regardless of surrounding wrapper text. Also tightens
+  `ConceptSynthesisSystemPrompt` (`curation/prompts.go`) with the
+  explicit "Return JSON only, no prose, no code fences." directive
+  every other JSON-producing curation prompt already carries. Adds
+  six regression tests covering bare JSON, fenced JSON, prose
+  preamble, language-tag variants, malformed-input rejection, and
+  empty-array handling -- the synthesis parser had zero coverage
+  before this fix. Closes #59. Follow-ups in #60: re-stuck records
+  from prior versions need a public recovery verb, and
+  `SystemPromptSetter` is anthropic-only (Bedrock + OpenAI fall back
+  to user-message preamble delivery).
+
 ## [0.3.0-alpha.2] - 2026-05-08
 
 Windows joins the table.

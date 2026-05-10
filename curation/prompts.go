@@ -355,4 +355,6 @@ var classificationSchema = map[string]any{
 // ConceptSynthesisSystemPrompt is the stable instructions for concept
 // synthesis. Variable content is one or more concept sections with
 // members. Cached by providers that support it.
-const ConceptSynthesisSystemPrompt = `Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {"keyword": "...", "synthesis": "2-4 sentence summary"}`
+const ConceptSynthesisSystemPrompt = `Synthesize each concept below from its member record summaries. Respond with a JSON array of objects, one per concept, in order. Each object: {"keyword": "...", "synthesis": "2-4 sentence summary"}
+
+Return JSON only, no prose, no code fences.`

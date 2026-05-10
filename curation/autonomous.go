@@ -1628,13 +1628,27 @@ func meanCosineToCentroid(g *graph.Graph, memberIDs []string) (cos float64, used
 }
 
 // parseBatchSynthesis extracts synthesis strings from a JSON array
-// response. Handles markdown code fences and partial JSON.
+// response. Tolerates prose preamble / closing remarks and markdown
+// fences around the JSON. Mirrors parseContradictionBatchResult's
+// bracket-finding shape: even when the response is wrapped in
+// narration, the JSON array's outer brackets locate the payload.
 func parseBatchSynthesis(resp string) []string {
 	text := strings.TrimSpace(resp)
 	text = strings.TrimPrefix(text, "```json")
 	text = strings.TrimPrefix(text, "```")
 	text = strings.TrimSuffix(text, "```")
 	text = strings.TrimSpace(text)
+
+	// Be tolerant of leading narration / interior fences: find the
+	// first [ and last ]. The prompt asks the model to respond with
+	// a JSON array; this slice locates that payload even when the
+	// model wraps it in prose ("Here are the syntheses:") or fences
+	// with a language tag the prefix-strip didn't anticipate.
+	start := strings.Index(text, "[")
+	end := strings.LastIndex(text, "]")
+	if start >= 0 && end > start {
+		text = text[start : end+1]
+	}
 
 	var results []struct {
 		Keyword   string `json:"keyword"`
