@@ -739,9 +739,8 @@ func TestParseBatchSynthesisWithCodeFences(t *testing.T) {
 
 // TestParseBatchSynthesisWithProsePreamble: the model prepends
 // narration before the array. Bracket-finding must locate the array
-// payload despite the leading prose. Pre-fix this returned nil; the
-// fix added the [ ... ] slice that mirrors parseContradictionBatchResult.
-// This is the load-bearing case for #59.
+// payload despite the leading prose -- json.Unmarshal would otherwise
+// reject the response as not-valid-JSON.
 func TestParseBatchSynthesisWithProsePreamble(t *testing.T) {
 	input := `Here are the syntheses you requested:
 
