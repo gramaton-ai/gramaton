@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.3] - 2026-05-10
+
+Curation correctness fixes. Bedrock and OpenAI now actually deliver
+system prompts (they were silently dropped). Synthesis JSON parser
+hardened. New CLI verbs to recover already-stuck records. Capability-
+detection cleanup to prevent the silent-lie class recurring.
+
 ### Changed
 
 - **Capability-detection sites now go through `llm.Unwrap` before
