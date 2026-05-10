@@ -172,6 +172,15 @@ const (
 	MaxLogActionsFilter = 64
 )
 
+// MaxResetStuckIDs caps the number of explicit IDs accepted by
+// CurationResetStuck. The operation is loopback-gated and the body
+// size is already bounded, but an explicit cap keeps the api layer
+// honest about its blast radius. 10000 matches MaxExploreNodes --
+// "max population we'll touch in one operation." Operators with more
+// than 10k stuck records have a deeper problem the recovery verb
+// alone can't help with.
+const MaxResetStuckIDs = 10000
+
 // Collection item listing limits. Bounds on the new projection and
 // filter knobs keep CollectionItems from being a DoS amplifier --
 // 10k field names or a filter map with 1000 keys * 1000 values each

@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gramaton-ai/gramaton/curation"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // Curation surfaces store-housekeeping operations: viewing the runner's
@@ -155,4 +157,189 @@ func (a *API) CurationBatch(ctx context.Context) (CurationBatchResponse, *APIErr
 		return CurationBatchResponse{}, ErrInternal("batch processing failed")
 	}
 	return CurationBatchResponse{Result: result}, nil
+}
+
+// stuckTaskPolicy describes how to identify and reset a stuck record
+// for one curation task. Mirrors curation/task_retry.go's
+// taskRetryPolicy in spirit (status + attempts + error properties),
+// but adds the StatusResetValue field naming the value to flip back
+// to on a reset (each task has its own "available for work" status:
+// "captured" for classify, "pending" for synthesis).
+type stuckTaskPolicy struct {
+	Task             string // human-readable name reported to operators
+	StatusKey        string // node property holding the lifecycle status
+	StatusStuckValue string // value indicating the record is stuck
+	StatusResetValue string // value to reset to on un-stick
+	AttemptsKey      string // monotonic per-record retry counter
+	ErrorKey         string // last failure reason (truncated)
+}
+
+// stuckTaskPolicies enumerates the curation tasks that have a
+// stuck-after-N retry flow today. Adding a future task: register its
+// policy here. The list is read at request time so additions are
+// picked up without further wiring.
+var stuckTaskPolicies = []stuckTaskPolicy{
+	{
+		Task:             "classify",
+		StatusKey:        "processing_status",
+		StatusStuckValue: "stuck",
+		StatusResetValue: "captured",
+		AttemptsKey:      "classify_attempts",
+		ErrorKey:         "last_classify_error",
+	},
+	{
+		Task:             "synthesis",
+		StatusKey:        "synthesis_status",
+		StatusStuckValue: "stuck",
+		StatusResetValue: "pending",
+		AttemptsKey:      "synthesis_attempts",
+		ErrorKey:         "last_synthesis_error",
+	},
+}
+
+// StuckRecord identifies a single record-task pair flagged as stuck.
+// A record can in principle appear under multiple tasks if it has
+// multiple per-task status fields stuck simultaneously, though in
+// practice each task targets a different node shape.
+type StuckRecord struct {
+	ID    string `json:"id"`
+	Task  string `json:"task"`
+	Error string `json:"error,omitempty"`
+}
+
+// CurationListStuckResponse is the read-only stuck-record inventory.
+// Records is the per-record breakdown; Counts is a per-task summary
+// for callers that only need totals.
+type CurationListStuckResponse struct {
+	Records []StuckRecord  `json:"records"`
+	Counts  map[string]int `json:"counts"`
+}
+
+// CurationResetStuckRequest selects which stuck records to un-stick.
+// IDs empty = reset every stuck record. IDs non-empty = reset only
+// those records (and only the ones in that set that are actually
+// stuck; non-stuck IDs in the list are silently ignored).
+type CurationResetStuckRequest struct {
+	IDs []string `json:"ids,omitempty" jsonschema:"specific record IDs to reset; empty resets all stuck records"`
+}
+
+// CurationResetStuckResponse reports how many records were reset and
+// the per-task breakdown. Reset is the total across all tasks.
+type CurationResetStuckResponse struct {
+	Reset  int            `json:"reset"`
+	Counts map[string]int `json:"counts"`
+}
+
+// CurationListStuck walks the graph and returns every record with a
+// stuck task status. Read-only; safe to call frequently.
+func (a *API) CurationListStuck(ctx context.Context) (CurationListStuckResponse, *APIError) {
+	_ = ctx
+	a.engine.RLock()
+	defer a.engine.RUnlock()
+
+	var records []StuckRecord
+	counts := map[string]int{}
+	g := a.engine.Graph()
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		for _, p := range stuckTaskPolicies {
+			status, ok := n.Properties.GetString(p.StatusKey)
+			if !ok || status != p.StatusStuckValue {
+				continue
+			}
+			lastErr, _ := n.Properties.GetString(p.ErrorKey)
+			records = append(records, StuckRecord{
+				ID:    n.ID,
+				Task:  p.Task,
+				Error: lastErr,
+			})
+			counts[p.Task]++
+		}
+	}
+	it.Close()
+
+	return CurationListStuckResponse{
+		Records: records,
+		Counts:  counts,
+	}, nil
+}
+
+// CurationResetStuck flips stuck records back to their pre-failure
+// status and clears their per-task attempts counter + last-error
+// property. The next curation cycle will retry them. Operator-driven
+// recovery; use the matching CLI verb gramaton curation
+// stuck-records-reset which adds a count + LLM-cost-warning + Y/N
+// confirmation around this call.
+//
+// When req.IDs is empty: reset every stuck record across all tasks.
+// When req.IDs is non-empty: reset only the listed records; non-stuck
+// IDs in the list are silently ignored (no error -- caller may pass
+// a list from a prior CurationListStuck snapshot whose state has
+// since changed).
+func (a *API) CurationResetStuck(ctx context.Context, req CurationResetStuckRequest) (CurationResetStuckResponse, *APIError) {
+	_ = ctx
+	if len(req.IDs) > MaxResetStuckIDs {
+		return CurationResetStuckResponse{}, ErrInvalid(fmt.Sprintf("ids: too many (%d > max %d)", len(req.IDs), MaxResetStuckIDs))
+	}
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	var allowlist map[string]bool
+	if len(req.IDs) > 0 {
+		allowlist = make(map[string]bool, len(req.IDs))
+		for _, id := range req.IDs {
+			allowlist[id] = true
+		}
+	}
+
+	// Phase 1: collect what to reset (do not mutate during iteration --
+	// the existing curation passes follow this same two-phase shape).
+	type pendingReset struct {
+		id     string
+		policy stuckTaskPolicy
+	}
+	var resets []pendingReset
+	g := a.engine.Graph()
+	it := g.NodeIterator()
+	for it.Next() {
+		n := it.Node()
+		if allowlist != nil && !allowlist[n.ID] {
+			continue
+		}
+		for _, p := range stuckTaskPolicies {
+			status, ok := n.Properties.GetString(p.StatusKey)
+			if ok && status == p.StatusStuckValue {
+				resets = append(resets, pendingReset{id: n.ID, policy: p})
+			}
+		}
+	}
+	it.Close()
+
+	// Phase 2: apply the resets and emit a CommitAction per record so
+	// gramaton_log surfaces who was reset by this operation.
+	counts := map[string]int{}
+	var actions []graph.CommitAction
+	for _, r := range resets {
+		a.engine.SetProp(r.id, r.policy.StatusKey, graph.StringProperty(r.policy.StatusResetValue))
+		a.engine.SetProp(r.id, r.policy.AttemptsKey, graph.Int64Property(0))
+		_ = a.engine.Graph().RemoveNodeProperty(r.id, r.policy.ErrorKey)
+		counts[r.policy.Task]++
+		actions = append(actions, graph.CommitAction{
+			Kind:     graph.ActionCurationStuckReset,
+			RecordID: r.id,
+		})
+	}
+
+	if len(resets) > 0 {
+		if _, err := a.engine.Save("curation: reset stuck records", actions...); err != nil {
+			a.log.Warn("save failed", "component", "curation", "op", "reset_stuck", "err", err)
+			return CurationResetStuckResponse{}, ErrInternal("failed to save reset")
+		}
+	}
+
+	return CurationResetStuckResponse{
+		Reset:  len(resets),
+		Counts: counts,
+	}, nil
 }

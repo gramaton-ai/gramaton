@@ -70,6 +70,7 @@ const (
 	ActionCollectionUnretire     = "collection_unretire"
 	ActionCollectionSchemaUpdate = "collection_schema_update"
 	ActionCollectionMigrate      = "collection_migrate"
+	ActionCurationStuckReset     = "curation_stuck_reset"
 
 	// Curation cycle actions (autonomous + deterministic passes).
 	ActionCurationClassify           = "curation:classify"

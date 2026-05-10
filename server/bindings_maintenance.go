@@ -85,6 +85,34 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusOK, result)
 	})
 
+	mux.HandleFunc("GET /v1/curation/stuck-records", func(w http.ResponseWriter, r *http.Request) {
+		result, apiErr := s.api.CurationListStuck(r.Context())
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/curation/stuck-records/reset", func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"stuck-records reset is restricted to loopback connections", false)
+			return
+		}
+		var req api.CurationResetStuckRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil && !errors.Is(err, errEmptyBody) {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CurationResetStuck(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
 	mux.HandleFunc("POST /v1/reembed", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ReembedRequest
 		// Body is optional -- no required fields. But if a body IS
