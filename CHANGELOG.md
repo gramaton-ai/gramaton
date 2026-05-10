@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gramaton curation stuck-records-list` and
+  `gramaton curation stuck-records-reset` CLI subcommands** for
+  customer-driven recovery from accumulated stuck-task records.
+  After PR #61 hardened the synthesis parser, fresh stuck records
+  largely stop accumulating, but existing alpha.2 installs carry
+  whatever stuck records were already on disk, and stuck records
+  are excluded from future curation cycles by design (selection
+  guards filter on `synthesis_status="pending"` /
+  `processing_status="stuck"`). The list verb prints stuck record
+  IDs one per line (pipe-friendly; `--verbose` adds task + last
+  error as TSV; `--task` filters to one task). The reset verb
+  flips the relevant status property back to its task's
+  retry-eligible value (`captured` for classify, `pending` for
+  synthesis), clears the per-task attempts counter, and removes
+  the last-error property. With no arguments, resets every stuck
+  record; with explicit IDs, resets only those (non-stuck IDs in
+  the list are silently ignored). Always shows a count + LLM-cost
+  warning + Y/N confirmation before applying. New api methods
+  `CurationListStuck` (read-only, no engine lock contention) and
+  `CurationResetStuck` (write, emits one
+  `ActionCurationStuckReset` per record so the operation surfaces
+  in `gramaton_log`). HTTP routes `GET /v1/curation/stuck-records`
+  and `POST /v1/curation/stuck-records/reset` (the reset route is
+  loopback-gated like other destructive curation routes). No MCP
+  surface -- this is a customer recovery action, not an
+  agent-driven flow. Closes #60 Part B (stuck-record recovery
+  verb); Part A (`SystemPromptSetter` for Bedrock + OpenAI) tracked
+  separately.
+
 ### Fixed
 
 - **Concept-synthesis JSON parser hardened against prose preamble and
