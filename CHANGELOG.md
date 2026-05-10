@@ -9,6 +9,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Capability-detection sites now go through `llm.Unwrap` before
+  type-asserting against optional interfaces.** Previously,
+  curation's seven `llmProv.(llm.SystemPromptSetter)` callsites
+  asserted against the wrapper Provider directly. The Metered
+  decorator declared `SetSystemPrompt` on `*Metered` unconditionally
+  and delegated to inner via type assertion -- which made `*Metered`
+  always satisfy the interface at the type-assertion layer
+  regardless of inner support. Combined with the curation cache
+  path, this dropped system prompts silently for any provider that
+  didn't implement (the bug PR #65 surfaced for Bedrock and OpenAI
+  before they got native implementations). The fix introduces
+  `llm.Unwrap(Provider) Provider`, which walks `Inner()` references
+  through any wrapper stack and returns the deepest unwrapped
+  Provider; capability checks against the result reflect actual
+  implementation, not wrapper advertisement. `Metered.SetSystemPrompt`
+  is removed (now dead code -- callers are expected to use the
+  Unwrap pattern). Future optional-capability interfaces (the
+  pending #64 thinking-budget plumbing being the immediate next
+  case) inherit the precedent without re-introducing the
+  silent-lie footgun. Closes #66.
+
 - **CI test job per-package timeout bumped from 20m to 30m;
   job wrapper bumped from 30m to 45m.** The api package has been
   the dominant Windows-CI cost for a while (~6-10 min historical),

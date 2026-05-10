@@ -380,7 +380,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 
 	// Each tier (short / long) sets its own system prompt per pass.
 	// Ensure the provider's cached prompt is cleared on exit.
-	if setter, ok := llmProv.(llm.SystemPromptSetter); ok {
+	if setter, ok := llm.Unwrap(llmProv).(llm.SystemPromptSetter); ok {
 		defer setter.SetSystemPrompt("")
 	}
 	batchSize := cfg.LLM.Curation.BatchSize
@@ -492,7 +492,7 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 	shortModel := cfg.ModelForTask(config.TaskClassificationShort)
 	longModel := cfg.ModelForTask(config.TaskClassificationLong)
 
-	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
+	setter, hasSystemPrompt := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 	useCache := hasSystemPrompt && cfg.LLM.Curation.PromptCachingEnabled
 
 	// Pick the short-tier system prompt. When
@@ -694,7 +694,7 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 	// Falls back to concatenation if caching is disabled or the provider
 	// lacks SystemPromptSetter.
 	userPromptTemplate := summarizePrompt
-	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+	setter, hasSetter := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 	if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 		setter.SetSystemPrompt(SummarizeSystemPrompt)
 		defer setter.SetSystemPrompt("")
@@ -1135,7 +1135,7 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 
 	// Cache the invariant summarize-the-store instructions.
 	userPromptTemplate := manifestSummaryPrompt
-	setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+	setter, hasSetter := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 	if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 		setter.SetSystemPrompt(ManifestSystemPrompt)
 		defer setter.SetSystemPrompt("")
@@ -1281,7 +1281,7 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 
 	// Cache the invariant synthesis instructions on providers that
 	// support it; otherwise include them at the top of every batch.
-	setter, hasSystemPrompt := llmProv.(llm.SystemPromptSetter)
+	setter, hasSystemPrompt := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 	useCache := hasSystemPrompt && cfg.LLM.Curation.PromptCachingEnabled
 	preamble := ""
 	if !useCache {
@@ -1887,7 +1887,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	if batchSize == 1 {
 		// Cache the single-pair instructions. User body is the two records.
 		userPromptTemplate := contradictionPrompt
-		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+		setter, hasSetter := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 		if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 			setter.SetSystemPrompt(ContradictionSystemPrompt)
 			defer setter.SetSystemPrompt("")
@@ -1947,7 +1947,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		// Batched mode: N pairs per LLM call. Use the batch system prompt,
 		// which instructs the LLM to return a JSON array with pair_id.
 		includeSystemInline := true
-		setter, hasSetter := llmProv.(llm.SystemPromptSetter)
+		setter, hasSetter := llm.Unwrap(llmProv).(llm.SystemPromptSetter)
 		if hasSetter && cfg.LLM.Curation.PromptCachingEnabled {
 			setter.SetSystemPrompt(ContradictionBatchSystemPrompt)
 			defer setter.SetSystemPrompt("")

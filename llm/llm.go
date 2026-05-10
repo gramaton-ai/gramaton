@@ -76,8 +76,38 @@ type Provider interface {
 // implement to support a persistent system prompt with caching.
 // Curation sets this once before a classification batch so that
 // the taxonomy is cached across all calls.
+//
+// Capability detection at callsites MUST go through Unwrap before
+// type-asserting -- the Metered wrapper exposes Inner() and the
+// raw type assertion can succeed against a wrapper whose inner
+// doesn't actually implement the interface.
 type SystemPromptSetter interface {
 	SetSystemPrompt(text string)
+}
+
+// Unwrap walks a Provider chain through any wrapper that exposes
+// Inner() and returns the deepest unwrapped Provider. Used at
+// capability-detection sites so the type assertion reflects the
+// actual implementation, not a wrapper's lying advertisement.
+//
+// The pattern matters because optional-capability interfaces are
+// detected via type assertion (`p.(SomeInterface)`). A wrapper
+// declaring a delegating method on itself satisfies the interface
+// at the type-assertion layer regardless of inner support, which
+// produces silent capability lies. Curation hit this with
+// SystemPromptSetter on Bedrock and OpenAI providers; the symptom
+// was system prompts being silently dropped on every call.
+//
+// Naming parallels errors.Unwrap. Idempotent on Providers without
+// Inner(); recurses through nested wrappers.
+func Unwrap(p Provider) Provider {
+	for {
+		w, ok := p.(interface{ Inner() Provider })
+		if !ok {
+			return p
+		}
+		p = w.Inner()
+	}
 }
 
 // defaultCLIRateInterval is the minimum time between CLI provider
