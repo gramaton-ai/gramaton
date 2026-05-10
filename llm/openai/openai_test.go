@@ -74,6 +74,99 @@ func TestComplete(t *testing.T) {
 	}
 }
 
+// TestSetSystemPromptThreadsThroughComplete pins the contract that
+// SetSystemPrompt's value is delivered as a system-role message on
+// the next Complete call. Without this, the chat-completions request
+// body would carry only the user message and standing instructions
+// would be invisible to the model.
+func TestSetSystemPromptThreadsThroughComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(req.Messages) != 2 {
+			t.Fatalf("expected 2 messages (system + user), got %d: %+v", len(req.Messages), req.Messages)
+		}
+		if req.Messages[0].Role != "system" || req.Messages[0].Content != "be terse" {
+			t.Errorf("messages[0] not the system prompt: %+v", req.Messages[0])
+		}
+		if req.Messages[1].Role != "user" || req.Messages[1].Content != "ping" {
+			t.Errorf("messages[1] not the user prompt: %+v", req.Messages[1])
+		}
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "pong"}}},
+		})
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", apiKey: "sk-test", client: srv.Client()}
+	c.SetSystemPrompt("be terse")
+	if _, err := c.Complete(context.Background(), "ping"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+}
+
+// TestSetSystemPromptEmptyClears pins the symmetric clear contract:
+// SetSystemPrompt("") must drop the system message from subsequent
+// requests. Mirrors the curation set/call/clear-under-defer flow.
+func TestSetSystemPromptEmptyClears(t *testing.T) {
+	var lastBody chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&lastBody)
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "ok"}}},
+		})
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", apiKey: "sk-test", client: srv.Client()}
+
+	c.SetSystemPrompt("first")
+	if _, err := c.Complete(context.Background(), "p1"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(lastBody.Messages) != 2 {
+		t.Fatalf("first call should have 2 messages, got %d", len(lastBody.Messages))
+	}
+
+	c.SetSystemPrompt("")
+	if _, err := c.Complete(context.Background(), "p2"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(lastBody.Messages) != 1 {
+		t.Fatalf("after clear, request should have 1 user-only message, got %d", len(lastBody.Messages))
+	}
+	if lastBody.Messages[0].Role != "user" {
+		t.Errorf("after clear, expected user-only message, got role %q", lastBody.Messages[0].Role)
+	}
+}
+
+// TestSetSystemPromptThreadsThroughCompleteStructured pins the same
+// contract for the structured-output path. Curation classification
+// uses CompleteStructured; if the system prompt didn't propagate
+// here, JSON-only directives would be lost from classification calls.
+func TestSetSystemPromptThreadsThroughCompleteStructured(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Messages) != 2 || req.Messages[0].Role != "system" {
+			t.Errorf("CompleteStructured did not include system message: %+v", req.Messages)
+		}
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: `{"x":1}`}}},
+		})
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, model: "gpt-4o", apiKey: "sk-test", client: srv.Client()}
+	c.SetSystemPrompt("respond with json only")
+	schema := map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "integer"}}}
+	if _, err := c.CompleteStructured(context.Background(), schema, "give me x"); err != nil {
+		t.Fatalf("CompleteStructured: %v", err)
+	}
+}
+
 // TestSupportsStructuredOutput confirms OpenAI advertises structured
 // output via response_format: json_schema + strict=true.
 func TestSupportsStructuredOutput(t *testing.T) {

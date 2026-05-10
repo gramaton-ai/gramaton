@@ -75,6 +75,15 @@ type Client struct {
 	// hint so a curation loop hammering a non-enabled model doesn't
 	// repeat the same line every cycle.
 	accessDeniedWarned sync.Map
+
+	// systemPrompt holds the current standing system instructions,
+	// set via SetSystemPrompt and threaded into every Converse call's
+	// System field. RWMutex matches the Anthropic precedent so a
+	// future caller that calls SetSystemPrompt concurrently with
+	// Complete doesn't race on the read. Empty string = no system
+	// prompt sent (the default).
+	systemMu     sync.RWMutex
+	systemPrompt string
 }
 
 // New creates a Bedrock LLM client from the LLM config.
@@ -136,10 +145,51 @@ func (c *Client) warnIgnoredModel(model string) {
 		"hint", "bedrock client uses the model fixed at construction; configure llm.model or llm.models.* to switch")
 }
 
+// SetSystemPrompt configures a system prompt that will be included
+// in all subsequent Complete / CompleteStructured calls. The system
+// prompt is delivered through the Converse API's dedicated System
+// field (separate from the user message). Pass empty string to
+// clear. Safe to call concurrently with Complete.
+//
+// Implements llm.SystemPromptSetter. Without this method, Bedrock
+// curation runs with no system instructions at all -- the Metered
+// wrapper's auto-satisfaction of SystemPromptSetter combined with
+// PromptCachingEnabled=true (default) made curation skip the
+// user-message-preamble fallback while the inner provider silently
+// dropped the SetSystemPrompt call.
+func (c *Client) SetSystemPrompt(text string) {
+	c.systemMu.Lock()
+	defer c.systemMu.Unlock()
+	c.systemPrompt = text
+}
+
+// snapshotSystemPrompt returns the current system prompt under read
+// lock. The lock is released before any in-flight Converse call to
+// keep concurrent callers from serializing on it.
+func (c *Client) snapshotSystemPrompt() string {
+	c.systemMu.RLock()
+	defer c.systemMu.RUnlock()
+	return c.systemPrompt
+}
+
+// systemBlocks builds the SystemContentBlocks slice for a Converse
+// request. Returns nil when no system prompt is set so the SDK
+// omits the field entirely.
+func (c *Client) systemBlocks() []types.SystemContentBlock {
+	prompt := c.snapshotSystemPrompt()
+	if prompt == "" {
+		return nil
+	}
+	return []types.SystemContentBlock{
+		&types.SystemContentBlockMemberText{Value: prompt},
+	}
+}
+
 // Complete sends a prompt via the Converse API and returns the text.
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	out, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
 		ModelId: aws.String(c.model),
+		System:  c.systemBlocks(),
 		Messages: []types.Message{
 			{
 				Role: types.ConversationRoleUser,
@@ -216,6 +266,7 @@ func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, 
 	toolName := "emit_output"
 	out, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
 		ModelId: aws.String(c.model),
+		System:  c.systemBlocks(),
 		Messages: []types.Message{{
 			Role: types.ConversationRoleUser,
 			Content: []types.ContentBlock{

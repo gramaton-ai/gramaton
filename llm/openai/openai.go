@@ -36,6 +36,15 @@ type Client struct {
 	// ignoredModelWarned dedups the per-override Warn from
 	// CompleteWithModel so a tight curation loop doesn't flood logs.
 	ignoredModelWarned sync.Map
+
+	// systemPrompt holds the current standing system instructions,
+	// set via SetSystemPrompt and prepended as a system-role message
+	// to every chat-completions request. RWMutex matches the
+	// Anthropic precedent so a future caller that calls
+	// SetSystemPrompt concurrently with Complete doesn't race on the
+	// read. Empty string = no system prompt sent (the default).
+	systemMu     sync.RWMutex
+	systemPrompt string
 }
 
 // New creates an OpenAI-compatible LLM client.
@@ -142,13 +151,53 @@ func (c *Client) warnIgnoredModel(model string) {
 		"hint", "openai client uses the model fixed at construction; configure llm.model or llm.models.* to switch")
 }
 
+// SetSystemPrompt configures a system prompt that will be prepended
+// as a system-role message to all subsequent Complete /
+// CompleteStructured calls. Pass empty string to clear. Safe to call
+// concurrently with Complete.
+//
+// Implements llm.SystemPromptSetter. Without this method, OpenAI
+// curation runs with no system instructions at all -- the Metered
+// wrapper's auto-satisfaction of SystemPromptSetter combined with
+// PromptCachingEnabled=true (default) made curation skip the
+// user-message-preamble fallback while the inner provider silently
+// dropped the SetSystemPrompt call.
+func (c *Client) SetSystemPrompt(text string) {
+	c.systemMu.Lock()
+	defer c.systemMu.Unlock()
+	c.systemPrompt = text
+}
+
+// snapshotSystemPrompt returns the current system prompt under read
+// lock. The lock is released before any in-flight HTTP call to keep
+// concurrent callers from serializing on it.
+func (c *Client) snapshotSystemPrompt() string {
+	c.systemMu.RLock()
+	defer c.systemMu.RUnlock()
+	return c.systemPrompt
+}
+
+// buildMessages composes the messages slice for a chat-completions
+// request. Prepends a system-role message when a system prompt is
+// configured; otherwise returns the user message alone (matching the
+// pre-SystemPromptSetter behavior so callers without a system prompt
+// see no wire-format change).
+func (c *Client) buildMessages(prompt string) []chatMessage {
+	system := c.snapshotSystemPrompt()
+	if system == "" {
+		return []chatMessage{{Role: "user", Content: prompt}}
+	}
+	return []chatMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: prompt},
+	}
+}
+
 // Complete sends a prompt via /v1/chat/completions and returns the text.
 func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	body, err := json.Marshal(chatRequest{
-		Model: c.model,
-		Messages: []chatMessage{
-			{Role: "user", Content: prompt},
-		},
+		Model:    c.model,
+		Messages: c.buildMessages(prompt),
 	})
 	if err != nil {
 		return "", fmt.Errorf("openai llm: marshal request: %w", err)
@@ -231,10 +280,8 @@ func (c *Client) SupportsStructuredOutput() bool { return true }
 // Unmarshal directly without the "find first { and last }" dance.
 func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, prompt string) (json.RawMessage, error) {
 	body, err := json.Marshal(chatRequest{
-		Model: c.model,
-		Messages: []chatMessage{
-			{Role: "user", Content: prompt},
-		},
+		Model:    c.model,
+		Messages: c.buildMessages(prompt),
 		ResponseFormat: &responseFormat{
 			Type: "json_schema",
 			JSONSchema: &jsonSchema{
