@@ -30,6 +30,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   case) inherit the precedent without re-introducing the
   silent-lie footgun. Closes #66.
 
+- **CI test job per-package timeout bumped from 20m to 30m;
+  job wrapper bumped from 30m to 45m.** The api package has been
+  the dominant Windows-CI cost for a while (~6-10 min historical),
+  and the prior 20m budget started timing out after PR #63 added
+  stuck-records tests (one Windows run timed out at exactly 20m).
+  Bumped to give natural-growth headroom on the existing test
+  shape. The structural fix is splitting the api package so each
+  subpackage gets its own budget (tracked at #56); this CI bump is
+  the immediate buffer. Linux/macOS finish well under the new
+  budget and are unaffected. The matching job wrapper bump (30 ->
+  45 min) ensures the per-package timeout can actually fire
+  before the wall-clock job kill.
+
 ### Added
 
 - **`gramaton curation stuck-records-list` and

@@ -29,7 +29,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -40,17 +40,19 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
-      # -timeout 20m: Microsoft-hosted Windows runners are 3-5x slower
+      # -timeout 30m: Microsoft-hosted Windows runners are 3-5x slower
       # than Linux for our I/O-heavy workload (NTFS small-file ops +
       # Defender real-time scanning + Windows process-spawn cost).
-      # The api package alone needs ~6-10 min on a slow Windows runner
-      # at current test sizing -- the default 10m per-package budget
-      # is too tight after we've already trimmed the obvious outliers
-      # (#51 fixed TestCaptureBatchAsyncLargerThanSyncCap; #53 skipped
-      # TestCollectionPerformance + TestCaptureBatchWallClockSpeedup
-      # on Windows). Linux/macOS finish well under 10m and are
-      # unaffected by the larger budget.
-      - run: go test -timeout 20m ./...
+      # The api package has been the dominant cost for some time
+      # (~6-10 min historical, hovering near the prior 20m budget after
+      # PR #63 added stuck-records tests; one Windows run timed out
+      # at exactly 20m). Bumped from 20m -> 30m to give headroom on
+      # natural growth; the structural fix is splitting the api
+      # package so each subpackage gets its own budget (#56). The job
+      # wrapper bumped to 45m so this per-package timeout can actually
+      # fire before the wall-clock kill.
+      # Linux/macOS finish well under 20m and are unaffected.
+      - run: go test -timeout 30m ./...
 
   test-race:
     name: test-race (${{ matrix.os }})
