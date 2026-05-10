@@ -111,13 +111,6 @@ func (m *Metered) ProviderName() string { return m.inner.ProviderName() }
 // Inner returns the wrapped provider for type assertions.
 func (m *Metered) Inner() Provider { return m.inner }
 
-// SetSystemPrompt delegates to the inner provider if it supports it.
-func (m *Metered) SetSystemPrompt(text string) {
-	if setter, ok := m.inner.(SystemPromptSetter); ok {
-		setter.SetSystemPrompt(text)
-	}
-}
-
 // ensureRecorder attaches a UsageRecorder to ctx if one isn't already
 // present, and returns a closure that yields the per-call delta when
 // invoked. The delta is computed against the pre-call snapshot of the
