@@ -140,17 +140,36 @@ COST LIMITS -- caps that apply to ALL LLM calls.
 0 disables. Use these to keep a runaway loop from emptying
 your wallet.`,
 
-	"llm.cost_limits.max_calls_per_day": `max_calls_per_day: total LLM calls per calendar day.
-  Backstop for cost cap when the model isn't in the
-  pricing table.`,
+	"llm.cost_limits.max_calls_per_day": `max_calls_per_day: total LLM calls per calendar day across
+  ALL providers and tasks. Counter resets at UTC midnight.
+  Default 500 (set by 'gramaton init') is conservative for
+  new users; production curation against a meaningful
+  backlog will hit this -- bump to 5000-10000+ or 0 to
+  disable. When hit, all calls fail with ErrCapped until
+  midnight UTC; curation logs a warning and skips the LLM
+  phases. Backstop for cost caps when the model isn't in
+  the pricing table.`,
 
-	"llm.cost_limits.max_calls_per_session": `max_calls_per_session: per server session (between starts).`,
+	"llm.cost_limits.max_calls_per_session": `max_calls_per_session: total LLM calls per server session
+  (between starts). Resets when the server restarts.
+  Default 0 = disabled. Use when you want a single-session
+  ceiling regardless of calendar day.`,
 
 	"llm.cost_limits.max_cost_usd_per_day": `max_cost_usd_per_day: estimated USD per day, computed from
-  the per-model pricing table.`,
+  the per-model pricing table (llm/pricing.go). Counter
+  resets at UTC midnight. Default 5 (set by 'gramaton init')
+  covers small-scale use; production runs need higher.
+  Bump to fit your cost envelope or 0 to disable. When hit:
+  same behavior as max_calls_per_day -- ErrCapped on all
+  calls until midnight UTC. Use this when you care about
+  absolute cost; max_calls_per_day is the fallback when a
+  model isn't in the pricing table (CLI providers, custom
+  endpoints).`,
 
 	"llm.cost_limits.max_cost_usd_per_run": `max_cost_usd_per_run: estimated USD per curation cycle.
-  Cycle-level twin of max_cost_usd_per_day.`,
+  Cycle-level twin of max_cost_usd_per_day; protects
+  against a single runaway cycle without affecting the
+  daily envelope. 0 to disable.`,
 
 	"llm.cost_limits.rate_limit_interval": `rate_limit_interval: minimum gap between successive LLM
   calls.`,
@@ -174,6 +193,11 @@ generic concepts, runaway cost).`,
 	"llm.curation.batch_size": `batch_size: records classified per LLM call.`,
 
 	"llm.curation.max_calls_per_run": `max_calls_per_run: hard cap on LLM calls in one cycle.
+  Runner stops dispatching new calls once reached;
+  remaining work waits for the next cycle (default 5-min
+  interval). Default 20 limits each cycle to ~20 *
+  per-call cost. Production backlogs may want 100+ -- but
+  every bump multiplies per-cycle worst-case spend.
   Backstop when cost cap can't compute (unknown model in
   pricing table).`,
 

@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Inline documentation for cost-cap config knobs expanded.**
+  The yaml comments emitted by `gramaton init` (sourced from
+  `config/comments.go`) previously gave terse one-line descriptions
+  of `max_calls_per_day`, `max_cost_usd_per_day`,
+  `max_cost_usd_per_run`, and `curation.max_calls_per_run` without
+  surfacing the wizard defaults, the runtime behavior when a cap
+  fires, or any tuning guidance. Comments now explain what each
+  knob does, what default the wizard writes, what happens at
+  runtime when hit (`ErrCapped`, curation pauses, log warning),
+  and when to tune up for production workloads. `docs/configuration.md`
+  yaml example fixed to show the wizard's actual defaults
+  (`max_calls_per_day: 500`, `max_cost_usd_per_day: 5`) rather than
+  the pre-wizard `0` values, and gained a "Tuning for real
+  workloads" subsection covering the per-cycle vs per-day cap
+  relationship and the typical bump path.
+
 ## [0.3.0-alpha.3] - 2026-05-10
 
 Curation correctness fixes. Bedrock and OpenAI now actually deliver

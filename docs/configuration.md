@@ -99,10 +99,14 @@ llm:
       decompose:            low
 
   # Caps that apply to ALL LLM calls. 0 = disabled.
+  # The values below are what `gramaton init` writes on first
+  # install (conservative defaults for cost safety). Operators
+  # running production curation will hit these and need to bump
+  # them — see "Cost and call caps" below for tuning guidance.
   cost_limits:
-    max_calls_per_day: 0          # hard cap per calendar day
+    max_calls_per_day: 500        # hard cap per calendar day
     max_calls_per_session: 0      # hard cap per server lifetime
-    max_cost_usd_per_day: 0       # USD cap per calendar day (see below)
+    max_cost_usd_per_day: 5       # USD cap per calendar day (see below)
     max_cost_usd_per_run: 0       # USD cap per curation cycle
     rate_limit_interval: 0s       # min gap between successive calls
     max_response_tokens: 0        # 0 = provider default (Anthropic only)
@@ -137,6 +141,14 @@ Two independent safety nets under `cost_limits`, both checked before every LLM c
 `max_cost_usd_per_run` (per cycle) is independent of `max_cost_usd_per_day` (across all cycles). The per-cycle cap bounds a single cycle's damage; the per-day cap bounds the aggregate. Both complement the count caps rather than replacing them.
 
 When any cap trips, curation pauses and subsequent LLM calls return `llm.ErrCapped` until the daily boundary rolls over (automatic) or an operator manually unpauses.
+
+#### Tuning for real workloads
+
+`gramaton init` writes conservative defaults (`max_calls_per_day: 500`, `max_cost_usd_per_day: 5`) — appropriate for trying Gramaton out, too tight for production curation against a meaningful backlog. A typical 500-record backlog with the default cycle interval (5 min) and per-cycle cap (`curation.max_calls_per_run: 20`) drains in ~125 minutes WITHIN the daily 500-call envelope; the moment you exceed roughly 500 records of work in 24 hours, you'll hit the cap and curation pauses until midnight UTC. Bump `max_calls_per_day` to `5000`-`10000`+ for sustained production work, or set it to `0` to disable entirely (relying on `max_cost_usd_per_day` as the sole guardrail).
+
+`curation.max_calls_per_run` is the per-cycle cap (default 20). It bounds worst-case spend in a single cycle; raising it to 100+ drains backlogs faster but multiplies per-cycle exposure. For a tight cost envelope keep it low; for backlog catch-up after a long pause, bump temporarily.
+
+When you hit a cap, look for a `llm call refused: cap reached` warning in the gramaton log — the warning's `reason` field names which cap fired.
 
 ## Logging
 
