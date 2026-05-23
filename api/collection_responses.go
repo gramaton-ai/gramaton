@@ -185,6 +185,21 @@ type SessionSaveResponse struct {
 	TopicsCreated        int              `json:"topics_created"`
 	MemoryRecordsCreated int              `json:"memory_records_created"`
 	EdgesCreated         int              `json:"edges_created"`
+	Boundary             *SaveBoundary    `json:"boundary,omitempty"`
 	Superseded           []map[string]any `json:"superseded,omitempty"`
 	Failed               []ItemFailure    `json:"failed,omitempty"`
+}
+
+// SaveBoundary is the watermark emitted by a successful session_save.
+// The bracketed Marker string is the LLM-friendly scoping primitive:
+// the agent substring-scans its own conversation history for
+// "[gramaton-save-boundary" to find the position of its most recent
+// successful save and scope subsequent extraction to content that
+// appeared after it. Timestamp and SessionID are present for hook
+// consumers that want structured fields rather than parsing the
+// marker string.
+type SaveBoundary struct {
+	Marker    string `json:"marker"`
+	Timestamp string `json:"timestamp"`
+	SessionID string `json:"session_id"`
 }

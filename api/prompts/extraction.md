@@ -1,5 +1,23 @@
 # Extract knowledge from this conversation
 
+## Locate the boundary
+
+Scan back through this conversation for the most recent line
+containing `[gramaton-save-boundary` -- that string is the
+confirmation from your most recent successful `gramaton_session_save`.
+Everything BEFORE that boundary has already been extracted. Extract
+knowledge ONLY from content that appeared AFTER that line.
+
+If no such line exists in your context, this is the first save of
+the session (or the prior save's confirmation was compacted away) --
+extract from the entire conversation.
+
+Segments in `session_state` that pre-date `last_saved_at` arrive
+without `content` to keep this response small; their `summary_short`
+plus topic is enough to recognise already-covered ground.
+
+## What to save
+
 Review `session_state` below. Skip re-save of already-covered
 topics unless the conversation added, refined, or reversed them --
 when ideas evolve, save the NEW version (auto-supersession at
