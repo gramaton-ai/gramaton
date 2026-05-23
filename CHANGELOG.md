@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`gramaton_session_prepare` and `gramaton_session_save` gain
+  boundary-scoped ergonomics for long sessions.** Three additive
+  changes that let the agent skip already-extracted content on
+  subsequent cycles without breaking existing callers. (1)
+  `session_prepare` now returns `session_state.last_saved_at`
+  (RFC3339), populated from the session node and omitted on the first
+  prepare of a session. (2) `session_save` returns a `boundary`
+  object: `{marker, timestamp, session_id}`, where `marker` is a
+  bracketed string of the form `[gramaton-save-boundary T=...]` the
+  LLM can substring-scan its own conversation history for to find the
+  position of its most recent successful save. (3) For prepare
+  responses, segments older than `last_saved_at` arrive without
+  their `content` field -- `summary_short` plus topic context is
+  enough for the agent to recognise already-saved ground, and
+  dropping content cuts prepare payload sizes by ~5-10x on long
+  sessions. `session_save` now also persists `summary_short` onto the
+  Session segment node (it had only been written to the promoted
+  Memory record before), giving the lean shape a semantic anchor.
+  The extraction prompt at `api/prompts/extraction.md` was updated
+  with a "Locate the boundary" section that directs the agent to
+  scope extraction to content appearing after the most recent marker.
+  All three changes are additive: clients that ignore the new
+  fields fall back to the prior shape. `session_state.last_saved_at`,
+  `boundary`, and `summary_short` on segments are net-new; no
+  existing field has changed type or meaning.
+
 - **BREAKING: MCP tools `gramaton_capture` and `gramaton_session_commit`
   renamed to `gramaton_save` and `gramaton_session_save`.**
   The capture-batch family follows: `gramaton_capture_batch` →

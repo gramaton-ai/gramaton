@@ -169,6 +169,10 @@ Segments with `promote_to_memory: false` stay in the Sessions store only. Use th
 
 If the session node has an archived transcript, the prepare response surfaces the archive path. Decompressing and reading it is an option of last resort when the in-session context is missing what you need to extract well.
 
+### Save boundaries on multi-cycle sessions
+
+Every successful `gramaton_session_save` returns a `boundary` object containing a bracketed `marker` string of the form `[gramaton-save-boundary T=<RFC3339>]`. On subsequent cycles in the same conversation, substring-scan your context for `[gramaton-save-boundary` and scope extraction to content appearing AFTER the most recent match — everything before has already been saved. `gramaton_session_prepare` carries the matching `session_state.last_saved_at` watermark (omitted on the first prepare of a session) and returns pre-boundary segments without their `content` field; `summary_short` plus topic context is enough to recognise already-saved ground without re-shipping the full content.
+
 ### Sessions don't close collection items
 
 If the conversation worked through (and finished) a set of collection items — open tickets in a backlog, action items on a checklist — the session saves the *conversation* but does not flip those items' status. Closure is an explicit `gramaton_resolve` call per item; see "Closing items is an explicit action" under Collections below for the agent pattern. Skipping closure is the most common visible-drift bug: post-commit Memory records describe finished work while the underlying collection still lists those items as open.

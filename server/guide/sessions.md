@@ -143,6 +143,34 @@ For "what do we know?" questions, Memory is usually the right source.
   `prepare` surfaces `pending_uncaptured: {count, archive_path}` so
   you can decompress and review if needed.
 
+## Save Boundaries
+
+Every successful `session_save` returns a `boundary` object:
+
+```json
+{
+  "marker": "[gramaton-save-boundary T=2026-05-23T15:30:00Z]",
+  "timestamp": "2026-05-23T15:30:00Z",
+  "session_id": "..."
+}
+```
+
+The bracketed `marker` is the LLM-friendly scoping primitive for
+subsequent cycles in the same conversation. Substring-scan your
+conversation history for `[gramaton-save-boundary` and treat
+content appearing AFTER the most recent match as the extraction
+scope -- everything before has already been saved.
+
+`session_prepare` carries the matching `session_state.last_saved_at`
+watermark (RFC3339, omitted on the first prepare of a session) and
+returns segments older than that watermark in a lean shape: `id` +
+`summary_short` + topic + timestamps, no `content`. The
+`summary_short` plus topic name is enough to recognise already-saved
+ground without re-shipping the full content. If no
+`[gramaton-save-boundary` line exists in your context, treat the
+whole conversation as in scope -- the prior save's confirmation may
+have been compacted away.
+
 ## Related Tools
 
 - `gramaton_session_start`: Create or resume.

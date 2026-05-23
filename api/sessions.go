@@ -166,7 +166,14 @@ func (a *API) topicSegments(topicID string) []*graph.Node {
 
 // buildSessionResponse constructs a full Session response including topics and segments.
 // Caller must hold at least RLock.
-func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[string]any {
+//
+// When leanPreBoundary is true, segments older than the session's
+// last_saved_at watermark are returned without their `content` field --
+// the agent has already extracted them in a prior save cycle and only
+// needs id + topic + summary_short + timestamps to recognise them as
+// already-saved. Segments at or after the boundary, and all segments
+// when last_saved_at is unset, return the full shape.
+func (a *API) buildSessionResponse(sessionID string, session *graph.Node, leanPreBoundary bool) map[string]any {
 	resp := map[string]any{
 		"id": sessionID,
 	}
@@ -178,6 +185,10 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[st
 	}
 	if themes, ok := session.Properties.GetStringList("themes"); ok {
 		resp["themes"] = themes
+	}
+	lastSaved, hasLastSaved := session.Properties.GetTimestamp("last_saved_at")
+	if hasLastSaved {
+		resp["last_saved_at"] = lastSaved.Format(time.RFC3339)
 	}
 	// Include archive reference if present.
 	if path, ok := session.Properties.GetString("archive_path"); ok {
@@ -216,8 +227,13 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[st
 			segResp := map[string]any{
 				"id": seg.ID,
 			}
-			if c, ok := seg.Properties.GetString("content"); ok {
+			segCreated, hasCreated := seg.Properties.GetTimestamp("created_at")
+			preBoundary := leanPreBoundary && hasLastSaved && hasCreated && segCreated.Before(lastSaved)
+			if c, ok := seg.Properties.GetString("content"); ok && !preBoundary {
 				segResp["content"] = c
+			}
+			if cs, ok := seg.Properties.GetString("content_short"); ok {
+				segResp["summary_short"] = cs
 			}
 			if ca, ok := seg.Properties.GetString("captured_as"); ok {
 				segResp["captured_as"] = ca
@@ -225,8 +241,8 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[st
 			if ct, ok := seg.Properties.GetTimestamp("captured_at"); ok {
 				segResp["captured_at"] = ct.Format(time.RFC3339)
 			}
-			if ca, ok := seg.Properties.GetTimestamp("created_at"); ok {
-				segResp["created_at"] = ca.Format(time.RFC3339)
+			if hasCreated {
+				segResp["created_at"] = segCreated.Format(time.RFC3339)
 			}
 			segList = append(segList, segResp)
 		}
@@ -235,6 +251,19 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node) map[st
 	}
 	resp["topics"] = topicList
 	return resp
+}
+
+// saveBoundaryMarker is the bracketed string an LLM substring-scans
+// its own conversation history for, to find where its most recent
+// successful session_save committed. Format is deliberately compact
+// and grep-friendly: timestamp only, no count or session id (those
+// live in the surrounding JSON object if the consumer needs them).
+//
+// The bracketed form was chosen to minimise collision risk with prose
+// the agent might output; "gramaton-save-boundary" is unique enough
+// that a substring search will not false-positive on normal English.
+func saveBoundaryMarker(t time.Time) string {
+	return fmt.Sprintf("[gramaton-save-boundary T=%s]", t.UTC().Format(time.RFC3339))
 }
 
 // --- service methods ---
@@ -261,7 +290,7 @@ func (a *API) SessionStart(ctx context.Context, clientSessionID string, source s
 		session, _ := a.engine.Graph().GetNode(latestID)
 		a.log.Debug("session lookup hit", "component", "session",
 			"client_session_id", clientSessionID, "session_id", latestID)
-		resp := a.buildSessionResponse(latestID, session)
+		resp := a.buildSessionResponse(latestID, session, false)
 		resp["resumed"] = true
 		return resp, nil
 	}
@@ -300,7 +329,7 @@ func (a *API) SessionStart(ctx context.Context, clientSessionID string, source s
 		"session_id", n.ID, "client_session_id", clientSessionID,
 		"source", source, "chained_to", previousSessionID)
 
-	resp := a.buildSessionResponse(n.ID, n)
+	resp := a.buildSessionResponse(n.ID, n, false)
 	resp["resumed"] = false
 	if previousSessionID != "" {
 		resp["previous_session_id"] = previousSessionID
@@ -326,7 +355,7 @@ func (a *API) SessionGet(ctx context.Context, sessionID string) (map[string]any,
 	a.log.Debug("session get", "component", "session", "session_id", sessionID,
 		"topic_count", len(a.sessionTopics(sessionID)))
 
-	return a.buildSessionResponse(sessionID, session), nil
+	return a.buildSessionResponse(sessionID, session, false), nil
 }
 
 // compactionFlagTTL bounds how long a PostCompact/PreCompact flag is
@@ -582,7 +611,7 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 		a.engine.RUnlock()
 		return nil, svcErr
 	}
-	sessionState := a.buildSessionResponse(sessionID, session)
+	sessionState := a.buildSessionResponse(sessionID, session, true)
 	clientSessionID, _ := session.Properties.GetString("client_session_id")
 	a.engine.RUnlock()
 
@@ -856,6 +885,15 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			"content":        graph.StringProperty(seg.Content),
 			"created_at":     graph.TimestampProperty(now),
 		}
+		// Persist summary_short on the segment too (not just on the
+		// promoted Memory record). The lean-state branch in
+		// buildSessionResponse drops `content` for pre-boundary
+		// segments and surfaces summary_short as the dedup anchor;
+		// without it on the segment, lean state would lose the
+		// semantic signal the LLM uses to recognise already-saved work.
+		if seg.SummaryShort != "" {
+			segProps["content_short"] = graph.StringProperty(seg.SummaryShort)
+		}
 		segNode := a.engine.Graph().AddNode(segProps)
 		// BM25-index the segment content (no vector -- BM25-only per B1).
 		a.engine.IndexNode(segNode.ID, seg.Content, nil)
@@ -991,6 +1029,13 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 		}
 	}
 
+	// Advance the watermark on the session node. Written inside the
+	// same engine write lock as the segment creates so the commit is
+	// atomic: either the agent's next prepare sees the new boundary
+	// AND all this round's segments, or none of it.
+	boundaryTime := time.Now().UTC()
+	a.engine.SetProp(sessionID, "last_saved_at", graph.TimestampProperty(boundaryTime))
+
 	if _, err := a.engine.Save("session_save", graph.CommitAction{
 		Kind: graph.ActionSessionSave, RecordID: sessionID,
 	}); err != nil {
@@ -1013,6 +1058,11 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 		TopicsCreated:        topicsCreated,
 		MemoryRecordsCreated: memoryRecordsCreated,
 		EdgesCreated:         edgesCreated,
+		Boundary: &SaveBoundary{
+			Marker:    saveBoundaryMarker(boundaryTime),
+			Timestamp: boundaryTime.Format(time.RFC3339),
+			SessionID: sessionID,
+		},
 	}
 	if len(superseded) > 0 {
 		resp.Superseded = superseded

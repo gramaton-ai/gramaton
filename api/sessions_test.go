@@ -897,6 +897,252 @@ func TestSessionCommitMalformedSegments(t *testing.T) {
 	}
 }
 
+// --- Watermark + boundary marker (GH #73) ---
+
+func TestPrepareReturnsWatermark(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "watermark-test", "")
+	sessionID := result["id"].(string)
+
+	prep1, svcErr := a.SessionPrepare(ctx, sessionID)
+	if svcErr != nil {
+		t.Fatalf("first prepare: %v", svcErr)
+	}
+	state1 := prep1["session_state"].(map[string]any)
+	if _, has := state1["last_saved_at"]; has {
+		t.Errorf("first prepare should not surface last_saved_at, got %v", state1["last_saved_at"])
+	}
+
+	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: "Initial decision", TopicName: "Design", SummaryShort: "initial"},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	prep2, svcErr := a.SessionPrepare(ctx, sessionID)
+	if svcErr != nil {
+		t.Fatalf("second prepare: %v", svcErr)
+	}
+	state2 := prep2["session_state"].(map[string]any)
+	watermark, ok := state2["last_saved_at"].(string)
+	if !ok || watermark == "" {
+		t.Fatalf("second prepare missing last_saved_at, got %v", state2["last_saved_at"])
+	}
+	if _, err := time.Parse(time.RFC3339, watermark); err != nil {
+		t.Errorf("last_saved_at not RFC3339: %q (%v)", watermark, err)
+	}
+}
+
+func TestSessionSaveAdvancesWatermark(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "advance-test", "")
+	sessionID := result["id"].(string)
+
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare1: %v", err)
+	}
+	save1, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: "First save", TopicName: "Topic", SummaryShort: "first"},
+	})
+	if err != nil {
+		t.Fatalf("save1: %v", err)
+	}
+	if save1.Boundary == nil {
+		t.Fatal("save1: boundary missing")
+	}
+	t1, perr := time.Parse(time.RFC3339, save1.Boundary.Timestamp)
+	if perr != nil {
+		t.Fatalf("save1: timestamp parse %v", perr)
+	}
+
+	// Ensure measurable separation between RFC3339-second-precision
+	// timestamps so the second watermark is strictly later by visible
+	// string comparison as well as wall clock.
+	time.Sleep(1100 * time.Millisecond)
+
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare2: %v", err)
+	}
+	save2, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: "Second save", TopicName: "Topic", SummaryShort: "second"},
+	})
+	if err != nil {
+		t.Fatalf("save2: %v", err)
+	}
+	if save2.Boundary == nil {
+		t.Fatal("save2: boundary missing")
+	}
+	t2, perr := time.Parse(time.RFC3339, save2.Boundary.Timestamp)
+	if perr != nil {
+		t.Fatalf("save2: timestamp parse %v", perr)
+	}
+	if !t2.After(t1) {
+		t.Errorf("watermark did not advance: t1=%v, t2=%v", t1, t2)
+	}
+}
+
+func TestSessionSaveEmitsBoundaryMarker(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "marker-test", "")
+	sessionID := result["id"].(string)
+
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	saveResp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: "Boundary segment", TopicName: "Marker", SummaryShort: "boundary"},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if saveResp.Boundary == nil {
+		t.Fatal("expected boundary in save response")
+	}
+	if saveResp.Boundary.SessionID != sessionID {
+		t.Errorf("boundary.session_id = %q, want %q", saveResp.Boundary.SessionID, sessionID)
+	}
+
+	marker := saveResp.Boundary.Marker
+	if !strings.HasPrefix(marker, "[gramaton-save-boundary T=") {
+		t.Errorf("marker prefix unexpected: %q", marker)
+	}
+	if !strings.HasSuffix(marker, "]") {
+		t.Errorf("marker suffix unexpected: %q", marker)
+	}
+	// Marker timestamp must match the structured timestamp field.
+	if !strings.Contains(marker, saveResp.Boundary.Timestamp) {
+		t.Errorf("marker %q does not contain timestamp %q", marker, saveResp.Boundary.Timestamp)
+	}
+	if _, perr := time.Parse(time.RFC3339, saveResp.Boundary.Timestamp); perr != nil {
+		t.Errorf("boundary timestamp not RFC3339: %q (%v)", saveResp.Boundary.Timestamp, perr)
+	}
+}
+
+func TestPrepareLeanStateForPreBoundarySegments(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "lean-test", "")
+	sessionID := result["id"].(string)
+
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare1: %v", err)
+	}
+	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{
+			Content:      "Full decision content the agent should not see again",
+			TopicName:    "Design",
+			SummaryShort: "decision-anchor",
+		},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	prep, svcErr := a.SessionPrepare(ctx, sessionID)
+	if svcErr != nil {
+		t.Fatalf("prepare2: %v", svcErr)
+	}
+	state := prep["session_state"].(map[string]any)
+	if _, has := state["last_saved_at"]; !has {
+		t.Fatal("prepare2: expected last_saved_at to be set")
+	}
+
+	topics := state["topics"].([]map[string]any)
+	if len(topics) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(topics))
+	}
+	segments := topics[0]["segments"].([]map[string]any)
+	if len(segments) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(segments))
+	}
+	seg := segments[0]
+	if _, has := seg["content"]; has {
+		t.Errorf("pre-boundary segment should omit content, got %v", seg["content"])
+	}
+	if seg["summary_short"] != "decision-anchor" {
+		t.Errorf("summary_short = %v, want decision-anchor", seg["summary_short"])
+	}
+	if seg["id"] == nil || seg["id"] == "" {
+		t.Error("lean segment must still carry id")
+	}
+	if _, has := seg["created_at"]; !has {
+		t.Error("lean segment must still carry created_at")
+	}
+
+	// SessionGet retains full content -- the lean optimization is
+	// prepare-specific so debugging callers see the real shape.
+	got, _ := a.SessionGet(ctx, sessionID)
+	topicsFull := got["topics"].([]map[string]any)
+	segFull := topicsFull[0]["segments"].([]map[string]any)[0]
+	if segFull["content"] != "Full decision content the agent should not see again" {
+		t.Errorf("SessionGet should keep full content, got %v", segFull["content"])
+	}
+}
+
+func TestExtractionPromptInstructsBoundaryScan(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	prompt, _ := a.loadExtractionPrompt()
+
+	if !strings.Contains(prompt, "[gramaton-save-boundary") {
+		t.Error("extraction prompt missing boundary-marker reference")
+	}
+	if !strings.Contains(prompt, "gramaton_session_save") {
+		t.Error("extraction prompt should mention gramaton_session_save by name")
+	}
+	// The instruction must direct the LLM to scope on the marker --
+	// pin a substring of the operative sentence so prompt drift gets
+	// caught by tests instead of silently weakening the optimization.
+	if !strings.Contains(prompt, "AFTER") && !strings.Contains(prompt, "after that") {
+		t.Error("extraction prompt should instruct extraction of content AFTER the boundary")
+	}
+}
+
+func TestSessionSaveResponseJSONShape(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "json-shape-test", "")
+	sessionID := result["id"].(string)
+
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	resp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: "Wire-shape probe", TopicName: "Wire", SummaryShort: "probe"},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	raw, jerr := json.Marshal(resp)
+	if jerr != nil {
+		t.Fatalf("marshal: %v", jerr)
+	}
+	var decoded map[string]any
+	if jerr := json.Unmarshal(raw, &decoded); jerr != nil {
+		t.Fatalf("unmarshal: %v", jerr)
+	}
+	boundary, ok := decoded["boundary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected boundary object in JSON shape, got %v", decoded["boundary"])
+	}
+	for _, key := range []string{"marker", "timestamp", "session_id"} {
+		if _, has := boundary[key]; !has {
+			t.Errorf("boundary missing key %q in wire shape: %v", key, boundary)
+		}
+	}
+	if boundary["session_id"] != sessionID {
+		t.Errorf("boundary.session_id wire value = %v, want %v", boundary["session_id"], sessionID)
+	}
+}
+
 func TestSessionPreparedFlagConsumed(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
