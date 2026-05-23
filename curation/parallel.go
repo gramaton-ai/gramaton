@@ -2,12 +2,33 @@ package curation
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
+
+// isDeferrableLLMError reports whether err is a system-level signal
+// that should not count against a record's (or pair's, or manifest's)
+// retry budget. The caps and context-cancel errors mean "we never
+// asked the LLM the question" -- the record is fine, the system
+// paused. Treating these as per-record failures wrongly poisons the
+// queue: three cap-fired cycles flip processing_status to "stuck"
+// even though no record-shaped problem exists. Callers detect this
+// class before feeding err into recordTaskFailure / soft-fail edges /
+// the manifest negative cache.
+//
+// Provider-side transient errors (HTTP 5xx, rate-limit responses
+// from providers other than the Anthropic batch API) are not in
+// this set yet -- they arrive as opaque strings today; typed
+// detection is a separate follow-up.
+func isDeferrableLLMError(err error) bool {
+	return errors.Is(err, llm.ErrCapped) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
 
 // llmWork represents a single LLM call to be executed in a worker pool.
 // When schema is non-nil AND the provider supports structured output,

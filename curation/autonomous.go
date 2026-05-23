@@ -560,6 +560,11 @@ func classifyPending(ctx context.Context, e *core.Engine, llmProv llm.Provider, 
 		var out classifyOutcome
 		for i, lr := range llmResults {
 			if lr.err != nil {
+				if isDeferrableLLMError(lr.err) {
+					logger.Debug("classify deferred: system-level error",
+						"component", "curation", "record", sub[i].id, "err", lr.err)
+					continue
+				}
 				result.Errors++
 				logger.Warn("classify LLM error", "component", "curation", "record", sub[i].id, "err", lr.err)
 				out.failed = append(out.failed, failedClassify{
@@ -832,6 +837,11 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 
 	for i, lr := range llmResults {
 		if lr.err != nil {
+			if isDeferrableLLMError(lr.err) {
+				logger.Debug("summarize deferred: system-level error",
+					"component", "curation", "record", batch[i].id, "err", lr.err)
+				continue
+			}
 			result.Errors++
 			logger.Warn("summarize LLM error", "component", "curation", "record", batch[i].id, "err", lr.err)
 			failedSummaries = append(failedSummaries, summaryFailure{
@@ -1154,6 +1164,11 @@ func generateManifestSummary(ctx context.Context, e *core.Engine, llmProv llm.Pr
 	resp, err := completeWithModelOrDefault(ctx, llmProv, "manifest", model, prompt)
 	result.LLMCalls++
 	if err != nil {
+		if isDeferrableLLMError(err) {
+			logger.Debug("manifest deferred: system-level error",
+				"component", "curation", "err", err)
+			return
+		}
 		result.Errors++
 		logger.Warn("manifest summary LLM error", "component", "curation", "err", err)
 		recordManifestFailure()
@@ -1424,6 +1439,20 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 		var batchFailReason string
 		var syntheses []string
 		if err != nil {
+			if isDeferrableLLMError(err) {
+				logger.Debug("concept synthesis deferred: system-level error",
+					"component", "curation",
+					"batch_size", len(batch.concepts),
+					"err", err)
+				// Once the cap fires (or ctx is canceled), subsequent
+				// batches will also hit it. Break instead of continue
+				// so we don't burn 20 wasted per-batch round-trips
+				// through Metered.checkCap before cycleBudgetExceeded
+				// terminates the loop. Per-batch enrichment from
+				// earlier iterations already landed (each batch is
+				// self-contained inside the loop body).
+				break
+			}
 			result.Errors++
 			logger.Warn("concept synthesis batch failed",
 				"component", "curation",
@@ -1910,6 +1939,14 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			result.LLMCalls++
 
 			if err != nil {
+				if isDeferrableLLMError(err) {
+					logger.Debug("contradiction deferred: system-level error",
+						"component", "curation", "err", err)
+					// Cap / ctx-cancel hits every remaining pair too;
+					// break preserves earlier successes in findings /
+					// noContradictions for the post-loop apply phase.
+					break
+				}
 				result.Errors++
 				logger.Warn("contradiction LLM error", "component", "curation", "err", err)
 				failedChecks = append(failedChecks, checkedFailure{
@@ -1984,6 +2021,15 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			result.LLMCalls++
 
 			if err != nil {
+				if isDeferrableLLMError(err) {
+					logger.Debug("contradiction batch deferred: system-level error",
+						"component", "curation", "batch_size", len(batch), "err", err)
+					// Same break-not-continue reasoning as the single-
+					// pair path above: cap / ctx-cancel affects every
+					// remaining batch; preserve earlier successes for
+					// the post-loop apply phase.
+					break
+				}
 				result.Errors++
 				logger.Warn("contradiction batch LLM error", "component", "curation", "batch_size", len(batch), "err", err)
 				// Whole batch failed -- every pair in this batch counts
