@@ -282,7 +282,7 @@ func joinCollectionNames(names []string) string {
 // this tool do", so the server-registered description and the CLI
 // proxy's description can't diverge over time.
 
-const CollectionCreateDescription = "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_capture) for semantic knowledge like decisions, context, and research."
+const CollectionCreateDescription = "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_save) for semantic knowledge like decisions, context, and research."
 
 const CollectionListDescription = "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page."
 

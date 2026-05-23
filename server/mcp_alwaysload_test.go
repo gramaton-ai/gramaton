@@ -17,7 +17,7 @@ import (
 // here. The list pairs with the deferred-by-default rest of the
 // surface (~24 tools) which stays unpinned.
 var hotPathToolsAlwaysLoad = []string{
-	"gramaton_capture",
+	"gramaton_save",
 	"gramaton_collection_add",
 	"gramaton_collection_items",
 	"gramaton_collection_list",
@@ -27,7 +27,7 @@ var hotPathToolsAlwaysLoad = []string{
 	"gramaton_link",
 	"gramaton_resolve",
 	"gramaton_search",
-	"gramaton_session_commit",
+	"gramaton_session_save",
 	"gramaton_session_prepare",
 }
 

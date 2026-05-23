@@ -40,11 +40,11 @@ What Gramaton isn't:
 
 ## What this is, and what we don't know yet
 
-Gramaton is an experiment in whether structured metadata around stored data — confidence, temporality, knowledge type, epistemic status, graph relationships, automatic curation — actually helps AI agents remember and retrieve well. The motivating problem is observable: feed an LLM a flat corpus and it treats everything as roughly equally relevant — five years of roadmaps merge into one signal, refuted theories sit alongside live ones, last quarter's decision competes with the one being made today. Lifecycle and confidence don't come from raw text; they have to be attached at the data layer. The hypothesis comes from three research traditions covered in [foundations.md](docs/project-design/foundations.md): epistemology (knowledge ≠ text), neuroscience (episodic vs semantic, fast capture vs slow consolidation), and technical knowledge representation (property graphs, emergence over declaration).
+Gramaton is an experiment in whether structured metadata around stored data — confidence, temporality, knowledge type, epistemic status, graph relationships, automatic curation — actually helps AI agents remember and retrieve well. The motivating problem is observable: feed an LLM a flat corpus and it treats everything as roughly equally relevant — five years of roadmaps merge into one signal, refuted theories sit alongside live ones, last quarter's decision competes with the one being made today. Lifecycle and confidence don't come from raw text; they have to be attached at the data layer. The hypothesis comes from three research traditions covered in [foundations.md](docs/project-design/foundations.md): epistemology (knowledge ≠ text), neuroscience (episodic vs semantic, fast save vs slow consolidation), and technical knowledge representation (property graphs, emergence over declaration).
 
-The infrastructure works. Agents can capture, retrieve, traverse, branch, supersede. Curation runs in the background and integrates new knowledge over time. The mechanics line up with the research.
+The infrastructure works. Agents can save, retrieve, traverse, branch, supersede. Curation runs in the background and integrates new knowledge over time. The mechanics line up with the research.
 
-What's open is **whether agents consistently use the structure well**. Getting Claude Code (and presumably other MCP-aware harnesses) to recognize the right tool, capture at the right granularity, search before answering, and apply metadata thoughtfully is uneven in practice. We don't yet know whether the gap is in harness integration (more hooks, better routing rules), in onboarding (clearer guidance, better defaults), or in the design itself (the metadata model may not be pulling enough weight to justify its surface area).
+What's open is **whether agents consistently use the structure well**. Getting Claude Code (and presumably other MCP-aware harnesses) to recognize the right tool, save at the right granularity, search before answering, and apply metadata thoughtfully is uneven in practice. We don't yet know whether the gap is in harness integration (more hooks, better routing rules), in onboarding (clearer guidance, better defaults), or in the design itself (the metadata model may not be pulling enough weight to justify its surface area).
 
 Real-world usage is the only way to find out. If you try Gramaton and it works for you, that's signal. If you try it and it falls short, please [open an issue](https://github.com/gramaton-ai/gramaton/issues) and tell us what you expected and what happened — that's louder signal. Gramaton is a hypothesis to test, not a product to defend.
 
@@ -66,7 +66,7 @@ The wizard (when run in a terminal) walks five numbered steps plus a verificatio
 2. **Autonomous curation** — optionally configure an LLM provider for curation, reranking, and session extraction. Anthropic (Claude Haiku default), OpenAI-compatible, and AWS Bedrock are supported; skipping is fine — Gramaton runs with a deterministic-only curator otherwise.
 3. **Connecting to your AI tools** — auto-detects `claude` and `kiro` CLIs and registers the `gramaton` MCP entry in each.
 4. **Agent usage instructions** — offers to install Gramaton's CLAUDE.md / kiro instructions into each detected client so the agent knows how to use the store. Per-client opt-in.
-5. **Automatic knowledge capture** — installs Gramaton's session-capture hook scripts into your Claude Code / kiro-cli configs (pre-compact, post-compact, session-start, stop).
+5. **Automatic knowledge save** — installs Gramaton's session-save hook scripts into your Claude Code / kiro-cli configs (pre-compact, post-compact, session-start, stop).
 
 After Step 5, the wizard runs a verification pass: writes `~/.gramaton/config.yaml`, probes perms + writability, and summarizes what's configured.
 
@@ -87,7 +87,7 @@ Prefer a manual setup? The wizard emits exactly what you'd write by hand — dro
 }
 ```
 
-Your agent now has access to the full Gramaton MCP toolset — capture and search for semantic knowledge, session extraction for automatic capture, collections for structured items, and versioning tools for history. See [MCP Tools](#mcp-tools) below.
+Your agent now has access to the full Gramaton MCP toolset — save and search for semantic knowledge, session extraction for automatic save, collections for structured items, and versioning tools for history. See [MCP Tools](#mcp-tools) below.
 
 A CLI mirrors the MCP surface for inspection, scripting, and debugging.
 
@@ -105,13 +105,13 @@ Gramaton isn't one bucket of retrieved-by-similarity notes. It offers three dist
 
 For knowledge that benefits from best-match retrieval. Decisions, design rationale, research findings, user preferences, domain context.
 
-Memory records land from several paths: explicit `gramaton_capture` calls, the `gramaton_intake` write endpoint (with optional LLM-side classification), session commits that promote segments to Memory (the default — see Sessions below), and bulk ingest via the `gramaton ingest` CLI. All paths produce records with the same shape and the same retrieval semantics.
+Memory records land from several paths: explicit `gramaton_save` calls, the `gramaton_intake` write endpoint (with optional LLM-side classification), session commits that promote segments to Memory (the default — see Sessions below), and bulk ingest via the `gramaton ingest` CLI. All paths produce records with the same shape and the same retrieval semantics.
 
 Retrieval is via `gramaton_search`: results are ranked by composite score combining vector similarity, BM25 keywords, freshness (decayed by temporality), access-based activation, and confidence. A low-relevance miss is acceptable; the goal is surfacing the best few results, not all of them.
 
 ### Sessions — automatic extraction from conversations
 
-For knowledge that emerges during conversation without the agent being asked. Two-phase: `gramaton_session_prepare` returns extraction instructions; `gramaton_session_commit` submits the extracted segments. Each segment becomes a Session record (BM25-indexed, preserves the conversational thread) and, by default, a linked Memory record (vector-embedded for semantic search). Exploration, open questions, and dead ends can stay Session-only with `promote_to_memory: false` — searchable without polluting Memory's vector space.
+For knowledge that emerges during conversation without the agent being asked. Two-phase: `gramaton_session_prepare` returns extraction instructions; `gramaton_session_save` submits the extracted segments. Each segment becomes a Session record (BM25-indexed, preserves the conversational thread) and, by default, a linked Memory record (vector-embedded for semantic search). Exploration, open questions, and dead ends can stay Session-only with `promote_to_memory: false` — searchable without polluting Memory's vector space.
 
 ### Collections — structured, exhaustive
 
@@ -120,7 +120,7 @@ For things where missing one item is a failure: tasks, TODOs, action items, chec
 ### Decision rule
 
 > *Will missing one item be a failure?*
-> **Yes** → Collection. **No** → Memory (direct capture, or via session extraction).
+> **Yes** → Collection. **No** → Memory (direct save, or via session extraction).
 
 The [Integrator Guide](docs/integrator-guide.md) has the full treatment.
 
@@ -172,7 +172,7 @@ For the full layered package map, lock discipline, and data flow, see [Architect
 - **Three storage paths** — Memory (fuzzy), Sessions (auto-extract), Collections (exhaustive)
 - **Concept detection and promotion** — recurring keywords are detected as concept candidates; with an LLM provider configured, candidates are promoted to concept nodes that link related knowledge across topics
 - **Automatic curation** — lifecycle management, orphan linking, dedup, concept candidate detection, optional LLM classification and contradiction detection
-- **Auto-supersession** — captures that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge. Scoped per-collection via three orthogonal knobs (`curation`, `supersession`, `contradictions`); see `gramaton_guide(topic="collections")` for the per-template defaults.
+- **Auto-supersession** — saves that closely match an existing record (≥0.92 cosine) automatically mark the older record historical and create a `supersedes` edge. Scoped per-collection via three orthogonal knobs (`curation`, `supersession`, `contradictions`); see `gramaton_guide(topic="collections")` for the per-template defaults.
 - **Named stores** — run multiple isolated knowledge bases from the same binary (personal store, benchmark store, per-project store)
 - **Multiple providers** — pure-Go BERT (local, default, no external runtime), Ollama (local, alternative), OpenAI-compatible, and AWS Bedrock for embeddings; Anthropic, OpenAI-compatible, and AWS Bedrock for LLM
 
@@ -184,8 +184,8 @@ Gramaton's primary interface is MCP, organized into clusters matched to the thre
 
 | Tool | What it does |
 |------|-------------|
-| `gramaton_capture` | Store a knowledge record with epistemic metadata |
-| `gramaton_capture_batch` | Submit many records in one call. Sync mode returns per-item results inline (failures land in a `failed[]` array; the batch keeps going). Async mode returns a job id with `_status`, `_result`, `_cancel` companions for polling |
+| `gramaton_save` | Store a knowledge record with epistemic metadata |
+| `gramaton_save_batch` | Submit many records in one call. Sync mode returns per-item results inline (failures land in a `failed[]` array; the batch keeps going). Async mode returns a job id with `_status`, `_result`, `_cancel` companions for polling |
 | `gramaton_inspect` | Full content, metadata, and one-hop related edges for a record |
 | `gramaton_update` | Modify properties on an existing record |
 | `gramaton_classify` | Assign or update classification metadata on a pending record |
@@ -212,7 +212,7 @@ Gramaton's primary interface is MCP, organized into clusters matched to the thre
 | `gramaton_session_start` | Begin a conversation session bound to a client |
 | `gramaton_session_get` | Fetch current session state (segments committed so far) |
 | `gramaton_session_prepare` | Get extraction instructions; must be called before commit |
-| `gramaton_session_commit` | Submit extracted knowledge segments — creates Session records and (by default) linked Memory records |
+| `gramaton_session_save` | Submit extracted knowledge segments — creates Session records and (by default) linked Memory records |
 
 ### Collections (structured, exhaustive)
 
@@ -228,8 +228,8 @@ Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`,
 | `gramaton_backup` | Create a backup archive of the store |
 | `gramaton_curation` | View curation status, trigger a sweep, or dry-run |
 | `gramaton_reembed` | Re-embed records after an embedding model change |
-| `gramaton_jobs_list` | List active async jobs (capture batches and future async ops) |
-| `gramaton_guide` | Live topic-addressable reference (capture, search, sessions, collections, metadata, curation, temporal-queries) |
+| `gramaton_jobs_list` | List active async jobs (save batches and future async ops) |
+| `gramaton_guide` | Live topic-addressable reference (save, search, sessions, collections, metadata, curation, temporal-queries) |
 
 Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
 
@@ -248,7 +248,7 @@ A CLI mirrors the MCP surface for inspection, debugging, and scripting. A curate
 | `gramaton search <query> [flags]` | Search with metadata filtering |
 | `gramaton inspect <id>` | Full record details |
 | `gramaton explore <id> [--depth N]` | Graph traversal |
-| `gramaton capture` | Store a record (JSON on stdin) |
+| `gramaton save` | Store a record (JSON on stdin) |
 | `gramaton classify <id>` | Classify a pending record |
 | `gramaton resolve <id>` | Mark as resolved |
 | `gramaton update <id>` | Modify properties or edges |

@@ -90,8 +90,8 @@ func TestProxySearch(t *testing.T) {
 	}
 }
 
-func TestProxyCapture(t *testing.T) {
-	data := callProxy(t, "gramaton_capture", map[string]any{
+func TestProxySave(t *testing.T) {
+	data := callProxy(t, "gramaton_save", map[string]any{
 		"content":     "Test proxy capture: the sky is blue",
 		"temporality": "immutable",
 		"keywords":    []string{"test", "proxy"},
@@ -128,7 +128,7 @@ func TestProxyUpdate(t *testing.T) {
 
 func TestProxyResolve(t *testing.T) {
 	// First capture a record to resolve.
-	cap := callProxy(t, "gramaton_capture", map[string]any{
+	cap := callProxy(t, "gramaton_save", map[string]any{
 		"content":  "TODO: test proxy resolve lifecycle",
 		"keywords": []string{"test", "proxy", "todo"},
 	})
@@ -274,8 +274,8 @@ func TestProxyDeleteNotExposed(t *testing.T) {
 
 func TestProxyUnlink(t *testing.T) {
 	// Capture two records and link them.
-	dataA := callProxy(t, "gramaton_capture", map[string]any{"content": "Record A"})
-	dataB := callProxy(t, "gramaton_capture", map[string]any{"content": "Record B"})
+	dataA := callProxy(t, "gramaton_save", map[string]any{"content": "Record A"})
+	dataB := callProxy(t, "gramaton_save", map[string]any{"content": "Record B"})
 	idA, _ := dataA["id"].(string)
 	idB, _ := dataB["id"].(string)
 
@@ -296,7 +296,7 @@ func TestProxyUnlink(t *testing.T) {
 
 func TestProxyHistory(t *testing.T) {
 	// Capture and then inspect history.
-	data := callProxy(t, "gramaton_capture", map[string]any{"content": "Record with history"})
+	data := callProxy(t, "gramaton_save", map[string]any{"content": "Record with history"})
 	id, _ := data["id"].(string)
 	if id == "" {
 		t.Fatal("capture returned no id")

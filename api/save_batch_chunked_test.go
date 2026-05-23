@@ -15,22 +15,22 @@ import (
 
 // chunkedItems builds N CaptureBatchItems each with a unique
 // ClientRef ref-i and content "chunked-i".
-func chunkedItems(n int) []CaptureBatchItem {
-	out := make([]CaptureBatchItem, n)
+func chunkedItems(n int) []SaveBatchItem {
+	out := make([]SaveBatchItem, n)
 	for i := range out {
-		out[i] = CaptureBatchItem{
+		out[i] = SaveBatchItem{
 			ClientRef:      fmt.Sprintf("ref-%d", i),
-			CaptureRequest: CaptureRequest{Content: fmt.Sprintf("chunked-%d", i)},
+			SaveRequest: SaveRequest{Content: fmt.Sprintf("chunked-%d", i)},
 		}
 	}
 	return out
 }
 
-// TestCaptureBatchChunkedHappyPath: 30 items in 3 chunks of 10. All
+// TestSaveBatchChunkedHappyPath: 30 items in 3 chunks of 10. All
 // items commit; processed_count reaches 30; status = completed. Uses
 // the test-only chunk-size override so the test exercises multi-chunk
 // behavior without seeding 1500 items (the production cap).
-func TestCaptureBatchChunkedHappyPath(t *testing.T) {
+func TestSaveBatchChunkedHappyPath(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -38,13 +38,13 @@ func TestCaptureBatchChunkedHappyPath(t *testing.T) {
 
 	const N = 30
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
 		SkipSupersession: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 
 	j := pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
@@ -59,10 +59,10 @@ func TestCaptureBatchChunkedHappyPath(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedCrossChunkEdges: items span chunks; edges
+// TestSaveBatchChunkedCrossChunkEdges: items span chunks; edges
 // reference ClientRefs across chunk boundaries; all edges land in
 // the post-chunks fixup commit.
-func TestCaptureBatchChunkedCrossChunkEdges(t *testing.T) {
+func TestSaveBatchChunkedCrossChunkEdges(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -83,20 +83,20 @@ func TestCaptureBatchChunkedCrossChunkEdges(t *testing.T) {
 	}
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
 		SkipSupersession: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
 	// Fetch the full result
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     resp.JobID,
 		TimeoutMS: 10000,
 	})
@@ -119,10 +119,10 @@ func TestCaptureBatchChunkedCrossChunkEdges(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedFailedItemEdge: a cross-chunk edge whose
+// TestSaveBatchChunkedFailedItemEdge: a cross-chunk edge whose
 // target item failed Phase 0 validation surfaces as target_item_failed
 // in EdgesFailed; the corresponding item lands in Failed[].
-func TestCaptureBatchChunkedFailedItemEdge(t *testing.T) {
+func TestSaveBatchChunkedFailedItemEdge(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -140,7 +140,7 @@ func TestCaptureBatchChunkedFailedItemEdge(t *testing.T) {
 	}
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
@@ -148,7 +148,7 @@ func TestCaptureBatchChunkedFailedItemEdge(t *testing.T) {
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID: resp.JobID, TimeoutMS: 5000,
 	})
 	if apiErr != nil {
@@ -175,11 +175,11 @@ func TestCaptureBatchChunkedFailedItemEdge(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedEdgeFixupFailure: inject FaultPhaseEdgeFixup;
+// TestSaveBatchChunkedEdgeFixupFailure: inject FaultPhaseEdgeFixup;
 // every node chunk lands on disk; status flips to
 // failed/edge_fixup_failed; Result.Added has every node chunk;
 // Result.EdgesFailed lists every edge with code fixup_failed.
-func TestCaptureBatchChunkedEdgeFixupFailure(t *testing.T) {
+func TestSaveBatchChunkedEdgeFixupFailure(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -198,7 +198,7 @@ func TestCaptureBatchChunkedEdgeFixupFailure(t *testing.T) {
 	}
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
@@ -221,7 +221,7 @@ func TestCaptureBatchChunkedEdgeFixupFailure(t *testing.T) {
 	}
 
 	// Result has Added + EdgesFailed populated.
-	full, _ := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, _ := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID: resp.JobID, TimeoutMS: 5000,
 	})
 	if full.Stats.AddedCount != N {
@@ -240,10 +240,10 @@ func TestCaptureBatchChunkedEdgeFixupFailure(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedManualEdgeRecovery: documents the recovery
+// TestSaveBatchChunkedManualEdgeRecovery: documents the recovery
 // path. After an edge_fixup_failed Job, a caller iterates
 // Result.EdgesFailed and replays each via gramaton_link.
-func TestCaptureBatchChunkedManualEdgeRecovery(t *testing.T) {
+func TestSaveBatchChunkedManualEdgeRecovery(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -260,7 +260,7 @@ func TestCaptureBatchChunkedManualEdgeRecovery(t *testing.T) {
 		{SourceClientRef: "ref-5", TargetClientRef: "ref-25", Type: "supports"},
 	}
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
@@ -268,7 +268,7 @@ func TestCaptureBatchChunkedManualEdgeRecovery(t *testing.T) {
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
-	full, _ := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, _ := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID: resp.JobID, TimeoutMS: 5000,
 	})
 
@@ -297,10 +297,10 @@ func TestCaptureBatchChunkedManualEdgeRecovery(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedPerChunkProgress: a status reader sees
+// TestSaveBatchChunkedPerChunkProgress: a status reader sees
 // processed_count grow as chunks land. Uses the blockingInjector to
 // pause inside chunk_save so we can observe a mid-batch snapshot.
-func TestCaptureBatchChunkedPerChunkProgress(t *testing.T) {
+func TestSaveBatchChunkedPerChunkProgress(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -319,7 +319,7 @@ func TestCaptureBatchChunkedPerChunkProgress(t *testing.T) {
 	t.Cleanup(func() { a.SetChunkSizeForTests(0) })
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
 		SkipSupersession: true,
@@ -328,7 +328,7 @@ func TestCaptureBatchChunkedPerChunkProgress(t *testing.T) {
 	inj.waitEntered(t, FaultPhaseChunkSave, 10*time.Second)
 
 	// Pre-first-chunk-commit snapshot: ProcessedCount=0.
-	st0, _ := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+	st0, _ := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 	if st0.ProcessedCount != 0 {
 		t.Errorf("pre-first-chunk processed: %d want 0", st0.ProcessedCount)
 	}
@@ -338,17 +338,17 @@ func TestCaptureBatchChunkedPerChunkProgress(t *testing.T) {
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
 	// Final snapshot: ProcessedCount = N.
-	st1, _ := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+	st1, _ := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 	if st1.ProcessedCount != N {
 		t.Errorf("final processed: %d want %d", st1.ProcessedCount, N)
 	}
 }
 
-// TestCaptureBatchChunkedCancelMidImport: cancel arrives while runner
+// TestSaveBatchChunkedCancelMidImport: cancel arrives while runner
 // is parked at chunk 1's chunk_save. The runner releases, chunk 1
 // lands, then shouldStopChunked observes the cancel before chunk 2
 // runs. Status = cancelled with partial state.
-func TestCaptureBatchChunkedCancelMidImport(t *testing.T) {
+func TestSaveBatchChunkedCancelMidImport(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -362,7 +362,7 @@ func TestCaptureBatchChunkedCancelMidImport(t *testing.T) {
 
 	const N = 30 // 3 chunks of 10
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
 		SkipSupersession: true,
@@ -370,7 +370,7 @@ func TestCaptureBatchChunkedCancelMidImport(t *testing.T) {
 	inj.waitEntered(t, FaultPhaseChunkSave, 10*time.Second)
 
 	// Cancel before the first chunk commits.
-	c, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	c, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Cancel: %v", apiErr)
 	}
@@ -402,10 +402,10 @@ func TestCaptureBatchChunkedCancelMidImport(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedChunk2SaveFailure: inject save failure on
+// TestSaveBatchChunkedChunk2SaveFailure: inject save failure on
 // the second chunk specifically. Chunk 1 stays on disk; chunk 2's
 // nodes roll back; status = failed/chunk_2_save_failed.
-func TestCaptureBatchChunkedChunk2SaveFailure(t *testing.T) {
+func TestSaveBatchChunkedChunk2SaveFailure(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -419,7 +419,7 @@ func TestCaptureBatchChunkedChunk2SaveFailure(t *testing.T) {
 
 	const N = 30 // 3 chunks of 10
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
 		SkipSupersession: true,
@@ -492,28 +492,28 @@ func TestChunkRanges(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedSyncStillSingleSave confirms the sync path
+// TestSaveBatchChunkedSyncStillSingleSave confirms the sync path
 // (Wait=true, the default) is unchanged: items + edges land in ONE
 // commit, not two. L6 only restructures the async path.
-func TestCaptureBatchChunkedSyncStillSingleSave(t *testing.T) {
+func TestSaveBatchChunkedSyncStillSingleSave(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{ClientRef: "ref-0", CaptureRequest: CaptureRequest{Content: "a"}},
-			{ClientRef: "ref-1", CaptureRequest: CaptureRequest{Content: "b"}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{ClientRef: "ref-0", SaveRequest: SaveRequest{Content: "a"}},
+			{ClientRef: "ref-1", SaveRequest: SaveRequest{Content: "b"}},
 		},
 		Edges: []EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to"},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("edges: %d want 1", len(resp.Edges))
 	}
 
-	// Walk the graph: HEAD commit must contain BOTH ActionCapture (2)
+	// Walk the graph: HEAD commit must contain BOTH ActionSave (2)
 	// and ActionLink (1) — sync still writes one combined commit.
 	eng.RLock()
 	defer eng.RUnlock()
@@ -526,10 +526,10 @@ func TestCaptureBatchChunkedSyncStillSingleSave(t *testing.T) {
 	}
 }
 
-// (Sanity) TestCaptureBatchChunkedAsyncTwoCommitsForItemsAndEdges
+// (Sanity) TestSaveBatchChunkedAsyncTwoCommitsForItemsAndEdges
 // confirms the async path now writes the items in chunks AND a
 // separate fixup commit for edges.
-func TestCaptureBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
+func TestSaveBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	a.SetChunkSizeForTests(10)
@@ -547,14 +547,14 @@ func TestCaptureBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
 		{SourceClientRef: "ref-0", TargetClientRef: "ref-15", Type: "related_to"},
 	}
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
 		SkipSupersession: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
@@ -582,10 +582,10 @@ func TestCaptureBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchChunkedRefMapPersistedAcrossChunks: after each
+// TestSaveBatchChunkedRefMapPersistedAcrossChunks: after each
 // chunk, Job.ClientRefToID accumulates new refs from the just-
 // committed chunk so a Status reader sees a consistent partial map.
-func TestCaptureBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
+func TestSaveBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -600,7 +600,7 @@ func TestCaptureBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
 
 	const N = 30 // 3 chunks of 10
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
 		SkipSupersession: true,
@@ -610,7 +610,7 @@ func TestCaptureBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
 	once.waitParked(t, 10*time.Second)
 
 	// Status snapshot should reflect chunk 1's refs (10) only.
-	st, _ := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+	st, _ := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 	if len(st.ClientRefToID) != 10 {
 		t.Errorf("after chunk 1: ClientRefToID=%d want 10", len(st.ClientRefToID))
 	}
@@ -693,9 +693,9 @@ func (b *chunkNumBlocker) release() {
 	}
 }
 
-func pollStatus(t *testing.T, a *API, jobID string, within time.Duration) CaptureBatchStatusResponse {
+func pollStatus(t *testing.T, a *API, jobID string, within time.Duration) SaveBatchStatusResponse {
 	t.Helper()
-	st, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: jobID})
+	st, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: jobID})
 	if apiErr != nil {
 		t.Fatalf("Status: %v", apiErr)
 	}

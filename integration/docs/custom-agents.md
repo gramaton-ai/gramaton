@@ -24,7 +24,7 @@ no permission prompts.
 *Records:*
 | Tool | Description |
 |------|-------------|
-| `gramaton_capture` | User-initiated capture to Memory |
+| `gramaton_save` | User-initiated save to Memory |
 | `gramaton_inspect` | Get full record details (and one-hop edges) |
 | `gramaton_update` | Update record metadata |
 | `gramaton_classify` | Classify a pending record |
@@ -40,13 +40,13 @@ no permission prompts.
 | `gramaton_stats` | Aggregate statistics |
 | `gramaton_status` | Health and store metadata |
 
-*Sessions (autonomous capture):*
+*Sessions (autonomous save):*
 | Tool | Description |
 |------|-------------|
 | `gramaton_session_start` | Bind a working-directory session |
 | `gramaton_session_get` | Look up a session by id |
 | `gramaton_session_prepare` | Phase 1: receive extraction instructions |
-| `gramaton_session_commit` | Phase 2: submit extracted segments |
+| `gramaton_session_save` | Phase 2: submit extracted segments |
 
 *Intake:*
 | Tool | Description |
@@ -97,7 +97,7 @@ no permission prompts.
 *Guide:*
 | Tool | Description |
 |------|-------------|
-| `gramaton_guide` | Live reference for any topic (capture, search, sessions, collections, metadata, curation, temporal-queries) |
+| `gramaton_guide` | Live reference for any topic (save, search, sessions, collections, metadata, curation, temporal-queries) |
 
 ### 2. REST API
 
@@ -132,8 +132,8 @@ GET    /v1/stats/llm                        LLM usage & cost stats
 # Sessions
 POST   /v1/sessions                         Start a session
 GET    /v1/sessions/{id}                    Look up a session
-POST   /v1/sessions/{id}/prepare            Phase 1 of capture flow
-POST   /v1/sessions/{id}/commit             Phase 2 of capture flow
+POST   /v1/sessions/{id}/prepare            Phase 1 of save flow
+POST   /v1/sessions/{id}/save             Phase 2 of save flow
 POST   /v1/sessions/{id}/archive            Archive a session
 
 # Intake (replaces the retired /v1/observe)
@@ -203,7 +203,7 @@ the server daemon on first use.
 gramaton search "<query>" [flags]
 gramaton inspect <record-id>
 gramaton explore <record-id> [flags]
-gramaton capture -f <json-file>
+gramaton save -f <json-file>
 gramaton classify -f <json-file>
 gramaton update -f <json-file>
 gramaton pending
@@ -225,7 +225,7 @@ prompt should include these behavioral instructions:
 - When you need context beyond the current conversation
 - When uncertain whether the user expressed a preference before
 
-### When to Capture
+### When to Save
 
 - User makes a decision or states a preference
 - A significant fact, insight, or design rationale emerges
@@ -233,18 +233,18 @@ prompt should include these behavioral instructions:
 - Research findings or domain knowledge are discussed
 - A constraint, requirement, or tradeoff is identified
 
-### When NOT to Capture
+### When NOT to Save
 
 - Trivial exchanges, greetings, small talk
 - Questions without answers
 - Work-in-progress that hasn't solidified
 - Your own generated responses or analysis
 
-### Capture Workflow
+### Save Workflow
 
-The standard capture workflow is three operations:
+The standard save workflow is three operations:
 
-1. **Capture** the knowledge with classification metadata
+1. **Save** the knowledge with classification metadata
 2. **Search** for related existing records
 3. **Link** the new record to related ones
 
@@ -257,10 +257,10 @@ before context compaction), call the two-phase session flow:
 
 ```
 gramaton_session_prepare(session_id="<id>")
-gramaton_session_commit(session_id="<id>", segments=[...])
+gramaton_session_save(session_id="<id>", segments=[...])
 ```
 
-`prepare` returns extraction instructions plus already-captured
+`prepare` returns extraction instructions plus already-saved
 segments (for dedup). `commit` submits extracted segments. Each
 segment becomes a Session record (BM25-indexed); when
 `promote_to_memory: true` (default) it also becomes a Memory record
@@ -283,8 +283,8 @@ gramaton_intake(facts=["Decided to use JWT", "API v2 replaces v1"])
 
 Both paths are fire-and-forget: do not announce, do not call every
 turn. They are safety nets for knowledge the agent didn't explicitly
-capture. Explicit `gramaton_capture` remains the primary,
-high-quality, user-initiated capture path.
+save. Explicit `gramaton_save` remains the primary,
+high-quality, user-initiated save path.
 
 ### Interpreting Metadata
 

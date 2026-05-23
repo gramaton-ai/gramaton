@@ -9,6 +9,31 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING: MCP tools `gramaton_capture` and `gramaton_session_commit`
+  renamed to `gramaton_save` and `gramaton_session_save`.**
+  The capture-batch family follows: `gramaton_capture_batch` →
+  `gramaton_save_batch` (with `_status`, `_cancel`, `_result` siblings).
+  HTTP routes also rename: `/v1/capture/batch[...]` → `/v1/save/batch[...]`
+  and `/v1/sessions/{id}/commit` → `/v1/sessions/{id}/save`. Rationale:
+  agent ergonomics. The verb "save" is the dominant phrasing humans and
+  LLMs use for memory persistence; "commit" was bleeding GitHub/coding
+  connotations that reduced auto-trigger rate during conversations.
+  Tool descriptions were also rewritten with explicit cross-references
+  for disambiguation: `gramaton_save` is the single-record path (user
+  explicitly hands you content); the `session_prepare` + `session_save`
+  pair handles session-level events (work boundaries, compaction,
+  "save the session"). Internal Go API follows: `api.Capture` →
+  `api.Save`, `api.CaptureBatch` → `api.SaveBatch`, `api.SessionCommit`
+  → `api.SessionSave`, `CommitSegment` → `SaveSegment`, plus type/file
+  renames. The audit-log action constants `graph.ActionCapture` and
+  `graph.ActionSessionCommit` rename to `graph.ActionSave` and
+  `graph.ActionSessionSave`; their string values change from `"capture"`
+  and `"session_commit"` to `"save"` and `"session_save"`. Existing
+  stores keep historical audit-log entries tagged with the old values
+  (no migration); new events use the new values. The `gramaton_guide`
+  topic `"capture"` is renamed to `"save"`. Alpha; no compatibility
+  alias is provided.
+
 - **Inline documentation for cost-cap config knobs expanded.**
   The yaml comments emitted by `gramaton init` (sourced from
   `config/comments.go`) previously gave terse one-line descriptions
@@ -572,7 +597,7 @@ This is the first publicly-announced release.
   catching drift the recent feature work left behind. Specific
   fixes: tool-count claims aligned with the actual MCP tool registry;
   log-filename references corrected (`gramaton.log`, not
-  `server.log`); `gramaton_capture_batch` description rewritten
+  `server.log`); `gramaton_save_batch` description rewritten
   (sync mode is per-item failure isolation, not all-or-nothing);
   `gramaton init` wizard step order corrected in the CLI table;
   `gramaton_search` data flow in `architecture.md` extended with
@@ -610,8 +635,8 @@ This is the first publicly-announced release.
   tool schemas until the agent calls `ToolSearch` to fetch them,
   paying ~50-100ms per tool per session on first use. Pin the 12
   tools the agent reaches for on every substantive session
-  (`gramaton_search`, `gramaton_inspect`, `gramaton_capture`,
-  `gramaton_session_prepare`, `gramaton_session_commit`,
+  (`gramaton_search`, `gramaton_inspect`, `gramaton_save`,
+  `gramaton_session_prepare`, `gramaton_session_save`,
   `gramaton_collection_add`, `gramaton_collection_items`,
   `gramaton_collection_update`, `gramaton_collection_list`,
   `gramaton_resolve`, `gramaton_link`, `gramaton_curation`) via
@@ -1109,22 +1134,22 @@ This is the first publicly-announced release.
 
 ### Added
 
-- **Async mode for `gramaton_capture_batch` + 4 companion MCP tools.**
+- **Async mode for `gramaton_save_batch` + 4 companion MCP tools.**
   Setting `wait=false` returns a `job_id` immediately
   and runs the commit in a background goroutine; the new tools poll
   and control the job:
 
-  - **`gramaton_capture_batch_status(job_id)`** — read-only Job
+  - **`gramaton_save_batch_status(job_id)`** — read-only Job
     snapshot (status, total_items, processed_count, errors[],
     client_ref_to_id map, client_token, failure_reason). Polling
     is cheap and never touches the engine write lock.
-  - **`gramaton_capture_batch_cancel(job_id)`** — flips the Job to
+  - **`gramaton_save_batch_cancel(job_id)`** — flips the Job to
     `cancelled` atomically (state-machine guarded; cancelling a
     terminal job is an idempotent no-op). One automatic retry on
     transient JobStore.Update failure to tolerate brief bbolt
     contention. Signals the runner's context so an in-flight embed
     exits cleanly.
-  - **`gramaton_capture_batch_result(job_id, timeout_ms)`** — blocks
+  - **`gramaton_save_batch_result(job_id, timeout_ms)`** — blocks
     with poll backoff until the Job reaches a terminal state, then
     returns the full CaptureBatchResponse (added/failed/edges/
     edges_failed/stats). On timeout: returns the current snapshot
@@ -1133,7 +1158,7 @@ This is the first publicly-announced release.
   - **`gramaton_jobs_list`** — enumerate persisted jobs by status /
     kind / client_token / time range, paginated (default limit 50,
     max 200). Returns lightweight summaries; heavy Result payload
-    requires `gramaton_capture_batch_status` on a specific id.
+    requires `gramaton_save_batch_status` on a specific id.
 
   Async runner: panic-recovers (marks the Job
   `failed/panicked: <message>` so a panic doesn't leave a stuck
@@ -1159,7 +1184,7 @@ This is the first publicly-announced release.
   `POST /v1/capture/batch/{job_id}/cancel`,
   `GET /v1/capture/batch/{job_id}/result`, `GET /v1/jobs`.
 
-- **Intra-batch edges in `gramaton_capture_batch`.**
+- **Intra-batch edges in `gramaton_save_batch`.**
   `Edges []EdgeSpec` in the request body lets the caller create
   intra-batch and to-existing-record edges in the same commit as
   the items they connect. Each EdgeSpec resolves source and
@@ -1186,10 +1211,10 @@ This is the first publicly-announced release.
   includes Edges so a different edge set rejects ClientToken
   reuse.
 
-- **`gramaton_capture_batch` MCP tool + `POST /v1/capture/batch`
+- **`gramaton_save_batch` MCP tool + `POST /v1/capture/batch`
   HTTP route + CLI proxy.** Sync mode: stores up to
   500 records in a single call sharing one engine write lock and
-  one batch-embed call. Each item follows the `gramaton_capture`
+  one batch-embed call. Each item follows the `gramaton_save`
   shape with an optional `client_ref` echoed back in the response;
   per-item validation failures land in `failed[]` while the rest
   commit. Phase 0 enforces a 256MB total content-byte budget
@@ -1247,7 +1272,7 @@ This is the first publicly-announced release.
   automatically.
 
 - **New `jobs/` package: persistent tracking for long-running async
-  operations** (prereq for `gramaton_capture_batch`).
+  operations** (prereq for `gramaton_save_batch`).
   Bbolt-backed store in a dedicated `jobs.db` file separate from
   the engine's index store and graph commit log. Search isolation
   by construction: jobs are not graph nodes, so curation and search
@@ -1416,7 +1441,7 @@ This is the first publicly-announced release.
   Gramaton through Claude or another agent. Practical tips on
   capture, search, backlog management, common pitfalls, and how to
   verify things landed. All examples synthetic. Calls out the
-  load-bearing fact that session prepare/commit does NOT close
+  load-bearing fact that session prepare/save does NOT close
   collection items — closure is an explicit `gramaton_resolve` call,
   with the inferred-from-conversation alternative rejected to avoid
   silent state loss on partial work. README's docs index now
@@ -2542,7 +2567,7 @@ This is the first publicly-announced release.
 - **Deprecated kiro `gramaton-observe.md` integration doc deleted.**
   The `gramaton_observe` MCP tool was retired during the
   canonical-api / sessions migration (replaced by the
-  `gramaton_session_prepare` / `gramaton_session_commit` two-phase
+  `gramaton_session_prepare` / `gramaton_session_save` two-phase
   flow). The kiro guide for it remained on disk and led future
   agents to the dead tool. Removed alongside other docstring
   fixes.
@@ -4411,7 +4436,7 @@ This is the first publicly-announced release.
   `server-design.md` (pre-canonical-api "v0.2" daemon spec, superseded by
   the `api/` unified surface); `observe-pipeline.md` (the
   `gramaton_observe` flow, soft-deprecated and replaced by the
-  session prepare/commit two-tier model); `capture-and-processing.md`
+  session prepare/save two-tier model); `capture-and-processing.md`
   and `curation.md` (early subagent-classification-at-capture model
   with `/gramaton-process` and `/gramaton-curate` skills that were
   never built -- current reality is server-side autonomous curation
@@ -4720,7 +4745,7 @@ This is the first publicly-announced release.
   as a first-class tool. Neither matches reality: the canonical-api refactor introduced
   the three-way split (Memory / Sessions / Collections) and
   `gramaton_observe` is soft-deprecated in favor of the session
-  prepare/commit flow. Rewrite reorganizes around the current
+  prepare/save flow. Rewrite reorganizes around the current
   model: sections for the decision rule ("will missing one item be
   a failure?"), Memory depth (four write paths, context envelope,
   classification guidance), Sessions depth (the commit triggers --
@@ -4838,7 +4863,7 @@ This is the first publicly-announced release.
   by `gramaton_session_prepare` dropped from 202 lines (~9360 bytes)
   to 51 lines (~2525 bytes). Detailed content (field-role framework,
   classification heuristics per axis, question-type mapping, two-tier
-  semantics) has been delegated to `gramaton_guide(topic="capture")`,
+  semantics) has been delegated to `gramaton_guide(topic="save")`,
   `(topic="metadata")`, and `(topic="sessions")` -- the topics already
   carry the same material as the authoritative reference. The prompt
   retains the must-haves: the submission tool name, the full segment
@@ -4874,7 +4899,7 @@ This is the first publicly-announced release.
   shipped `integration/claude-code/CLAUDE.md` template was updated
   with the same trigger list + scheduled cadence + anti-pattern
   callout. Behavior change: LLM agents using the MCP surface should
-  call prepare/commit more frequently during real-dev conversations.
+  call prepare/save more frequently during real-dev conversations.
 - **Engine god-object split.** `core/engine.go` reorganised
   into named subsystems and sibling pipeline packages across two PRs.
   PR1 extracted `providers`, `searcher`, and `indexSet` subsystems
@@ -5069,7 +5094,7 @@ This is the first publicly-announced release.
   search, explore, branches, diff, log, revert, reembed, ingest,
   status). Standard response envelope with curation status and meta.
 - **MCP integration** -- 19 MCP tools via Streamable HTTP at `/mcp`.
-  Agents call `gramaton_search`, `gramaton_capture`, etc. as typed
+  Agents call `gramaton_search`, `gramaton_save`, etc. as typed
   tools with no shell involvement. Uses official MCP Go SDK
   (Apache-2.0). Stdio transport via `gramaton mcp` for clients like
   Claude Code.

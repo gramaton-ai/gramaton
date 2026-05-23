@@ -223,7 +223,7 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 
 	// Persist once at the end rather than per-record. Engine.Save
 	// expects the caller to hold the write lock (see callers like
-	// curation/batch.go:212 and api/capture.go — Save flushes bbolt
+	// curation/batch.go:212 and api/save.go — Save flushes bbolt
 	// indexes + writes the HEAD ref, none of which it synchronizes
 	// internally). Concurrent readers during that window would
 	// observe torn state. Take the Lock explicitly.

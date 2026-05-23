@@ -131,7 +131,7 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 			warnings = append(warnings, fmt.Sprintf("skipped %s: content exceeds maximum length", f.Filename))
 			continue
 		}
-		capReq := &captureRequest{Content: f.Content}
+		capReq := &saveRequest{Content: f.Content}
 		prepared = append(prepared, precomputed{
 			file:     f,
 			embedded: s.preEmbedContent(ctx, capReq),

@@ -7,7 +7,7 @@ import (
 )
 
 // canonicalizeRequest produces a deterministic byte representation of
-// a CaptureBatchRequest for hashing and idempotency comparison.
+// a SaveBatchRequest for hashing and idempotency comparison.
 //
 // Stripped: Wait (transport-level), ClientToken (idempotency key),
 // SourceCredibility's marshaled NaN form (NaN-rejection lives in
@@ -25,7 +25,7 @@ import (
 // Map ordering: encoding/json sorts map[string]any keys
 // alphabetically (Go 1.12+). Meta maps thus serialize identically
 // regardless of insertion order.
-func canonicalizeRequest(req CaptureBatchRequest) ([]byte, error) {
+func canonicalizeRequest(req SaveBatchRequest) ([]byte, error) {
 	c := canonicalRequest{
 		Items:            make([]canonicalItem, len(req.Items)),
 		SkipSupersession: req.SkipSupersession,
@@ -73,7 +73,7 @@ func defaultedEdgeWeight(p *float64) *float64 {
 }
 
 // canonicalRequest is the wire form fed into the hash. It mirrors
-// CaptureBatchRequest with Wait + ClientToken stripped and timestamps
+// SaveBatchRequest with Wait + ClientToken stripped and timestamps
 // normalized. Edges affect semantics so they hash; their order is
 // preserved (caller-meaningful).
 type canonicalRequest struct {
@@ -111,8 +111,8 @@ type canonicalItem struct {
 	ClientRef              string         `json:"client_ref,omitempty"`
 }
 
-func canonicalizeItem(item CaptureBatchItem) canonicalItem {
-	r := item.CaptureRequest
+func canonicalizeItem(item SaveBatchItem) canonicalItem {
+	r := item.SaveRequest
 	return canonicalItem{
 		Content:                r.Content,
 		Temporality:            r.Temporality,

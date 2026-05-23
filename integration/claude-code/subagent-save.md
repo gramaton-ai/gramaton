@@ -1,12 +1,12 @@
-# Capture Subagent Instructions
+# Save Subagent Instructions
 
 > **Legacy / fallback pattern.** This file describes the original
 > "classification subagent" template, which a parent agent invokes to
 > classify and store a single piece of content. Most current deployments
 > should not use this pattern: server-side curation (when an LLM
 > provider is configured) handles classification automatically, and
-> autonomous capture from conversations now goes through
-> `gramaton_session_prepare` / `gramaton_session_commit`. Use this
+> autonomous save from conversations now goes through
+> `gramaton_session_prepare` / `gramaton_session_save`. Use this
 > template only as a fallback for `autonomous: false` deployments that
 > still want classification work farmed out to a side context.
 
@@ -61,8 +61,8 @@ no relevant context for that field -- skip them.
 
 **asserted_as_of** -- When did the source make this claim?
 - Only set when the source's claim date is different from now.
-- Example: capturing a decision from a meeting last week --
-  asserted_as_of is the meeting date, not the capture date.
+- Example: saving a decision from a meeting last week --
+  asserted_as_of is the meeting date, not the save date.
 - Omit when the knowledge is current (created_at covers it).
 
 ## Instructions
@@ -77,11 +77,11 @@ no relevant context for that field -- skip them.
    - Entity names from "Who or what is involved"
    - Domain/subject markers from "What is this about"
 
-3. Write a summary_short (~750 chars (semantic anchor for embedding)) that captures the essence.
+3. Write a summary_short (~750 chars (semantic anchor for embedding)) that saves the essence.
 
-4. Store the record via `gramaton_capture`:
+4. Store the record via `gramaton_save`:
    ```
-   gramaton_capture(
+   gramaton_save(
      content="[the content]",
      temporality="[value]",
      confidence=[float],
@@ -112,7 +112,7 @@ no relevant context for that field -- skip them.
 
 6. If the content is complex (a decision with reasoning, a multi-part
    analysis), decompose into sub-records:
-   - Capture each sub-record as a separate gramaton_capture call
+   - Save each sub-record as a separate gramaton_save call
    - Link sub-records to the parent via appropriate edge types
    - Example: a decision has `justifies` edges from constraints,
      `defeats` edges to rejected alternatives

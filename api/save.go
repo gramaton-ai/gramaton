@@ -9,14 +9,14 @@ import (
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
-// CaptureRequest is the canonical input to the capture operation.
+// SaveRequest is the canonical input to the capture operation.
 // Every transport (HTTP, MCP, CLI proxy) uses this struct directly --
 // there is no per-transport copy to drift from.
 //
 // json tags are the HTTP wire format.
 // jsonschema tags surface as MCP tool descriptions (the MCP SDK reads
 // them via reflection when the struct is passed as a tool args type).
-type CaptureRequest struct {
+type SaveRequest struct {
 	Content                string         `json:"content" jsonschema:"the knowledge to store (required)"`
 	Temporality            string         `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
 	Confidence             *float64       `json:"confidence,omitempty" jsonschema:"number between 0.0 and 1.0"`
@@ -52,23 +52,23 @@ type SupersededRecord struct {
 	EdgeID     string  `json:"edge_id"`
 }
 
-// CaptureResponse is the canonical output of the capture operation.
+// SaveResponse is the canonical output of the capture operation.
 // Omitted fields use json:",omitempty" so the wire format stays tight
 // on the happy path (no warnings, no supersession).
-type CaptureResponse struct {
+type SaveResponse struct {
 	ID         string             `json:"id"`
 	Warnings   []string           `json:"warnings,omitempty"`
 	Superseded []SupersededRecord `json:"superseded,omitempty"`
 }
 
-// CaptureDescription is the MCP tool description shared by every
-// transport that surfaces capture (direct MCP registration and the
+// SaveDescription is the MCP tool description shared by every
+// transport that surfaces save (direct MCP registration and the
 // CLI MCP proxy). Changes here update both surfaces.
-const CaptureDescription = `Store a knowledge record in Memory. Use this ONLY when the user explicitly asks you to remember, save, or capture something. Do not call this tool autonomously -- session extraction (gramaton_session_prepare/commit) handles automatic knowledge capture.
+const SaveDescription = `Save a single record to persistent semantic memory. Use when the user explicitly hands you content to remember/save/store, or when you want to persist a specific fact, decision, or observation. Single record per call.
 
-NOT for tasks, action items, checklists, or anything that needs exhaustive tracking. Use gramaton_collection_add for those.
+NOT for saving the session/conversation itself, or for extracting knowledge from ongoing conversation -- use gramaton_session_prepare + gramaton_session_save for those. NOT for tasks/checklists -- use gramaton_collection_add.
 
-Field roles: content is unbounded and should be self-contained with rationale; summary_short (~750 chars) is the embedding-ready semantic anchor for vector search; keywords are BM25 terms a future agent would type. These are different outputs serving different parts of retrieval, not nested compressions. For full guidance on what to capture, classification heuristics per question type, and synthesis-not-summarization discipline, call gramaton_guide(topic="capture").
+Field roles: content is unbounded and should be self-contained with rationale; summary_short (~750 chars) is the embedding-ready semantic anchor for vector search; keywords are BM25 terms a future agent would type. These are different outputs serving different parts of retrieval, not nested compressions. For full guidance on what to save, classification heuristics per question type, and synthesis-not-summarization discipline, call gramaton_guide(topic="save").
 
 IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`
 
@@ -80,20 +80,20 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 // the older one is marked historical and a "supersedes" edge links
 // the new record to it. Returns ErrConflict only when dedup.action =
 // "reject" AND a duplicate is found.
-func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse, *APIError) {
-	captureStart := time.Now()
+func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIError) {
+	saveStart := time.Now()
 
 	if req.Content == "" {
-		return CaptureResponse{}, ErrMissing("content is required")
+		return SaveResponse{}, ErrMissing("content is required")
 	}
 	if len(req.Content) > a.engine.Config().Limits.MaxContentLength {
-		return CaptureResponse{}, ErrInvalid("content exceeds maximum length")
+		return SaveResponse{}, ErrInvalid("content exceeds maximum length")
 	}
-	if err := validateCaptureRequest(&req); err != nil {
-		return CaptureResponse{}, ErrInvalid(err.Error())
+	if err := validateSaveRequest(&req); err != nil {
+		return SaveResponse{}, ErrInvalid(err.Error())
 	}
 	if err := validateMeta(req.Meta); err != nil {
-		return CaptureResponse{}, ErrInvalid(err.Error())
+		return SaveResponse{}, ErrInvalid(err.Error())
 	}
 
 	// Pre-embed outside the lock. Observation extraction (D18/D23)
@@ -147,7 +147,7 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 			a.engine.PropIdx().RemoveNode(n.ID, n.Properties)
 			a.engine.VecIdx().Remove(n.ID)
 			a.engine.Graph().DeleteNode(n.ID)
-			return CaptureResponse{}, ErrConflict(msg)
+			return SaveResponse{}, ErrConflict(msg)
 		}
 
 		// Default action is "supersede": mark the older record historical
@@ -179,30 +179,30 @@ func (a *API) Capture(ctx context.Context, req CaptureRequest) (CaptureResponse,
 		}
 	}
 
-	if _, err := a.engine.Save("capture", graph.CommitAction{
-		Kind: graph.ActionCapture, RecordID: n.ID,
+	if _, err := a.engine.Save("save", graph.CommitAction{
+		Kind: graph.ActionSave, RecordID: n.ID,
 	}); err != nil {
-		return CaptureResponse{}, ErrInternal("failed to save")
+		return SaveResponse{}, ErrInternal("failed to save")
 	}
 
 	a.log.Info("capture complete",
-		"component", "capture",
+		"component", "save",
 		"node", n.ID,
 		"content_len", len(req.Content),
 		"embed_ms", embedDur.Milliseconds(),
-		"total_ms", time.Since(captureStart).Milliseconds(),
+		"total_ms", time.Since(saveStart).Milliseconds(),
 		"superseded", len(superseded) > 0)
 
-	return CaptureResponse{
+	return SaveResponse{
 		ID:         n.ID,
 		Warnings:   warnings,
 		Superseded: superseded,
 	}, nil
 }
 
-// validateCaptureRequest checks per-field invariants: numeric ranges,
+// validateSaveRequest checks per-field invariants: numeric ranges,
 // enum values, string lengths. Returns the first problem found.
-func validateCaptureRequest(r *CaptureRequest) error {
+func validateSaveRequest(r *SaveRequest) error {
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}

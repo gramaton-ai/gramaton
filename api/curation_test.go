@@ -43,7 +43,7 @@ func addStuckRecord(t *testing.T, eng *core.Engine, task, errMsg string) string 
 	for k, v := range n.Properties {
 		eng.PropIdx().Add(n.ID, k, v)
 	}
-	if _, err := eng.Save("test: add stuck record", graph.CommitAction{Kind: graph.ActionCapture, RecordID: n.ID}); err != nil {
+	if _, err := eng.Save("test: add stuck record", graph.CommitAction{Kind: graph.ActionSave, RecordID: n.ID}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	return n.ID

@@ -35,19 +35,19 @@ func pollUntilTerminal(t *testing.T, a *API, jobID string, timeout time.Duration
 	}
 }
 
-// TestCaptureBatchAsyncHappyPath: wait=false returns immediately with
+// TestSaveBatchAsyncHappyPath: wait=false returns immediately with
 // pending; runner picks up and the Job ends in completed.
-func TestCaptureBatchAsyncHappyPath(t *testing.T) {
+func TestSaveBatchAsyncHappyPath(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("alpha", "beta", "gamma"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	j := pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
 	if j.Status != jobs.StatusCompleted {
@@ -58,15 +58,15 @@ func TestCaptureBatchAsyncHappyPath(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncOverCap: more than MaxAsyncBatchSize rejected.
-func TestCaptureBatchAsyncOverCap(t *testing.T) {
+// TestSaveBatchAsyncOverCap: more than MaxAsyncBatchSize rejected.
+func TestSaveBatchAsyncOverCap(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	f := false
-	items := make([]CaptureBatchItem, MaxAsyncBatchSize+1)
+	items := make([]SaveBatchItem, MaxAsyncBatchSize+1)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "x"}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: "x"}}
 	}
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: items,
 	})
@@ -75,10 +75,10 @@ func TestCaptureBatchAsyncOverCap(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchStatusUnknownJob: unknown JobID -> ErrNotFound.
-func TestCaptureBatchStatusUnknownJob(t *testing.T) {
+// TestSaveBatchStatusUnknownJob: unknown JobID -> ErrNotFound.
+func TestSaveBatchStatusUnknownJob(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{
+	_, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{
 		JobID: "01HQQQQQQQQQQQQQQQQQQQQQQQ",
 	})
 	if apiErr == nil || apiErr.Code != "not_found" {
@@ -86,31 +86,31 @@ func TestCaptureBatchStatusUnknownJob(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchStatusEmptyJobID: missing job_id -> ErrMissing.
-func TestCaptureBatchStatusEmptyJobID(t *testing.T) {
+// TestSaveBatchStatusEmptyJobID: missing job_id -> ErrMissing.
+func TestSaveBatchStatusEmptyJobID(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{})
+	_, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{})
 	if apiErr == nil || apiErr.Code != "missing_field" {
 		t.Fatalf("expected missing_field, got %v", apiErr)
 	}
 }
 
-// TestCaptureBatchStatusReadsRunningJob: status reflects an in-flight
+// TestSaveBatchStatusReadsRunningJob: status reflects an in-flight
 // async job's metadata.
-func TestCaptureBatchStatusReadsRunningJob(t *testing.T) {
+func TestSaveBatchStatusReadsRunningJob(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
-	st, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+	st, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Status: %v", apiErr)
 	}
@@ -125,17 +125,17 @@ func TestCaptureBatchStatusReadsRunningJob(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchCancelAlreadyCompleted: cancelling a terminal job
+// TestSaveBatchCancelAlreadyCompleted: cancelling a terminal job
 // returns its current state, Cancelled=false.
-func TestCaptureBatchCancelAlreadyCompleted(t *testing.T) {
+func TestSaveBatchCancelAlreadyCompleted(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("x"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
-	c, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{
+	c, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{
 		JobID: resp.JobID,
 	})
 	if apiErr != nil {
@@ -149,20 +149,20 @@ func TestCaptureBatchCancelAlreadyCompleted(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchCancelAlreadyCancelled: cancelling a cancelled job
+// TestSaveBatchCancelAlreadyCancelled: cancelling a cancelled job
 // is idempotent (no-op, Cancelled=false).
-func TestCaptureBatchCancelAlreadyCancelled(t *testing.T) {
+func TestSaveBatchCancelAlreadyCancelled(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
-	first, _ := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	first, _ := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
-	second, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	second, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Cancel #2: %v", apiErr)
 	}
@@ -175,10 +175,10 @@ func TestCaptureBatchCancelAlreadyCancelled(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchCancelUnknownJob: ErrNotFound.
-func TestCaptureBatchCancelUnknownJob(t *testing.T) {
+// TestSaveBatchCancelUnknownJob: ErrNotFound.
+func TestSaveBatchCancelUnknownJob(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{
+	_, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{
 		JobID: "01HQQQQQQQQQQQQQQQQQQQQQQQ",
 	})
 	if apiErr == nil || apiErr.Code != "not_found" {
@@ -186,13 +186,13 @@ func TestCaptureBatchCancelUnknownJob(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchCancelPersistFailureRetrySucceeds: first persist
+// TestSaveBatchCancelPersistFailureRetrySucceeds: first persist
 // attempt fails via the once-injector; the second succeeds; cancel
 // reaches the cancelled state without surfacing the transient.
 // Uses blockingInjector to park the runner so the cancel is
 // guaranteed to find a non-terminal job AND we can assert the
 // onceInjector actually fired (no race-tolerant escape).
-func TestCaptureBatchCancelPersistFailureRetrySucceeds(t *testing.T) {
+func TestSaveBatchCancelPersistFailureRetrySucceeds(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -205,7 +205,7 @@ func TestCaptureBatchCancelPersistFailureRetrySucceeds(t *testing.T) {
 	}()
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
@@ -214,7 +214,7 @@ func TestCaptureBatchCancelPersistFailureRetrySucceeds(t *testing.T) {
 	once := &onceInjector{phase: FaultPhaseJobstoreUpdate, err: errors.New("transient")}
 	a.SetFaultInjector(once)
 
-	c, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	c, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Cancel: %v (expected retry to succeed)", apiErr)
 	}
@@ -245,11 +245,11 @@ func (o *onceInjector) Inject(phase string) error {
 	return o.err
 }
 
-// TestCaptureBatchCancelPersistFailureBothFail: both persist attempts
+// TestSaveBatchCancelPersistFailureBothFail: both persist attempts
 // fail; cancel returns ErrInternal so the caller knows the cancel
 // didn't take. Uses blockingInjector to park the runner inside Phase
 // 3 so the cancel is guaranteed to race a non-terminal job.
-func TestCaptureBatchCancelPersistFailureBothFail(t *testing.T) {
+func TestSaveBatchCancelPersistFailureBothFail(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -263,7 +263,7 @@ func TestCaptureBatchCancelPersistFailureBothFail(t *testing.T) {
 	}()
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("y"),
 	})
@@ -275,7 +275,7 @@ func TestCaptureBatchCancelPersistFailureBothFail(t *testing.T) {
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseJobstoreUpdate: errors.New("forever"),
 	}})
-	_, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	_, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	if apiErr == nil || apiErr.Code != "internal_error" {
 		t.Errorf("expected internal_error on persist-double-fail, got %v", apiErr)
 	}
@@ -285,21 +285,21 @@ func TestCaptureBatchCancelPersistFailureBothFail(t *testing.T) {
 	a.SetFaultInjector(inj)
 }
 
-// TestCaptureBatchResultBlocksUntilCompletion: the result endpoint
+// TestSaveBatchResultBlocksUntilCompletion: the result endpoint
 // returns the full payload once the runner finishes.
-func TestCaptureBatchResultBlocksUntilCompletion(t *testing.T) {
+func TestSaveBatchResultBlocksUntilCompletion(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("alpha", "beta"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     resp.JobID,
 		TimeoutMS: 5000,
 	})
@@ -317,17 +317,17 @@ func TestCaptureBatchResultBlocksUntilCompletion(t *testing.T) {
 	}
 }
 
-// (TestCaptureBatchResultTimeout moved to
-// capture_batch_review_test.go as TestCaptureBatchResultTimeoutDeterministic.
+// (TestSaveBatchResultTimeout moved to
+// capture_batch_review_test.go as TestSaveBatchResultTimeoutDeterministic.
 // The prior version was race-tolerant — when the runner won the race,
 // the timeout path was never exercised, leaving the test
 // non-deterministic. The new version uses blockingInjector to park the
 // runner past the deadline so the timeout always fires.)
 
-// TestCaptureBatchResultUnknownJob: ErrNotFound.
-func TestCaptureBatchResultUnknownJob(t *testing.T) {
+// TestSaveBatchResultUnknownJob: ErrNotFound.
+func TestSaveBatchResultUnknownJob(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	_, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     "01HQQQQQQQQQQQQQQQQQQQQQQQ",
 		TimeoutMS: 100,
 	})
@@ -336,15 +336,15 @@ func TestCaptureBatchResultUnknownJob(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResultAfterTerminalReturnsImmediately: result on a
+// TestSaveBatchResultAfterTerminalReturnsImmediately: result on a
 // completed job returns inline with no polling.
-func TestCaptureBatchResultAfterTerminalReturnsImmediately(t *testing.T) {
+func TestSaveBatchResultAfterTerminalReturnsImmediately(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("done"),
 	})
 	start := time.Now()
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     resp.JobID,
 		TimeoutMS: 30000,
 	})
@@ -369,9 +369,9 @@ func TestJobsListFilters(t *testing.T) {
 	// Seed three completed sync jobs with distinct tokens.
 	tok1 := "11111111-1111-1111-1111-111111111111"
 	tok2 := "22222222-2222-2222-2222-222222222222"
-	r1, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{ClientToken: tok1, Items: mustItems("a")})
-	r2, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{ClientToken: tok2, Items: mustItems("b")})
-	r3, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{Items: mustItems("c")})
+	r1, _ := a.SaveBatch(context.Background(), SaveBatchRequest{ClientToken: tok1, Items: mustItems("a")})
+	r2, _ := a.SaveBatch(context.Background(), SaveBatchRequest{ClientToken: tok2, Items: mustItems("b")})
+	r3, _ := a.SaveBatch(context.Background(), SaveBatchRequest{Items: mustItems("c")})
 
 	// All three should appear with status=completed.
 	all, apiErr := a.JobsList(context.Background(), JobsListRequest{Status: jobs.StatusCompleted})
@@ -439,7 +439,7 @@ func TestJobsListInvalidStatus(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncCancelBeforeFirstChunk: cancel races with the
+// TestSaveBatchAsyncCancelBeforeFirstChunk: cancel races with the
 // runner; three outcomes are documented and acceptable:
 //
 //  1. Cancel beats the runner entirely -> Status=cancelled, 0 items.
@@ -450,21 +450,21 @@ func TestJobsListInvalidStatus(t *testing.T) {
 //     before the cancel signal can short-circuit it; the in-store
 //     items must equal the count Job.Result reports as added.
 //  3. Cancel loses the race entirely -> Status=completed.
-func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
+func TestSaveBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("a", "b"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
-	c, _ := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	c, _ := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
-	// CaptureBatchCancel flips Status to cancelled but does NOT
+	// SaveBatchCancel flips Status to cancelled but does NOT
 	// populate Result; the runner does that asynchronously via
 	// finalizeCancelledWithProgress. pollUntilTerminal returns when
 	// Status is terminal, which can race ahead of the runner's
@@ -485,7 +485,7 @@ func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 		// cancel arrives mid-flight; both 0 (early cancel won) and N>0
 		// (cancel landed after a chunk commit) are valid, as long as
 		// the store and Result agree.
-		res, _ := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{JobID: resp.JobID})
+		res, _ := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{JobID: resp.JobID})
 		if count != len(res.Added) {
 			t.Errorf("store/result mismatch: store has %d items, Result.Added has %d",
 				count, len(res.Added))
@@ -506,12 +506,12 @@ func TestCaptureBatchAsyncCancelBeforeFirstChunk(t *testing.T) {
 func TestShutdownAsyncWaitsForRunners(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	f := false
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("a", "b", "c"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if err := a.ShutdownAsync(context.Background()); err != nil {
 		t.Errorf("ShutdownAsync: %v", err)
@@ -533,7 +533,7 @@ func TestShutdownAsyncBlocksNewRunners(t *testing.T) {
 		t.Fatalf("ShutdownAsync: %v", err)
 	}
 	f := false
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
@@ -542,7 +542,7 @@ func TestShutdownAsyncBlocksNewRunners(t *testing.T) {
 	}
 }
 
-// (TestCaptureBatchAsyncRestartRecovery removed as vacuous — its
+// (TestSaveBatchAsyncRestartRecovery removed as vacuous — its
 // only assertion was `j.Kind == capture_batch` which doesn't test
 // recovery at all. Restart-recovery semantics are exercised in
 // core/jobstore_wiring_test.go for both sync- and async-created jobs;

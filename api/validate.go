@@ -28,7 +28,7 @@ var clientTokenRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 var clientRefRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // reservedMetaPrefix and reservedMetaInfix reserve the `_gramaton.`
-// namespace inside meta maps. CaptureBatch stamps
+// namespace inside meta maps. SaveBatch stamps
 // `meta._gramaton.import.job_id` for orphan recovery; rejecting these
 // at validation time prevents callers from shadowing the stamp.
 const (
@@ -147,7 +147,7 @@ const (
 	// headroom for nanoseconds + offset and rejects pathological
 	// 10MB inputs.
 	MaxRFC3339Len = 64
-	// MaxResultTimeoutMS caps CaptureBatchResult's blocking timeout.
+	// MaxResultTimeoutMS caps SaveBatchResult's blocking timeout.
 	// Holding a connection for longer than this is a footgun; the
 	// caller should poll Status instead.
 	MaxResultTimeoutMS = 30 * 60 * 1000 // 30 minutes

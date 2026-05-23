@@ -20,7 +20,7 @@ route between Gramaton and Claude Code's built-in auto-memory: thin
 behavior rules that should shape every response stay in
 auto-memory; everything else (decisions, facts, research, tasks,
 context) goes to Gramaton. Default: Gramaton. Existing auto-memory
-entries are unchanged; the rule governs future captures only.
+entries are unchanged; the rule governs future saves only.
 
 ## The 30-second mental model
 
@@ -29,7 +29,7 @@ to ask for changes what your agent does:
 
 | You ask                         | Bucket    | What happens                              |
 |----------------------------------|-----------|-------------------------------------------|
-| "remember this"                  | Memory    | Direct capture; ranked retrieval later   |
+| "remember this"                  | Memory    | Direct save; ranked retrieval later   |
 | "add a TODO" / "track this"      | Collection| Structured item; exhaustive listing later|
 | (nothing — just talk)            | Session   | Conversation auto-extracted at checkpoint|
 
@@ -46,21 +46,21 @@ If you want one *now* (before context compaction, before switching
 topics, or just because you want a checkpoint), say so:
 
 - "Run a session prepare and commit."
-- "Wrap up this session — capture what we did."
+- "Wrap up this session — save what we did."
 - "Do a session checkpoint before we move on."
 
 The agent runs `gramaton_session_prepare` then
-`gramaton_session_commit` and the conversation so far gets extracted
+`gramaton_session_save` and the conversation so far gets extracted
 into Session segments and Memory records.
 
 ## Capturing knowledge
 
 ### When to ask explicitly
 
-Ask the agent to capture when:
+Ask the agent to save when:
 
 - **You make a decision you'll want to recall.** "We're going with
-  per-tenant rate limits keyed by API token, not IP." → "Capture that
+  per-tenant rate limits keyed by API token, not IP." → "Save that
   as a decision."
 - **You learn a non-obvious fact about the system.** "The retry policy
   in the payments service uses jittered exponential backoff with a
@@ -71,11 +71,11 @@ Ask the agent to capture when:
 
 Ask via natural language. Examples:
 
-- "Capture this: the payment retry budget is 5 attempts over 90 seconds."
+- "Save this: the payment retry budget is 5 attempts over 90 seconds."
 - "Save the gist of what we just figured out about cache invalidation."
 - "Remember that the rate-limit threshold is per-org, not per-user."
 
-### What NOT to capture
+### What NOT to save
 
 - Trivial chat. "Hi", "thanks", small talk.
 - Questions without answers.
@@ -88,7 +88,7 @@ Ask via natural language. Examples:
 ### Don't pre-summarize
 
 If you find yourself writing a tight one-liner before asking the agent
-to capture, stop. Hand it the **raw decision** — the actual text, the
+to save, stop. Hand it the **raw decision** — the actual text, the
 actual reasoning. Gramaton's curation pipeline generates the summary,
 keywords, and embeddings. If you summarize first, you lose the
 reasoning that made the decision useful, and the embedding gets
@@ -96,11 +96,11 @@ generated from a tagline instead of the substance.
 
 Bad:
 
-> "Capture: we picked Postgres."
+> "Save: we picked Postgres."
 
 Good:
 
-> "Capture this: we evaluated Postgres vs MySQL for the new service
+> "Save this: we evaluated Postgres vs MySQL for the new service
 > and went with Postgres because the team's already running three
 > Postgres clusters and the tooling investment is paid down. MySQL
 > would have been ~10% faster on the dominant query but the
@@ -112,15 +112,15 @@ with `keywords: [postgres, mysql, database, decision]`,
 useful `summary_short`. The first one becomes a record that says
 "we picked Postgres" and not much else.
 
-### Sessions handle most captures for you
+### Sessions handle most saves for you
 
-You don't have to manually capture every interesting thing. Your
-agent runs `gramaton_session_prepare` and `gramaton_session_commit`
+You don't have to manually save every interesting thing. Your
+agent runs `gramaton_session_prepare` and `gramaton_session_save`
 at natural checkpoints (decision lands, topic pivots, you say "ship
 it"). The session extracts segments from the conversation, including
 the reasoning, and creates Memory records automatically.
 
-Manual captures still matter for:
+Manual saves still matter for:
 
 - Decisions you want to commit *immediately* (don't wait for the
   next checkpoint).
@@ -301,10 +301,10 @@ change, not an inference from conversation. Auto-closing on "looks
 like we finished it" produces false positives that silently lose
 state.
 
-> ### Important: session prepare/commit does NOT close tickets
+> ### Important: session prepare/save does NOT close tickets
 >
 > If you ask Gramaton to do a session checkpoint ("wrap up and
-> capture what we did"), the session captures the **conversation**
+> save what we did"), the session saves the **conversation**
 > (decisions, learnings, context) but does NOT touch your collection
 > tickets. You'll see Memory records about the work, but the
 > tickets stay `status: open` until you explicitly close them.
@@ -334,7 +334,7 @@ sorts after retrieval; the tool itself doesn't truncate.
 **"I asked you to remember it, but it doesn't show up in search."**
 
 Curation classifies and embeds in the background (default: every
-minute). Right after a capture, the record exists but isn't yet
+minute). Right after a save, the record exists but isn't yet
 classified — temporality, knowledge_type, summary_short are
 unset, and the embedding may not be generated. Wait a cycle, then
 search. If it's still missing after ~5 minutes, ask the agent to
@@ -348,7 +348,7 @@ See above — sessions don't close tickets. Close them explicitly.
 
 **"There are duplicates of the same decision."**
 
-Gramaton auto-supersedes when a new capture is very similar (cosine
+Gramaton auto-supersedes when a new save is very similar (cosine
 >= 0.92) to an existing record — the older one gets `valid_until`
 and a `supersedes` edge. If you're seeing duplicates anyway, the
 two phrasings probably embedded too far apart for the threshold.
@@ -375,7 +375,7 @@ plus the record's edges. You don't need to know the tool name.
 
 Memory records have a temporality. `durable` records (most
 decisions) decay slowly over years. If something stale keeps
-surfacing, the right move is usually to capture the *new* state
+surfacing, the right move is usually to save the *new* state
 explicitly — auto-supersession will retire the old one. Don't try
 to "fix" search ranking by tweaking config; the freshness signal
 works.
@@ -391,9 +391,9 @@ record (`gramaton_update`) or resolve it.
 
 ## Verifying things landed
 
-After a capture or commit, you can confirm it stuck:
+After a save or commit, you can confirm it stuck:
 
-- "Search for the decision I just captured." — vector + keyword.
+- "Search for the decision I just saved." — vector + keyword.
 - "Show me the most recent records." — `gramaton_search(sort=created_at)`.
 - "Inspect the record you just created." — by ID.
 - "List all items in the dev backlog." — exhaustive collection.
@@ -401,7 +401,7 @@ After a capture or commit, you can confirm it stuck:
 If a record is *missing* and not stuck:
 
 - Curation may not have run yet — wait, or check status.
-- The capture may have failed silently — ask the agent to retry,
+- The save may have failed silently — ask the agent to retry,
   or check the server log (`~/.gramaton/data/gramaton.log`).
 - The classification may have produced a different
   knowledge_type than you expected — try a broader search.
@@ -436,7 +436,7 @@ record ID; that's enough to triage most issues.
 - **Garbage collection.** GC is off by default; commit history is
   cheap to keep, and you'll want it for the audit trail.
 
-You only think about Gramaton when you have something to capture,
+You only think about Gramaton when you have something to save,
 something to find, or something to track. Everything else is the
 agent's problem.
 

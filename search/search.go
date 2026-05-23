@@ -558,7 +558,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		for _, r := range results {
 			if r.Store == "sessions" {
 				// Find the segment's extracted memory target. Segments
-				// committed via api.SessionCommit cache the target as
+				// committed via api.SessionSave cache the target as
 				// the captured_as property at extraction time, so a
 				// single property read replaces an EdgesFrom walk.
 				// Older segments that pre-date the cache (or were

@@ -745,7 +745,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Sessions cluster: migrated to api package. Shims in
 	// bindings_sessions.go. Covers /v1/sessions,
 	// /v1/sessions/{id}, /v1/sessions/{id}/prepare,
-	// /v1/sessions/{id}/commit, /v1/sessions/{id}/archive.
+	// /v1/sessions/{id}/save, /v1/sessions/{id}/archive.
 	s.registerSessionsRoutes(mux)
 }
 

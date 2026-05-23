@@ -47,7 +47,7 @@ Requests flow downward; dependencies flow inward. Nothing in `core/`, `graph/`, 
 
 The outermost layer. Three transports, one surface underneath.
 
-- **HTTP**: `server/bindings_*.go` register Cobra-style routes via `http.ServeMux`. Each route deserializes a request body, calls an `api.API` method, and serializes the response. No business logic — just wire format translation and an `api.APIError` → HTTP status mapping. The whole mux is wrapped by `securityHeaders`, which sets security headers, captures the response status for the request log, and installs a panic-recover defer at the transport boundary — an unrecovered panic inside any api/ method is logged and turned into a structured `{code:"internal", retryable:false}` 500 envelope rather than a closed connection. `http.ErrAbortHandler` is re-panicked so net/http's intentional-abort semantics survive.
+- **HTTP**: `server/bindings_*.go` register Cobra-style routes via `http.ServeMux`. Each route deserializes a request body, calls an `api.API` method, and serializes the response. No business logic — just wire format translation and an `api.APIError` → HTTP status mapping. The whole mux is wrapped by `securityHeaders`, which sets security headers, saves the response status for the request log, and installs a panic-recover defer at the transport boundary — an unrecovered panic inside any api/ method is logged and turned into a structured `{code:"internal", retryable:false}` 500 envelope rather than a closed connection. `http.ErrAbortHandler` is re-panicked so net/http's intentional-abort semantics survive.
 - **MCP (Streamable HTTP + stdio)**: `server/mcp.go` wires the MCP SDK's server to a `/mcp` route on the same HTTP listener (loopback-only — non-loopback callers get rejected before reaching the handler), and `cli/mcp_cmd.go` exposes an equivalent stdio entry point. `server.registerMCPTools` calls nine cluster registrars (`bindings_records.go`, `bindings_search.go`, `bindings_sessions.go`, `bindings_collections.go`, `bindings_admin.go`, `bindings_history.go`, `bindings_maintenance.go`, `mcp_intake.go`, `mcp_guide.go`), each of which registers MCP tools that call `api.API` methods directly — not through HTTP.
 - **CLI**: `cli/*.go` holds one Cobra command per operation. A CLI command opens a local HTTP client against the server and calls the HTTP route (`cli/httpclient.go`). For MCP-native clients that run Gramaton as a stdio subprocess, `cli/mcp_cmd.go` + `cli/mcp_proxy_*.go` register the same MCP tool set, proxying each call to the HTTP server via the same local client.
 
@@ -55,7 +55,7 @@ The important invariant: all three transports consume the same request/response 
 
 ### 2. The canonical operations surface (`api/`)
 
-`api/` is the single source of truth for what an operation *is*. One file per operation (`api/capture.go`, `api/search.go`, `api/sessions.go`, `api/collections.go`, `api/branches.go`, ...). Each follows the same shape:
+`api/` is the single source of truth for what an operation *is*. One file per operation (`api/save.go`, `api/search.go`, `api/sessions.go`, `api/collections.go`, `api/branches.go`, ...). Each follows the same shape:
 
 ```go
 type XxxRequest  struct { /* json + jsonschema tags */ }
@@ -67,7 +67,7 @@ func (a *API) Xxx(ctx context.Context, req XxxRequest) (XxxResponse, *APIError)
 Locking discipline lives here. Methods call `a.engine.Lock()` / `Unlock()` (or `RLock()` / `RUnlock()`) and do nothing slow inside the lock:
 
 - Validate inputs.
-- Pre-embed content **outside** the lock (`a.preEmbedContent(...)` in `api/capture.go` is the canonical example — embeddings take tens of milliseconds, so the lock stays short).
+- Pre-embed content **outside** the lock (`a.preEmbedContent(...)` in `api/save.go` is the canonical example — embeddings take tens of milliseconds, so the lock stays short).
 - Acquire lock, mutate or read, release.
 - Serialize results.
 
@@ -146,7 +146,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
 | `backup/` | Tar archive backup/restore, export/import. The walker takes a bbolt-native coherent snapshot of `jobs.db` via `View+WriteTo` so the file is always consistent in the tarball. |
-| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_capture_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
+| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_save_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
 | `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop). Exposed as `gramaton hook <event>` subcommands; one-line proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them. `.cmd` on Windows for Kiro, `.sh` everywhere else. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
 | `internal/setup/` | Interactive setup wizard (`gramaton init`) used to register MCP entries and install per-client agent guidance. Templates live in `internal/setup/templates/` as a shared `base.md` plus per-client addenda (`claude_addendum.md`, `kiro_addendum.md`); `templateForClient(clientName)` substitutes the matched addendum at a `<!-- CLIENT_ADDENDUM -->` marker in `base.md`, so adding a future client (codex, cursor, etc.) is dropping in a new addendum file plus one `case` in the switch. `integration/<client>/` snapshots are drift-tested against the canonical via `TestIntegrationSnapshotsMatchCanonical` (refresh with `go test ./internal/setup -update-integration`). |
@@ -190,10 +190,10 @@ The `OpenFiles` body, in order: format-version check, bbolt open, index set cons
 
 ## Data flow examples
 
-### Capture
+### Save
 
 ```
-Client → POST /v1/records → api.Capture
+Client → POST /v1/records → api.Save
   1. Validate request (content length, enums, meta shape)
   2. Pre-embed content_short outside the lock (via a.engine.Embedder())
   3. engine.Lock()
@@ -207,10 +207,10 @@ Client → POST /v1/records → api.Capture
   10. Serialize CaptureResponse (id, warnings, superseded[])
 ```
 
-### Capture batch (sync)
+### Save batch (sync)
 
 ```
-Client → POST /v1/capture/batch (Wait=true) → api.CaptureBatch
+Client → POST /v1/save/batch (Wait=true) → api.SaveBatch
   1. Phase 0: validate envelope (item count cap, byte budget, ClientToken UUID, edge count cap)
   2. ClientToken idempotency: FindByClientToken(token, tenant) — same body returns prior JobID,
      mismatching body rejected with conflict, failed/cancelled prior gets a fresh job linked via SupersedesJobID
@@ -222,10 +222,10 @@ Client → POST /v1/capture/batch (Wait=true) → api.CaptureBatch
   7. JobStore.Update with Result + Errors; mark completed
 ```
 
-### Capture batch (async, multi-chunk)
+### Save batch (async, multi-chunk)
 
 ```
-Client → POST /v1/capture/batch (Wait=false) → api.CaptureBatch
+Client → POST /v1/save/batch (Wait=false) → api.SaveBatch
   1. Common prelude (validate, idempotency, create Job with status=pending)
   2. Spawn goroutine via runCaptureBatchAsync; return JobID + status=pending immediately
 
@@ -244,9 +244,9 @@ In the goroutine (runCaptureBatchAsyncChunked):
   e. Mark completed; populate Job.Result with the full CaptureBatchResponse (items + edges + stats)
 
 Companion endpoints:
-  GET  /v1/capture/batch/{job_id}/status  → live snapshot (read-only, cheap to poll)
-  POST /v1/capture/batch/{job_id}/cancel  → flip Job.Status=cancelled atomically; signal runner ctx
-  GET  /v1/capture/batch/{job_id}/result  → block (poll backoff) until terminal or timeout
+  GET  /v1/save/batch/{job_id}/status  → live snapshot (read-only, cheap to poll)
+  POST /v1/save/batch/{job_id}/cancel  → flip Job.Status=cancelled atomically; signal runner ctx
+  GET  /v1/save/batch/{job_id}/result  → block (poll backoff) until terminal or timeout
   GET  /v1/jobs                            → enumerate jobs (tenant-filtered, paginated)
 ```
 
@@ -284,7 +284,7 @@ For exhaustive retrieval beyond `candidate_cap`, callers route to `gramaton_expo
 ### Session commit
 
 ```
-Client → POST /v1/sessions/{id}/commit → api.SessionCommit
+Client → POST /v1/sessions/{id}/save → api.SessionSave
   1. Verify session has a prior prepare (tracked in a.preparedSessions)
   2. For each segment:
      a. Pre-embed summary_short outside the lock

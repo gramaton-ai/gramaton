@@ -15,15 +15,15 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// CaptureBatchRequest captures up to MaxSyncBatchSize records in a
-// single call. Items follow the same shape as CaptureRequest with an
+// SaveBatchRequest captures up to MaxSyncBatchSize records in a
+// single call. Items follow the same shape as SaveRequest with an
 // optional ClientRef for in-batch identity.
 //
 // Layer 3 honors only the synchronous path; passing Wait=false returns
 // ErrInvalid until Layer 5 wires the async runner. ClientToken +
 // canonicalized RequestHash provide cross-call idempotency.
-type CaptureBatchRequest struct {
-	Items            []CaptureBatchItem `json:"items" jsonschema:"items to capture (1 to MaxSyncBatchSize); each follows the gramaton_capture shape with an optional client_ref"`
+type SaveBatchRequest struct {
+	Items            []SaveBatchItem `json:"items" jsonschema:"items to capture (1 to MaxSyncBatchSize); each follows the gramaton_save shape with an optional client_ref"`
 	Edges            []EdgeSpec         `json:"edges,omitempty" jsonschema:"intra-batch and to-existing-record edges. Capped at 10x item count. Each edge resolves source/target via either an existing record id or an in-batch client_ref."`
 	Wait             *bool              `json:"wait,omitempty" jsonschema:"true (sync, default) returns the full result inline; false (async) returns a job_id to poll. Layer 5 implements async; Layer 3 rejects wait=false."`
 	ClientToken      string             `json:"client_token,omitempty" jsonschema:"UUID. With identical request body returns the prior JobID idempotently; with a different body the same token is rejected."`
@@ -72,12 +72,12 @@ type EdgeFailure struct {
 	Message string `json:"message"`
 }
 
-// CaptureBatchItem is one record in a CaptureBatchRequest. Embeds the
+// SaveBatchItem is one record in a SaveBatchRequest. Embeds the
 // existing single-capture shape to keep field semantics identical and
 // adds a per-item ClientRef the caller can use to wire intra-batch
 // edges (Layer 4).
-type CaptureBatchItem struct {
-	CaptureRequest
+type SaveBatchItem struct {
+	SaveRequest
 	ClientRef string `json:"client_ref,omitempty" jsonschema:"caller-supplied label unique within the batch (max 128 chars; letters, digits, dot, hyphen, underscore); echoed back in the response and used by Edges in Layer 4."`
 }
 
@@ -97,7 +97,7 @@ type CaptureBatchAdded struct {
 // caller supplied one. Code is a stable machine-readable token;
 // Message is human-readable. Distinct from api.ItemFailure (which
 // uses ItemID for pre-existing record references in
-// SessionCommit/CollectionMigrate).
+// SessionSave/CollectionMigrate).
 type BatchItemFailure struct {
 	Index     int    `json:"index"`
 	ClientRef string `json:"client_ref,omitempty"`
@@ -116,10 +116,10 @@ type CaptureBatchStats struct {
 	EdgesFailed     int `json:"edges_failed,omitempty"`
 }
 
-// CaptureBatchResponse is the canonical output of CaptureBatch. Sync
+// SaveBatchResponse is the canonical output of SaveBatch. Sync
 // mode populates Added/Failed/Stats inline; async mode (Layer 5) fills
 // JobID + Status only and the caller polls.
-type CaptureBatchResponse struct {
+type SaveBatchResponse struct {
 	JobID       string              `json:"job_id"`
 	Status      string              `json:"status"`
 	Added       []CaptureBatchAdded `json:"added,omitempty"`
@@ -130,17 +130,17 @@ type CaptureBatchResponse struct {
 	Warnings    []string            `json:"warnings,omitempty"`
 }
 
-// CaptureBatchDescription is the MCP tool description shared by every
+// SaveBatchDescription is the MCP tool description shared by every
 // transport (MCP server registration and CLI MCP proxy).
-const CaptureBatchDescription = `Store up to 500 knowledge records in a single call. Each item follows the gramaton_capture shape; the batch shares one engine write lock and one embed call, so wall-clock latency is far lower than the sum of per-item gramaton_capture calls.
+const SaveBatchDescription = `Store up to 500 knowledge records in a single call. Each item follows the gramaton_save shape; the batch shares one engine write lock and one embed call, so wall-clock latency is far lower than the sum of per-item gramaton_save calls.
 
-Use this when the caller has already collected a batch (migration, file import, conversation extraction). For a single record use gramaton_capture; for tasks/checklists use gramaton_collection_add_batch.
+Use this when the caller has already collected a batch (migration, file import, conversation extraction). For a single record use gramaton_save; for tasks/checklists use gramaton_collection_add_batch.
 
 client_token + an exact-match request body returns the prior job_id idempotently (safe to retry on transport failure). A different body with the same token is rejected with conflict. skip_supersession=true disables auto-dedup for migration imports.
 
 Per-item failures land in the response's failed[] array (the batch keeps going); the only request-level errors are validation (item count, byte budget) and client_token reuse with a different body.`
 
-// CaptureBatch dispatches to either the synchronous core or the
+// SaveBatch dispatches to either the synchronous core or the
 // async runner based on req.Wait. Both paths share envelope
 // validation, ClientToken idempotency, and Job.Create up front; the
 // per-item commit work runs inline (sync) or in a goroutine (async).
@@ -148,7 +148,7 @@ Per-item failures land in the response's failed[] array (the batch keeps going);
 // L5 single-chunk runner: the entire batch commits in one Save call
 // in the runner goroutine (same shape as sync, just off the request
 // path). L6 introduces multi-chunk + cross-chunk edge fixup.
-func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (CaptureBatchResponse, *APIError) {
+func (a *API) SaveBatch(ctx context.Context, req SaveBatchRequest) (SaveBatchResponse, *APIError) {
 	asyncMode := req.Wait != nil && !*req.Wait
 	cfg := a.engine.Config()
 	itemCap := cfg.Jobs.MaxSyncBatchSize
@@ -166,18 +166,18 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 		byteCap = MaxBatchBytes
 	}
 	if err := validateBatchEnvelope(req, itemCap, byteCap); err != nil {
-		return CaptureBatchResponse{}, ErrInvalid(err.Error())
+		return SaveBatchResponse{}, ErrInvalid(err.Error())
 	}
 
 	store := a.engine.JobStore()
 	if store == nil {
-		return CaptureBatchResponse{}, ErrUnavailable("jobstore unavailable")
+		return SaveBatchResponse{}, ErrUnavailable("jobstore unavailable")
 	}
 
 	canonical, err := canonicalizeRequest(req)
 	if err != nil {
 		a.log.Warn("capture_batch canonicalize failed", "err", err)
-		return CaptureBatchResponse{}, ErrInternal("failed to canonicalize request")
+		return SaveBatchResponse{}, ErrInternal("failed to canonicalize request")
 	}
 	requestHash := hashCanonical(canonical)
 
@@ -192,13 +192,13 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 		prior, err := store.FindByClientToken(req.ClientToken, tenant)
 		if err != nil {
 			a.log.Warn("capture_batch client_token lookup failed", "err", err)
-			return CaptureBatchResponse{}, ErrInternal("failed to look up client_token")
+			return SaveBatchResponse{}, ErrInternal("failed to look up client_token")
 		}
 		if prior != nil {
 			switch prior.Status {
 			case jobs.StatusCompleted, jobs.StatusRunning, jobs.StatusPending:
 				if prior.RequestHash != requestHash {
-					return CaptureBatchResponse{}, ErrConflict("client_token reused with different request body")
+					return SaveBatchResponse{}, ErrConflict("client_token reused with different request body")
 				}
 				return idempotentResponse(prior), nil
 			case jobs.StatusFailed, jobs.StatusCancelled:
@@ -230,7 +230,7 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 	}
 	if err := store.Create(job); err != nil {
 		a.log.Warn("capture_batch job create failed", "err", err)
-		return CaptureBatchResponse{}, ErrInternal("failed to create job")
+		return SaveBatchResponse{}, ErrInternal("failed to create job")
 	}
 
 	if asyncMode {
@@ -245,10 +245,10 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 			if uerr := store.Update(job); uerr != nil {
 				a.log.Warn("capture_batch shutdown job update failed", "job_id", jobID, "err", uerr)
 			}
-			return CaptureBatchResponse{}, ErrUnavailable("server shutting down")
+			return SaveBatchResponse{}, ErrUnavailable("server shutting down")
 		}
 		go a.runCaptureBatchAsync(runnerCtx, jobID, req)
-		return CaptureBatchResponse{
+		return SaveBatchResponse{
 			JobID:  jobID,
 			Status: jobs.StatusPending,
 		}, nil
@@ -262,7 +262,7 @@ func (a *API) CaptureBatch(ctx context.Context, req CaptureBatchRequest) (Captur
 // the JobStore with a usable Status (Pending or Running). Caller is
 // responsible for advancing Pending → Running before invoking this in
 // the async path.
-func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req CaptureBatchRequest, job *jobs.Job) (CaptureBatchResponse, *APIError) {
+func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBatchRequest, job *jobs.Job) (SaveBatchResponse, *APIError) {
 	store := a.engine.JobStore()
 	// Test-only panic-injection seam. The async runner's
 	// recoverAsyncPanic deferred handler observes the panic and marks
@@ -310,7 +310,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 		if !itemValid[i] {
 			continue
 		}
-		itemEmbedText[i] = embedTextForBatch(item.CaptureRequest)
+		itemEmbedText[i] = embedTextForBatch(item.SaveRequest)
 	}
 	a.batchEmbed(ctx, itemValid, itemEmbedText, itemVecs, itemEmbedErrs)
 	embedderModel := ""
@@ -355,7 +355,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 		} else {
 			props["processing_status"] = graph.StringProperty("captured")
 		}
-		setOptionalProps(props, item.CaptureRequest)
+		setOptionalProps(props, item.SaveRequest)
 
 		n := a.engine.Graph().AddNode(props)
 		rollback = append(rollback, rollbackEntry{nodeID: n.ID, props: n.Properties})
@@ -404,7 +404,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 		if item.ClientRef != "" {
 			job.ClientRefToID[item.ClientRef] = n.ID
 		}
-		actions = append(actions, graph.CommitAction{Kind: graph.ActionCapture, RecordID: n.ID})
+		actions = append(actions, graph.CommitAction{Kind: graph.ActionSave, RecordID: n.ID})
 	}
 
 	// Edge resolution + commit. Each edge resolves source/target via
@@ -524,7 +524,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 		if uerr := store.Update(job); uerr != nil {
 			a.log.Error("capture_batch job update on save failure failed", "job_id", jobID, "err", uerr)
 		}
-		return CaptureBatchResponse{}, ErrInternal("failed to save batch")
+		return SaveBatchResponse{}, ErrInternal("failed to save batch")
 	}
 	unlock()
 
@@ -540,7 +540,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req Capture
 	job.Status = jobs.StatusCompleted
 	job.CompletedAt = time.Now().UTC()
 	job.ProcessedCount = len(finalAdded) + len(failures)
-	resp := CaptureBatchResponse{
+	resp := SaveBatchResponse{
 		JobID:       jobID,
 		Status:      jobs.StatusCompleted,
 		Added:       finalAdded,
@@ -706,7 +706,7 @@ func (a *API) resolveEdgeEndpoint(
 // embedTextForBatch derives the embedding text for one batch item,
 // preferring SummaryShort and capping Content at MaxSummaryShort to
 // match Capture's geometry.
-func embedTextForBatch(r CaptureRequest) string {
+func embedTextForBatch(r SaveRequest) string {
 	if r.SummaryShort != "" {
 		return r.SummaryShort
 	}
@@ -717,10 +717,10 @@ func embedTextForBatch(r CaptureRequest) string {
 	return r.Content
 }
 
-// idempotentResponse rebuilds a CaptureBatchResponse from a stored Job
+// idempotentResponse rebuilds a SaveBatchResponse from a stored Job
 // record. Used when ClientToken matches a prior call.
-func idempotentResponse(j *jobs.Job) CaptureBatchResponse {
-	resp := CaptureBatchResponse{
+func idempotentResponse(j *jobs.Job) SaveBatchResponse {
+	resp := SaveBatchResponse{
 		JobID:  j.ID,
 		Status: j.Status,
 	}
@@ -759,7 +759,7 @@ func errorsFromFailures(in []BatchItemFailure) []jobs.ItemError {
 // byte ceiling (cfg.Jobs.MaxBatchBytes, falling back to the
 // MaxBatchBytes constant). Per-item checks live in validateBatchItem;
 // per-edge checks live in resolveEdge.
-func validateBatchEnvelope(req CaptureBatchRequest, itemCap int, byteCap int64) error {
+func validateBatchEnvelope(req SaveBatchRequest, itemCap int, byteCap int64) error {
 	if len(req.Items) == 0 {
 		return errors.New("items must not be empty")
 	}
@@ -787,7 +787,7 @@ func validateBatchEnvelope(req CaptureBatchRequest, itemCap int, byteCap int64) 
 // validateBatchItem runs the same field-level validation as Capture
 // plus the additional batch-only constraints (ClientRef shape,
 // reserved meta-key namespace).
-func validateBatchItem(item *CaptureBatchItem) error {
+func validateBatchItem(item *SaveBatchItem) error {
 	if item.Content == "" {
 		return errors.New("content is required")
 	}
@@ -802,7 +802,7 @@ func validateBatchItem(item *CaptureBatchItem) error {
 	if err := validateMeta(item.Meta); err != nil {
 		return err
 	}
-	if err := validateCaptureRequest(&item.CaptureRequest); err != nil {
+	if err := validateSaveRequest(&item.SaveRequest); err != nil {
 		return err
 	}
 	return nil

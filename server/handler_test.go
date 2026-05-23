@@ -376,7 +376,7 @@ func TestCurationStatusEndpoint(t *testing.T) {
 
 // --- Auto-supersession ---
 
-func TestCaptureAutoSupersession(t *testing.T) {
+func TestSaveAutoSupersession(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	// Create first record with embedding.

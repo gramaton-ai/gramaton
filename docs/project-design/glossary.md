@@ -18,7 +18,7 @@ Never mix both in the same surface. Pick one per context.
 | **Gramaton** | The complete system — service + agent integration kit. |
 | **Gramaton Service** | The Go server binary. Stores knowledge, delegates embedding to an external provider (Ollama/API/Bedrock), serves queries. No LLM dependency. Pure Go, no native dependencies. |
 | **Agent Integration Kit** | Prompt patterns, system prompt templates, subagent prompts, and skill definitions that give agents the ability to use Gramaton transparently. |
-| **Context envelope** | Five domain-neutral structured fields the agent packages alongside content at capture time: what is this about, who/what is involved, what prompted this, what should this be findable by, what else relates. Contains implicit knowledge that isn't in the content itself. What makes records findable by context, not just by content. |
+| **Context envelope** | Five domain-neutral structured fields the agent packages alongside content at save time: what is this about, who/what is involved, what prompted this, what should this be findable by, what else relates. Contains implicit knowledge that isn't in the content itself. What makes records findable by context, not just by content. |
 | **Retrieval funnel** | The enforced query pattern: cheap/broad tools first, expensive/deep tools require IDs from narrower tools. Enforced by API shape, not prompt instructions. |
 | **Store manifest** | Lightweight summary of what the knowledge store contains (domains, projects, counts, temporal range, strengths/gaps). Injected into agent system prompt so the agent knows what the store covers. |
 
@@ -69,14 +69,14 @@ Never mix both in the same surface. Pick one per context.
 | **activation_boost** | Float64 property on a node. Accumulated indirect activation from neighbor access. Decays over time independently. Part of the scoring model. |
 | **effective_score** | Computed at query time. Weighted combination of vector similarity, freshness, ACT-R activation, and confidence. Importance acts as a floor. Never stored. |
 
-## Capture & Processing
+## Save & Processing
 
 | Term | Definition |
 |------|-----------|
-| **Transparent capture** | The agent decides autonomously to store knowledge, spawning a subagent without interrupting the user's conversation. |
+| **Transparent save** | The agent decides autonomously to store knowledge, spawning a subagent without interrupting the user's conversation. |
 | **Transparent retrieval** | The agent searches Gramaton as part of normal reasoning without the user explicitly asking. |
-| **Subagent** | A separate agent context spawned by the main agent to handle a delegated task. Originally part of the pre-session capture pattern (classification + storage in a side context); currently more commonly used for other delegated work (code-review, research spanning large file sets). The session prepare/commit flow replaces most capture-time subagent usage. |
-| **Processing status** | `captured` (raw, unclassified), `pending` (queued for enrichment), `processed` (fully classified). |
+| **Subagent** | A separate agent context spawned by the main agent to handle a delegated task. Originally part of the pre-session save pattern (classification + storage in a side context); currently more commonly used for other delegated work (code-review, research spanning large file sets). The session prepare/save flow replaces most save-time subagent usage. |
+| **Processing status** | `saved` (raw, unclassified), `pending` (queued for enrichment), `processed` (fully classified). |
 | **Chunking** | Splitting long content into overlapping fragments for embedding. Each chunk becomes a child node. |
 
 ## Architecture
@@ -101,14 +101,14 @@ Never mix both in the same surface. Pick one per context.
 | **Knowledge diffing** | Querying what changed between two points in the graph's history, optionally scoped to a topic. Answers "what evolved" not just "what exists." |
 | **Speculative branching** | Creating a branch to explore a design option or hypothesis without polluting the main store. Merge if adopted, discard if rejected. Maps to hippocampal working memory in neuroscience. |
 | **Audit trail** | The commit history of a specific record — when it was created, how it changed, why confidence was adjusted, what contradicted it. Enables provenance-aware reasoning by agents. |
-| **Rollback** | Atomic revert of any commit. Undoes a batch of captures or a bad curation run cleanly. |
+| **Rollback** | Atomic revert of any commit. Undoes a batch of saves or a bad curation run cleanly. |
 
 ## Neuroscience-Inspired
 
 | Term | Definition |
 |------|-----------|
 | **Engram** | The physical trace of a memory in the brain. Gramaton's spiritual ancestor. |
-| **Dual-store model** | Fast capture + slow integration. Maps to: immediate storage with embeddings (fast) + deferred LLM classification (slow). |
+| **Dual-store model** | Fast save + slow integration. Maps to: immediate storage with embeddings (fast) + deferred LLM classification (slow). |
 | **Default mode network** | Brain network active during rest that consolidates memory. Maps to Gramaton's curation — background maintenance during idle time. |
 | **Principled forgetting** | Not all forgetting is bad. Low-value records are intentionally deprioritized to keep retrieval efficient. |
 
@@ -117,8 +117,8 @@ Never mix both in the same surface. Pick one per context.
 | Term | Definition |
 |------|-----------|
 | **Session** | A conversation thread bound to a client by `client_session_id`. Sessions hold committed segments and optionally an archived transcript. Identified by `session_id` (ULID). Created lazily on `gramaton_session_start`. |
-| **Session segment** | A single extracted unit of knowledge from a conversation, committed via `gramaton_session_commit`. BM25-indexed and reachable by session-scoped queries. Each segment can also create a linked Memory record. |
-| **Memory record** | A knowledge record in the Memory store — vector-embedded, full lifecycle (classification, supersession, decay). Can be created directly via `gramaton_capture` / `gramaton_intake` / `gramaton ingest`, or as a by-product of a session commit with `promote_to_memory: true`. |
+| **Session segment** | A single extracted unit of knowledge from a conversation, committed via `gramaton_session_save`. BM25-indexed and reachable by session-scoped queries. Each segment can also create a linked Memory record. |
+| **Memory record** | A knowledge record in the Memory store — vector-embedded, full lifecycle (classification, supersession, decay). Can be created directly via `gramaton_save` / `gramaton_intake` / `gramaton ingest`, or as a by-product of a session commit with `promote_to_memory: true`. |
 | **`promote_to_memory`** | Boolean flag on each session segment. `true` (default) creates a linked Memory record alongside the Session segment; `false` keeps the segment Session-only so exploration and dead ends remain findable without competing in Memory's vector space. |
 | **`extracted_as` edge** | Edge connecting a Session segment to its linked Memory record, created when a segment is committed with `promote_to_memory: true`. |
 | **Session archive** | A compressed on-disk copy of a session's raw transcript, optionally created via `gramaton session archive` (or the shipped `hooks/claude-code/pre-compact.sh`). Path is recorded on the session node as `archive_path`; the archive is not indexed for search. |

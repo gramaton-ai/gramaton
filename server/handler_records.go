@@ -10,7 +10,7 @@ import (
 
 // --- Request types ---
 
-type captureRequest struct {
+type saveRequest struct {
 	Content           string         `json:"content"`
 	Temporality       string         `json:"temporality,omitempty"`
 	Confidence        *float64       `json:"confidence,omitempty"`
@@ -47,7 +47,7 @@ type preEmbeddedVectors struct {
 // preEmbedContent generates embeddings before acquiring the lock.
 // Threads ctx so client cancellation aborts the embedder call instead
 // of waiting it out.
-func (s *Server) preEmbedContent(ctx context.Context, req *captureRequest) *preEmbeddedVectors {
+func (s *Server) preEmbedContent(ctx context.Context, req *saveRequest) *preEmbeddedVectors {
 	if s.engine.Embedder() == nil {
 		return nil
 	}
@@ -160,7 +160,7 @@ func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error 
 
 // --- Helpers ---
 
-func validateCaptureRequest(req *captureRequest) error {
+func validateSaveRequest(req *saveRequest) error {
 	if err := validateFloat64Range("confidence", req.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func validateCaptureRequest(req *captureRequest) error {
 	return nil
 }
 
-func setOptionalProps(props graph.Properties, req *captureRequest) {
+func setOptionalProps(props graph.Properties, req *saveRequest) {
 	if req.Temporality != "" {
 		props["temporality"] = graph.StringProperty(req.Temporality)
 	}

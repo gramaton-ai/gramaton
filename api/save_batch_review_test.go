@@ -120,18 +120,18 @@ func (e *dedupEmbedder) ContextWindow() int { return 512 }
 
 // --- Deterministic supersession ---
 
-// TestCaptureBatchSupersessionDeterministic seeds an existing record
+// TestSaveBatchSupersessionDeterministic seeds an existing record
 // then captures identical content. With the dedup embedder the
 // vectors collide deterministically and the supersession path runs.
-// Replaces the L3 TestCaptureBatchSupersession which was vacuously
+// Replaces the L3 TestSaveBatchSupersession which was vacuously
 // gated on `if len(Superseded) > 0`.
-func TestCaptureBatchSupersessionDeterministic(t *testing.T) {
+func TestSaveBatchSupersessionDeterministic(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	const text = "the deterministic supersession seed phrase"
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems(text),
 	})
 	if apiErr != nil {
@@ -139,7 +139,7 @@ func TestCaptureBatchSupersessionDeterministic(t *testing.T) {
 	}
 	seedID := resp.Added[0].ID
 
-	resp2, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems(text),
 	})
 	if apiErr != nil {
@@ -168,19 +168,19 @@ func TestCaptureBatchSupersessionDeterministic(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchInternalSupersession: items A and B in the same
+// TestSaveBatchInternalSupersession: items A and B in the same
 // batch with identical content. B supersedes A; a supersedes edge
 // from B to A exists; A has valid_until set.
-func TestCaptureBatchInternalSupersession(t *testing.T) {
+func TestSaveBatchInternalSupersession(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("identical batch phrase", "identical batch phrase"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 2 {
 		t.Fatalf("expected 2 added, got %d", len(resp.Added))
@@ -214,11 +214,11 @@ func TestCaptureBatchInternalSupersession(t *testing.T) {
 
 // --- Async runner panic recovery ---
 
-// TestCaptureBatchAsyncRunnerPanicRecovery: inject a panic via the
+// TestSaveBatchAsyncRunnerPanicRecovery: inject a panic via the
 // new FaultPhasePanic seam. The runner's defer-recover catches it
 // and persists Job.Status=failed with FailureReason starting
 // "panicked:".
-func TestCaptureBatchAsyncRunnerPanicRecovery(t *testing.T) {
+func TestSaveBatchAsyncRunnerPanicRecovery(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -228,12 +228,12 @@ func TestCaptureBatchAsyncRunnerPanicRecovery(t *testing.T) {
 	defer a.SetFaultInjector(nil)
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	j := pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
 	if j.Status != jobs.StatusFailed {
@@ -246,7 +246,7 @@ func TestCaptureBatchAsyncRunnerPanicRecovery(t *testing.T) {
 	// And subsequent jobs must work normally — the panic mustn't
 	// have left the API in a degraded state.
 	a.SetFaultInjector(nil)
-	resp2, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("y"),
 	})
@@ -265,13 +265,13 @@ func startsWith(s, prefix string) bool {
 
 // --- Deterministic cancel-vs-runner via blockingInjector ---
 
-// TestCaptureBatchAsyncCancelDuringRun pins cancel-during-runner
+// TestSaveBatchAsyncCancelDuringRun pins cancel-during-runner
 // by blocking the runner inside FaultPhaseChunkSave (which fires
 // inside the engine write lock immediately before Save). The cancel
 // endpoint flips status; we release the runner; the runner observes
 // the Save error path. With the dedup-friendly seed missing this
 // ends with cancelled status and zero records committed.
-func TestCaptureBatchAsyncCancelDuringRun(t *testing.T) {
+func TestSaveBatchAsyncCancelDuringRun(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -281,12 +281,12 @@ func TestCaptureBatchAsyncCancelDuringRun(t *testing.T) {
 	defer a.SetFaultInjector(nil)
 
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("a", "b"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	inj.waitEntered(t, FaultPhaseChunkSave, 2*time.Second)
 
@@ -294,7 +294,7 @@ func TestCaptureBatchAsyncCancelDuringRun(t *testing.T) {
 	// blocked on the chunk_save phase. Cancel via the api flips
 	// the Job's persisted status without interrupting the lock-held
 	// runner.
-	c, apiErr := a.CaptureBatchCancel(context.Background(), CaptureBatchCancelRequest{JobID: resp.JobID})
+	c, apiErr := a.SaveBatchCancel(context.Background(), SaveBatchCancelRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Cancel: %v", apiErr)
 	}
@@ -320,11 +320,11 @@ func TestCaptureBatchAsyncCancelDuringRun(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResultTimeoutDeterministic: blocks the runner via
-// the chunk_save fault and asserts CaptureBatchResult returns the
+// TestSaveBatchResultTimeoutDeterministic: blocks the runner via
+// the chunk_save fault and asserts SaveBatchResult returns the
 // "timeout" error code with a snapshot. Replaces the race-tolerant
-// L5 TestCaptureBatchResultTimeout.
-func TestCaptureBatchResultTimeoutDeterministic(t *testing.T) {
+// L5 TestSaveBatchResultTimeout.
+func TestSaveBatchResultTimeoutDeterministic(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() {
 		// Release the runner before shutdown so it can exit.
@@ -337,13 +337,13 @@ func TestCaptureBatchResultTimeoutDeterministic(t *testing.T) {
 	defer a.SetFaultInjector(nil)
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
 	inj.waitEntered(t, FaultPhaseChunkSave, 2*time.Second)
 
-	full, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	full, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     resp.JobID,
 		TimeoutMS: 50,
 	})
@@ -365,11 +365,11 @@ func TestCaptureBatchResultTimeoutDeterministic(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResultTimeoutCap: TimeoutMS over 30 minutes is
+// TestSaveBatchResultTimeoutCap: TimeoutMS over 30 minutes is
 // rejected with input_error.
-func TestCaptureBatchResultTimeoutCap(t *testing.T) {
+func TestSaveBatchResultTimeoutCap(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	_, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     "01HQQQQQQQQQQQQQQQQQQQQQQQ",
 		TimeoutMS: MaxResultTimeoutMS + 1,
 	})
@@ -378,10 +378,10 @@ func TestCaptureBatchResultTimeoutCap(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResultTimeoutNegative: negative TimeoutMS rejected.
-func TestCaptureBatchResultTimeoutNegative(t *testing.T) {
+// TestSaveBatchResultTimeoutNegative: negative TimeoutMS rejected.
+func TestSaveBatchResultTimeoutNegative(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatchResult(context.Background(), CaptureBatchResultRequest{
+	_, apiErr := a.SaveBatchResult(context.Background(), SaveBatchResultRequest{
 		JobID:     "01HQQQQQQQQQQQQQQQQQQQQQQQ",
 		TimeoutMS: -1,
 	})
@@ -392,10 +392,10 @@ func TestCaptureBatchResultTimeoutNegative(t *testing.T) {
 
 // --- Concurrent status readers ---
 
-// TestCaptureBatchAsyncConcurrentStatusReaders: 3 goroutines polling
-// CaptureBatchStatus while the runner is blocked. None see a torn or
+// TestSaveBatchAsyncConcurrentStatusReaders: 3 goroutines polling
+// SaveBatchStatus while the runner is blocked. None see a torn or
 // corrupt snapshot; status field is consistent across reads.
-func TestCaptureBatchAsyncConcurrentStatusReaders(t *testing.T) {
+func TestSaveBatchAsyncConcurrentStatusReaders(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -405,7 +405,7 @@ func TestCaptureBatchAsyncConcurrentStatusReaders(t *testing.T) {
 	defer a.SetFaultInjector(nil)
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("a", "b", "c"),
 	})
@@ -425,7 +425,7 @@ func TestCaptureBatchAsyncConcurrentStatusReaders(t *testing.T) {
 					return
 				default:
 				}
-				st, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+				st, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 				if apiErr != nil {
 					errCh <- fmt.Errorf("status: %v", apiErr)
 					return
@@ -456,10 +456,10 @@ func TestCaptureBatchAsyncConcurrentStatusReaders(t *testing.T) {
 	pollUntilTerminal(t, a, resp.JobID, 5*time.Second)
 }
 
-// TestCaptureBatchAsyncStatusBeforeFirstChunk: submit + immediate
+// TestSaveBatchAsyncStatusBeforeFirstChunk: submit + immediate
 // status. processed_count=0 and status is pending or running. The
 // status-during-init path doesn't race the runner's first read.
-func TestCaptureBatchAsyncStatusBeforeFirstChunk(t *testing.T) {
+func TestSaveBatchAsyncStatusBeforeFirstChunk(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -469,11 +469,11 @@ func TestCaptureBatchAsyncStatusBeforeFirstChunk(t *testing.T) {
 	defer a.SetFaultInjector(nil)
 
 	f := false
-	resp, _ := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("a", "b"),
 	})
-	st, apiErr := a.CaptureBatchStatus(context.Background(), CaptureBatchStatusRequest{JobID: resp.JobID})
+	st, apiErr := a.SaveBatchStatus(context.Background(), SaveBatchStatusRequest{JobID: resp.JobID})
 	if apiErr != nil {
 		t.Fatalf("Status: %v", apiErr)
 	}
@@ -493,36 +493,36 @@ func TestCaptureBatchAsyncStatusBeforeFirstChunk(t *testing.T) {
 
 // --- Multi-tenancy ---
 
-// TestCaptureBatchTenantOwnership: a job created under tenant "A"
+// TestSaveBatchTenantOwnership: a job created under tenant "A"
 // is not visible to a caller with tenant "B" via Status, Cancel,
 // Result, or JobsList.
-func TestCaptureBatchTenantOwnership(t *testing.T) {
+func TestSaveBatchTenantOwnership(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	ctxA := WithTenant(context.Background(), "tenant-a")
 	ctxB := WithTenant(context.Background(), "tenant-b")
 
-	resp, apiErr := a.CaptureBatch(ctxA, CaptureBatchRequest{Items: mustItems("a")})
+	resp, apiErr := a.SaveBatch(ctxA, SaveBatchRequest{Items: mustItems("a")})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch[A]: %v", apiErr)
+		t.Fatalf("SaveBatch[A]: %v", apiErr)
 	}
 
 	// B can't read A's job state.
-	if _, apiErr := a.CaptureBatchStatus(ctxB, CaptureBatchStatusRequest{JobID: resp.JobID}); apiErr == nil || apiErr.Code != "not_found" {
+	if _, apiErr := a.SaveBatchStatus(ctxB, SaveBatchStatusRequest{JobID: resp.JobID}); apiErr == nil || apiErr.Code != "not_found" {
 		t.Errorf("Status[B->A]: expected not_found, got %v", apiErr)
 	}
 	// B can't cancel A's job.
-	if _, apiErr := a.CaptureBatchCancel(ctxB, CaptureBatchCancelRequest{JobID: resp.JobID}); apiErr == nil || apiErr.Code != "not_found" {
+	if _, apiErr := a.SaveBatchCancel(ctxB, SaveBatchCancelRequest{JobID: resp.JobID}); apiErr == nil || apiErr.Code != "not_found" {
 		t.Errorf("Cancel[B->A]: expected not_found, got %v", apiErr)
 	}
 	// B can't fetch A's result.
-	if _, apiErr := a.CaptureBatchResult(ctxB, CaptureBatchResultRequest{JobID: resp.JobID, TimeoutMS: 100}); apiErr == nil || apiErr.Code != "not_found" {
+	if _, apiErr := a.SaveBatchResult(ctxB, SaveBatchResultRequest{JobID: resp.JobID, TimeoutMS: 100}); apiErr == nil || apiErr.Code != "not_found" {
 		t.Errorf("Result[B->A]: expected not_found, got %v", apiErr)
 	}
 
 	// A's view sees its own job.
-	if _, apiErr := a.CaptureBatchStatus(ctxA, CaptureBatchStatusRequest{JobID: resp.JobID}); apiErr != nil {
+	if _, apiErr := a.SaveBatchStatus(ctxA, SaveBatchStatusRequest{JobID: resp.JobID}); apiErr != nil {
 		t.Errorf("Status[A->A]: got %v", apiErr)
 	}
 
@@ -545,9 +545,9 @@ func TestCaptureBatchTenantOwnership(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientTokenPerTenant: same ClientToken across
+// TestSaveBatchClientTokenPerTenant: same ClientToken across
 // tenants doesn't collide. Each tenant's retry returns its own JobID.
-func TestCaptureBatchClientTokenPerTenant(t *testing.T) {
+func TestSaveBatchClientTokenPerTenant(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
@@ -555,14 +555,14 @@ func TestCaptureBatchClientTokenPerTenant(t *testing.T) {
 	ctxA := WithTenant(context.Background(), "tenant-a")
 	ctxB := WithTenant(context.Background(), "tenant-b")
 
-	respA, _ := a.CaptureBatch(ctxA, CaptureBatchRequest{ClientToken: tok, Items: mustItems("a")})
-	respB, _ := a.CaptureBatch(ctxB, CaptureBatchRequest{ClientToken: tok, Items: mustItems("b")})
+	respA, _ := a.SaveBatch(ctxA, SaveBatchRequest{ClientToken: tok, Items: mustItems("a")})
+	respB, _ := a.SaveBatch(ctxB, SaveBatchRequest{ClientToken: tok, Items: mustItems("b")})
 	if respA.JobID == respB.JobID {
 		t.Errorf("tenant-A and tenant-B got same JobID with same token: %s", respA.JobID)
 	}
 
 	// Retrying tenant A's exact request returns A's JobID idempotently.
-	respARetry, _ := a.CaptureBatch(ctxA, CaptureBatchRequest{ClientToken: tok, Items: mustItems("a")})
+	respARetry, _ := a.SaveBatch(ctxA, SaveBatchRequest{ClientToken: tok, Items: mustItems("a")})
 	if respARetry.JobID != respA.JobID {
 		t.Errorf("idempotency: retry returned %s, want %s", respARetry.JobID, respA.JobID)
 	}
@@ -576,11 +576,11 @@ func TestJobsListNoClientTokenInSummary(t *testing.T) {
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	tok := "11111111-1111-1111-1111-111111111111"
-	if _, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	if _, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("a"),
 	}); apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 
 	resp, _ := a.JobsList(context.Background(), JobsListRequest{})
@@ -647,7 +647,7 @@ func TestJobsListOffsetCap(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncLargerThanSyncCap: an async request with more
+// TestSaveBatchAsyncLargerThanSyncCap: an async request with more
 // items than the configured sync cap used to be rejected by the sync
 // envelope cap. The fix reorders cap selection so async-mode validation
 // uses MaxAsyncBatchSize, not MaxSyncBatchSize.
@@ -658,7 +658,7 @@ func TestJobsListOffsetCap(t *testing.T) {
 // being verified ("items > sync cap accepted via async") is independent
 // of the cap's absolute value, so we now configure cfg.Jobs.MaxSyncBatchSize
 // = 10 and submit 11 items. Same proof, ~99% faster on every platform.
-func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
+func TestSaveBatchAsyncLargerThanSyncCap(t *testing.T) {
 	emb := &stubBatchEmbedder{dim: 4}
 	a, _ := setupReembedAPI(t, core.WithEmbedder(emb), func(cfg *config.Config) {
 		cfg.Jobs.MaxSyncBatchSize = 10
@@ -667,11 +667,11 @@ func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
 
 	f := false
 	const itemCount = 11 // > syncCap=10, must go async
-	items := make([]CaptureBatchItem, itemCount)
+	items := make([]SaveBatchItem, itemCount)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: fmt.Sprintf("item-%d", i)}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("item-%d", i)}}
 	}
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
 		SkipSupersession: true,
@@ -687,14 +687,14 @@ func TestCaptureBatchAsyncLargerThanSyncCap(t *testing.T) {
 // don't get rejected for body mismatch.
 func TestCanonicalEdgeWeightDefaultNormalized(t *testing.T) {
 	half := 0.5
-	a, _ := canonicalizeRequest(CaptureBatchRequest{
-		Items: []CaptureBatchItem{{ClientRef: "r0", CaptureRequest: CaptureRequest{Content: "x"}}},
+	a, _ := canonicalizeRequest(SaveBatchRequest{
+		Items: []SaveBatchItem{{ClientRef: "r0", SaveRequest: SaveRequest{Content: "x"}}},
 		Edges: []EdgeSpec{
 			{SourceClientRef: "r0", TargetClientRef: "r0", Type: "rel"}, // Weight nil
 		},
 	})
-	b, _ := canonicalizeRequest(CaptureBatchRequest{
-		Items: []CaptureBatchItem{{ClientRef: "r0", CaptureRequest: CaptureRequest{Content: "x"}}},
+	b, _ := canonicalizeRequest(SaveBatchRequest{
+		Items: []SaveBatchItem{{ClientRef: "r0", SaveRequest: SaveRequest{Content: "x"}}},
 		Edges: []EdgeSpec{
 			{SourceClientRef: "r0", TargetClientRef: "r0", Type: "rel", Weight: &half},
 		},
@@ -717,9 +717,9 @@ func TestReservedNamespaceCaseBypass(t *testing.T) {
 		"foo._GRAMATON.bar",
 	}
 	for _, k := range cases {
-		resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-			Items: []CaptureBatchItem{
-				{CaptureRequest: CaptureRequest{Content: "c", Meta: map[string]any{k: "v"}}},
+		resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+			Items: []SaveBatchItem{
+				{SaveRequest: SaveRequest{Content: "c", Meta: map[string]any{k: "v"}}},
 			},
 		})
 		if apiErr != nil {
@@ -741,7 +741,7 @@ func TestSecIdxRolledBackOnSaveFailure(t *testing.T) {
 		FaultPhaseChunkSave: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("rolled-back"),
 	})
 	if apiErr == nil {
@@ -766,5 +766,5 @@ func TestSecIdxRolledBackOnSaveFailure(t *testing.T) {
 // code. Functional behavior is exercised by api/-level tests.
 
 // (HTTP wiring tests live in server/handler_capture_batch_test.go --
-// see that file for the new /v1/capture/batch/{job_id}/* and
+// see that file for the new /v1/save/batch/{job_id}/* and
 // /v1/jobs route tests.)

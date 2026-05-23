@@ -8,7 +8,7 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
-// Tests here cover the server-level serviceCapture wrapper that
+// Tests here cover the server-level serviceSave wrapper that
 // handler_intake.go still depends on. Coverage of the other record
 // operations (Inspect/Update/Classify/Resolve/Link/Unlink/Delete) moved
 // to api/records_test.go when the dead server-level services were
@@ -17,12 +17,12 @@ import (
 func TestServiceCaptureBasic(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	result, svcErr := srv.serviceCapture(context.Background(), &captureRequest{
+	result, svcErr := srv.serviceSave(context.Background(), &saveRequest{
 		Content:     "test knowledge record",
 		Temporality: "durable",
 	})
 	if svcErr != nil {
-		t.Fatalf("serviceCapture: %v", svcErr)
+		t.Fatalf("serviceSave: %v", svcErr)
 	}
 
 	id, ok := result["id"].(string)
@@ -34,7 +34,7 @@ func TestServiceCaptureBasic(t *testing.T) {
 func TestServiceCaptureValidation(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	_, svcErr := srv.serviceCapture(context.Background(), &captureRequest{})
+	_, svcErr := srv.serviceSave(context.Background(), &saveRequest{})
 	if svcErr == nil {
 		t.Fatal("expected error for empty content")
 	}
@@ -107,7 +107,7 @@ func TestServiceCaptureSupersedeSetResolution(t *testing.T) {
 func TestServiceCaptureWithMeta(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-	result, svcErr := srv.serviceCapture(context.Background(), &captureRequest{
+	result, svcErr := srv.serviceSave(context.Background(), &saveRequest{
 		Content:     "PLAT-142: Add rate limiting to API gateway",
 		Temporality: "temporal",
 		Meta: map[string]any{
@@ -119,7 +119,7 @@ func TestServiceCaptureWithMeta(t *testing.T) {
 		},
 	})
 	if svcErr != nil {
-		t.Fatalf("serviceCapture with meta: %v", svcErr)
+		t.Fatalf("serviceSave with meta: %v", svcErr)
 	}
 
 	id := result["id"].(string)
@@ -148,7 +148,7 @@ func TestServiceCaptureWithMeta(t *testing.T) {
 func TestServiceCaptureMetaValidation(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	_, svcErr := srv.serviceCapture(context.Background(), &captureRequest{
+	_, svcErr := srv.serviceSave(context.Background(), &saveRequest{
 		Content: "test",
 		Meta:    map[string]any{"nested": map[string]any{"bad": true}},
 	})
@@ -156,7 +156,7 @@ func TestServiceCaptureMetaValidation(t *testing.T) {
 		t.Fatal("expected error for nested map in meta")
 	}
 
-	_, svcErr = srv.serviceCapture(context.Background(), &captureRequest{
+	_, svcErr = srv.serviceSave(context.Background(), &saveRequest{
 		Content: "test",
 		Meta:    map[string]any{"": "value"},
 	})

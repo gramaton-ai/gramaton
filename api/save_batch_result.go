@@ -9,24 +9,24 @@ import (
 	"github.com/gramaton-ai/gramaton/jobs"
 )
 
-// CaptureBatchResultRequest selects a job by ID with an optional
+// SaveBatchResultRequest selects a job by ID with an optional
 // timeout. TimeoutMS=0 falls back to cfg.Jobs.ResultDefaultTimeout
 // (30 minutes) so a caller doesn't accidentally hang forever on a
 // stuck job.
-type CaptureBatchResultRequest struct {
-	JobID     string `json:"job_id" jsonschema:"the job_id returned by gramaton_capture_batch"`
+type SaveBatchResultRequest struct {
+	JobID     string `json:"job_id" jsonschema:"the job_id returned by gramaton_save_batch"`
 	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"max ms to wait for terminal state; 0 = use cfg.Jobs.ResultDefaultTimeout (30 min); max 30 minutes (1800000 ms)"`
 }
 
-// CaptureBatchResultDescription is the MCP tool description for
-// gramaton_capture_batch_result.
-const CaptureBatchResultDescription = `Block until an async gramaton_capture_batch job reaches a terminal state (completed/failed/cancelled), then return the full response payload (added/failed/edges/edges_failed/stats).
+// SaveBatchResultDescription is the MCP tool description for
+// gramaton_save_batch_result.
+const SaveBatchResultDescription = `Block until an async gramaton_save_batch job reaches a terminal state (completed/failed/cancelled), then return the full response payload (added/failed/edges/edges_failed/stats).
 
 The call returns immediately if the job is already terminal. It honors the timeout_ms argument (default cfg.Jobs.ResultDefaultTimeout = 30 min); on timeout it returns the current Job snapshot with status=running and an unavailable error code so the caller can retry.
 
-For polling progress without blocking use gramaton_capture_batch_status.`
+For polling progress without blocking use gramaton_save_batch_status.`
 
-// CaptureBatchResult blocks (with poll backoff) until the Job reaches
+// SaveBatchResult blocks (with poll backoff) until the Job reaches
 // a terminal state or the timeout elapses. On timeout returns the
 // current Job snapshot and a "timeout" APIError so the caller knows
 // the wait didn't complete.
@@ -35,19 +35,19 @@ For polling progress without blocking use gramaton_capture_batch_status.`
 // passes a larger value. Holding a connection for longer is a
 // footgun; the caller should poll Status instead. Per-tenant Job
 // access is enforced inside the poll loop.
-func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequest) (CaptureBatchResponse, *APIError) {
+func (a *API) SaveBatchResult(ctx context.Context, req SaveBatchResultRequest) (SaveBatchResponse, *APIError) {
 	if req.JobID == "" {
-		return CaptureBatchResponse{}, ErrMissing("job_id is required")
+		return SaveBatchResponse{}, ErrMissing("job_id is required")
 	}
 	if req.TimeoutMS < 0 {
-		return CaptureBatchResponse{}, ErrInvalid("timeout_ms must not be negative")
+		return SaveBatchResponse{}, ErrInvalid("timeout_ms must not be negative")
 	}
 	if req.TimeoutMS > MaxResultTimeoutMS {
-		return CaptureBatchResponse{}, ErrInvalid(fmt.Sprintf("timeout_ms exceeds %d (30 min)", MaxResultTimeoutMS))
+		return SaveBatchResponse{}, ErrInvalid(fmt.Sprintf("timeout_ms exceeds %d (30 min)", MaxResultTimeoutMS))
 	}
 	store := a.engine.JobStore()
 	if store == nil {
-		return CaptureBatchResponse{}, ErrUnavailable("jobstore unavailable")
+		return SaveBatchResponse{}, ErrUnavailable("jobstore unavailable")
 	}
 
 	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
@@ -69,13 +69,13 @@ func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequ
 		j, err := store.Get(req.JobID)
 		if err != nil {
 			if err == jobs.ErrNotFound {
-				return CaptureBatchResponse{}, ErrNotFound("job not found")
+				return SaveBatchResponse{}, ErrNotFound("job not found")
 			}
 			a.log.Warn("capture_batch_result: get failed", "job_id", req.JobID, "err", err)
-			return CaptureBatchResponse{}, ErrInternal("failed to read job")
+			return SaveBatchResponse{}, ErrInternal("failed to read job")
 		}
 		if !tenantOwnsJob(tenant, j.TenantID) {
-			return CaptureBatchResponse{}, ErrNotFound("job not found")
+			return SaveBatchResponse{}, ErrNotFound("job not found")
 		}
 		switch j.Status {
 		case jobs.StatusCompleted, jobs.StatusFailed, jobs.StatusCancelled:
@@ -93,7 +93,7 @@ func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequ
 		}
 		select {
 		case <-ctx.Done():
-			return CaptureBatchResponse{}, ErrUnavailable("context cancelled")
+			return SaveBatchResponse{}, ErrUnavailable("context cancelled")
 		case <-time.After(delay):
 		}
 		if delay < maxDelay {
@@ -106,11 +106,11 @@ func (a *API) CaptureBatchResult(ctx context.Context, req CaptureBatchResultRequ
 }
 
 // responseFromJob projects a stored Job back into a
-// CaptureBatchResponse. Sync-mode jobs persist the full Result
+// SaveBatchResponse. Sync-mode jobs persist the full Result
 // payload; async jobs that haven't finished yet rebuild a
 // status-only snapshot.
-func responseFromJob(j *jobs.Job) CaptureBatchResponse {
-	resp := CaptureBatchResponse{
+func responseFromJob(j *jobs.Job) SaveBatchResponse {
+	resp := SaveBatchResponse{
 		JobID:  j.ID,
 		Status: j.Status,
 		Stats: CaptureBatchStats{

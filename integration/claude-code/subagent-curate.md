@@ -58,7 +58,7 @@ After classifying pending records, check for keyword emergence:
 
 2. Create concept nodes for emerged concepts:
    ```
-   gramaton_capture(
+   gramaton_save(
      content="Kafka: A distributed event streaming platform...",
      knowledge_type="conceptual",
      temporality="durable",

@@ -41,7 +41,7 @@ type preEmbeddedVectors struct {
 // embed (no embedder configured, empty content). Errors travel in the
 // returned struct so the caller can still create the node and attach
 // a warning rather than failing the whole capture.
-func (a *API) preEmbedContent(ctx context.Context, r CaptureRequest) *preEmbeddedVectors {
+func (a *API) preEmbedContent(ctx context.Context, r SaveRequest) *preEmbeddedVectors {
 	if a.engine.Embedder() == nil {
 		return nil
 	}
@@ -173,9 +173,9 @@ func metaBM25Text(meta map[string]any) string {
 	return result
 }
 
-// setOptionalProps copies non-empty fields from a CaptureRequest onto
+// setOptionalProps copies non-empty fields from a SaveRequest onto
 // a graph.Properties map. Used at capture time to populate a new node.
-func setOptionalProps(props graph.Properties, r CaptureRequest) {
+func setOptionalProps(props graph.Properties, r SaveRequest) {
 	if r.Temporality != "" {
 		props["temporality"] = graph.StringProperty(r.Temporality)
 	}
@@ -233,7 +233,7 @@ func setOptionalProps(props graph.Properties, r CaptureRequest) {
 	if r.ContextCaptureReason != "" {
 		props["context_capture_reason"] = graph.StringProperty(r.ContextCaptureReason)
 	}
-	// Caller must have passed validateCaptureRequest, which parses all
+	// Caller must have passed validateSaveRequest, which parses all
 	// three date fields up-front, so time.Parse failures here would
 	// indicate a validator/apply drift. We still check err to avoid
 	// writing a zero-value timestamp if that ever regresses.

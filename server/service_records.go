@@ -68,10 +68,10 @@ func metaBM25Text(meta map[string]any) string {
 	return result
 }
 
-// serviceCapture creates a new knowledge record. Handles pre-embedding,
+// serviceSave creates a new knowledge record. Handles pre-embedding,
 // deduplication, supersession, and chunking.
-func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[string]any, *serviceError) {
-	captureStart := time.Now()
+func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]any, *serviceError) {
+	saveStart := time.Now()
 
 	if req.Content == "" {
 		return nil, errMissing("content is required")
@@ -79,7 +79,7 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 	if len(req.Content) > s.engine.Config().Limits.MaxContentLength {
 		return nil, errInvalid("content exceeds maximum length")
 	}
-	if err := validateCaptureRequest(req); err != nil {
+	if err := validateSaveRequest(req); err != nil {
 		return nil, errInvalid(err.Error())
 	}
 	if err := validateMeta(req.Meta); err != nil {
@@ -167,18 +167,18 @@ func (s *Server) serviceCapture(ctx context.Context, req *captureRequest) (map[s
 		}
 	}
 
-	if _, err := s.engine.Save("capture", graph.CommitAction{
-		Kind: graph.ActionCapture, RecordID: n.ID,
+	if _, err := s.engine.Save("save", graph.CommitAction{
+		Kind: graph.ActionSave, RecordID: n.ID,
 	}); err != nil {
 		return nil, errInternal("failed to save")
 	}
 
 	s.log.Info("capture complete",
-		"component", "capture",
+		"component", "save",
 		"node", n.ID,
 		"content_len", len(req.Content),
 		"embed_ms", embedDur.Milliseconds(),
-		"total_ms", time.Since(captureStart).Milliseconds(),
+		"total_ms", time.Since(saveStart).Milliseconds(),
 		"superseded", len(superseded) > 0)
 
 	resp := map[string]any{

@@ -26,7 +26,7 @@ func (s *Server) registerMCPIntakeTools(mcpServer *mcp.Server) {
 		Name: "gramaton_intake",
 		Description: `Deliberate write endpoint for Memory. Provide content and optional context signals. If the server has an LLM, it classifies automatically. Otherwise the record is stored as "captured" and classified later via gramaton_classify or curation.
 
-This tool stores records in Memory (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those. For session-scoped conversation capture, use gramaton_session_prepare/commit.
+This tool stores records in Memory (ranked semantic search). NOT for tasks, TODOs, or checklists -- use gramaton_collection_add for those. For session-scoped conversation capture, use gramaton_session_prepare/save.
 
 You can provide classification metadata (temporality, confidence, etc.) OR provide context signals and let the server classify. Both work. Field roles: content unbounded and self-contained; summary_short ~750 chars is the embedding-ready semantic anchor; keywords are BM25 terms a future agent would type.
 

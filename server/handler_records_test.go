@@ -9,7 +9,7 @@ import (
 )
 
 func TestSetOptionalProps(t *testing.T) {
-	req := &captureRequest{
+	req := &saveRequest{
 		Content:         "Test",
 		Temporality:     "durable",
 		Confidence:      ptrFloat64(0.9),
@@ -44,7 +44,7 @@ func TestSetOptionalProps(t *testing.T) {
 }
 
 func TestSetOptionalPropsEmpty(t *testing.T) {
-	req := &captureRequest{Content: "Only content"}
+	req := &saveRequest{Content: "Only content"}
 	props := graph.Properties{}
 	setOptionalProps(props, req)
 
@@ -58,7 +58,7 @@ func TestSetOptionalPropsEmpty(t *testing.T) {
 }
 
 func TestSetOptionalPropsValidDates(t *testing.T) {
-	req := &captureRequest{
+	req := &saveRequest{
 		Content:    "Dated",
 		ValidFrom:  "2026-01-01T00:00:00Z",
 		ValidUntil: "2026-12-31T00:00:00Z",
@@ -75,7 +75,7 @@ func TestSetOptionalPropsValidDates(t *testing.T) {
 }
 
 func TestSetOptionalPropsAssertedAsOf(t *testing.T) {
-	req := &captureRequest{
+	req := &saveRequest{
 		Content:      "Historical claim",
 		AssertedAsOf: "2025-06-15T10:00:00Z",
 	}
@@ -88,7 +88,7 @@ func TestSetOptionalPropsAssertedAsOf(t *testing.T) {
 }
 
 func TestSetOptionalPropsAssertedAsOfInvalid(t *testing.T) {
-	req := &captureRequest{
+	req := &saveRequest{
 		Content:      "Bad date",
 		AssertedAsOf: "not-a-date",
 	}
@@ -103,19 +103,19 @@ func TestSetOptionalPropsAssertedAsOfInvalid(t *testing.T) {
 func TestValidateCaptureRequest(t *testing.T) {
 	tests := []struct {
 		name    string
-		req     captureRequest
+		req     saveRequest
 		wantErr bool
 	}{
-		{"valid", captureRequest{Content: "test", Temporality: "durable", Confidence: ptrFloat64(0.9)}, false},
-		{"invalid temporality", captureRequest{Content: "test", Temporality: "bad"}, true},
-		{"invalid knowledge_type", captureRequest{Content: "test", KnowledgeType: "bad"}, true},
-		{"invalid epistemic", captureRequest{Content: "test", EpistemicStatus: "bad"}, true},
-		{"confidence too high", captureRequest{Content: "test", Confidence: ptrFloat64(2.0)}, true},
-		{"confidence too low", captureRequest{Content: "test", Confidence: ptrFloat64(-1.0)}, true},
+		{"valid", saveRequest{Content: "test", Temporality: "durable", Confidence: ptrFloat64(0.9)}, false},
+		{"invalid temporality", saveRequest{Content: "test", Temporality: "bad"}, true},
+		{"invalid knowledge_type", saveRequest{Content: "test", KnowledgeType: "bad"}, true},
+		{"invalid epistemic", saveRequest{Content: "test", EpistemicStatus: "bad"}, true},
+		{"confidence too high", saveRequest{Content: "test", Confidence: ptrFloat64(2.0)}, true},
+		{"confidence too low", saveRequest{Content: "test", Confidence: ptrFloat64(-1.0)}, true},
 	}
 
 	for _, tt := range tests {
-		err := validateCaptureRequest(&tt.req)
+		err := validateSaveRequest(&tt.req)
 		if tt.wantErr && err == nil {
 			t.Errorf("%s: expected error", tt.name)
 		}

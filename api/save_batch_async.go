@@ -23,9 +23,9 @@ import (
 //  5. unregisterAsyncRunner so the registry doesn't leak the entry.
 //
 // The goroutine NEVER returns an APIError to a caller; it persists
-// final state on the Job record. Callers poll via CaptureBatchStatus /
-// CaptureBatchResult.
-func (a *API) runCaptureBatchAsync(ctx context.Context, jobID string, req CaptureBatchRequest) {
+// final state on the Job record. Callers poll via SaveBatchStatus /
+// SaveBatchResult.
+func (a *API) runCaptureBatchAsync(ctx context.Context, jobID string, req SaveBatchRequest) {
 	defer a.unregisterAsyncRunner(jobID)
 	defer a.recoverAsyncPanic(jobID)
 
@@ -116,7 +116,7 @@ func (a *API) recoverAsyncPanic(jobID string) {
 // cancelled with a specific reason. Used when ctx.Done() fires before
 // the runner enters its core path.
 //
-// Race guard: if a concurrent CaptureBatchCancel already flipped the
+// Race guard: if a concurrent SaveBatchCancel already flipped the
 // Job to cancelled, exit without touching it -- the cancel handler's
 // CompletedAt and FailureReason should win, not be clobbered.
 func (a *API) finalizeCancelled(jobID, reason string) {
