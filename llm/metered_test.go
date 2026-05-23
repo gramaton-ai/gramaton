@@ -1,9 +1,12 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
@@ -227,6 +230,57 @@ func TestMeteredDelegatesStructuredOutput(t *testing.T) {
 	summary := tracker.Summary()
 	if summary.Session.Calls != 1 {
 		t.Errorf("Session.Calls = %d, want 1", summary.Session.Calls)
+	}
+}
+
+// TestMeteredCapLogsOncePerTransition pins the log-spam polish:
+// when the cap fires, the "llm call refused" warn must log exactly
+// once across many refused calls. A 100-record curation cycle with
+// 4 workers previously emitted ~100 identical lines for one global
+// event, dominating operator log volume. The CAS latch on
+// cappedLogged serialises the first paused-observation across
+// goroutines; subsequent refused calls log nothing until the tracker
+// reports unpaused (cap rolled over).
+func TestMeteredCapLogsOncePerTransition(t *testing.T) {
+	tracker := NewUsageTracker(t.TempDir(), 0, 1, 0) // 1 call/session cap.
+	stub := &stubProvider{response: "ok"}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	m := NewMetered(stub, tracker, logger)
+
+	// First call lands and trips the cap; no cap-warn yet.
+	if _, err := m.Complete(context.Background(), "ping"); err != nil {
+		t.Fatalf("first call: unexpected error %v", err)
+	}
+	if got := strings.Count(buf.String(), "llm call refused"); got != 0 {
+		t.Fatalf("after first (successful) call: cap-reached log count = %d, want 0", got)
+	}
+
+	// Three refused calls -- exactly one warn line, total.
+	for i := 0; i < 3; i++ {
+		if _, err := m.Complete(context.Background(), "ping"); !errors.Is(err, ErrCapped) {
+			t.Fatalf("refused call %d: err = %v, want ErrCapped", i+1, err)
+		}
+	}
+	if got := strings.Count(buf.String(), "llm call refused"); got != 1 {
+		t.Errorf("after 3 refused calls: cap-reached log count = %d, want 1", got)
+	}
+
+	// Unpause + retrip: the latch clears on the unpaused observation,
+	// so the next firing logs again. This is the property that lets
+	// daily-cap rollover at UTC midnight be a visible operator event
+	// instead of silent.
+	tracker.Unpause()
+	if _, err := m.Complete(context.Background(), "ping"); err != nil {
+		t.Fatalf("post-unpause call: unexpected error %v", err)
+	}
+	// Second cap firing should produce a second warn line.
+	if _, err := m.Complete(context.Background(), "ping"); !errors.Is(err, ErrCapped) {
+		t.Fatalf("second cap firing: err = %v, want ErrCapped", err)
+	}
+	if got := strings.Count(buf.String(), "llm call refused"); got != 2 {
+		t.Errorf("after second cap firing: cap-reached log count = %d, want 2", got)
 	}
 }
 

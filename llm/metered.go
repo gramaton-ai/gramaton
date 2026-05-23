@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
@@ -39,6 +40,12 @@ type Metered struct {
 	inner   Provider
 	tracker *UsageTracker
 	logger  *slog.Logger
+	// cappedLogged latches once per cap-firing event so the
+	// "cap reached" warn log fires exactly once per transition,
+	// not once per refused call. Cleared automatically when the
+	// tracker reports unpaused (cap window rolled, or operator
+	// raised the limit) so the next firing logs once again.
+	cappedLogged atomic.Bool
 }
 
 // NewMetered wraps a provider with usage tracking and per-call logging.
@@ -87,19 +94,27 @@ func (m *Metered) CompleteWithModel(ctx context.Context, model, prompt string) (
 // checkCap returns ErrCapped (wrapped with the pause reason) if the
 // tracker reports the caller is over its daily or session cap. A nil
 // tracker means caps are not enforced.
+//
+// Logs once per cap-firing event (CAS latch on cappedLogged) instead
+// of once per refused call: a 100-record cycle with 4 workers would
+// otherwise emit ~100 identical "cap reached" lines for what is a
+// single global event. The latch clears when the tracker reports
+// unpaused so the next firing logs again.
 func (m *Metered) checkCap() error {
 	if m.tracker == nil {
 		return nil
 	}
-	if paused, reason := m.tracker.IsPaused(); paused {
-		if m.logger != nil {
-			m.logger.Warn("llm call refused: cap reached",
-				"component", "llm",
-				"reason", reason)
-		}
-		return fmt.Errorf("%w: %s", ErrCapped, reason)
+	paused, reason := m.tracker.IsPaused()
+	if !paused {
+		m.cappedLogged.Store(false)
+		return nil
 	}
-	return nil
+	if m.logger != nil && m.cappedLogged.CompareAndSwap(false, true) {
+		m.logger.Warn("llm call refused: cap reached",
+			"component", "llm",
+			"reason", reason)
+	}
+	return fmt.Errorf("%w: %s", ErrCapped, reason)
 }
 
 func (m *Metered) ModelID() string { return m.inner.ModelID() }

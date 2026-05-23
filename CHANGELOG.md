@@ -7,6 +7,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cost-cap and context-cancel errors no longer poison curation
+  records.** When `max_calls_per_day` / `max_cost_usd_per_day` /
+  `max_calls_per_session` fired mid-curation-cycle, the resulting
+  `llm.ErrCapped` was treated as a per-record failure: the affected
+  records' `<task>_attempts` counters incremented, and at the
+  configured threshold (default 3) flipped to
+  `processing_status="stuck"`. `context.Canceled` and
+  `context.DeadlineExceeded` (server shutdown, per-task timeout)
+  suffered the same fate. Records were fine; the failure was
+  system-level. Recovery previously required manual
+  `gramaton curation stuck-records-reset` against records that had
+  done nothing wrong. Fix: at each of five LLM-dispatch sites in
+  `curation/` (classify inline, summarize, concept synthesis batch,
+  manifest, contradiction single + batch), detect the deferrable
+  error classes via a new `isDeferrableLLMError` helper before
+  feeding the error into the retry-tracking machinery. On detection,
+  the affected machinery is skipped entirely: the record / pair /
+  manifest cache stays at its pre-cycle state and resumes normally
+  on the next cycle (after cap reset at UTC midnight, or after
+  context recovery). The Anthropic batch API path (`batch.go`) is
+  not affected -- its submission bypasses the `Metered` wrapper, and
+  per-sub-request outcomes from the Anthropic batch API are genuine
+  per-record signals. Provider-side transient errors (HTTP 5xx,
+  rate-limit responses) are not yet in the deferrable set; they
+  arrive as opaque strings today, and typed detection is tracked as
+  a separate follow-up. Bundled polish: `llm.Metered.checkCap` now
+  logs the "cap reached" warn exactly once per cap-firing event
+  (CAS latch cleared on the next paused=false observation) instead
+  of once per refused call; a 100-record curation cycle with 4
+  workers previously emitted ~100 identical lines for one global
+  event. Closes #71.
+
 ### Changed
 
 - **`gramaton_session_prepare` and `gramaton_session_save` gain

@@ -289,6 +289,17 @@ func RunBatchClassification(ctx context.Context, e *core.Engine, llmProv llm.Pro
 	// at threshold, the same as if it had failed in the inline cycle.
 	// The selection at line 44 already excludes stuck records, so we
 	// don't need a pre-flight skip.
+	//
+	// No isDeferrableLLMError guard here. The Anthropic batch API
+	// bypasses the Metered wrapper at submission, so the cap fires
+	// (if at all) on the SubmitBatch call -- the surrounding function
+	// returns early before this loop runs. Context cancellation is
+	// also handled earlier (the polling loop returns on ctx.Done).
+	// Failures that reach this point are per-sub-request outcomes
+	// from the Anthropic batch API (errored / expired / canceled at
+	// the sub-request level), which are genuine per-record signals.
+	// Typed handling of transient provider outcomes (rate-limit,
+	// overloaded) is tracked as a separate follow-up.
 	classifyRetry := taskRetryPolicy{
 		AttemptsKey:      "classify_attempts",
 		ErrorKey:         "last_classify_error",
