@@ -100,7 +100,7 @@ const (
 	// and marks Job failed/edge_fixup_failed.
 	FaultPhaseEdgeFixup = "edge_fixup"
 	// FaultPhasePanic is honored only by FaultInjector implementations
-	// that can panic on demand. CaptureBatch's runner consults this
+	// that can panic on demand. SaveBatch's runner consults this
 	// via tests via the panic-injection seam.
 	FaultPhasePanic = "panic"
 )
@@ -245,7 +245,7 @@ func (a *API) StopPreparedSweeper() {
 }
 
 // registerAsyncRunner records a running async-batch goroutine so
-// CaptureBatchCancel can signal it via ctx.Done() and ShutdownAsync
+// SaveBatchCancel can signal it via ctx.Done() and ShutdownAsync
 // can wait for in-flight runners to exit. Returns false if the API
 // is shutting down -- callers must skip spawning the runner.
 func (a *API) registerAsyncRunner(jobID string, cancel context.CancelFunc) bool {

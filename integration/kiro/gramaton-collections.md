@@ -16,7 +16,7 @@ Manage structured collections in Gramaton for tasks, lists, and backlogs.
 | Use `gramaton_search` | Use `gramaton_collection_items` |
 | Ranked results (best N) | ALL items, guaranteed |
 | Fuzzy, semantic | Structured, enforced |
-| Passive capture (observe) | Explicit add only |
+| Passive save (observe) | Explicit add only |
 
 ## Creating a Collection
 

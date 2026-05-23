@@ -15,7 +15,7 @@ import (
 func captureForExport(t *testing.T, a *API, marker string) string {
 	t.Helper()
 	conf := 0.9
-	resp, apiErr := a.Capture(context.Background(), CaptureRequest{
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
 		Content:         marker + " body content for export filter test",
 		SummaryShort:    marker + " summary",
 		Temporality:     "durable",

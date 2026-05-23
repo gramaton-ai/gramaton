@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestIntakeDeliberateCapture(t *testing.T) {
+func TestIntakeDeliberateSave(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	w := doRequest(t, srv, "POST", "/v1/intake", map[string]any{
 		"content":              "We decided to use PostgreSQL for the main database",

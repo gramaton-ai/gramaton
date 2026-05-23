@@ -34,7 +34,7 @@ import (
 //
 // Cancel between chunks: status check at chunk boundaries observes
 // the flip, finalizes Job with whatever has committed so far.
-func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req CaptureBatchRequest, job *jobs.Job) {
+func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req SaveBatchRequest, job *jobs.Job) {
 	store := a.engine.JobStore()
 
 	// Test-only panic-injection seam (same shape as runCaptureBatchCore).
@@ -59,7 +59,7 @@ func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req
 		if !itemValid[i] {
 			continue
 		}
-		itemEmbedText[i] = embedTextForBatch(item.CaptureRequest)
+		itemEmbedText[i] = embedTextForBatch(item.SaveRequest)
 	}
 	a.batchEmbed(ctx, itemValid, itemEmbedText, itemVecs, itemEmbedErrs)
 	embedderModel := ""
@@ -185,7 +185,7 @@ func (a *API) shouldStopChunked(ctx context.Context, jobID string) bool {
 // validateAllBatchItems runs Phase 0/1 over every item in req,
 // returning a parallel itemValid bool slice and a list of per-item
 // failures keyed by original index.
-func (a *API) validateAllBatchItems(req CaptureBatchRequest) ([]bool, []BatchItemFailure) {
+func (a *API) validateAllBatchItems(req SaveBatchRequest) ([]bool, []BatchItemFailure) {
 	itemValid := make([]bool, len(req.Items))
 	failures := make([]BatchItemFailure, 0)
 	clientRefSeen := make(map[string]int, len(req.Items))
@@ -228,14 +228,14 @@ type chunkData struct {
 
 // commitItemsChunk runs Phase 3 over one chunk's items. Acquires the
 // engine write lock, walks valid items, runs Save with N
-// ActionCapture entries, releases the lock. On Save failure performs
+// ActionSave entries, releases the lock. On Save failure performs
 // scoped rollback (only this chunk's nodes) and returns the error.
 //
 // itemValid / itemVecs / itemEmbedErrs are parallel to items
 // (already chunk-local — caller slices before passing). embedderModel
 // labels embeddings for the applyPreEmbedded call.
 func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
-	items []CaptureBatchItem, itemValid []bool, itemVecs [][]float32,
+	items []SaveBatchItem, itemValid []bool, itemVecs [][]float32,
 	itemEmbedErrs []error, embedderModel string, skipSupersession bool,
 ) (*chunkData, error) {
 	type rollbackEntry struct {
@@ -273,7 +273,7 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 		} else {
 			props["processing_status"] = graph.StringProperty("captured")
 		}
-		setOptionalProps(props, item.CaptureRequest)
+		setOptionalProps(props, item.SaveRequest)
 
 		n := a.engine.Graph().AddNode(props)
 		rollback = append(rollback, rollbackEntry{nodeID: n.ID, props: n.Properties})
@@ -317,7 +317,7 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 		if item.ClientRef != "" {
 			newRefs[item.ClientRef] = n.ID
 		}
-		actions = append(actions, graph.CommitAction{Kind: graph.ActionCapture, RecordID: n.ID})
+		actions = append(actions, graph.CommitAction{Kind: graph.ActionSave, RecordID: n.ID})
 	}
 
 	saveErr := a.injectFault(FaultPhaseChunkSave)
@@ -469,7 +469,7 @@ func (a *API) commitEdgeFixup(jobID string, edges []EdgeSpec,
 // finalizeChunkedCompleted writes the terminal Job state for a fully-
 // successful chunked run. Builds the response payload, persists it
 // in Job.Result, and flips Status to completed.
-func (a *API) finalizeChunkedCompleted(jobID string, items []CaptureBatchItem,
+func (a *API) finalizeChunkedCompleted(jobID string, items []SaveBatchItem,
 	summary *chunkSummary, edge *edgeFixupData,
 ) {
 	resp := buildChunkedResponse(jobID, jobs.StatusCompleted, items, summary, edge)
@@ -561,7 +561,7 @@ func (a *API) finalizeCancelledWithProgress(jobID string, summary *chunkSummary)
 		return
 	}
 	if job.Status == jobs.StatusCancelled {
-		// CaptureBatchCancel already wrote the terminal state; just
+		// SaveBatchCancel already wrote the terminal state; just
 		// merge in the progress info.
 		job.ProcessedCount = summary.ProcessedItems + len(summary.Failures)
 		job.ClientRefToID = copyRefMap(summary.ClientRefToID)
@@ -593,13 +593,13 @@ func (a *API) finalizeCancelledWithProgress(jobID string, summary *chunkSummary)
 	}
 }
 
-// buildChunkedResponse assembles a CaptureBatchResponse from the
+// buildChunkedResponse assembles a SaveBatchResponse from the
 // across-chunks summary + edge fixup data. The items argument is
 // ignored on failure paths (only used to populate Stats.TotalItems
 // on the success path; failure paths compute it from summary).
-func buildChunkedResponse(jobID, status string, items []CaptureBatchItem,
+func buildChunkedResponse(jobID, status string, items []SaveBatchItem,
 	summary *chunkSummary, edge *edgeFixupData,
-) CaptureBatchResponse {
+) SaveBatchResponse {
 	total := summary.ProcessedItems + len(summary.Failures)
 	if items != nil {
 		total = len(items)
@@ -612,7 +612,7 @@ func buildChunkedResponse(jobID, status string, items []CaptureBatchItem,
 		EdgesAdded:      len(edge.Added),
 		EdgesFailed:     len(edge.Failed),
 	}
-	return CaptureBatchResponse{
+	return SaveBatchResponse{
 		JobID:       jobID,
 		Status:      status,
 		Added:       summary.Added,

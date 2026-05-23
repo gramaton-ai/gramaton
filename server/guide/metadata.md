@@ -67,8 +67,8 @@ reason to surface this above similar-scoring records.
 
 ## Related Tools
 
-- `gramaton_capture`: Set metadata at capture time.
+- `gramaton_save`: Set metadata at capture time.
 - `gramaton_classify`: Set metadata on pending records.
 - `gramaton_update`: Update metadata on existing records.
-- See `gramaton_guide(topic="capture")` for how content/summary_short/
+- See `gramaton_guide(topic="save")` for how content/summary_short/
   keywords relate to each other and retrieval.

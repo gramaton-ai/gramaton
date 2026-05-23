@@ -247,7 +247,7 @@ func TestResolveAutoCloseOptOut(t *testing.T) {
 func TestResolveAutoCloseNotInCollection(t *testing.T) {
 	a, _ := setupTestAPI(t)
 
-	cap, capErr := a.Capture(context.Background(), CaptureRequest{Content: "a memory"})
+	cap, capErr := a.Save(context.Background(), SaveRequest{Content: "a memory"})
 	if capErr != nil {
 		t.Fatalf("Capture: %v", capErr)
 	}

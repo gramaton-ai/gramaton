@@ -127,7 +127,7 @@ Do these steps exactly:
    turns as the conversation the instructions refer to). Produce a
    list of segments.
 
-5. Call mcp__gramaton-bench__gramaton_session_commit with:
+5. Call mcp__gramaton-bench__gramaton_session_save with:
      session_id = SESSION_ULID
      segments   = <your extracted segments>
    Default `promote_to_memory: true` — do NOT override.
@@ -209,7 +209,7 @@ on the user's drive when needed.
 
 ## Gotchas
 
-- The prepare/commit pair rejects `commit` if `prepare` wasn't called
+- The prepare/save pair rejects `commit` if `prepare` wasn't called
   first for that session_id. Each sub-agent MUST call prepare, not
   assume a prior state.
 - `promote_to_memory: true` is the default — the benchmark test depends

@@ -1,11 +1,11 @@
 # Extract knowledge from this conversation
 
-Review `session_state` below. Skip re-capture of already-covered
+Review `session_state` below. Skip re-save of already-covered
 topics unless the conversation added, refined, or reversed them --
-when ideas evolve, capture the NEW version (auto-supersession at
+when ideas evolve, save the NEW version (auto-supersession at
 cosine ≥ 0.92 marks older records historical automatically).
 
-Submit segments via `gramaton_session_commit`. Each segment needs:
+Submit segments via `gramaton_session_save`. Each segment needs:
 
 - `content` -- unbounded, self-contained. Include rationale,
   alternatives considered, why-nots, concrete details (paths,
@@ -27,7 +27,7 @@ Submit segments via `gramaton_session_commit`. Each segment needs:
 - **Synthesize, don't summarize.** Rewrite for a future reader who
   wasn't in the room. Anti-patterns: "We discussed X" (substance
   lost), "User decided Y" (the *why* lost). Be concrete.
-- **Capture, don't suppress.** Open questions, dead ends, in-progress
+- **Save, don't suppress.** Open questions, dead ends, in-progress
   reasoning, and joint conclusions ALL belong in the store -- just
   with honest metadata: `speculative` for uncertainty, `refuted` for
   "we tried X and it didn't work", `promote_to_memory: false` for
@@ -38,14 +38,14 @@ Submit segments via `gramaton_session_commit`. Each segment needs:
   the conversation. Name concepts no one said if that's what the
   future question would ask about.
 - **Skip only the low-value:** greetings, pure restatements of
-  already-captured segments, confused exchanges without resolution,
+  already-saved segments, confused exchanges without resolution,
   mechanical tool-call narration without substantive results.
 
 ## For deeper guidance
 
-- `gramaton_guide(topic="capture")` -- field roles, synthesis
-  principle, what to capture vs skip in detail.
+- `gramaton_guide(topic="save")` -- field roles, synthesis
+  principle, what to save vs skip in detail.
 - `gramaton_guide(topic="metadata")` -- per-field classification
   heuristics and the question-type → metadata mapping.
 - `gramaton_guide(topic="sessions")` -- two-tier Session/Memory model,
-  session state semantics, when to call prepare/commit.
+  session state semantics, when to call prepare/save.

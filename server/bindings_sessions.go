@@ -49,17 +49,17 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusOK, result)
 	})
 
-	mux.HandleFunc("POST /v1/sessions/{id}/commit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/sessions/{id}/save", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
 			SessionID string               `json:"session_id"`
-			Segments  []api.CommitSegment  `json:"segments"`
+			Segments  []api.SaveSegment  `json:"segments"`
 		}
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.SessionCommit(r.Context(), id, req.Segments)
+		result, apiErr := s.api.SessionSave(r.Context(), id, req.Segments)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -155,16 +155,16 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 
 	type sessionCommitArgs struct {
 		SessionID string               `json:"session_id" jsonschema:"session ID to commit segments to"`
-		Segments  []api.CommitSegment  `json:"segments" jsonschema:"array of extracted knowledge segments"`
+		Segments  []api.SaveSegment  `json:"segments" jsonschema:"array of extracted knowledge segments"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_session_commit",
-		Description: api.SessionCommitDescription,
+		Name:        "gramaton_session_save",
+		Description: api.SessionSaveDescription,
 		Meta:        mcpAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_session_commit")
+		done := s.mcpToolStart("gramaton_session_save")
 		defer done(nil)
-		result, apiErr := s.api.SessionCommit(ctx, args.SessionID, args.Segments)
+		result, apiErr := s.api.SessionSave(ctx, args.SessionID, args.Segments)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

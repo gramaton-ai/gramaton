@@ -38,7 +38,7 @@ func addSearchableRecord(t *testing.T, eng *core.Engine, content string, keyword
 
 // createSessionWithSegments creates a session, prepares, and commits segments.
 // Returns the session ID.
-func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segments []api.CommitSegment) string {
+func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segments []api.SaveSegment) string {
 	t.Helper()
 	ctx := context.Background()
 	result, apiErr := srv.api.SessionStart(ctx, clientID, "")
@@ -50,7 +50,7 @@ func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segme
 	if _, apiErr := srv.api.SessionPrepare(ctx, sessionID); apiErr != nil {
 		t.Fatalf("session prepare: %v", apiErr)
 	}
-	if _, apiErr := srv.api.SessionCommit(ctx, sessionID, segments); apiErr != nil {
+	if _, apiErr := srv.api.SessionSave(ctx, sessionID, segments); apiErr != nil {
 		t.Fatalf("session commit: %v", apiErr)
 	}
 	return sessionID
@@ -59,7 +59,7 @@ func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segme
 func TestSearchFindsBM25SessionSegments(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	createSessionWithSegments(t, srv, "bm25-search-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "bm25-search-test", []api.SaveSegment{
 		{Content: "PostgreSQL is our primary database choice", TopicName: "Architecture"},
 	})
 
@@ -135,7 +135,7 @@ func TestSearchStoreOriginMetadata(t *testing.T) {
 	addSearchableRecord(t, eng, "Go is a systems language", []string{"golang"})
 
 	// Add a Session segment.
-	createSessionWithSegments(t, srv, "store-origin-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "store-origin-test", []api.SaveSegment{
 		{Content: "Go is excellent for building services", TopicName: "Tech"},
 	})
 
@@ -170,7 +170,7 @@ func TestSearchStoreFilterMemoryOnly(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	addSearchableRecord(t, eng, "Redis caching strategy", []string{"redis"})
-	createSessionWithSegments(t, srv, "filter-memory-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "filter-memory-test", []api.SaveSegment{
 		{Content: "Redis is used for caching in production", TopicName: "Infra"},
 	})
 
@@ -195,7 +195,7 @@ func TestSearchStoreFilterSessionsOnly(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
 	addSearchableRecord(t, eng, "Kubernetes orchestration", []string{"k8s"})
-	createSessionWithSegments(t, srv, "filter-session-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "filter-session-test", []api.SaveSegment{
 		{Content: "Kubernetes deployment pipeline discussion", TopicName: "Infra"},
 	})
 
@@ -223,7 +223,7 @@ func TestSearchSessionOnlyData(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Only session data, no Memory records.
-	createSessionWithSegments(t, srv, "session-only-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "session-only-test", []api.SaveSegment{
 		{Content: "Terraform infrastructure as code patterns", TopicName: "Infra"},
 	})
 
@@ -268,7 +268,7 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 	// Memory record (has vector embedding potential + BM25).
 	addSearchableRecord(t, eng, "GraphQL API design patterns for microservices", []string{"graphql", "api"})
 	// Session segment (BM25 only).
-	createSessionWithSegments(t, srv, "ranking-test", []api.CommitSegment{
+	createSessionWithSegments(t, srv, "ranking-test", []api.SaveSegment{
 		{Content: "GraphQL API design patterns for microservices", TopicName: "API"},
 	})
 

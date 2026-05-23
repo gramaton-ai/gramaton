@@ -39,7 +39,7 @@ var templateKiroAddendum string
 
 // clientAddendumMarker is the placeholder in base.md where each
 // client's addendum slots in. Keeping it just after the introductory
-// framing (and before the deeper "### Retrieval" / "### Capture"
+// framing (and before the deeper "### Retrieval" / "### Save"
 // sections) lets the routing rule register before the agent dives
 // into specific tool guidance.
 const clientAddendumMarker = "<!-- CLIENT_ADDENDUM -->"
@@ -182,7 +182,7 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 					"Detected existing Claude Code auto-memory at",
 					"~/.claude/projects/*/memory/. The routing rule in the",
 					"installed instructions tells the agent to prefer Gramaton",
-					"for new captures; existing auto-memory entries are",
+					"for new saves; existing auto-memory entries are",
 					"unchanged.",
 				)
 			}

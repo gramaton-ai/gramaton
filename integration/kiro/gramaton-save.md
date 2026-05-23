@@ -1,6 +1,6 @@
-# gramaton-capture
+# gramaton-save
 
-Capture knowledge into the Gramaton store.
+Save knowledge into the Gramaton store.
 
 ## When to Use
 
@@ -20,9 +20,9 @@ Capture knowledge into the Gramaton store.
 
 3. Write a summary_short (~750 chars (semantic anchor for embedding))
 
-4. Store via `gramaton_capture`:
+4. Store via `gramaton_save`:
    ```
-   gramaton_capture(
+   gramaton_save(
      content="[knowledge to store]",
      temporality="[value]",
      confidence=[float],
@@ -45,7 +45,7 @@ Capture knowledge into the Gramaton store.
    )
    ```
 
-## Do Not Capture
+## Do Not Save
 
 - Trivial exchanges or small talk
 - Questions without answers

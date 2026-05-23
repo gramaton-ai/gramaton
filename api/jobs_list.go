@@ -25,7 +25,7 @@ type JobsListRequest struct {
 // JobsListResponse is the lightweight summary projection. Heavy
 // per-item fields (Result, ClientRefToID) are intentionally omitted
 // here; callers that need them follow up with
-// gramaton_capture_batch_status.
+// gramaton_save_batch_status.
 type JobsListResponse struct {
 	Jobs   []JobSummary `json:"jobs"`
 	Total  int          `json:"total"`
@@ -39,7 +39,7 @@ type JobsListResponse struct {
 // ClientToken is intentionally NOT included here. Listing other
 // tenants' tokens (in the multi-tenant future) would let one caller
 // guess another's idempotency window. A caller that wants to look up
-// their own jobs by token uses CaptureBatchStatus on a known JobID,
+// their own jobs by token uses SaveBatchStatus on a known JobID,
 // or filters JobsList by their own ClientToken via the request.
 type JobSummary struct {
 	ID             string    `json:"id"`
@@ -55,7 +55,7 @@ type JobSummary struct {
 
 // JobsListDescription is the MCP tool description for
 // gramaton_jobs_list.
-const JobsListDescription = `Enumerate persisted async jobs with optional filtering by status / kind / client_token / time range. Returns lightweight summaries (id, status, counts, timestamps) — Result payload and client_ref→id map are NOT included; for those call gramaton_capture_batch_status on a specific job.
+const JobsListDescription = `Enumerate persisted async jobs with optional filtering by status / kind / client_token / time range. Returns lightweight summaries (id, status, counts, timestamps) — Result payload and client_ref→id map are NOT included; for those call gramaton_save_batch_status on a specific job.
 
 Use this to find a recently-submitted job whose JobID was lost in transport, or to audit recent batch activity. Pagination via limit (max 200) and offset.`
 

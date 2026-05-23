@@ -18,7 +18,7 @@ func seedRecordsForPagination(t *testing.T, a *API, marker string, n int) {
 	ctx := context.Background()
 	conf := 0.9
 	for i := 0; i < n; i++ {
-		req := CaptureRequest{
+		req := SaveRequest{
 			Content:         marker + " record body number " + strconv.Itoa(i) + " mentions the marker term",
 			SummaryShort:    marker + " summary " + strconv.Itoa(i),
 			Temporality:     "durable",
@@ -26,7 +26,7 @@ func seedRecordsForPagination(t *testing.T, a *API, marker string, n int) {
 			KnowledgeType:   "semantic",
 			EpistemicStatus: "well_established",
 		}
-		if _, apiErr := a.Capture(ctx, req); apiErr != nil {
+		if _, apiErr := a.Save(ctx, req); apiErr != nil {
 			t.Fatalf("capture #%d: %v", i, apiErr)
 		}
 	}

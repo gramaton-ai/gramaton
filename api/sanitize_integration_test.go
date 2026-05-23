@@ -20,11 +20,11 @@ const contaminationTail = `</summary_short>
 
 // --- Capture ---
 
-func TestCaptureStripsContaminationTail(t *testing.T) {
+func TestSaveStripsContaminationTail(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	resp, apiErr := a.Capture(ctx, CaptureRequest{
+	resp, apiErr := a.Save(ctx, SaveRequest{
 		Content:      "Full content for the record. Not truncated.",
 		SummaryShort: "Real summary here." + contaminationTail,
 	})
@@ -47,11 +47,11 @@ func TestCaptureStripsContaminationTail(t *testing.T) {
 	}
 }
 
-func TestCaptureRejectsPureContamination(t *testing.T) {
+func TestSaveRejectsPureContamination(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	_, apiErr := a.Capture(ctx, CaptureRequest{
+	_, apiErr := a.Save(ctx, SaveRequest{
 		Content:      "Full content here.",
 		SummaryShort: contaminationTail, // leading tag — strip yields empty
 	})
@@ -66,11 +66,11 @@ func TestCaptureRejectsPureContamination(t *testing.T) {
 	}
 }
 
-func TestCaptureStripsContaminationInContextFields(t *testing.T) {
+func TestSaveStripsContaminationInContextFields(t *testing.T) {
 	a, eng := setupTestAPI(t)
 	ctx := context.Background()
 
-	resp, apiErr := a.Capture(ctx, CaptureRequest{
+	resp, apiErr := a.Save(ctx, SaveRequest{
 		Content:       "Content body.",
 		ContextAbout:  "Clean topic." + contaminationTail,
 		ContextWho:    "Alice and Bob." + contaminationTail,
@@ -166,7 +166,7 @@ func TestUpdateStripsContaminationTail(t *testing.T) {
 	}
 }
 
-// --- SessionCommit ---
+// --- SessionSave ---
 
 func TestSessionCommitRejectsContaminatedSegment(t *testing.T) {
 	a, _ := setupTestAPI(t)
@@ -178,10 +178,10 @@ func TestSessionCommitRejectsContaminatedSegment(t *testing.T) {
 		t.Fatalf("prepare: %v", svcErr)
 	}
 
-	segments := []CommitSegment{
+	segments := []SaveSegment{
 		{Content: "Clean segment content.", TopicName: "Topic", SummaryShort: contaminationTail},
 	}
-	_, apiErr := a.SessionCommit(ctx, sessionID, segments)
+	_, apiErr := a.SessionSave(ctx, sessionID, segments)
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid, got nil")
 	}
@@ -203,14 +203,14 @@ func TestSessionCommitStripsSegmentContaminationTail(t *testing.T) {
 		t.Fatalf("prepare: %v", svcErr)
 	}
 
-	segments := []CommitSegment{
+	segments := []SaveSegment{
 		{
 			Content:      "Body content of segment. Long enough to persist.",
 			TopicName:    "Topic",
 			SummaryShort: "Clean summary." + contaminationTail,
 		},
 	}
-	if _, apiErr := a.SessionCommit(ctx, sessionID, segments); apiErr != nil {
+	if _, apiErr := a.SessionSave(ctx, sessionID, segments); apiErr != nil {
 		t.Fatalf("commit: %v", apiErr)
 	}
 

@@ -4,10 +4,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var captureFile string
+var saveFile string
 
-var captureCmd = &cobra.Command{
-	Use:   "capture",
+var saveCmd = &cobra.Command{
+	Use:   "save",
 	Short: "Store a knowledge record",
 	Long: `Reads a JSON object from stdin or --file containing the record content
 and optional metadata. Creates a record in Memory, generates
@@ -23,24 +23,24 @@ Optional fields:
   context_source_type, context_time_sensitivity,
   context_reliability, context_capture_reason,
   asserted_as_of, meta, valid_from, valid_until`,
-	RunE: runCapture,
+	RunE: runSave,
 }
 
 func init() {
-	captureCmd.Flags().StringVarP(&captureFile, "file", "f", "", "read JSON input from file instead of stdin (deleted after read if in gramaton temp dir)")
-	rootCmd.AddCommand(captureCmd)
+	saveCmd.Flags().StringVarP(&saveFile, "file", "f", "", "read JSON input from file instead of stdin (deleted after read if in gramaton temp dir)")
+	rootCmd.AddCommand(saveCmd)
 }
 
-func runCapture(cmd *cobra.Command, args []string) error {
+func runSave(cmd *cobra.Command, args []string) error {
 	// The server accepts the same JSON shape via POST /v1/records.
-	input, err := readCommandInput(captureFile)
+	input, err := readCommandInput(saveFile)
 	if err != nil {
 		return err
 	}
 
 	resp, err := serverPost("/v1/records", input)
 	if err != nil {
-		return writeServerError("capture", err)
+		return writeServerError("save", err)
 	}
 
 	return printEnvelope(resp)

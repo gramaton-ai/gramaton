@@ -55,7 +55,7 @@ func TestAutoSupersessionAlreadyHistorical(t *testing.T) {
 	}
 }
 
-func TestCaptureWithNoEmbedder(t *testing.T) {
+func TestSaveWithNoEmbedder(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Without an embedder, capture should still work --
@@ -76,7 +76,7 @@ func TestCaptureWithNoEmbedder(t *testing.T) {
 	}
 }
 
-func TestCaptureResponseIncludesWarnings(t *testing.T) {
+func TestSaveResponseIncludesWarnings(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	w := doRequest(t, srv, "POST", "/v1/records", map[string]any{
@@ -94,7 +94,7 @@ func TestCaptureResponseIncludesWarnings(t *testing.T) {
 	}
 }
 
-func TestCaptureProcessingStatus(t *testing.T) {
+func TestSaveProcessingStatus(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Without classification: should be "captured".

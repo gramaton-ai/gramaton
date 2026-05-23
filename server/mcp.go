@@ -67,7 +67,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 // haven't shipped the per-tool alwaysLoad feature) ignore the
 // metadata and behave as before.
 //
-// We pin a curated subset (search/inspect/capture/session_*/
+// We pin a curated subset (search/inspect/save/session_*/
 // collection_{add,items,update,list}/resolve/link/curation) rather
 // than every tool to avoid bloating the system prompt with infrequent
 // administrative or diagnostic tools (branch, backup, reembed,

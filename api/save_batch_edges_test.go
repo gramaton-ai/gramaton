@@ -7,17 +7,17 @@ import (
 	"testing"
 )
 
-// edgeReq builds a CaptureBatchRequest with N items each carrying its
+// edgeReq builds a SaveBatchRequest with N items each carrying its
 // own ClientRef ("ref-0", "ref-1", ...) plus the supplied edges.
-func edgeReq(itemContents []string, edges []EdgeSpec) CaptureBatchRequest {
-	items := make([]CaptureBatchItem, len(itemContents))
+func edgeReq(itemContents []string, edges []EdgeSpec) SaveBatchRequest {
+	items := make([]SaveBatchItem, len(itemContents))
 	for i, c := range itemContents {
-		items[i] = CaptureBatchItem{
+		items[i] = SaveBatchItem{
 			ClientRef:      refName(i),
-			CaptureRequest: CaptureRequest{Content: c},
+			SaveRequest: SaveRequest{Content: c},
 		}
 	}
-	return CaptureBatchRequest{Items: items, Edges: edges}
+	return SaveBatchRequest{Items: items, Edges: edges}
 }
 
 func refName(i int) string {
@@ -47,11 +47,11 @@ func itoa(i int) string {
 	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
 
-// TestCaptureBatchEdgesIntraBatch: 3 items + 2 ClientRef edges, all
+// TestSaveBatchEdgesIntraBatch: 3 items + 2 ClientRef edges, all
 // commit. Edges round-trip with their assigned IDs.
-func TestCaptureBatchEdgesIntraBatch(t *testing.T) {
+func TestSaveBatchEdgesIntraBatch(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"alpha", "beta", "gamma"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to"},
@@ -59,7 +59,7 @@ func TestCaptureBatchEdgesIntraBatch(t *testing.T) {
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 2 {
 		t.Fatalf("edges: got %d want 2", len(resp.Edges))
@@ -77,19 +77,19 @@ func TestCaptureBatchEdgesIntraBatch(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeToExistingNode: edge.TargetID points at a
+// TestSaveBatchEdgeToExistingNode: edge.TargetID points at a
 // pre-existing record; edge created.
-func TestCaptureBatchEdgeToExistingNode(t *testing.T) {
+func TestSaveBatchEdgeToExistingNode(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	existing := addRecord(t, eng, "existing target record")
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"new item"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetID: existing, Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("edges: got %d want 1", len(resp.Edges))
@@ -99,19 +99,19 @@ func TestCaptureBatchEdgeToExistingNode(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeForwardRef: item 0's edge points at item 2 by
+// TestSaveBatchEdgeForwardRef: item 0's edge points at item 2 by
 // ClientRef. Resolution doesn't depend on item commit order — items
 // commit in batch order, then edges resolve against the full map.
-func TestCaptureBatchEdgeForwardRef(t *testing.T) {
+func TestSaveBatchEdgeForwardRef(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b", "c"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-2", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("edges: got %d want 1", len(resp.Edges))
@@ -124,40 +124,40 @@ func TestCaptureBatchEdgeForwardRef(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeBackwardRef: item 2's edge points at item 0 by
+// TestSaveBatchEdgeBackwardRef: item 2's edge points at item 0 by
 // ClientRef.
-func TestCaptureBatchEdgeBackwardRef(t *testing.T) {
+func TestSaveBatchEdgeBackwardRef(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b", "c"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-2", TargetClientRef: "ref-0", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("edges: got %d want 1", len(resp.Edges))
 	}
 }
 
-// TestCaptureBatchEdgeTargetItemFailed: edge target points at an item
+// TestSaveBatchEdgeTargetItemFailed: edge target points at an item
 // whose validation failed -> target_item_failed.
-func TestCaptureBatchEdgeTargetItemFailed(t *testing.T) {
+func TestSaveBatchEdgeTargetItemFailed(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	bad := 2.0
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{ClientRef: "ref-0", CaptureRequest: CaptureRequest{Content: "valid"}},
-			{ClientRef: "ref-broken", CaptureRequest: CaptureRequest{Content: "bad", Confidence: &bad}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{ClientRef: "ref-0", SaveRequest: SaveRequest{Content: "valid"}},
+			{ClientRef: "ref-broken", SaveRequest: SaveRequest{Content: "bad", Confidence: &bad}},
 		},
 		Edges: []EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-broken", Type: "related_to"},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 0 {
 		t.Errorf("expected 0 edges committed, got %d", len(resp.Edges))
@@ -167,89 +167,89 @@ func TestCaptureBatchEdgeTargetItemFailed(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeSourceItemFailed: edge source points at a failed
+// TestSaveBatchEdgeSourceItemFailed: edge source points at a failed
 // item -> source_item_failed.
-func TestCaptureBatchEdgeSourceItemFailed(t *testing.T) {
+func TestSaveBatchEdgeSourceItemFailed(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	bad := 2.0
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{ClientRef: "ref-broken", CaptureRequest: CaptureRequest{Content: "bad", Confidence: &bad}},
-			{ClientRef: "ref-good", CaptureRequest: CaptureRequest{Content: "good"}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{ClientRef: "ref-broken", SaveRequest: SaveRequest{Content: "bad", Confidence: &bad}},
+			{ClientRef: "ref-good", SaveRequest: SaveRequest{Content: "good"}},
 		},
 		Edges: []EdgeSpec{
 			{SourceClientRef: "ref-broken", TargetClientRef: "ref-good", Type: "related_to"},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "source_item_failed" {
 		t.Errorf("expected source_item_failed, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeTargetIDNotFound: edge.TargetID references a
+// TestSaveBatchEdgeTargetIDNotFound: edge.TargetID references a
 // record that doesn't exist anywhere.
-func TestCaptureBatchEdgeTargetIDNotFound(t *testing.T) {
+func TestSaveBatchEdgeTargetIDNotFound(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetID: "01HQQQQQQQQQQQQQQQQQQQQQQQ", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "target_id_not_found" {
 		t.Errorf("expected target_id_not_found, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeSourceIDNotFound: edge.SourceID references a
+// TestSaveBatchEdgeSourceIDNotFound: edge.SourceID references a
 // record that doesn't exist.
-func TestCaptureBatchEdgeSourceIDNotFound(t *testing.T) {
+func TestSaveBatchEdgeSourceIDNotFound(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceID: "01HQQQQQQQQQQQQQQQQQQQQQQQ", TargetClientRef: "ref-0", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "source_id_not_found" {
 		t.Errorf("expected source_id_not_found, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeRefNotFound: a ClientRef that doesn't match any
+// TestSaveBatchEdgeRefNotFound: a ClientRef that doesn't match any
 // item also surfaces *_id_not_found.
-func TestCaptureBatchEdgeRefNotFound(t *testing.T) {
+func TestSaveBatchEdgeRefNotFound(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-nonexistent", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "target_id_not_found" {
 		t.Errorf("expected target_id_not_found for missing ref, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeInvalidWeight: weight outside [0,1] is rejected
+// TestSaveBatchEdgeInvalidWeight: weight outside [0,1] is rejected
 // per edge with invalid_weight.
-func TestCaptureBatchEdgeInvalidWeight(t *testing.T) {
+func TestSaveBatchEdgeInvalidWeight(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	bad := 2.0
 	neg := -0.5
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to", Weight: &bad},
@@ -257,7 +257,7 @@ func TestCaptureBatchEdgeInvalidWeight(t *testing.T) {
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 2 {
 		t.Fatalf("expected 2 invalid_weight failures, got %d: %+v", len(resp.EdgesFailed), resp.EdgesFailed)
@@ -269,20 +269,20 @@ func TestCaptureBatchEdgeInvalidWeight(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeWeightZeroExplicit: an explicit zero weight is a
+// TestSaveBatchEdgeWeightZeroExplicit: an explicit zero weight is a
 // valid edge weight (pinning the 0=valid policy; 0 is a meaningful
 // signal, not a placeholder).
-func TestCaptureBatchEdgeWeightZeroExplicit(t *testing.T) {
+func TestSaveBatchEdgeWeightZeroExplicit(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	zero := 0.0
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to", Weight: &zero},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(resp.Edges))
@@ -292,28 +292,28 @@ func TestCaptureBatchEdgeWeightZeroExplicit(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeSelfLoop: source and target resolve to same ID.
-func TestCaptureBatchEdgeSelfLoop(t *testing.T) {
+// TestSaveBatchEdgeSelfLoop: source and target resolve to same ID.
+func TestSaveBatchEdgeSelfLoop(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-0", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "self_loop" {
 		t.Errorf("expected self_loop, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeDuplicate: same (source, target, type) tuple
+// TestSaveBatchEdgeDuplicate: same (source, target, type) tuple
 // twice -> second fails with duplicate_edge.
-func TestCaptureBatchEdgeDuplicate(t *testing.T) {
+func TestSaveBatchEdgeDuplicate(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to"},
@@ -321,7 +321,7 @@ func TestCaptureBatchEdgeDuplicate(t *testing.T) {
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Errorf("expected 1 edge, got %d", len(resp.Edges))
@@ -331,16 +331,16 @@ func TestCaptureBatchEdgeDuplicate(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeOverMultiplier: len(Edges) > 10 * len(Items)
+// TestSaveBatchEdgeOverMultiplier: len(Edges) > 10 * len(Items)
 // -> envelope ErrInvalid.
-func TestCaptureBatchEdgeOverMultiplier(t *testing.T) {
+func TestSaveBatchEdgeOverMultiplier(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	items := []string{"a"}
 	edges := make([]EdgeSpec, MaxBatchEdgeMultiplier+1)
 	for i := range edges {
 		edges[i] = EdgeSpec{SourceClientRef: "ref-0", TargetClientRef: "ref-0", Type: "related_to"}
 	}
-	_, apiErr := a.CaptureBatch(context.Background(), edgeReq(items, edges))
+	_, apiErr := a.SaveBatch(context.Background(), edgeReq(items, edges))
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error, got %v", apiErr)
 	}
@@ -349,73 +349,73 @@ func TestCaptureBatchEdgeOverMultiplier(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgeInvalidType: empty edge type -> invalid_type.
-func TestCaptureBatchEdgeInvalidType(t *testing.T) {
+// TestSaveBatchEdgeInvalidType: empty edge type -> invalid_type.
+func TestSaveBatchEdgeInvalidType(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: ""},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "invalid_type" {
 		t.Errorf("expected invalid_type, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeMissingEndpoint: neither id nor ref supplied
+// TestSaveBatchEdgeMissingEndpoint: neither id nor ref supplied
 // for an endpoint -> missing_endpoint.
-func TestCaptureBatchEdgeMissingEndpoint(t *testing.T) {
+func TestSaveBatchEdgeMissingEndpoint(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", Type: "related_to"}, // no target
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "missing_endpoint" {
 		t.Errorf("expected missing_endpoint, got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchEdgeBothEndpointsSet: id and ref both set on the
+// TestSaveBatchEdgeBothEndpointsSet: id and ref both set on the
 // same endpoint -> missing_endpoint (mutually exclusive).
-func TestCaptureBatchEdgeBothEndpointsSet(t *testing.T) {
+func TestSaveBatchEdgeBothEndpointsSet(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	existing := addRecord(t, eng, "existing")
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetID: existing, TargetClientRef: "ref-0", Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.EdgesFailed) != 1 || resp.EdgesFailed[0].Code != "missing_endpoint" {
 		t.Errorf("expected missing_endpoint (mutually exclusive), got %+v", resp.EdgesFailed)
 	}
 }
 
-// TestCaptureBatchMixedRefs: edge with SourceClientRef + TargetID;
+// TestSaveBatchMixedRefs: edge with SourceClientRef + TargetID;
 // both resolution paths exercised in one edge.
-func TestCaptureBatchMixedRefs(t *testing.T) {
+func TestSaveBatchMixedRefs(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	existing := addRecord(t, eng, "existing target")
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"new"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetID: existing, Type: "related_to"},
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(resp.Edges))
@@ -428,15 +428,15 @@ func TestCaptureBatchMixedRefs(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgesRollbackOnSaveFailure: edges added in-memory
+// TestSaveBatchEdgesRollbackOnSaveFailure: edges added in-memory
 // during Phase 3 must be removed on Save failure rollback.
-func TestCaptureBatchEdgesRollbackOnSaveFailure(t *testing.T) {
+func TestSaveBatchEdgesRollbackOnSaveFailure(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseChunkSave: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	_, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to"},
@@ -452,12 +452,12 @@ func TestCaptureBatchEdgesRollbackOnSaveFailure(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEdgesCommitActions: each successful edge contributes
-// an ActionLink CommitAction; combined with N item ActionCapture
+// TestSaveBatchEdgesCommitActions: each successful edge contributes
+// an ActionLink CommitAction; combined with N item ActionSave
 // entries the total = items + edges.
-func TestCaptureBatchEdgesCommitActions(t *testing.T) {
+func TestSaveBatchEdgesCommitActions(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), edgeReq(
+	resp, apiErr := a.SaveBatch(context.Background(), edgeReq(
 		[]string{"a", "b", "c"},
 		[]EdgeSpec{
 			{SourceClientRef: "ref-0", TargetClientRef: "ref-1", Type: "related_to"},
@@ -465,7 +465,7 @@ func TestCaptureBatchEdgesCommitActions(t *testing.T) {
 		},
 	))
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	_ = resp
 	eng.RLock()
@@ -474,7 +474,7 @@ func TestCaptureBatchEdgesCommitActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCommitMeta: %v", err)
 	}
-	// 3 ActionCapture + 2 ActionLink = 5 total
+	// 3 ActionSave + 2 ActionLink = 5 total
 	if len(commit.Actions) != 5 {
 		t.Errorf("expected 5 actions (3 capture + 2 link), got %d", len(commit.Actions))
 	}

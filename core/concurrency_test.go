@@ -270,7 +270,7 @@ func TestConcurrentSearchAndCapture(t *testing.T) {
 				for k, v := range n.Properties {
 					eng.PropIdx().Add(n.ID, k, v)
 				}
-				eng.Save("capture")
+				eng.Save("save")
 				eng.Unlock()
 			}
 		}(i)

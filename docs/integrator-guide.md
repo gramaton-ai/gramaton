@@ -19,7 +19,7 @@ Best-match retrieval ranked by composite score. Not exhaustive.
 **Retrieval:** `gramaton_search` with optional metadata filters. Results are ranked by a weighted combination of vector similarity (fused with BM25 keyword match via RRF), knowledge freshness (time-decay keyed to temporality), access recency (activation), and confidence. Importance acts as a floor.
 
 **Write paths:**
-- `gramaton_capture` — user-initiated direct capture. Full control over metadata.
+- `gramaton_save` — user-initiated direct save. Full control over metadata.
 - `gramaton_intake` — deliberate write endpoint. Same surface, optionally lets the server classify via LLM if one is configured.
 - Session commit with `promote_to_memory: true` (the default) — each committed segment also lands as a Memory record.
 - `gramaton ingest` CLI — bulk-load text files.
@@ -28,7 +28,7 @@ All four paths produce records with the same shape and the same retrieval semant
 
 ### Sessions — automatic extraction from conversations
 
-Per-conversation capture via a two-phase extraction flow. Optionally promotes segments to Memory.
+Per-conversation save via a two-phase extraction flow. Optionally promotes segments to Memory.
 
 **Use for:** knowledge that emerges during a conversation without the user explicitly asking you to remember it. Architectural decisions that landed while debugging. User preferences stated in passing. Dead ends that should be searchable but shouldn't compete with real decisions.
 
@@ -37,7 +37,7 @@ Per-conversation capture via a two-phase extraction flow. Optionally promotes se
 **Flow:**
 1. `gramaton_session_start` — begin a session bound to a client session ID. Idempotent if called on an existing session.
 2. `gramaton_session_prepare(session_id)` — returns extraction instructions plus the session state so far. Must be called before commit.
-3. `gramaton_session_commit(session_id, segments)` — submits extracted segments. Each segment creates a Session segment node (BM25-indexed) and, by default, a linked Memory record (vector-embedded, full lifecycle).
+3. `gramaton_session_save(session_id, segments)` — submits extracted segments. Each segment creates a Session segment node (BM25-indexed) and, by default, a linked Memory record (vector-embedded, full lifecycle).
 
 **`promote_to_memory`:** omit (default `true`) for decisions, facts, and preferences that should compete in semantic search. Set to `false` for exploration, open questions, and dead ends — they stay findable by session-scoped search but don't pollute Memory's vector space.
 
@@ -57,20 +57,20 @@ Named containers with optional schema. Every item returned, guaranteed complete.
 
 > *Will missing one item be a failure?*
 > **Yes** → Collection.
-> **No** → Memory (direct via capture/intake, or via session extraction).
+> **No** → Memory (direct via save/intake, or via session extraction).
 
-If the answer is ambiguous, start with Memory. It's easier to escalate a Memory record into a Collection item later than to back-fill a Collection with records that were originally captured as fuzzy memory.
+If the answer is ambiguous, start with Memory. It's easier to escalate a Memory record into a Collection item later than to back-fill a Collection with records that were originally saved as fuzzy memory.
 
 ## Memory — depth
 
-### What to capture
+### What to save
 
 - Decisions with reasoning ("chose Kafka because we need replay")
 - Facts that will still matter in future sessions (user preferences, constraints, "how we do X here")
 - Research findings, domain knowledge, architectural context
 - User statements you'll want to look up later ("the deadline is the 15th")
 
-### What NOT to capture
+### What NOT to save
 
 - Trivial exchanges, greetings, confirmation messages
 - Information already in the codebase or git history ("file X exists", "function Y is called from Z")
@@ -78,13 +78,13 @@ If the answer is ambiguous, start with Memory. It's easier to escalate a Memory 
 - Intermediate reasoning that got superseded inside the same session
 - Near-duplicates of existing records (the server auto-supersedes at ≥0.92 cosine — don't pre-check)
 
-### Capture raw content, not summaries
+### Save raw content, not summaries
 
 The `content` field should hold the actual source material — the full decision text, the exact reasoning, the literal user statement. Don't pre-digest. Gramaton's attention funnel (`content_full` → `content_short` → `content_keywords` → `embedding_*` → BM25) is designed to compress; that's curation's job, not yours. Every layer of agent-side summarization loses information that can't be reconstructed.
 
 ### Metadata classification
 
-Set metadata at capture time when you know it. Leave fields empty when uncertain — curation will classify pending records.
+Set metadata at save time when you know it. Leave fields empty when uncertain — curation will classify pending records.
 
 | Field | Set it when… | Leave empty when… |
 |-------|--------------|-------------------|
@@ -113,7 +113,7 @@ Content is what was said. The context envelope is everything else that was true 
 | `context_findable_by` | Terms, names, IDs someone might search for later |
 | `context_related` | Known related records or topics |
 
-Filling these deliberately at capture time produces records that are retrievable by project, ticket ID, or team — not just by the exact words in `content`. The `gramaton_intake` tool expects them explicitly.
+Filling these deliberately at save time produces records that are retrievable by project, ticket ID, or team — not just by the exact words in `content`. The `gramaton_intake` tool expects them explicitly.
 
 ### `meta` for structured source data
 
@@ -142,14 +142,14 @@ Good uses: project names, ticket IDs, source systems, status values, categories.
 
 ### When to commit (triggers)
 
-Session commit is the primary autonomous-capture path. Call `prepare` then `commit` when any of the following happens:
+Session commit is the primary autonomous-save path. Call `prepare` then `commit` when any of the following happens:
 
-- A commit-worthy decision lands. A feature ships. A debate resolves. An approach gets chosen after considering alternatives.
+- A save-worthy decision lands. A feature ships. A debate resolves. An approach gets chosen after considering alternatives.
 - The user signals closure — "done", "ship it", "that works", "okay" in response to completed work.
 - A multi-step task tracked in a plan or TODO list reaches its last completed step.
 - The user pivots topics. Extract the outgoing topic's outcomes before context-switching.
 - You're about to hit context compaction. Extract first, let compaction happen after.
-- The user explicitly asks you to capture, remember, or store something about the session.
+- The user explicitly asks you to save, remember, or store something about the session.
 
 **Regardless of those triggers,** if you've gone ~10 substantive conversation turns without calling commit, call it now. Don't wait for a "natural" breakpoint — by the time the natural breakpoint arrives you've blown past the window where the early reasoning is easy to reconstruct.
 
@@ -165,13 +165,13 @@ Segments with `promote_to_memory: false` stay in the Sessions store only. Use th
 
 ### Session state and the `recent_compaction` nudge
 
-`gramaton_session_prepare` returns the session state: what's been committed so far. If the response includes a `recent_compaction` field, your context was just compacted — review the returned state carefully before extracting so you don't re-capture knowledge that's already there.
+`gramaton_session_prepare` returns the session state: what's been committed so far. If the response includes a `recent_compaction` field, your context was just compacted — review the returned state carefully before extracting so you don't re-save knowledge that's already there.
 
 If the session node has an archived transcript, the prepare response surfaces the archive path. Decompressing and reading it is an option of last resort when the in-session context is missing what you need to extract well.
 
 ### Sessions don't close collection items
 
-If the conversation worked through (and finished) a set of collection items — open tickets in a backlog, action items on a checklist — the session captures the *conversation* but does not flip those items' status. Closure is an explicit `gramaton_resolve` call per item; see "Closing items is an explicit action" under Collections below for the agent pattern. Skipping closure is the most common visible-drift bug: post-commit Memory records describe finished work while the underlying collection still lists those items as open.
+If the conversation worked through (and finished) a set of collection items — open tickets in a backlog, action items on a checklist — the session saves the *conversation* but does not flip those items' status. Closure is an explicit `gramaton_resolve` call per item; see "Closing items is an explicit action" under Collections below for the agent pattern. Skipping closure is the most common visible-drift bug: post-commit Memory records describe finished work while the underlying collection still lists those items as open.
 
 ## Collections — depth
 
@@ -213,7 +213,7 @@ Field names must match `^[a-zA-Z_][a-zA-Z0-9_]*$` — they become property keys 
 
 ### `content_fields` — what the LLM treats as the item's content
 
-Schemas may declare an ordered `content_fields` list naming the fields that constitute the canonical text representation of an item. When set, `content_fields` drives both BM25 indexing and the vector embedding for that item: the server joins those field values (in the declared order) and the joined string is what gets embedded and tokenized. Editing a `content_fields`-listed field flips `processing_status` back to `captured` and queues a re-embed; editing other fields (status, dates, assignee) doesn't touch the index.
+Schemas may declare an ordered `content_fields` list naming the fields that constitute the canonical text representation of an item. When set, `content_fields` drives both BM25 indexing and the vector embedding for that item: the server joins those field values (in the declared order) and the joined string is what gets embedded and tokenized. Editing a `content_fields`-listed field flips `processing_status` back to `saved` and queues a re-embed; editing other fields (status, dates, assignee) doesn't touch the index.
 
 ```json
 {
@@ -269,14 +269,14 @@ The server rejects the duplicate. The caller decides what to do: update the exis
 
 ### Closing items is an explicit action — sessions don't do it
 
-Resolving a collection item (marking it `completed` / `superseded` / `abandoned` / `obsolete`) requires an explicit `gramaton_resolve` call. Session prepare/commit captures the conversation that led to the work being finished but does NOT touch the item — `field.status` stays whatever it was, no `valid_until`, no resolution edge.
+Resolving a collection item (marking it `completed` / `superseded` / `abandoned` / `obsolete`) requires an explicit `gramaton_resolve` call. Session prepare/save saves the conversation that led to the work being finished but does NOT touch the item — `field.status` stays whatever it was, no `valid_until`, no resolution edge.
 
 This is intentional. Closure is a deliberate state change with audit consequences (write to `valid_until`, `resolution`, optional `resolution_note`, plus an edge for the audit trail). Inferring closure from "the session said we shipped it" produces false positives that silently lose state on partial work.
 
 The pattern for an agent wrapping up a topic:
 
 1. Call `gramaton_resolve` for each completed item explicitly. When the resolved record is a collection item AND the schema declares an enum field named `status`, the server auto-flips that field to a closed-equivalent value (first `resolved` / `done` / `finished` / `abandoned` in the schema's enum, whichever appears first). This is `auto_close_collection_status: true` by default; pass `false` to skip the collection-side write and only stamp `valid_until` + `resolution`. Records in collections whose status field has no closed-equivalent value emit `CollectionWarning` so the agent can prompt the operator to call `gramaton_collection_update` manually.
-2. THEN call `gramaton_session_prepare` + `gramaton_session_commit`.
+2. THEN call `gramaton_session_prepare` + `gramaton_session_save`.
 
 Order doesn't matter mechanically (independent subgraphs, engine serializes commits), but closure-first gives the session a clean view of the post-state. If you forget closure entirely, the user has visible drift: session-extracted Memory records say the work shipped, the collection still shows the items open.
 
@@ -353,11 +353,11 @@ When writing system prompts or agent instructions for Gramaton integration:
 
 1. **Separate the three storage paths in the prompt.** Don't mix "search Memory for context" with "check the task collection" with "commit session segments." They're different operations with different triggers.
 2. **Be specific about when to search.** "Before answering questions about past decisions, project context, architecture, preferences, or domain knowledge" beats "search when relevant."
-3. **Be specific about when to capture.** For Memory, capture only when the user explicitly asks. For Sessions, commit at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
-4. **Don't tell the agent to classify everything at capture time.** Let curation handle unclassified records. Classify only when the agent is confident about metadata.
+3. **Be specific about when to save.** For Memory, save only when the user explicitly asks. For Sessions, commit at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
+4. **Don't tell the agent to classify everything at save time.** Let curation handle unclassified records. Classify only when the agent is confident about metadata.
 5. **For collections, be explicit about the target.** "Add this to the Sprint Backlog collection" beats "save this task."
-6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before capturing Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
-7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for capture / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
+6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before saving Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
+7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for save / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
 Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md), [Kiro specs](../integration/kiro/), and [custom agent frameworks](../integration/docs/custom-agents.md).
 
@@ -387,6 +387,6 @@ The boundary: **Gramaton stores and retrieves. Your agent thinks and decides.**
 
 ## Live reference
 
-`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `capture`, `search`, `sessions`, `collections`, `metadata`, `curation`, `temporal-queries`. The guide content lives in the repo at `server/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
+`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `save`, `search`, `sessions`, `collections`, `metadata`, `curation`, `temporal-queries`. The guide content lives in the repo at `server/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
 
 When you're unsure about a field, a trigger, or a flow, call the guide rather than guessing. That's its job.

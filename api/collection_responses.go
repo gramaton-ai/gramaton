@@ -1,6 +1,6 @@
 package api
 
-// Typed response shapes for the collections cluster + SessionCommit.
+// Typed response shapes for the collections cluster + SessionSave.
 // Each method's response was map[string]any before the canonical-api
 // refactor; this file replaces those with named structs whose JSON
 // shapes match the prior wire output byte-for-byte.
@@ -10,7 +10,7 @@ package api
 //     mirrors the old map[string]any behavior.
 //   - nested optional sub-objects use pointer types so nil = absent.
 //   - per-item dynamic shapes (CollectionItem.Fields,
-//     CommitSegment-derived response data) stay map[string]any
+//     SaveSegment-derived response data) stay map[string]any
 //     because the sub-shape is collection-schema-driven; typing per
 //     schema is out of scope.
 
@@ -159,7 +159,7 @@ type CollectionMigrateResponse struct {
 	Failed            []ItemFailure `json:"failed,omitempty"`
 }
 
-// ItemFailure is the per-item failure shape used by SessionCommit and
+// ItemFailure is the per-item failure shape used by SessionSave and
 // CollectionMigrate (and structurally compatible with BatchAddFailure
 // in the AddBatch path). Index correlates to the caller's input
 // position; ItemID correlates to a pre-existing record the operation
@@ -171,14 +171,14 @@ type ItemFailure struct {
 	Message string `json:"message"`
 }
 
-// SessionCommitResponse pins SessionCommit's previous map[string]any
+// SessionSaveResponse pins SessionSave's previous map[string]any
 // shape. The legacy map emits session_only_segments unconditionally,
 // so it has no omitempty here. Superseded is omitempty (emitted only
 // when at least one record got auto-superseded by a commit segment).
 // Failed is the per-segment failure list reserved for future
 // partial-success work (see CollectionMigrateResponse.Failed for the
 // same disclaimer).
-type SessionCommitResponse struct {
+type SessionSaveResponse struct {
 	SessionID            string           `json:"session_id"`
 	SegmentsAdded        int              `json:"segments_added"`
 	SessionOnlySegments  int              `json:"session_only_segments"`

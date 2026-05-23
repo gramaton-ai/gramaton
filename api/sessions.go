@@ -27,21 +27,25 @@ var embeddedExtractionPrompt string
 
 // SessionStartDescription is the MCP tool description for
 // gramaton_session_start.
-const SessionStartDescription = `Start or resume a knowledge capture session. On fresh start, creates a new session. On resume (--continue), creates a new session chained to the previous one. Returns the active session.`
+const SessionStartDescription = `Start or resume a knowledge session. On fresh start, creates a new session. On resume (--continue), creates a new session chained to the previous one. Returns the active session.`
 
 // SessionGetDescription is the MCP tool description for
 // gramaton_session_get.
-const SessionGetDescription = `Get the current session state including all topics and segments. Use to review what has been captured so far.`
+const SessionGetDescription = `Get the current session state including all topics and segments. Use to review what has been saved so far.`
 
 // SessionPrepareDescription is the MCP tool description for
 // gramaton_session_prepare. Leads with "eagerly throughout" language
 // to counter the prior-version regression where agents self-triggered
 // far less often than the old gramaton_observe tool did.
-const SessionPrepareDescription = `Extract knowledge from the ongoing conversation. Returns extraction instructions and session state. Call this EAGERLY throughout a conversation, not just at the end: immediately after a decision lands, a rule or principle is articulated, a task completes, or the user pivots topics. Also call before context compaction, and at least every ~10 substantive turns even without an explicit trigger. Bundling captures at session end is an anti-pattern -- knowledge from early in the conversation becomes harder to reconstruct as context accumulates. You must follow the returned instructions before calling gramaton_session_commit.`
+const SessionPrepareDescription = `Extract save-worthy knowledge from the ongoing conversation. Returns extraction instructions and session state. Call this EAGERLY throughout a conversation, not just at the end: immediately after a decision lands, a rule or principle is articulated, a task completes, or the user pivots topics. Also call before context compaction, when the user signals "save the session" or "we're done", and at least every ~10 substantive turns even without an explicit trigger. Bundling saves at session end is an anti-pattern -- knowledge from early in the conversation becomes harder to reconstruct as context accumulates. You must follow the returned instructions before calling gramaton_session_save.
 
-// SessionCommitDescription is the MCP tool description for
-// gramaton_session_commit.
-const SessionCommitDescription = `Submit extracted knowledge segments to the session. IMPORTANT: You must call gramaton_session_prepare first and follow its instructions. Do not call this tool directly -- the preparation step provides required context for high-quality extraction.`
+For saving a single specific record the user handed you, use gramaton_save instead.`
+
+// SessionSaveDescription is the MCP tool description for
+// gramaton_session_save.
+const SessionSaveDescription = `Submit extracted knowledge segments to finalize a session save. Triggered by save-worthy session events: a work boundary lands (task complete, topic pivot, user says "we're done"), compaction is imminent or just happened, or the user explicitly asks to save the session/conversation. IMPORTANT: You must call gramaton_session_prepare first and follow its instructions. Do not call this tool directly -- the preparation step provides required context for high-quality extraction.
+
+For saving a single specific record the user handed you, use gramaton_save instead.`
 
 // loadExtractionPrompt loads the extraction prompt from the config directory,
 // falling back to the embedded default. Returns the prompt content and a short
@@ -658,7 +662,7 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 	return resp, nil
 }
 
-// CommitSegment is a single segment submitted via session_commit.
+// SaveSegment is a single segment submitted via session_save.
 //
 // PromoteToMemory implements the two-tier extraction model: when true
 // (or unset), the segment becomes both a Session segment (BM25-indexed)
@@ -668,7 +672,7 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 // extracted_as edge. Use false for exploration, dead ends, open
 // questions, and other "valuable context" content that shouldn't
 // pollute the Memory store's vector space.
-type CommitSegment struct {
+type SaveSegment struct {
 	Content         string   `json:"content"`
 	TopicName       string   `json:"topic"`
 	Temporality     string   `json:"temporality,omitempty"`
@@ -683,22 +687,22 @@ type CommitSegment struct {
 // shouldPromote returns true when the segment should be promoted to a
 // Memory record. Default (nil) is true for backward compatibility with
 // pre-two-tier callers; explicitly setting false makes it Session-only.
-func (c CommitSegment) shouldPromote() bool {
+func (c SaveSegment) shouldPromote() bool {
 	if c.PromoteToMemory == nil {
 		return true
 	}
 	return *c.PromoteToMemory
 }
 
-// SessionCommit appends extracted segments to the session.
+// SessionSave appends extracted segments to the session.
 // Validates that prepare was called first. Creates new topics as needed.
 // Phase 2: stores in Session only (no Memory records, no embedding).
-func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []CommitSegment) (SessionCommitResponse, *APIError) {
+func (a *API) SessionSave(ctx context.Context, sessionID string, segments []SaveSegment) (SessionSaveResponse, *APIError) {
 	if sessionID == "" {
-		return SessionCommitResponse{}, ErrMissing("session_id is required")
+		return SessionSaveResponse{}, ErrMissing("session_id is required")
 	}
 	if len(segments) == 0 {
-		return SessionCommitResponse{}, ErrMissing("segments is required and must not be empty")
+		return SessionSaveResponse{}, ErrMissing("segments is required and must not be empty")
 	}
 
 	// Validate all segments before consuming the prepared flag so that a
@@ -707,16 +711,16 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 	maxSummary := MaxSummaryShort()
 	for i, seg := range segments {
 		if strings.TrimSpace(seg.Content) == "" {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content is required", i))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content is required", i))
 		}
 		if strings.TrimSpace(seg.TopicName) == "" {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name is required", i))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name is required", i))
 		}
 		if maxContent > 0 && len(seg.Content) > maxContent {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content exceeds maximum length", i))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: content exceeds maximum length", i))
 		}
 		if len(seg.TopicName) > MaxTopicLength {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: topic name exceeds maximum length", i))
 		}
 		// Sanitize summary_short to strip LLM tool-use-format
 		// leakage before length-checking. Mutate via the slice
@@ -725,22 +729,22 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		origSeg := segments[i].SummaryShort
 		segments[i].SummaryShort = sanitize.Field(origSeg)
 		if err := sanitize.Validate(origSeg, segments[i].SummaryShort, fmt.Sprintf("segment %d: summary_short", i), maxSummary); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(err.Error())
+			return SessionSaveResponse{}, ErrInvalid(err.Error())
 		}
 		if err := validateFloat64Range("confidence", seg.Confidence, 0.0, 1.0); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("temporality", seg.Temporality, ValidTemporalities); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("knowledge_type", seg.KnowledgeType, ValidKnowledgeTypes); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateEnum("epistemic_status", seg.EpistemicStatus, ValidEpistemicStatuses); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 		if err := validateKeywords(seg.Keywords); err != nil {
-			return SessionCommitResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
+			return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segment %d: %s", i, err.Error()))
 		}
 	}
 
@@ -755,7 +759,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 
 	if !prepared {
 		a.log.Warn("session commit rejected: prepare not called", "component", "session", "session_id", sessionID)
-		return SessionCommitResponse{}, ErrPrepareRequired("You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.")
+		return SessionSaveResponse{}, ErrPrepareRequired("You must call gramaton_session_prepare first. Prepare returns extraction instructions and session state needed for high-quality knowledge extraction. Call prepare, follow its instructions, then call commit.")
 	}
 
 	start := time.Now()
@@ -798,7 +802,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 	defer a.engine.Unlock()
 
 	if _, svcErr := a.isSession(sessionID); svcErr != nil {
-		return SessionCommitResponse{}, svcErr
+		return SessionSaveResponse{}, svcErr
 	}
 
 	// Build topic name -> ID map from existing topics.
@@ -835,7 +839,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 			if _, err := a.engine.Graph().AddEdge(topicNode.ID, sessionID, "topic_of", 1.0, nil); err != nil {
 				a.log.Warn("topic_of edge create failed", "component", "session",
 					"session_id", sessionID, "topic_id", topicNode.ID, "err", err)
-				return SessionCommitResponse{}, ErrInternal("failed to link topic to session")
+				return SessionSaveResponse{}, ErrInternal("failed to link topic to session")
 			}
 			topicID = topicNode.ID
 			topicMap[seg.TopicName] = topicID
@@ -859,7 +863,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		if _, err := a.engine.Graph().AddEdge(segNode.ID, topicID, "segment_of", 1.0, nil); err != nil {
 			a.log.Warn("segment_of edge create failed", "component", "session",
 				"session_id", sessionID, "topic_id", topicID, "err", err)
-			return SessionCommitResponse{}, ErrInternal("failed to link segment to topic")
+			return SessionSaveResponse{}, ErrInternal("failed to link segment to topic")
 		}
 		segmentsAdded++
 
@@ -987,12 +991,12 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		}
 	}
 
-	if _, err := a.engine.Save("session_commit", graph.CommitAction{
-		Kind: graph.ActionSessionCommit, RecordID: sessionID,
+	if _, err := a.engine.Save("session_save", graph.CommitAction{
+		Kind: graph.ActionSessionSave, RecordID: sessionID,
 	}); err != nil {
 		a.log.Warn("session commit save failed", "component", "session",
 			"session_id", sessionID, "err", err)
-		return SessionCommitResponse{}, ErrInternal("failed to save session commit")
+		return SessionSaveResponse{}, ErrInternal("failed to save session commit")
 	}
 
 	dur := time.Since(start)
@@ -1002,7 +1006,7 @@ func (a *API) SessionCommit(ctx context.Context, sessionID string, segments []Co
 		"memory_records_created", memoryRecordsCreated, "edges_created", edgesCreated,
 		"embed_ms", embedDur.Milliseconds(), "duration", dur)
 
-	resp := SessionCommitResponse{
+	resp := SessionSaveResponse{
 		SessionID:            sessionID,
 		SegmentsAdded:        segmentsAdded,
 		SessionOnlySegments:  sessionOnlySegments,

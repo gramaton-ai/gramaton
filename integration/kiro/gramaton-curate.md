@@ -48,7 +48,7 @@ without applying them.
 
 4. Create concept nodes and link related records:
    ```
-   gramaton_capture(
+   gramaton_save(
      content="Concept name: brief definition",
      knowledge_type="conceptual",
      temporality="durable",

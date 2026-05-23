@@ -6,7 +6,7 @@ Collections are structured containers with guaranteed exhaustive retrieval. Ever
 
 Use for tasks, TODOs, action items, backlogs, checklists -- anything where missing an item is a failure.
 
-**Decision rule:** Will missing one item be a failure? Yes = collection. No = Memory (gramaton_capture).
+**Decision rule:** Will missing one item be a failure? Yes = collection. No = Memory (gramaton_save).
 
 ## Operations
 
@@ -94,6 +94,6 @@ Collection items are graph nodes and can be linked to Memory records via `gramat
 
 ## Related Topics
 
-- `gramaton_guide(topic="capture")` — Memory vs Collections decision rule.
+- `gramaton_guide(topic="save")` — Memory vs Collections decision rule.
 - `gramaton_guide(topic="curation")` — stage-by-knob mapping for the curation pipeline.
 - `gramaton_guide(topic="temporal-queries")` — `as_of=T` semantics and the broader temporal-query surface.

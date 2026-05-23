@@ -621,7 +621,7 @@ func (c Config) ModelForTask(task LLMTask) string {
 // sub-fact nodes that inherit the parent's metadata, for narrow-target
 // semantic recall. Not related to automatic conversation capture --
 // that is handled by the sessions flow (gramaton_session_prepare /
-// gramaton_session_commit).
+// gramaton_session_save).
 //
 // The original `/v1/observe` LLM-driven endpoint plus its gating flag
 // and metadata-default knobs (DefaultConfidence, DefaultTemporality,

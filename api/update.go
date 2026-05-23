@@ -60,7 +60,7 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		return UpdateResponse{}, ErrNotFound("record not found")
 	}
 	if kt, _ := n.Properties.GetString("knowledge_type"); kt == "segment" {
-		return UpdateResponse{}, ErrInvalid("session segments are append-only; use gramaton_session_commit to update capture status")
+		return UpdateResponse{}, ErrInvalid("session segments are append-only; use gramaton_session_save to update capture status")
 	}
 
 	updated := false

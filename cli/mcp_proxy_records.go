@@ -15,47 +15,47 @@ import (
 // struct drift. The handlers forward to the running HTTP server.
 func registerRecordsProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_capture",
-		Description: api.CaptureDescription,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureRequest) (*mcp.CallToolResult, any, error) {
+		Name:        "gramaton_save",
+		Description: api.SaveDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveRequest) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/records", args)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_capture_batch",
-		Description: api.CaptureBatchDescription,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchRequest) (*mcp.CallToolResult, any, error) {
-		return proxyPost("/v1/capture/batch", args)
+		Name:        "gramaton_save_batch",
+		Description: api.SaveBatchDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveBatchRequest) (*mcp.CallToolResult, any, error) {
+		return proxyPost("/v1/save/batch", args)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_capture_batch_status",
-		Description: api.CaptureBatchStatusDescription,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchStatusRequest) (*mcp.CallToolResult, any, error) {
+		Name:        "gramaton_save_batch_status",
+		Description: api.SaveBatchStatusDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveBatchStatusRequest) (*mcp.CallToolResult, any, error) {
 		if args.JobID == "" {
 			return proxyErr("job_id is required")
 		}
-		return proxyGet(fmt.Sprintf("/v1/capture/batch/%s/status", url.PathEscape(args.JobID)))
+		return proxyGet(fmt.Sprintf("/v1/save/batch/%s/status", url.PathEscape(args.JobID)))
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_capture_batch_cancel",
-		Description: api.CaptureBatchCancelDescription,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchCancelRequest) (*mcp.CallToolResult, any, error) {
+		Name:        "gramaton_save_batch_cancel",
+		Description: api.SaveBatchCancelDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveBatchCancelRequest) (*mcp.CallToolResult, any, error) {
 		if args.JobID == "" {
 			return proxyErr("job_id is required")
 		}
-		return proxyPost(fmt.Sprintf("/v1/capture/batch/%s/cancel", url.PathEscape(args.JobID)), nil)
+		return proxyPost(fmt.Sprintf("/v1/save/batch/%s/cancel", url.PathEscape(args.JobID)), nil)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "gramaton_capture_batch_result",
-		Description: api.CaptureBatchResultDescription,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.CaptureBatchResultRequest) (*mcp.CallToolResult, any, error) {
+		Name:        "gramaton_save_batch_result",
+		Description: api.SaveBatchResultDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveBatchResultRequest) (*mcp.CallToolResult, any, error) {
 		if args.JobID == "" {
 			return proxyErr("job_id is required")
 		}
-		path := fmt.Sprintf("/v1/capture/batch/%s/result", url.PathEscape(args.JobID))
+		path := fmt.Sprintf("/v1/save/batch/%s/result", url.PathEscape(args.JobID))
 		if args.TimeoutMS > 0 {
 			path += fmt.Sprintf("?timeout_ms=%d", args.TimeoutMS)
 		}

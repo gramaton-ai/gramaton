@@ -6,17 +6,17 @@ import (
 	"github.com/gramaton-ai/gramaton/jobs"
 )
 
-// CaptureBatchStatusRequest selects a job by ID for a status read.
-type CaptureBatchStatusRequest struct {
-	JobID string `json:"job_id" jsonschema:"the job_id returned by gramaton_capture_batch"`
+// SaveBatchStatusRequest selects a job by ID for a status read.
+type SaveBatchStatusRequest struct {
+	JobID string `json:"job_id" jsonschema:"the job_id returned by gramaton_save_batch"`
 }
 
-// CaptureBatchStatusResponse is the live snapshot of a Job. Errors[]
+// SaveBatchStatusResponse is the live snapshot of a Job. Errors[]
 // surfaces per-item failures collected so far so a caller can correct
 // inputs and retry without waiting for the run to finish.
 // ClientRefToID maps caller-supplied refs to assigned ULIDs; with
 // failed runs it lets a caller resume edge creation via gramaton_link.
-type CaptureBatchStatusResponse struct {
+type SaveBatchStatusResponse struct {
 	JobID          string             `json:"job_id"`
 	Status         string             `json:"status"`
 	Kind           string             `json:"kind"`
@@ -28,35 +28,35 @@ type CaptureBatchStatusResponse struct {
 	ClientToken    string             `json:"client_token,omitempty"`
 }
 
-// CaptureBatchStatusDescription is the MCP tool description for
-// gramaton_capture_batch_status.
-const CaptureBatchStatusDescription = `Inspect the live state of an async gramaton_capture_batch job. Returns status (pending|running|completed|failed|cancelled), total/processed counts, per-item errors collected so far, and the client_ref→id map so edge wiring can resume from a partial run.
+// SaveBatchStatusDescription is the MCP tool description for
+// gramaton_save_batch_status.
+const SaveBatchStatusDescription = `Inspect the live state of an async gramaton_save_batch job. Returns status (pending|running|completed|failed|cancelled), total/processed counts, per-item errors collected so far, and the client_ref→id map so edge wiring can resume from a partial run.
 
 Safe to poll repeatedly; the call is read-only against the JobStore.`
 
-// CaptureBatchStatus reads the current Job state. Read-only; never
+// SaveBatchStatus reads the current Job state. Read-only; never
 // touches the engine write lock. Cross-tenant access surfaces
 // ErrNotFound rather than ErrForbidden so existence isn't leaked.
-func (a *API) CaptureBatchStatus(ctx context.Context, req CaptureBatchStatusRequest) (CaptureBatchStatusResponse, *APIError) {
+func (a *API) SaveBatchStatus(ctx context.Context, req SaveBatchStatusRequest) (SaveBatchStatusResponse, *APIError) {
 	if req.JobID == "" {
-		return CaptureBatchStatusResponse{}, ErrMissing("job_id is required")
+		return SaveBatchStatusResponse{}, ErrMissing("job_id is required")
 	}
 	store := a.engine.JobStore()
 	if store == nil {
-		return CaptureBatchStatusResponse{}, ErrUnavailable("jobstore unavailable")
+		return SaveBatchStatusResponse{}, ErrUnavailable("jobstore unavailable")
 	}
 	j, err := store.Get(req.JobID)
 	if err != nil {
 		if err == jobs.ErrNotFound {
-			return CaptureBatchStatusResponse{}, ErrNotFound("job not found")
+			return SaveBatchStatusResponse{}, ErrNotFound("job not found")
 		}
 		a.log.Warn("capture_batch_status: get failed", "job_id", req.JobID, "err", err)
-		return CaptureBatchStatusResponse{}, ErrInternal("failed to read job")
+		return SaveBatchStatusResponse{}, ErrInternal("failed to read job")
 	}
 	if !tenantOwnsJob(tenantFromContext(ctx), j.TenantID) {
-		return CaptureBatchStatusResponse{}, ErrNotFound("job not found")
+		return SaveBatchStatusResponse{}, ErrNotFound("job not found")
 	}
-	return CaptureBatchStatusResponse{
+	return SaveBatchStatusResponse{
 		JobID:          j.ID,
 		Status:         j.Status,
 		Kind:           j.Kind,

@@ -13,12 +13,12 @@ import (
 // method -> write response. No business logic in this file.
 func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/records", func(w http.ResponseWriter, r *http.Request) {
-		var req api.CaptureRequest
+		var req api.SaveRequest
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		resp, apiErr := s.api.Capture(r.Context(), req)
+		resp, apiErr := s.api.Save(r.Context(), req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -26,13 +26,13 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
-	mux.HandleFunc("POST /v1/capture/batch", func(w http.ResponseWriter, r *http.Request) {
-		var req api.CaptureBatchRequest
+	mux.HandleFunc("POST /v1/save/batch", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SaveBatchRequest
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		resp, apiErr := s.api.CaptureBatch(r.Context(), req)
+		resp, apiErr := s.api.SaveBatch(r.Context(), req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -40,8 +40,8 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
-	mux.HandleFunc("GET /v1/capture/batch/{job_id}/status", func(w http.ResponseWriter, r *http.Request) {
-		resp, apiErr := s.api.CaptureBatchStatus(r.Context(), api.CaptureBatchStatusRequest{
+	mux.HandleFunc("GET /v1/save/batch/{job_id}/status", func(w http.ResponseWriter, r *http.Request) {
+		resp, apiErr := s.api.SaveBatchStatus(r.Context(), api.SaveBatchStatusRequest{
 			JobID: r.PathValue("job_id"),
 		})
 		if apiErr != nil {
@@ -51,8 +51,8 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusOK, resp)
 	})
 
-	mux.HandleFunc("POST /v1/capture/batch/{job_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
-		resp, apiErr := s.api.CaptureBatchCancel(r.Context(), api.CaptureBatchCancelRequest{
+	mux.HandleFunc("POST /v1/save/batch/{job_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		resp, apiErr := s.api.SaveBatchCancel(r.Context(), api.SaveBatchCancelRequest{
 			JobID: r.PathValue("job_id"),
 		})
 		if apiErr != nil {
@@ -62,9 +62,9 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		s.writeJSON(w, http.StatusOK, resp)
 	})
 
-	mux.HandleFunc("GET /v1/capture/batch/{job_id}/result", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/save/batch/{job_id}/result", func(w http.ResponseWriter, r *http.Request) {
 		timeoutMS := parseIntParam(r, "timeout_ms", 0, api.MaxResultTimeoutMS)
-		resp, apiErr := s.api.CaptureBatchResult(r.Context(), api.CaptureBatchResultRequest{
+		resp, apiErr := s.api.SaveBatchResult(r.Context(), api.SaveBatchResultRequest{
 			JobID:     r.PathValue("job_id"),
 			TimeoutMS: timeoutMS,
 		})
@@ -212,71 +212,71 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 // per-transport struct redefinition. The jsonschema tags on the
 // canonical request structs produce the tool schema.
 func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
-	type captureArgs = api.CaptureRequest
+	type saveArgs = api.SaveRequest
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture",
-		Description: api.CaptureDescription,
+		Name:        "gramaton_save",
+		Description: api.SaveDescription,
 		Meta:        mcpAlwaysLoadMeta(),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_capture")
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args saveArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_save")
 		defer done(nil)
-		resp, apiErr := s.api.Capture(ctx, args)
+		resp, apiErr := s.api.Save(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
 		return mcpJSONResult(resp)
 	})
 
-	type captureBatchArgs = api.CaptureBatchRequest
+	type captureBatchArgs = api.SaveBatchRequest
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture_batch",
-		Description: api.CaptureBatchDescription,
+		Name:        "gramaton_save_batch",
+		Description: api.SaveBatchDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_capture_batch")
+		done := s.mcpToolStart("gramaton_save_batch")
 		defer done(nil)
-		resp, apiErr := s.api.CaptureBatch(ctx, args)
+		resp, apiErr := s.api.SaveBatch(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
 		return mcpJSONResult(resp)
 	})
 
-	type captureBatchStatusArgs = api.CaptureBatchStatusRequest
+	type captureBatchStatusArgs = api.SaveBatchStatusRequest
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture_batch_status",
-		Description: api.CaptureBatchStatusDescription,
+		Name:        "gramaton_save_batch_status",
+		Description: api.SaveBatchStatusDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchStatusArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_capture_batch_status")
+		done := s.mcpToolStart("gramaton_save_batch_status")
 		defer done(nil)
-		resp, apiErr := s.api.CaptureBatchStatus(ctx, args)
+		resp, apiErr := s.api.SaveBatchStatus(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
 		return mcpJSONResult(resp)
 	})
 
-	type captureBatchCancelArgs = api.CaptureBatchCancelRequest
+	type captureBatchCancelArgs = api.SaveBatchCancelRequest
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture_batch_cancel",
-		Description: api.CaptureBatchCancelDescription,
+		Name:        "gramaton_save_batch_cancel",
+		Description: api.SaveBatchCancelDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchCancelArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_capture_batch_cancel")
+		done := s.mcpToolStart("gramaton_save_batch_cancel")
 		defer done(nil)
-		resp, apiErr := s.api.CaptureBatchCancel(ctx, args)
+		resp, apiErr := s.api.SaveBatchCancel(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
 		return mcpJSONResult(resp)
 	})
 
-	type captureBatchResultArgs = api.CaptureBatchResultRequest
+	type captureBatchResultArgs = api.SaveBatchResultRequest
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "gramaton_capture_batch_result",
-		Description: api.CaptureBatchResultDescription,
+		Name:        "gramaton_save_batch_result",
+		Description: api.SaveBatchResultDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchResultArgs) (*mcp.CallToolResult, any, error) {
-		done := s.mcpToolStart("gramaton_capture_batch_result")
+		done := s.mcpToolStart("gramaton_save_batch_result")
 		defer done(nil)
-		resp, apiErr := s.api.CaptureBatchResult(ctx, args)
+		resp, apiErr := s.api.SaveBatchResult(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

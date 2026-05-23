@@ -78,7 +78,7 @@ This section is the minimum you need to find your way around.
 The two most important things to internalise:
 
 1. **The `api/` package is the canonical surface.** Every operation
-   (capture, search, branch, backup, ...) is a method on `*api.API`
+   (save, search, branch, backup, ...) is a method on `*api.API`
    with a typed `Request` and a typed `Response`. The HTTP server,
    the MCP stdio handler, and the CLI MCP proxy are all thin shims
    that translate transport-specific details into an `api.X(ctx,
@@ -433,7 +433,7 @@ backup along the way, and apply the three-phase lock pattern.
    HEAD/refs/FORMAT under RLock, release, then run the actual
    `tar.gz` compression off-lock.
 3. `backup/backup.go` (modified) -- new `CreateSnapshot(snap, ...)`
-   function that takes the captured snapshot and writes a
+   function that takes the saved snapshot and writes a
    tar.gz that injects the snapshotted HEAD/refs/FORMAT instead
    of re-reading the live disk.
 4. `core/engine.go` (modified) -- new `SwapGraph(g)` primitive
@@ -457,7 +457,7 @@ backup along the way, and apply the three-phase lock pattern.
 
 - `TestBackupDoesNotBlockWrites` -- proof that the three-phase
   split releases the lock before compression, by racing a
-  concurrent capture against an in-flight backup using the
+  concurrent save against an in-flight backup using the
   snapshot hook.
 - `TestBackupSnapshotConsistency` -- proof that writes landing
   AFTER the snapshot phase do NOT appear in the archive.
@@ -487,7 +487,7 @@ view of the graph) and slow work (disk, network, embedding).
 ```go
 func (a *API) ThreePhaseExample(ctx context.Context, req XxxRequest) (XxxResponse, *APIError) {
     // Phase 1: snapshot under read lock. Must be fast -- ideally
-    // just a few field reads or a hash capture.
+    // just a few field reads or a hash save.
     a.engine.RLock()
     snapshot := captureWhatYouNeed(a.engine)
     a.engine.RUnlock()
@@ -631,7 +631,7 @@ anything at INFO better be worth the line every time it fires:
   Operators should be able to grep for WARN and find every degraded
   path without noise.
 - **INFO**: state-change events the user wants to see *once per
-  occurrence* — capture done, session committed, write batch
+  occurrence* — save done, session committed, write batch
   complete (when there was actual work), curation cycle summary,
   graph load complete. One INFO per logical operation; not per
   sub-step.
@@ -660,7 +660,7 @@ case this is seconds.**
 
 We had this in `BackupCreate` pre-PR-3: the RLock was held for the
 entire tar.gz pass. A one-second backup blocked every concurrent
-write. Fix: phase 1 captures HEAD/refs in microseconds; phase 2
+write. Fix: phase 1 saves HEAD/refs in microseconds; phase 2
 does the slow work off-lock.
 
 If you find yourself wanting to hold a lock across slow work, the
@@ -761,7 +761,7 @@ on 2026-05-07 led to GH issues #16 and the test-stability sweep:
    prove concurrency. Under race detector load, the scheduler may
    serialize the goroutines despite the lock permitting parallelism,
    leaving `maxLive == 1`.
-2. `TestCaptureBatchAsyncCancelBeforeFirstChunk` only handled two
+2. `TestSaveBatchAsyncCancelBeforeFirstChunk` only handled two
    terminal states (`cancelled-with-0`, `completed`) — but the
    chunked runner explicitly supports a third (`cancelled-with-N>0`).
    `pollUntilTerminal` returned when status flipped, racing the
@@ -793,7 +793,7 @@ on 2026-05-07 led to GH issues #16 and the test-stability sweep:
   whole-process runs depends on goroutine scheduling, GC pauses, and
   CI-runner load. Soften to `t.Logf` and keep the correctness contract
   on the output, not the timing. The original incident:
-  `TestCaptureBatchWallClockSpeedup` hard-asserted `tPar < tSeq` and
+  `TestSaveBatchWallClockSpeedup` hard-asserted `tPar < tSeq` and
   flaked on a single loaded ubuntu-latest run (par=1.4s, seq=944ms,
   ratio=0.67); the batch path was correct, just unlucky on that
   scheduler. If you genuinely need a perf gate, compare against a

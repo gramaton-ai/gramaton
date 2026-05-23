@@ -75,25 +75,25 @@ func setupBatchAPI(t *testing.T) (*API, *core.Engine, *stubBatchEmbedder) {
 	return a, eng, emb
 }
 
-func mustItems(items ...string) []CaptureBatchItem {
-	out := make([]CaptureBatchItem, len(items))
+func mustItems(items ...string) []SaveBatchItem {
+	out := make([]SaveBatchItem, len(items))
 	for i, c := range items {
-		out[i] = CaptureBatchItem{
-			CaptureRequest: CaptureRequest{Content: c},
+		out[i] = SaveBatchItem{
+			SaveRequest: SaveRequest{Content: c},
 		}
 	}
 	return out
 }
 
-// TestCaptureBatchHappyPath: 3 items, all commit, single batch embed,
+// TestSaveBatchHappyPath: 3 items, all commit, single batch embed,
 // Job reaches completed state.
-func TestCaptureBatchHappyPath(t *testing.T) {
+func TestSaveBatchHappyPath(t *testing.T) {
 	a, _, emb := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("alpha record", "beta record", "gamma record"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if resp.Status != jobs.StatusCompleted {
 		t.Errorf("status: got %q want %q", resp.Status, jobs.StatusCompleted)
@@ -117,23 +117,23 @@ func TestCaptureBatchHappyPath(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEmpty: zero items rejected with ErrInvalid.
-func TestCaptureBatchEmpty(t *testing.T) {
+// TestSaveBatchEmpty: zero items rejected with ErrInvalid.
+func TestSaveBatchEmpty(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{Items: nil})
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: nil})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error, got %v", apiErr)
 	}
 }
 
-// TestCaptureBatchOverCap: more than MaxSyncBatchSize items rejected.
-func TestCaptureBatchOverCap(t *testing.T) {
+// TestSaveBatchOverCap: more than MaxSyncBatchSize items rejected.
+func TestSaveBatchOverCap(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	items := make([]CaptureBatchItem, MaxSyncBatchSize+1)
+	items := make([]SaveBatchItem, MaxSyncBatchSize+1)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "x"}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: "x"}}
 	}
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{Items: items})
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: items})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error, got %v", apiErr)
 	}
@@ -142,19 +142,19 @@ func TestCaptureBatchOverCap(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchByteBudget: total content bytes exceeds
+// TestSaveBatchByteBudget: total content bytes exceeds
 // MaxBatchBytes -> ErrInvalid.
-func TestCaptureBatchByteBudget(t *testing.T) {
+func TestSaveBatchByteBudget(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	// Forge 10 items that together overflow the cap. Use chunks of
 	// MaxBatchBytes/9 so the 10th item tips the total past the limit.
 	chunkLen := MaxBatchBytes/9 + 1
 	chunk := strings.Repeat("a", chunkLen)
-	items := make([]CaptureBatchItem, 10)
+	items := make([]SaveBatchItem, 10)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: chunk}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: chunk}}
 	}
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{Items: items})
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: items})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error, got %v", apiErr)
 	}
@@ -163,53 +163,53 @@ func TestCaptureBatchByteBudget(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchValidationFailures: every Phase 0 per-item rule
+// TestSaveBatchValidationFailures: every Phase 0 per-item rule
 // produces an entry in Failed[]; valid items still commit.
-func TestCaptureBatchValidationFailures(t *testing.T) {
+func TestSaveBatchValidationFailures(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	nan := math.NaN()
 	inf := math.Inf(1)
 	bad := 2.0
 	cases := []struct {
 		name string
-		item CaptureBatchItem
+		item SaveBatchItem
 		want string // substring expected in the error message
 	}{
 		{
 			name: "confidence_out_of_range",
-			item: CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "c", Confidence: &bad}},
+			item: SaveBatchItem{SaveRequest: SaveRequest{Content: "c", Confidence: &bad}},
 			want: "confidence",
 		},
 		{
 			name: "confidence_nan",
-			item: CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "c", Confidence: &nan}},
+			item: SaveBatchItem{SaveRequest: SaveRequest{Content: "c", Confidence: &nan}},
 			want: "finite",
 		},
 		{
 			name: "confidence_inf",
-			item: CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "c", Confidence: &inf}},
+			item: SaveBatchItem{SaveRequest: SaveRequest{Content: "c", Confidence: &inf}},
 			want: "finite",
 		},
 		{
 			name: "client_ref_bad_charset",
-			item: CaptureBatchItem{ClientRef: "bad ref!", CaptureRequest: CaptureRequest{Content: "c"}},
+			item: SaveBatchItem{ClientRef: "bad ref!", SaveRequest: SaveRequest{Content: "c"}},
 			want: "client_ref",
 		},
 		{
 			name: "reserved_meta_namespace",
-			item: CaptureBatchItem{CaptureRequest: CaptureRequest{Content: "c", Meta: map[string]any{"_gramaton.foo": "bar"}}},
+			item: SaveBatchItem{SaveRequest: SaveRequest{Content: "c", Meta: map[string]any{"_gramaton.foo": "bar"}}},
 			want: "reserved",
 		},
 	}
-	items := []CaptureBatchItem{
-		{CaptureRequest: CaptureRequest{Content: "valid item one"}},
+	items := []SaveBatchItem{
+		{SaveRequest: SaveRequest{Content: "valid item one"}},
 	}
 	for _, tc := range cases {
 		items = append(items, tc.item)
 	}
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{Items: items})
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: items})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 1 {
 		t.Errorf("added: got %d want 1", len(resp.Added))
@@ -228,18 +228,18 @@ func TestCaptureBatchValidationFailures(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchDuplicateClientRef: two items with the same
+// TestSaveBatchDuplicateClientRef: two items with the same
 // ClientRef in the same batch -> second fails with duplicate_client_ref.
-func TestCaptureBatchDuplicateClientRef(t *testing.T) {
+func TestSaveBatchDuplicateClientRef(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{ClientRef: "ref-1", CaptureRequest: CaptureRequest{Content: "first"}},
-			{ClientRef: "ref-1", CaptureRequest: CaptureRequest{Content: "second"}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{ClientRef: "ref-1", SaveRequest: SaveRequest{Content: "first"}},
+			{ClientRef: "ref-1", SaveRequest: SaveRequest{Content: "second"}},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 1 || resp.Added[0].ClientRef != "ref-1" {
 		t.Errorf("expected first item added with ref-1, got %+v", resp.Added)
@@ -249,17 +249,17 @@ func TestCaptureBatchDuplicateClientRef(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchReservedNamespace: top-level _gramaton.* key is
+// TestSaveBatchReservedNamespace: top-level _gramaton.* key is
 // rejected.
-func TestCaptureBatchReservedNamespace(t *testing.T) {
+func TestSaveBatchReservedNamespace(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{CaptureRequest: CaptureRequest{Content: "x", Meta: map[string]any{"_gramaton.import.job_id": "fake"}}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{SaveRequest: SaveRequest{Content: "x", Meta: map[string]any{"_gramaton.import.job_id": "fake"}}},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Failed) != 1 {
 		t.Fatalf("expected 1 failure, got %d", len(resp.Failed))
@@ -269,34 +269,34 @@ func TestCaptureBatchReservedNamespace(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchReservedNamespaceNested: meta key containing
+// TestSaveBatchReservedNamespaceNested: meta key containing
 // `._gramaton.` substring is also rejected (pin: strict policy).
-func TestCaptureBatchReservedNamespaceNested(t *testing.T) {
+func TestSaveBatchReservedNamespaceNested(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{CaptureRequest: CaptureRequest{Content: "x", Meta: map[string]any{"foo._gramaton.bar": "baz"}}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{SaveRequest: SaveRequest{Content: "x", Meta: map[string]any{"foo._gramaton.bar": "baz"}}},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Failed) != 1 {
 		t.Fatalf("expected 1 failure, got %d", len(resp.Failed))
 	}
 }
 
-// TestCaptureBatchEmbedFallback: batch embed fails; per-item fallback
+// TestSaveBatchEmbedFallback: batch embed fails; per-item fallback
 // runs. Each item still commits; warnings collected only when the
 // per-item retry also fails.
-func TestCaptureBatchEmbedFallback(t *testing.T) {
+func TestSaveBatchEmbedFallback(t *testing.T) {
 	a, _, emb := setupBatchAPI(t)
 	emb.failBatch.Store(true)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("a", "b", "c"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 3 {
 		t.Fatalf("added: got %d want 3", len(resp.Added))
@@ -313,17 +313,17 @@ func TestCaptureBatchEmbedFallback(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchEmbedFallbackWarnsOnRetryFailure: when both batch and
+// TestSaveBatchEmbedFallbackWarnsOnRetryFailure: when both batch and
 // per-item embed fail, the item still commits but with a warning.
-func TestCaptureBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
+func TestSaveBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
 	a, _, emb := setupBatchAPI(t)
 	emb.failBatch.Store(true)
 	emb.perItemErr = errors.New("per-item provider down")
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("a"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 1 {
 		t.Fatalf("expected 1 added, got %d", len(resp.Added))
@@ -333,16 +333,16 @@ func TestCaptureBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
 	}
 }
 
-// (TestCaptureBatchSupersession moved to capture_batch_review_test.go
-// as TestCaptureBatchSupersessionDeterministic — the prior version
+// (TestSaveBatchSupersession moved to capture_batch_review_test.go
+// as TestSaveBatchSupersessionDeterministic — the prior version
 // gated its assertion on `if len(Superseded) > 0` which the stub
 // embedder rarely satisfied, making the test vacuous.)
 
-// TestCaptureBatchSkipSupersession: SkipSupersession=true disables
+// TestSaveBatchSkipSupersession: SkipSupersession=true disables
 // dedup-driven supersession entirely.
-func TestCaptureBatchSkipSupersession(t *testing.T) {
+func TestSaveBatchSkipSupersession(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("identical phrase one"),
 	})
 	if apiErr != nil {
@@ -351,7 +351,7 @@ func TestCaptureBatchSkipSupersession(t *testing.T) {
 	if len(resp.Added) != 1 {
 		t.Fatalf("seed added: %d", len(resp.Added))
 	}
-	resp2, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items:            mustItems("identical phrase one"),
 		SkipSupersession: true,
 	})
@@ -369,17 +369,17 @@ func TestCaptureBatchSkipSupersession(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientRefEcho: ClientRef round-trips in Added[].
-func TestCaptureBatchClientRefEcho(t *testing.T) {
+// TestSaveBatchClientRefEcho: ClientRef round-trips in Added[].
+func TestSaveBatchClientRefEcho(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
-		Items: []CaptureBatchItem{
-			{ClientRef: "alpha-1", CaptureRequest: CaptureRequest{Content: "first"}},
-			{ClientRef: "beta_2", CaptureRequest: CaptureRequest{Content: "second"}},
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
+		Items: []SaveBatchItem{
+			{ClientRef: "alpha-1", SaveRequest: SaveRequest{Content: "first"}},
+			{ClientRef: "beta_2", SaveRequest: SaveRequest{Content: "second"}},
 		},
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	want := map[string]bool{"alpha-1": false, "beta_2": false}
 	for _, ad := range resp.Added {
@@ -392,20 +392,20 @@ func TestCaptureBatchClientRefEcho(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientTokenIdempotent: same token + same body
+// TestSaveBatchClientTokenIdempotent: same token + same body
 // returns same JobID, no duplicate records.
-func TestCaptureBatchClientTokenIdempotent(t *testing.T) {
+func TestSaveBatchClientTokenIdempotent(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	tok := "01234567-89ab-cdef-0123-456789abcdef"
-	req := CaptureBatchRequest{
+	req := SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("first call content"),
 	}
-	resp1, apiErr := a.CaptureBatch(context.Background(), req)
+	resp1, apiErr := a.SaveBatch(context.Background(), req)
 	if apiErr != nil {
 		t.Fatalf("first: %v", apiErr)
 	}
-	resp2, apiErr := a.CaptureBatch(context.Background(), req)
+	resp2, apiErr := a.SaveBatch(context.Background(), req)
 	if apiErr != nil {
 		t.Fatalf("second: %v", apiErr)
 	}
@@ -420,18 +420,18 @@ func TestCaptureBatchClientTokenIdempotent(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientTokenHashMismatch: same token, different body
+// TestSaveBatchClientTokenHashMismatch: same token, different body
 // is rejected with conflict.
-func TestCaptureBatchClientTokenHashMismatch(t *testing.T) {
+func TestSaveBatchClientTokenHashMismatch(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	tok := "01234567-89ab-cdef-0123-456789abcdef"
-	if _, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	if _, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("first content"),
 	}); apiErr != nil {
 		t.Fatalf("first: %v", apiErr)
 	}
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("DIFFERENT content"),
 	})
@@ -440,9 +440,9 @@ func TestCaptureBatchClientTokenHashMismatch(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientTokenAfterFailure: a failed prior job's token
+// TestSaveBatchClientTokenAfterFailure: a failed prior job's token
 // is reusable; the new Job links to the prior via SupersedesJobID.
-func TestCaptureBatchClientTokenAfterFailure(t *testing.T) {
+func TestSaveBatchClientTokenAfterFailure(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	tok := "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -450,7 +450,7 @@ func TestCaptureBatchClientTokenAfterFailure(t *testing.T) {
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseChunkSave: errors.New("simulated save failure"),
 	}})
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("hello world"),
 	})
@@ -459,7 +459,7 @@ func TestCaptureBatchClientTokenAfterFailure(t *testing.T) {
 	}
 	a.SetFaultInjector(nil)
 
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("hello world"),
 	})
@@ -484,16 +484,16 @@ func TestCaptureBatchClientTokenAfterFailure(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchSaveFailureRollsBackVectorIndex: inject a save
+// TestSaveBatchSaveFailureRollsBackVectorIndex: inject a save
 // failure; verify the in-memory indexes were rolled back so a search
 // finds nothing.
-func TestCaptureBatchSaveFailureRollsBackVectorIndex(t *testing.T) {
+func TestSaveBatchSaveFailureRollsBackVectorIndex(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseChunkSave: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("rolled-back content one", "rolled-back content two"),
 	})
 	if apiErr == nil {
@@ -506,15 +506,15 @@ func TestCaptureBatchSaveFailureRollsBackVectorIndex(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchSaveFailureRollsBackBM25: after Save failure, BM25
+// TestSaveBatchSaveFailureRollsBackBM25: after Save failure, BM25
 // search returns nothing for the rolled-back content.
-func TestCaptureBatchSaveFailureRollsBackBM25(t *testing.T) {
+func TestSaveBatchSaveFailureRollsBackBM25(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseChunkSave: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("uniqueterm-xyz123 lorem"),
 	})
 	if apiErr == nil {
@@ -528,19 +528,19 @@ func TestCaptureBatchSaveFailureRollsBackBM25(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchJobStoreUpdateFailureAfterSave: records ARE on disk
+// TestSaveBatchJobStoreUpdateFailureAfterSave: records ARE on disk
 // and queryable; only Job bookkeeping failed.
-func TestCaptureBatchJobStoreUpdateFailureAfterSave(t *testing.T) {
+func TestSaveBatchJobStoreUpdateFailureAfterSave(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseJobstoreUpdate: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("survives jobstore failure"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 1 {
 		t.Fatalf("added: %d", len(resp.Added))
@@ -552,15 +552,15 @@ func TestCaptureBatchJobStoreUpdateFailureAfterSave(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchOrphanStamp: every record has
+// TestSaveBatchOrphanStamp: every record has
 // meta._gramaton.import.job_id matching the Job.
-func TestCaptureBatchOrphanStamp(t *testing.T) {
+func TestSaveBatchOrphanStamp(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("alpha", "beta"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	eng.RLock()
 	defer eng.RUnlock()
@@ -577,15 +577,15 @@ func TestCaptureBatchOrphanStamp(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchCommitActions: Save emits one ActionCapture per
+// TestSaveBatchCommitActions: Save emits one ActionSave per
 // committed item.
-func TestCaptureBatchCommitActions(t *testing.T) {
+func TestSaveBatchCommitActions(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("one", "two", "three"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if len(resp.Added) != 3 {
 		t.Fatalf("added: %d", len(resp.Added))
@@ -597,7 +597,7 @@ func TestCaptureBatchCommitActions(t *testing.T) {
 		t.Fatalf("loadCommitMeta: %v", err)
 	}
 	if len(commit.Actions) != 3 {
-		t.Errorf("expected 3 ActionCapture, got %d", len(commit.Actions))
+		t.Errorf("expected 3 ActionSave, got %d", len(commit.Actions))
 	}
 }
 
@@ -606,13 +606,13 @@ func TestCaptureBatchCommitActions(t *testing.T) {
 // TestCanonicalizeRequestStable: timestamp normalization, meta key
 // reordering, and Wait-field changes all produce identical bytes.
 func TestCanonicalizeRequestStable(t *testing.T) {
-	mkReq := func(wait *bool, ts string, metaA, metaB any) CaptureBatchRequest {
-		return CaptureBatchRequest{
+	mkReq := func(wait *bool, ts string, metaA, metaB any) SaveBatchRequest {
+		return SaveBatchRequest{
 			Wait: wait,
-			Items: []CaptureBatchItem{
+			Items: []SaveBatchItem{
 				{
 					ClientRef: "ref",
-					CaptureRequest: CaptureRequest{
+					SaveRequest: SaveRequest{
 						Content:      "x",
 						AssertedAsOf: ts,
 						Meta: map[string]any{
@@ -637,8 +637,8 @@ func TestCanonicalizeRequestStable(t *testing.T) {
 // TestCanonicalizeRequestDistinguishes: different content produces
 // different canonical bytes.
 func TestCanonicalizeRequestDistinguishes(t *testing.T) {
-	a, _ := canonicalizeRequest(CaptureBatchRequest{Items: mustItems("alpha")})
-	b, _ := canonicalizeRequest(CaptureBatchRequest{Items: mustItems("beta")})
+	a, _ := canonicalizeRequest(SaveBatchRequest{Items: mustItems("alpha")})
+	b, _ := canonicalizeRequest(SaveBatchRequest{Items: mustItems("beta")})
 	if string(a) == string(b) {
 		t.Errorf("canonical should differ:\n a=%s\n b=%s", a, b)
 	}
@@ -647,7 +647,7 @@ func TestCanonicalizeRequestDistinguishes(t *testing.T) {
 // TestCanonicalizeRequestSkipSupersessionDistinguishes: SkipSupersession
 // affects semantics so it must affect the hash.
 func TestCanonicalizeRequestSkipSupersessionDistinguishes(t *testing.T) {
-	base := CaptureBatchRequest{Items: mustItems("x")}
+	base := SaveBatchRequest{Items: mustItems("x")}
 	a, _ := canonicalizeRequest(base)
 	base.SkipSupersession = true
 	b, _ := canonicalizeRequest(base)
@@ -680,14 +680,14 @@ func TestValidateClientToken_FormatGate(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchJobStateOnSuccess: completed job has correct stats.
-func TestCaptureBatchJobStateOnSuccess(t *testing.T) {
+// TestSaveBatchJobStateOnSuccess: completed job has correct stats.
+func TestSaveBatchJobStateOnSuccess(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("one", "two"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	j, err := eng.JobStore().Get(resp.JobID)
 	if err != nil {
@@ -704,15 +704,15 @@ func TestCaptureBatchJobStateOnSuccess(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchJobStateOnSaveFailure: failed job has correct
+// TestSaveBatchJobStateOnSaveFailure: failed job has correct
 // status + reason.
-func TestCaptureBatchJobStateOnSaveFailure(t *testing.T) {
+func TestSaveBatchJobStateOnSaveFailure(t *testing.T) {
 	a, eng, _ := setupBatchAPI(t)
 	a.SetFaultInjector(&stubFaultInjector{errs: map[string]error{
 		FaultPhaseChunkSave: errors.New("forced"),
 	}})
 	defer a.SetFaultInjector(nil)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("x"),
 	})
 	if apiErr == nil {
@@ -735,11 +735,11 @@ func TestCaptureBatchJobStateOnSaveFailure(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchClientTokenInvalidShape: non-UUID token rejected
+// TestSaveBatchClientTokenInvalidShape: non-UUID token rejected
 // at the envelope level.
-func TestCaptureBatchClientTokenInvalidShape(t *testing.T) {
+func TestSaveBatchClientTokenInvalidShape(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
-	_, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	_, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		ClientToken: "not-a-uuid",
 		Items:       mustItems("x"),
 	})
@@ -748,18 +748,18 @@ func TestCaptureBatchClientTokenInvalidShape(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchAsyncReturnsPending: wait=false returns a JobID
+// TestSaveBatchAsyncReturnsPending: wait=false returns a JobID
 // with status=pending immediately; the async runner picks it up and
 // commits the work in the background.
-func TestCaptureBatchAsyncReturnsPending(t *testing.T) {
+func TestSaveBatchAsyncReturnsPending(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	f := false
-	resp, apiErr := a.CaptureBatch(context.Background(), CaptureBatchRequest{
+	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:  &f,
 		Items: mustItems("x"),
 	})
 	if apiErr != nil {
-		t.Fatalf("CaptureBatch: %v", apiErr)
+		t.Fatalf("SaveBatch: %v", apiErr)
 	}
 	if resp.JobID == "" {
 		t.Error("expected JobID")
@@ -773,17 +773,17 @@ func TestCaptureBatchAsyncReturnsPending(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchLockHoldTime: ratio gate. Compare batch lock-hold
+// TestSaveBatchLockHoldTime: ratio gate. Compare batch lock-hold
 // against N * single-capture lock-hold; should be cheaper, not 3x
 // worse.
-func TestCaptureBatchLockHoldTime(t *testing.T) {
+func TestSaveBatchLockHoldTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping lock-hold gate in -short mode")
 	}
 	a1, _, _ := setupBatchAPI(t)
 	t1Start := time.Now()
 	for i := 0; i < 10; i++ {
-		_, apiErr := a1.Capture(context.Background(), CaptureRequest{Content: fmt.Sprintf("baseline %d", i)})
+		_, apiErr := a1.Save(context.Background(), SaveRequest{Content: fmt.Sprintf("baseline %d", i)})
 		if apiErr != nil {
 			t.Fatalf("baseline capture %d: %v", i, apiErr)
 		}
@@ -791,12 +791,12 @@ func TestCaptureBatchLockHoldTime(t *testing.T) {
 	t1 := time.Since(t1Start) / 10
 
 	a2, _, _ := setupBatchAPI(t)
-	items := make([]CaptureBatchItem, 10)
+	items := make([]SaveBatchItem, 10)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: fmt.Sprintf("batch %d", i)}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("batch %d", i)}}
 	}
 	tBatchStart := time.Now()
-	if _, apiErr := a2.CaptureBatch(context.Background(), CaptureBatchRequest{Items: items}); apiErr != nil {
+	if _, apiErr := a2.SaveBatch(context.Background(), SaveBatchRequest{Items: items}); apiErr != nil {
 		t.Fatalf("batch: %v", apiErr)
 	}
 	tBatch := time.Since(tBatchStart)
@@ -810,9 +810,9 @@ func TestCaptureBatchLockHoldTime(t *testing.T) {
 	t.Logf("batch=%v vs serial=10*%v = %v", tBatch, t1, 10*t1)
 }
 
-// TestCaptureBatchWallClockSpeedup: ratio gate. Skipped on small CPU
+// TestSaveBatchWallClockSpeedup: ratio gate. Skipped on small CPU
 // machines where parallel embed has no headroom.
-func TestCaptureBatchWallClockSpeedup(t *testing.T) {
+func TestSaveBatchWallClockSpeedup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping wall-clock gate in -short mode")
 	}
@@ -831,19 +831,19 @@ func TestCaptureBatchWallClockSpeedup(t *testing.T) {
 	a1, _, _ := setupBatchAPI(t)
 	tSeqStart := time.Now()
 	for i := 0; i < N; i++ {
-		if _, apiErr := a1.Capture(context.Background(), CaptureRequest{Content: fmt.Sprintf("seq %d", i)}); apiErr != nil {
+		if _, apiErr := a1.Save(context.Background(), SaveRequest{Content: fmt.Sprintf("seq %d", i)}); apiErr != nil {
 			t.Fatalf("seq[%d]: %v", i, apiErr)
 		}
 	}
 	tSeq := time.Since(tSeqStart)
 
 	a2, _, _ := setupBatchAPI(t)
-	items := make([]CaptureBatchItem, N)
+	items := make([]SaveBatchItem, N)
 	for i := range items {
-		items[i] = CaptureBatchItem{CaptureRequest: CaptureRequest{Content: fmt.Sprintf("par %d", i)}}
+		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("par %d", i)}}
 	}
 	tParStart := time.Now()
-	if _, apiErr := a2.CaptureBatch(context.Background(), CaptureBatchRequest{Items: items}); apiErr != nil {
+	if _, apiErr := a2.SaveBatch(context.Background(), SaveBatchRequest{Items: items}); apiErr != nil {
 		t.Fatalf("par: %v", apiErr)
 	}
 	tPar := time.Since(tParStart)
@@ -862,20 +862,20 @@ func TestCaptureBatchWallClockSpeedup(t *testing.T) {
 	t.Logf("par=%v vs seq=%v ratio=%.2f", tPar, tSeq, float64(tSeq)/float64(tPar))
 }
 
-// TestCaptureBatchIdempotentResponseShape: the cached response from a
+// TestSaveBatchIdempotentResponseShape: the cached response from a
 // prior identical call decodes the same Added/Failed/Stats.
-func TestCaptureBatchIdempotentResponseShape(t *testing.T) {
+func TestSaveBatchIdempotentResponseShape(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	tok := "01234567-89ab-cdef-0123-456789abcdef"
-	req := CaptureBatchRequest{
+	req := SaveBatchRequest{
 		ClientToken: tok,
 		Items:       mustItems("alpha", "beta", "gamma"),
 	}
-	resp1, apiErr := a.CaptureBatch(context.Background(), req)
+	resp1, apiErr := a.SaveBatch(context.Background(), req)
 	if apiErr != nil {
 		t.Fatalf("first: %v", apiErr)
 	}
-	resp2, apiErr := a.CaptureBatch(context.Background(), req)
+	resp2, apiErr := a.SaveBatch(context.Background(), req)
 	if apiErr != nil {
 		t.Fatalf("second: %v", apiErr)
 	}
@@ -890,10 +890,10 @@ func TestCaptureBatchIdempotentResponseShape(t *testing.T) {
 	}
 }
 
-// TestCaptureBatchResponseJSONShape: response marshals cleanly with
+// TestSaveBatchResponseJSONShape: response marshals cleanly with
 // the documented field names.
-func TestCaptureBatchResponseJSONShape(t *testing.T) {
-	resp := CaptureBatchResponse{
+func TestSaveBatchResponseJSONShape(t *testing.T) {
+	resp := SaveBatchResponse{
 		JobID:  "job-1",
 		Status: "completed",
 		Added: []CaptureBatchAdded{

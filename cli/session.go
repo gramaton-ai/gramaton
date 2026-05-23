@@ -145,7 +145,7 @@ func runSessionCommit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("input_error: JSON must contain a \"segments\" array")
 	}
 
-	resp, err := serverPost(fmt.Sprintf("/v1/sessions/%s/commit", args[0]), body)
+	resp, err := serverPost(fmt.Sprintf("/v1/sessions/%s/save", args[0]), body)
 	if err != nil {
 		return fmt.Errorf("session commit: %w", err)
 	}

@@ -18,7 +18,7 @@ func TestGuideReturnsTopicList(t *testing.T) {
 	}
 	// Verify all 6 topics present.
 	expected := map[string]bool{
-		"metadata": false, "capture": false, "search": false,
+		"metadata": false, "save": false, "search": false,
 		"sessions": false, "collections": false, "curation": false,
 	}
 	for _, topic := range topics {
@@ -34,7 +34,7 @@ func TestGuideReturnsTopicList(t *testing.T) {
 func TestGuideReturnsContentForEachTopic(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	for _, topic := range []string{"metadata", "capture", "search", "sessions", "collections", "curation"} {
+	for _, topic := range []string{"metadata", "save", "search", "sessions", "collections", "curation"} {
 		result, svcErr := srv.serviceGuide(topic)
 		if svcErr != nil {
 			t.Errorf("guide(%s): %v", topic, svcErr)

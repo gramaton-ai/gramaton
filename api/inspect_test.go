@@ -14,7 +14,7 @@ func TestInspectEffectiveCurationOrphanMemoryRecord(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	cap, apiErr := a.Capture(ctx, CaptureRequest{Content: "orphan memory record"})
+	cap, apiErr := a.Save(ctx, SaveRequest{Content: "orphan memory record"})
 	if apiErr != nil {
 		t.Fatalf("Capture: %v", apiErr)
 	}

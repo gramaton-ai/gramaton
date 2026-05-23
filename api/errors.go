@@ -82,7 +82,7 @@ func ErrForbidden(msg string) *APIError {
 	return &APIError{Code: "forbidden", Message: msg, HTTPStatus: http.StatusForbidden, Retryable: false}
 }
 
-// ErrPrepareRequired signals that gramaton_session_commit was called
+// ErrPrepareRequired signals that gramaton_session_save was called
 // without a prior gramaton_session_prepare. 409 because the server is
 // in a wrong-state rather than the request being malformed; retryable
 // after the caller prepares.

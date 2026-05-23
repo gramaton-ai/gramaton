@@ -2,12 +2,12 @@
 
 Gramaton is your persistent storage for decisions, preferences, facts,
 research, and any knowledge that should survive beyond this session.
-Gramaton has three capture paths:
+Gramaton has three save paths:
 
-- **Memory** (`gramaton_capture`, `gramaton_search`) — fuzzy,
+- **Memory** (`gramaton_save`, `gramaton_search`) — fuzzy,
   semantic knowledge. User-initiated only. Decisions, context,
   research, preferences. Ranked retrieval, best-match results.
-- **Sessions** (`gramaton_session_prepare`, `gramaton_session_commit`)
+- **Sessions** (`gramaton_session_prepare`, `gramaton_session_save`)
   — automatic extraction from conversations. Two-phase flow.
   Produces both Session segments (for conversation recall) and
   Memory records (for semantic search), linked by an `extracted_as`
@@ -17,7 +17,7 @@ Gramaton has three capture paths:
   checklists, backlogs. Every item always returned.
 
 **Decision rule for knowledge vs tasks:** Will missing one item be
-a failure? Yes = Collection. No = Memory (via capture or session
+a failure? Yes = Collection. No = Memory (via save or session
 extraction).
 
 Gramaton is accessed via MCP tools. If MCP tools appear unavailable,
@@ -29,7 +29,7 @@ impractical in the moment.
 
 If you are unsure how Gramaton works, what a metadata field means,
 or when to use a given tool, call `gramaton_guide(topic=...)`.
-Topics: metadata, capture, search, sessions, collections, curation.
+Topics: metadata, save, search, sessions, collections, curation.
 The guide is the authoritative live reference — prefer it over
 assumptions from memory.
 
@@ -93,8 +93,8 @@ project-specific prior context exists in the store. Empty-search cost
 is seconds; missing-context cost is reasoning rebuilt from scratch.
 
 **When NOT to search first:**
-- When the user explicitly asks to store/capture/add something —
-  just capture it directly.
+- When the user explicitly asks to store/save/add something —
+  just save it directly.
 - When you're writing code or editing files (search only if you need
   context to do the work correctly).
 
@@ -173,37 +173,37 @@ reason more carefully:
 - conceptual: A definition or principle. Present as foundational.
 - reference: Lookup data. Present as-is.
 
-### Capture (User-Initiated)
+### Save (User-Initiated)
 
 Gramaton IS the knowledge store. When the user says "remember this",
-"store this", or "capture this" — call `gramaton_capture` directly.
+"store this", or "save this" — call `gramaton_save` directly.
 Do NOT search the filesystem, explore the codebase, or look for other
 storage systems.
 
-**`gramaton_capture` is user-initiated only.** Do not call it
-autonomously. Autonomous knowledge capture from conversations happens
-through the Session flow (see below), not through capture.
+**`gramaton_save` is user-initiated only.** Do not call it
+autonomously. Autonomous knowledge save from conversations happens
+through the Session flow (see below), not through save.
 
 For tasks, TODOs, or action items, use `gramaton_collection_add`
 instead. For knowledge emerging from conversation without the user
-asking, use session prepare/commit.
+asking, use session prepare/save.
 
 When the user explicitly asks to store something, do it immediately —
-no search-first, no exploration. Just capture.
+no search-first, no exploration. Just save.
 
-**Do NOT capture:**
+**Do NOT save:**
 - Trivial exchanges, greetings, small talk.
 - Questions without answers.
 - Work-in-progress that hasn't solidified.
 - Your own generated responses or analysis.
 
-**How to capture:**
-Call `gramaton_capture` directly — do NOT spawn background subagents.
+**How to save:**
+Call `gramaton_save` directly — do NOT spawn background subagents.
 Background agents cannot access MCP tools and the CLI fallback
 requires interactive permission. Captures are fast (single HTTP call,
 under a second) so there is no need to background them.
 
-**IMPORTANT: Capture raw content, not summaries.** The `content`
+**IMPORTANT: Save raw content, not summaries.** The `content`
 field should contain the actual source material — the full decision
 text, the exact conversation excerpt, the complete reasoning. Do NOT
 pre-digest or summarize. Curation generates `content_short` and
@@ -217,9 +217,9 @@ loses information.
 2. Extract keywords and write a `summary_short` (~750 chars; this is
    the embedding-ready semantic anchor — semantically representative,
    not a tagline).
-3. Capture:
+3. Save:
    ```
-   gramaton_capture(
+   gramaton_save(
      content="[the knowledge]",
      temporality="[value]",
      confidence=[float],
@@ -245,24 +245,24 @@ loses information.
      edge_type="related_to", edge_weight=0.7)
    ```
 
-**Auto-supersession:** When a captured record is very similar to an
+**Auto-supersession:** When a saved record is very similar to an
 existing one (>= 0.92 cosine similarity), the server automatically
 marks the older record as historical (sets `valid_until`) and creates
 a `supersedes` edge. You do not need to check for duplicates before
-capturing — the server handles it.
+saving — the server handles it.
 
 ### Sessions (Automatic Knowledge Extraction)
 
-Sessions are how Gramaton captures knowledge from conversations
-without the user having to ask. The primary autonomous-capture path.
+Sessions are how Gramaton saves knowledge from conversations
+without the user having to ask. The primary autonomous-save path.
 Two-phase flow:
 
 1. **Prepare** — `gramaton_session_prepare(session_id)` returns
    extraction instructions plus current session state (already-
-   captured segments, for dedup).
-2. **Commit** — `gramaton_session_commit(session_id, segments)`
+   saved segments, for dedup).
+2. **Commit** — `gramaton_session_save(session_id, segments)`
    submits extracted segments. Each segment becomes a Session segment
-   (BM25-indexed, captures the conversation thread). When
+   (BM25-indexed, saves the conversation thread). When
    `promote_to_memory: true` (the default when omitted), it ALSO
    becomes a Memory record (vector-embedded, full lifecycle,
    auto-supersession). Set `promote_to_memory: false` for
@@ -273,9 +273,9 @@ Two-phase flow:
 rejects commit without a prior prepare because prepare delivers the
 extraction instructions you need to produce good segments.
 
-**When to call prepare/commit — mandatory triggers:**
+**When to call prepare/save — mandatory triggers:**
 
-1. **A commit-worthy decision lands.** You implemented a feature,
+1. **A save-worthy decision lands.** You implemented a feature,
    finished a rewrite, resolved a debate, or chose an approach after
    considering alternatives.
 2. **The user says "done" / "ship it" / "that works" / "okay" in
@@ -288,11 +288,11 @@ extraction instructions you need to produce good segments.
 5. **Before context compaction.** Any mention of compacting, running
    low on context, or `/compact` — extract FIRST, then let
    compaction happen.
-6. **The user explicitly asks** to capture, remember, or store
+6. **The user explicitly asks** to save, remember, or store
    something about the session.
 
 **Scheduled checkpoint:** Regardless of the triggers above, if you
-have not called prepare/commit in the last ~10 assistant turns of a
+have not called prepare/save in the last ~10 assistant turns of a
 substantive conversation, do it now. The 10-turn clock resets on
 every commit.
 
@@ -312,7 +312,7 @@ Collections are structured containers with guaranteed exhaustive
 retrieval. Use for tasks, TODOs, action items, backlogs, checklists —
 anything where missing an item is a failure.
 
-**When to use collections (NOT gramaton_capture):**
+**When to use collections (NOT gramaton_save):**
 - "Add a TODO" — `gramaton_collection_add`
 - "What are my open tasks?" — `gramaton_collection_items`
 - "Mark this task done" — `gramaton_collection_update`

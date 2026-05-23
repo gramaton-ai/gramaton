@@ -64,18 +64,18 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 //   - content (default): capture as knowledge record
 //
 // mode="observed" was retired with the observe pipeline; sessions
-// (gramaton_session_prepare/commit) are the supported autonomous
+// (gramaton_session_prepare/save) are the supported autonomous
 // capture path.
 func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[string]any, *serviceError) {
 	if req.Content == "" {
 		return nil, errMissing("content is required")
 	}
 	if req.Mode == "observed" {
-		return nil, errInvalid(`mode="observed" was removed; use gramaton_session_prepare/commit for autonomous capture`)
+		return nil, errInvalid(`mode="observed" was removed; use gramaton_session_prepare/save for autonomous capture`)
 	}
 
-	// Build a captureRequest from the intake fields.
-	capReq := &captureRequest{
+	// Build a saveRequest from the intake fields.
+	capReq := &saveRequest{
 		Content:                req.Content,
 		Temporality:            req.Temporality,
 		Confidence:             req.Confidence,
@@ -94,7 +94,7 @@ func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[str
 		Meta:                   req.Meta,
 	}
 
-	result, svcErr := s.serviceCapture(ctx, capReq)
+	result, svcErr := s.serviceSave(ctx, capReq)
 	if svcErr != nil {
 		return nil, svcErr
 	}

@@ -1,6 +1,6 @@
 # Sessions Guide
 
-Sessions are how Gramaton captures knowledge from conversations
+Sessions are how Gramaton saves knowledge from conversations
 automatically. They coordinate the two-phase `prepare`/`commit` flow
 and hold the broader conversational thread (exploration, open
 questions, dead ends) alongside decision-grade Memory records.
@@ -15,7 +15,7 @@ questions, dead ends) alongside decision-grade Memory records.
    instructions deliver the question-type framework, classification
    heuristics, field-role guidance, and synthesis principle -- don't
    front-run them with inline reasoning.
-3. **Commit** (`gramaton_session_commit`): Submits extracted
+3. **Commit** (`gramaton_session_save`): Submits extracted
    segments.
 4. Sessions never end. No close or conclude state. Append-only.
 
@@ -29,7 +29,7 @@ session file.
 ## Two-Tier Extraction
 
 Every committed segment becomes a **Session segment** (BM25-indexed,
-captures the conversation thread). When `promote_to_memory: true`
+saves the conversation thread). When `promote_to_memory: true`
 (the default when omitted), it ALSO becomes a **Memory record**
 (vector-embedded, full lifecycle, auto-supersession at cosine ≥ 0.92).
 
@@ -46,7 +46,7 @@ Decision-grade knowledge worth surfacing in semantic search:
 
 Valuable context that shouldn't pollute Memory's vector space:
 
-- Open questions that haven't resolved (capture them so a future
+- Open questions that haven't resolved (save them so a future
   agent knows the question is still on the table, but they aren't
   Memory-grade until answered).
 - Pure exploration ("we considered X but moved on").
@@ -69,10 +69,10 @@ Noise-but-worth-finding-by-keyword -> Session-only.
   knowledge. Edge: `segment_of` -> Topic. Promoted segments also
   have an `extracted_as` edge -> Memory record.
 
-## When to Call prepare/commit
+## When to Call prepare/save
 
 Call `prepare` + `commit` EAGERLY and FREQUENTLY during a conversation.
-This is the primary autonomous-capture path; bundling captures at
+This is the primary autonomous-save path; bundling saves at
 session end is an anti-pattern because early-session context becomes
 harder to reconstruct as the conversation accumulates.
 
@@ -82,15 +82,15 @@ harder to reconstruct as the conversation accumulates.
   library, which approach).
 - The user articulates a rule, principle, or preference.
 - A task in the TaskList flips to `completed`.
-- The user pivots to a new topic — capture the outgoing one first.
+- The user pivots to a new topic — save the outgoing one first.
 - The user says "done", "ship it", "that works", or similar closure
   signals on work that just landed.
-- The user explicitly asks to capture.
+- The user explicitly asks to save.
 - Before context compaction: any mention of compacting, running low,
   or needing to compress.
 
 **Scheduled cadence:** even without an explicit trigger, call
-prepare/commit at least every ~10 substantive turns of a real-dev
+prepare/save at least every ~10 substantive turns of a real-dev
 conversation. Reset the clock at each commit.
 
 **What counts as "substantive":** turns that produced decisions,
@@ -98,18 +98,18 @@ preferences, design rationale, dead ends, research, architectural
 choices, cost estimates, or any non-trivial reasoning. Routine Q&A
 and small edits don't reset the clock.
 
-**Anti-pattern to avoid:** "I'll capture at the end of this big
+**Anti-pattern to avoid:** "I'll save at the end of this big
 task." By the time the big task completes, you've blown past multiple
 natural breakpoints and the earliest reasoning is harder to recover.
-Capture at each landing, not at the end.
+Save at each landing, not at the end.
 
 ## Question Types Sessions Serve
 
 Sessions shine for questions Memory alone can't answer well:
 
-- **"What did we try?"** -- dead ends captured with
+- **"What did we try?"** -- dead ends saved with
   `epistemic_status: refuted`.
-- **"What's still open?"** -- open questions captured as Session-only
+- **"What's still open?"** -- open questions saved as Session-only
   segments with `epistemic_status: speculative`.
 - **"What was the broader conversation around X?"** -- the thread
   that produced the Memory record, including the rejected
@@ -137,7 +137,7 @@ For "what do we know?" questions, Memory is usually the right source.
 - **PostCompact flag**: after compaction, the next `prepare` surfaces
   `recent_compaction: {at: ...}` and prepends a note to the
   extraction instructions. Review session state carefully before
-  extracting to avoid re-capturing.
+  extracting to avoid re-saving.
 - **PreCompact archive**: if uncaptured segments existed at
   compaction, the raw transcript is archived (gzipped) and the next
   `prepare` surfaces `pending_uncaptured: {count, archive_path}` so
@@ -149,11 +149,11 @@ For "what do we know?" questions, Memory is usually the right source.
 - `gramaton_session_get`: View full session state.
 - `gramaton_session_prepare`: Start extraction flow; returns the
   canonical extraction prompt.
-- `gramaton_session_commit`: Submit segments (with `promote_to_memory`
+- `gramaton_session_save`: Submit segments (with `promote_to_memory`
   per segment).
 - `gramaton session current` (CLI): Resolve the session_id for this
   working directory.
-- `gramaton_guide(topic="capture")`: Field roles, synthesis
+- `gramaton_guide(topic="save")`: Field roles, synthesis
   principle.
 - `gramaton_guide(topic="metadata")`: Classification fields and
   their question-type mapping.
