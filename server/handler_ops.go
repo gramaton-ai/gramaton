@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/storage"
 )
@@ -162,19 +163,25 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 
 		// Dedup check: auto-supersede if similar record exists.
 		if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
-			oldNode, _ := s.engine.Graph().GetNode(dupID)
-			if oldNode != nil {
-				if _, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until"); !alreadyHistorical {
-					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-					s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-					s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-					if _, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err != nil {
-						s.log.Error("failed to add supersedes edge",
-							"component", "ingest", "newer", n.ID, "older", dupID, "err", err)
+			if curation.IsSupersessionOptOut(s.engine.Graph(), dupID) {
+				s.log.Debug("auto-supersession skipped: opt-out",
+					"component", "ingest", "newer", n.ID, "older", dupID,
+					"similarity", fmt.Sprintf("%.3f", sim))
+			} else {
+				oldNode, _ := s.engine.Graph().GetNode(dupID)
+				if oldNode != nil {
+					if _, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until"); !alreadyHistorical {
+						s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+						s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+						s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
+						if _, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err != nil {
+							s.log.Error("failed to add supersedes edge",
+								"component", "ingest", "newer", n.ID, "older", dupID, "err", err)
+						}
 					}
 				}
+				warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
 			}
-			warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
 		}
 
 		ingested++

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -143,25 +144,31 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 
 		// Default "supersede" semantics (see design-decisions.md D37):
 		// mark the older record historical and link via a supersedes edge.
-		now := time.Now().UTC()
-		oldNode, _ := s.engine.Graph().GetNode(dupID)
-		if oldNode != nil {
-			_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
-			if !alreadyHistorical {
-				s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-				s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-				s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-				if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
-					summary := ""
-					if v, ok := oldNode.Properties.GetString("content_short"); ok {
-						summary = v
+		if curation.IsSupersessionOptOut(s.engine.Graph(), dupID) {
+			s.log.Debug("auto-supersession skipped: opt-out",
+				"component", "save", "new_id", n.ID, "dup_id", dupID,
+				"similarity", fmt.Sprintf("%.3f", sim))
+		} else {
+			now := time.Now().UTC()
+			oldNode, _ := s.engine.Graph().GetNode(dupID)
+			if oldNode != nil {
+				_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
+				if !alreadyHistorical {
+					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+					s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+					s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
+					if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+						summary := ""
+						if v, ok := oldNode.Properties.GetString("content_short"); ok {
+							summary = v
+						}
+						superseded = append(superseded, map[string]any{
+							"id":         dupID,
+							"summary":    summary,
+							"similarity": sim,
+							"edge_id":    e.ID,
+						})
 					}
-					superseded = append(superseded, map[string]any{
-						"id":         dupID,
-						"summary":    summary,
-						"similarity": sim,
-						"edge_id":    e.ID,
-					})
 				}
 			}
 		}

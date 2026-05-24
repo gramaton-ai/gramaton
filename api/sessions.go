@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
@@ -995,6 +996,12 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			if _, inBatch := batchIDs[dupID]; inBatch {
 				a.log.Debug("auto-supersession skipped: within-commit batch",
 					"component", "session", "new_id", memNode.ID, "dup_id", dupID)
+				continue
+			}
+			if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
+				a.log.Debug("auto-supersession skipped: opt-out",
+					"component", "session", "new_id", memNode.ID, "dup_id", dupID,
+					"similarity", fmt.Sprintf("%.3f", sim))
 				continue
 			}
 			cfg := a.engine.Config()

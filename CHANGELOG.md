@@ -9,6 +9,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Capture-time auto-supersession now honors `supersession=none`
+  opt-out.** Records whose effective supersession resolves to `none`
+  (via collection membership, e.g. journal-style or
+  human-curated collections) are configured to skip auto-supersession
+  entirely. The curation cycle has honored this via
+  `shouldAutoSupersede` in `curation/effective.go`. The capture-time
+  path -- `engine.CheckDedup`
+  callers in `api/save.go`, `api/save_batch.go` (batch dedup),
+  `api/sessions.go` (per-segment Memory record supersession),
+  `server/service_records.go`, and the legacy
+  `server/handler_ops.go` ingest handler -- did not. A near-duplicate
+  capture against an opt-out record would still mark the older
+  record historical, set `resolution=superseded`, and add a
+  `supersedes` edge. Fix: new exported helper
+  `curation.IsSupersessionOptOut(g, recordID)` isolates the
+  opt-out gate from `shouldAutoSupersede` (which also includes
+  scope and shared-collection rules that don't apply at capture
+  time because the new node has no `member_of` edges yet). The five
+  capture-time sites now consult this helper after `CheckDedup`
+  returns a hit and skip the destructive write when the older
+  record is opted out. Other gates intentionally not ported:
+  structural-edge filter and shared-collection are no-ops at
+  capture (no edges yet on the new node), and observation
+  `node_type` skip is debatable (a real record replacing a TF-IDF
+  observation may be correct semantics). Closes #76.
+
 - **Cost-cap and context-cancel errors no longer poison curation
   records.** When `max_calls_per_day` / `max_cost_usd_per_day` /
   `max_calls_per_session` fired mid-curation-cycle, the resulting

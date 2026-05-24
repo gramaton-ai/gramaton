@@ -213,6 +213,24 @@ func mostPermissiveContradictions(a, b string) string {
 	return "off"
 }
 
+// IsSupersessionOptOut reports whether the record at recordID has
+// explicitly opted out of auto-supersession (effective
+// supersession=none). Use at capture-time supersession sites to
+// honor the opt-out contract: capture must not destructively modify
+// a record configured to skip auto-supersession.
+//
+// shouldAutoSupersede also checks this, alongside scope and
+// shared-collection rules. Those other rules require the new node
+// to have its own member_of edges, which it doesn't at capture
+// time, so this helper isolates the one gate that applies in both
+// contexts.
+//
+// The function is read-only and acquires no locks; callers hold
+// either RLock or Lock for the duration.
+func IsSupersessionOptOut(g graph.NodeReader, recordID string) bool {
+	return EffectiveCurationFor(g, recordID).Supersession == "none"
+}
+
 // shouldAutoSupersede returns true if the auto-supersession path
 // may consolidate a candidate pair (a, b). Encodes the per-pair
 // rule that flows from each record's effective supersession value:

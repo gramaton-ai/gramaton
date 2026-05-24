@@ -39,6 +39,44 @@ func addRecord(t *testing.T, g *graph.Graph, collectionIDs ...string) string {
 	return rec
 }
 
+// TestIsSupersessionOptOut: the helper is true only when effective
+// supersession resolves to "none". Orphans and records in
+// collections with supersession != none must NOT be flagged as
+// opt-out.
+func TestIsSupersessionOptOut(t *testing.T) {
+	g := graph.New()
+
+	orphan := g.AddNode(graph.Properties{}).ID
+	if IsSupersessionOptOut(g, orphan) {
+		t.Error("orphan: got opt-out, want false (memory orphan default = store)")
+	}
+
+	collNone := addCollection(t, g, "", "none", "")
+	recNone := addRecord(t, g, collNone)
+	if !IsSupersessionOptOut(g, recNone) {
+		t.Error("record in supersession=none collection: got false, want opt-out")
+	}
+
+	collColl := addCollection(t, g, "", "collection", "")
+	recColl := addRecord(t, g, collColl)
+	if IsSupersessionOptOut(g, recColl) {
+		t.Error("record in supersession=collection: got opt-out, want false")
+	}
+
+	collStore := addCollection(t, g, "", "store", "")
+	recStore := addRecord(t, g, collStore)
+	if IsSupersessionOptOut(g, recStore) {
+		t.Error("record in supersession=store: got opt-out, want false")
+	}
+
+	// Mixed: one collection at none + another at store. Most-
+	// restrictive wins for the destructive knob -> effective none.
+	recMixed := addRecord(t, g, collNone, collStore)
+	if !IsSupersessionOptOut(g, recMixed) {
+		t.Error("mixed none+store membership: got false, want opt-out (most-restrictive wins)")
+	}
+}
+
 // TestEffectiveCurationOrphan: a record with no member_of edges
 // gets the memory-orphan defaults. This is today's Memory record
 // behaviour and the no-regression contract.
