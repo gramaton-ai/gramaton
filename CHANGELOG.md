@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Stale `integration/` reference docs cleared as precondition for
+  the multi-harness integration pass.** Deleted the four
+  `integration/kiro/gramaton-{search,save,curate,collections}.md`
+  files (not installed by the wizard, not pinned by any drift test,
+  and being replaced by whatever shape falls out of the
+  primary-source-driven Kiro integration design). Deleted
+  `integration/claude-code/subagent-{save,curate}.md` (self-described
+  legacy/fallback patterns from the pre-session-flow era; the
+  session flow and autonomous curation supersede them, and their
+  presence under `integration/claude-code/` invited confusion).
+  `README.md` and `docs/integrator-guide.md` updated to drop the
+  now-broken Kiro reference link. The Claude Code integration
+  surface (`integration/claude-code/CLAUDE.md` + the canonical
+  templates under `internal/setup/templates/`) is unchanged. The
+  empty `integration/kiro/` directory was also removed.
+
 ### Fixed
 
 - **Integration docs and `gramaton init` template no longer carry

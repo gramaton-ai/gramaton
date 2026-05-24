@@ -363,7 +363,7 @@ When writing system prompts or agent instructions for Gramaton integration:
 6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before saving Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
 7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for save / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
-Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md), [Kiro specs](../integration/kiro/), and [custom agent frameworks](../integration/docs/custom-agents.md).
+Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md) and [custom agent frameworks](../integration/docs/custom-agents.md).
 
 ### Verifying the install
 

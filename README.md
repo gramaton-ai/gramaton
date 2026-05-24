@@ -231,7 +231,7 @@ Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`,
 | `gramaton_jobs_list` | List active async jobs (save batches and future async ops) |
 | `gramaton_guide` | Live topic-addressable reference (save, search, sessions, collections, metadata, curation, temporal-queries) |
 
-Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
+Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/) and [custom agent frameworks](integration/docs/custom-agents.md).
 
 <details>
 <summary><strong>CLI Reference</strong></summary>
