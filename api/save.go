@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
@@ -155,25 +156,31 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		// validates Action to one of "supersede" or "reject" (see
 		// design-decisions.md D37), so reaching this branch implies
 		// "supersede" semantics.
-		now := time.Now().UTC()
-		oldNode, _ := a.engine.Graph().GetNode(dupID)
-		if oldNode != nil {
-			_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
-			if !alreadyHistorical {
-				a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-				a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-				a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-				if e, err := a.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
-					summary := ""
-					if v, ok := oldNode.Properties.GetString("content_short"); ok {
-						summary = v
+		if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
+			a.log.Debug("auto-supersession skipped: opt-out",
+				"component", "save", "new_id", n.ID, "dup_id", dupID,
+				"similarity", fmt.Sprintf("%.3f", sim))
+		} else {
+			now := time.Now().UTC()
+			oldNode, _ := a.engine.Graph().GetNode(dupID)
+			if oldNode != nil {
+				_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
+				if !alreadyHistorical {
+					a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
+					a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
+					a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
+					if e, err := a.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+						summary := ""
+						if v, ok := oldNode.Properties.GetString("content_short"); ok {
+							summary = v
+						}
+						superseded = append(superseded, SupersededRecord{
+							ID:         dupID,
+							Summary:    summary,
+							Similarity: sim,
+							EdgeID:     e.ID,
+						})
 					}
-					superseded = append(superseded, SupersededRecord{
-						ID:         dupID,
-						Summary:    summary,
-						Similarity: sim,
-						EdgeID:     e.ID,
-					})
 				}
 			}
 		}

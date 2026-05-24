@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/oklog/ulid/v2"
@@ -633,6 +634,12 @@ func (a *API) batchSupersedeIfDuplicate(newID string) []SupersededRecord {
 	}
 	dupID, sim := a.engine.CheckDedup(newID)
 	if dupID == "" {
+		return nil
+	}
+	if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
+		a.log.Debug("auto-supersession skipped: opt-out",
+			"component", "save_batch", "new_id", newID, "dup_id", dupID,
+			"similarity", fmt.Sprintf("%.3f", sim))
 		return nil
 	}
 	now := time.Now().UTC()
