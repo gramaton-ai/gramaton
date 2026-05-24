@@ -9,6 +9,48 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Integration docs and `gramaton init` template no longer carry
+  stale terminology from the capture→save / session_commit→session_save
+  rename.** Issue #77 caught seven `commit` references in the prose
+  of `internal/setup/templates/base.md` (the source for the
+  agent-usage CLAUDE.md / Kiro instructions that `gramaton init`
+  writes into client config dirs). This PR also covers two adjacent
+  gaps not caught by the original issue's grep: (1) the same
+  template's "Captures are fast (single HTTP call…)" line under
+  "How to save" was using the renamed tool's verb -- now "Saves are
+  fast"; (2) the hand-maintained `integration/docs/custom-agents.md`
+  reference for third-party agent frameworks still labeled
+  `gramaton_session_save` as `commit` and warned against "orphan
+  commits" -- now matches the current tool surface.
+  `integration/claude-code/CLAUDE.md` snapshot regenerated via
+  `go test ./internal/setup -update-integration`. Legitimate
+  version-control uses of "commit" (`gramaton_log`, `gramaton_diff`,
+  `/v1/revert`, the addendum's "never commit API keys" auto-memory
+  routing example) are intentionally preserved. Closes #77.
+
+- **Kiro skills brought up to date with the current integrator
+  surface.** `integration/kiro/gramaton-collections.md`: replaced
+  the stale "Passive save (observe)" cell in the
+  Knowledge-Graph-vs-Collections table with "Passive save via
+  sessions" -- the observe flow was removed when session extraction
+  took over (`/v1/observe` retired, replaced by the session
+  prepare/save pair). Added explicit coverage of the four orthogonal
+  behavior knobs (`curation`, `supersession`, `contradictions`,
+  `clear_mode`) and the `template` shortcut on
+  `gramaton_collection_create`. Rewrote the "Adding Items"
+  duplicate-handling note to reflect the curation-mode-aware
+  behavior introduced by D37 + the per-collection behavior knobs:
+  `curation: none` returns the existing item id with
+  `deduplicated: true` (idempotent); `curation: standard` returns
+  `ErrConflict`. Mentioned `gramaton_collection_add_batch` as the
+  preferred path for >10-item adds. `integration/kiro/gramaton-curate.md`:
+  added a top-of-file framing paragraph making it explicit the
+  skill is the fallback for the `autonomous: false` deployment
+  case (matching the framing already on
+  `integration/claude-code/subagent-curate.md`), and noting that
+  deterministic curation runs server-side regardless of LLM
+  availability.
+
 - **Capture-time auto-supersession now honors `supersession=none`
   opt-out.** Records whose effective supersession resolves to `none`
   (via collection membership, e.g. journal-style or
