@@ -290,7 +290,7 @@ func (w *Wizard) Run(ctx context.Context) error {
 func (w *Wizard) welcome() {
 	w.writer.Section("Welcome to Gramaton")
 	w.writer.Paragraph(
-		"A local, versioned knowledge store for AI agents.",
+		"Local, versioned epistemic memory for AI agents.",
 		"",
 		"I'll get you set up in about 2-3 minutes. Press Ctrl+C at",
 		"any time to exit -- nothing is persisted until the end of",

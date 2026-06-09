@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Project description now reads "epistemic memory" instead of
+  "knowledge store."** The one-line description changes from "A
+  local, versioned knowledge store for AI agents." to "Local,
+  versioned epistemic memory for AI agents." across the README
+  intro, the GitHub repository description, the `gramaton init`
+  welcome banner (`internal/setup/wizard.go`), and the CLI root
+  help (`cli/root.go`). Epistemic metadata is the product (design
+  decision D1); "knowledge store" undersold the differentiator and
+  read interchangeably with generic vector stores. Historical
+  CHANGELOG entries retain the old phrasing.
+
 ### Removed
 
 - **Stale `integration/` reference docs cleared as precondition for

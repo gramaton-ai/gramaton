@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
-**Gramaton is an experimental local, versioned knowledge store for AI agents.** It carries epistemic metadata (confidence, temporality, lifecycle, provenance) on every record and links them in a property graph, so agents can retrieve knowledge with its context — across conversations, tools, and time.
+**Gramaton is experimental local, versioned epistemic memory for AI agents.** It carries epistemic metadata (confidence, temporality, lifecycle, provenance) on every record and links them in a property graph, so agents can retrieve knowledge with its context — across conversations, tools, and time.
 
 ## Why Gramaton
 

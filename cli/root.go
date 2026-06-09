@@ -18,7 +18,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "gramaton",
-	Short: "A knowledge store for AI agents",
+	Short: "Local, versioned epistemic memory for AI agents",
 	Long: `Gramaton stores knowledge in a versioned property graph with vector
 search and epistemic metadata. Agents interact through CLI commands
 that filter and rank by metadata before returning results.`,
