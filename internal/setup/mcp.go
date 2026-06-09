@@ -72,33 +72,29 @@ type MCPBackend interface {
 // detect binaries and shell out to each client's CLI for registration.
 type DefaultMCPBackend struct{}
 
-// Detect looks for known MCP client binaries on PATH. Currently
-// recognizes Claude Code (`claude`) and kiro-cli (`kiro`). Order of
-// the returned slice matches the order binaries were searched -- it's
-// stable for a given machine, which matters for the wizard's display.
+// Detect probes every harness in the registry (PATH binary or
+// config-dir presence, per entry). Order of the returned slice
+// matches registry order -- it's stable for a given machine, which
+// matters for the wizard's display.
 func (DefaultMCPBackend) Detect() []DetectedClient {
 	var clients []DetectedClient
-	if p, err := exec.LookPath("claude"); err == nil {
-		clients = append(clients, DetectedClient{Name: "Claude Code", Binary: p})
-	}
-	if p, err := exec.LookPath("kiro"); err == nil {
-		clients = append(clients, DetectedClient{Name: "kiro-cli", Binary: p})
+	for _, h := range harnesses {
+		if c, ok := detectHarness(h); ok {
+			clients = append(clients, c)
+		}
 	}
 	return clients
 }
 
-// Register dispatches to a client-specific registration helper.
+// Register dispatches to the harness's registration strategy.
 // Unknown clients are a programming error (Detect returned something
-// Register doesn't handle) so we surface that loudly.
+// the registry doesn't know) so we surface that loudly.
 func (DefaultMCPBackend) Register(ctx context.Context, client DetectedClient) (bool, error) {
-	switch client.Name {
-	case "Claude Code":
-		return registerWithClaudeCode(ctx, client.Binary)
-	case "kiro-cli":
-		return registerWithKiroCli(ctx, client.Binary)
-	default:
+	h := harnessByName(client.Name)
+	if h == nil || h.RegisterMCP == nil {
 		return false, fmt.Errorf("unknown MCP client: %s", client.Name)
 	}
+	return h.RegisterMCP(ctx, client.Binary)
 }
 
 // registerWithClaudeCode invokes `claude mcp add` to register Gramaton

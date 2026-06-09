@@ -29,15 +29,15 @@ func (w *Wizard) stepMCP(ctx context.Context) error {
 
 	clients := w.mcpBackend.Detect()
 	if len(clients) == 0 {
-		w.writer.Paragraph(
+		lines := []string{
 			"No supported MCP clients were found on this computer.",
 			"",
-			"Gramaton still works via CLI. When you install Claude Code",
-			"or kiro-cli, re-run `gramaton init` or register Gramaton",
-			"manually:",
+			"Gramaton still works via CLI. When you install " + harnessNamesForProse() + ",",
+			"re-run `gramaton init` or register Gramaton manually:",
 			"",
-			"  claude mcp add --scope user gramaton gramaton -- mcp",
-		)
+		}
+		lines = append(lines, harnessManualHints()...)
+		w.writer.Paragraph(lines...)
 		return nil
 	}
 
@@ -76,11 +76,9 @@ func (w *Wizard) stepMCP(ctx context.Context) error {
 	}
 	if !confirm {
 		w.writer.Warn("Skipping MCP client registration.")
-		w.writer.Paragraph(
-			"Register manually with any of:",
-			"  claude mcp add --scope user gramaton gramaton -- mcp",
-			"  (kiro-cli's equivalent -- check `kiro mcp --help`)",
-		)
+		lines := []string{"Register manually with any of:"}
+		lines = append(lines, harnessManualHints()...)
+		w.writer.Paragraph(lines...)
 		return nil
 	}
 

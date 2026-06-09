@@ -45,13 +45,14 @@ var templateKiroAddendum string
 const clientAddendumMarker = "<!-- CLIENT_ADDENDUM -->"
 
 // templateForClient returns the agent-usage template body to install
-// for the named MCP client: the shared base, with the client's
-// addendum substituted at the CLIENT_ADDENDUM marker. Unknown
-// clients get the base template alone (graceful default for forward
-// compatibility).
+// for the named MCP client: the shared base, with the harness's
+// addendum (from the registry) substituted at the CLIENT_ADDENDUM
+// marker. Unknown clients get the base template alone (graceful
+// default for forward compatibility).
 //
-// Adding a new client is dropping in a new addendum file and a case
-// here; install logic stays untouched.
+// Adding a new client is dropping in a new addendum file and
+// referencing it from the harness registry; install logic stays
+// untouched.
 func templateForClient(clientName string) string {
 	// Normalize embedded templates to LF. The .md files live in the
 	// repo and may be checked out with CRLF on Windows (git's
@@ -62,11 +63,8 @@ func templateForClient(clientName string) string {
 	// produce host-dependent output.
 	base := strings.ReplaceAll(templateBase, "\r\n", "\n")
 	var addendum string
-	switch clientName {
-	case "Claude Code":
-		addendum = strings.TrimSpace(strings.ReplaceAll(templateClaudeAddendum, "\r\n", "\n"))
-	case "kiro-cli":
-		addendum = strings.TrimSpace(strings.ReplaceAll(templateKiroAddendum, "\r\n", "\n"))
+	if h := harnessByName(clientName); h != nil {
+		addendum = strings.TrimSpace(strings.ReplaceAll(h.Addendum, "\r\n", "\n"))
 	}
 
 	body := base
@@ -219,29 +217,20 @@ const (
 )
 
 // instructionsPathForClient returns the path + layout for a client's
-// user-scope instruction file. Returns an error for unknown clients
-// rather than guessing — the wizard prefers to surface gaps so we
-// can add support deliberately.
+// user-scope instruction file, resolved from the harness registry.
+// Returns an error for unknown clients (or registry entries without
+// an instructions path) rather than guessing — the wizard prefers
+// to surface gaps so we can add support deliberately.
 func instructionsPathForClient(clientName string) (string, instructionsLayout, error) {
+	h := harnessByName(clientName)
+	if h == nil || len(h.InstructionsRelPath) == 0 {
+		return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve home dir: %w", err)
 	}
-	switch clientName {
-	case "Claude Code":
-		// Claude Code loads ~/.claude/CLAUDE.md as one merged
-		// system-prompt piece; users routinely add their own
-		// content alongside. Fence the managed region.
-		return filepath.Join(home, ".claude", "CLAUDE.md"), fencedBlockInSharedFile, nil
-	case "kiro-cli":
-		// Kiro loads every .md in ~/.kiro/steering/ on session
-		// start, so single-purpose files are the idiomatic shape.
-		// Own gramaton.md entirely; users add siblings for their
-		// own topics.
-		// Verified: https://kiro.dev/docs/cli/steering/
-		return filepath.Join(home, ".kiro", "steering", "gramaton.md"), wholeFileOwned, nil
-	}
-	return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	return filepath.Join(append([]string{home}, h.InstructionsRelPath...)...), h.InstructionsLayout, nil
 }
 
 // installInstructions writes the gramaton-managed content into the

@@ -59,21 +59,21 @@ var kiroEvents = []hookEventSpec{
 	{cliEvent: "kiro-stop", fileBase: "stop"},
 }
 
-// eventsForClient returns the spec list for a known client name.
-// Returns nil for unknown clients so Materialize reports a
-// specific error to the wizard caller.
+// eventsForClient returns the spec list for a hook embed-dir name
+// (e.g. "claude-code"), resolved from the harness registry. Returns
+// nil for unknown clients so Materialize reports a specific error
+// to the wizard caller.
 func eventsForClient(client string) []hookEventSpec {
-	switch client {
-	case "claude-code":
-		return claudeCodeEvents
-	case "kiro":
-		return kiroEvents
+	if h := harnessByEmbedDir(client); h != nil {
+		return h.HookEvents
 	}
 	return nil
 }
 
 // renderHookProxy synthesizes the proxy script for an event.
 // Returns the filename (including extension) and the file body.
+// client is the hook embed-dir name; the .cmd-vs-.sh choice comes
+// from the harness registry's WindowsCmdProxy flag.
 //
 // Matrix:
 //
@@ -86,7 +86,8 @@ func eventsForClient(client string) []hookEventSpec {
 // bash look for a binary named `bash\r` and fail); CRLF for .cmd
 // so cmd.exe treats the file as a native batch script.
 func renderHookProxy(client, cliEvent, fileBase string) (filename, body string) {
-	if client == "kiro" && runtime.GOOS == "windows" {
+	h := harnessByEmbedDir(client)
+	if h != nil && h.WindowsCmdProxy && runtime.GOOS == "windows" {
 		return fileBase + ".cmd", fmt.Sprintf("@gramaton hook %s\r\n", cliEvent)
 	}
 	return fileBase + ".sh", fmt.Sprintf("#!/bin/bash\nexec gramaton hook %s\n", cliEvent)

@@ -208,14 +208,18 @@ func (w *Wizard) verifyMCPRegistration(ctx context.Context) {
 			return
 		}
 	}
-	w.writer.Warn("MCP: gramaton not found in Claude Code's config. If you declined Step 3 or it failed, register manually: claude mcp add --scope user gramaton gramaton -- mcp")
+	w.writer.Warn("MCP: gramaton not found in Claude Code's config. If you declined Step 3 or it failed, register manually: " + harnessByName(harnessClaudeCode).ManualMCPHint)
 }
 
 // verifyHooks walks <configDir>/hooks/<client>/ for each known
 // client and confirms the expected scripts exist and are executable.
 // Reports per-client ✓ or ⚠.
 func (w *Wizard) verifyHooks() {
-	for _, client := range []string{"claude-code", "kiro"} {
+	for _, h := range harnesses {
+		if h.HookEmbedDir == "" {
+			continue
+		}
+		client := h.HookEmbedDir
 		dir := filepath.Join(w.configDir, "hooks", client)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
