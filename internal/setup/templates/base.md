@@ -178,7 +178,7 @@ no search-first, no exploration. Just save.
 **How to save:**
 Call `gramaton_save` directly — do NOT spawn background subagents.
 Background agents cannot access MCP tools and the CLI fallback
-requires interactive permission. Captures are fast (single HTTP call,
+requires interactive permission. Saves are fast (single HTTP call,
 under a second) so there is no need to background them.
 
 **IMPORTANT: Save raw content, not summaries.** The `content`
@@ -238,7 +238,7 @@ Two-phase flow:
 1. **Prepare** — `gramaton_session_prepare(session_id)` returns
    extraction instructions plus current session state (already-
    saved segments, for dedup).
-2. **Commit** — `gramaton_session_save(session_id, segments)`
+2. **Save** — `gramaton_session_save(session_id, segments)`
    submits extracted segments. Each segment becomes a Session segment
    (BM25-indexed, saves the conversation thread). When
    `promote_to_memory: true` (the default when omitted), it ALSO
@@ -247,8 +247,8 @@ Two-phase flow:
    exploration, open questions, and dead ends — they stay searchable
    in Sessions without polluting Memory's vector space.
 
-**Do not call commit without calling prepare first.** The server
-rejects commit without a prior prepare because prepare delivers the
+**Do not call save without calling prepare first.** The server
+rejects save without a prior prepare because prepare delivers the
 extraction instructions you need to produce good segments.
 
 **When to call prepare/save — mandatory triggers:**
@@ -257,12 +257,12 @@ extraction instructions you need to produce good segments.
    finished a rewrite, resolved a debate, or chose an approach after
    considering alternatives.
 2. **The user says "done" / "ship it" / "that works" / "okay" in
-   response to completed work.** Commit before moving to the next
+   response to completed work.** Save before moving to the next
    topic.
 3. **You finish a multi-step task tracked in a task list.** After the
-   last task flips to `completed`, commit.
+   last task flips to `completed`, save.
 4. **The user pivots topics.** They're done with topic A and moving
-   to topic B. Commit topic A's outcomes before you context-switch.
+   to topic B. Save topic A's outcomes before you context-switch.
 5. **Before context compaction.** Any mention of compacting, running
    low on context, or `/compact` — extract FIRST, then let
    compaction happen.
@@ -272,7 +272,7 @@ extraction instructions you need to produce good segments.
 **Scheduled checkpoint:** Regardless of the triggers above, if you
 have not called prepare/save in the last ~10 assistant turns of a
 substantive conversation, do it now. The 10-turn clock resets on
-every commit.
+every save.
 
 **Finding the session_id.** Run `gramaton session current` — returns
 `{"session_id": ..., "client_session_id": ...}` for the session bound

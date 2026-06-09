@@ -1,14 +1,19 @@
 # gramaton-curate
 
-Run knowledge store maintenance tasks.
+Manually classify pending records as a fallback when the server has
+no LLM provider configured (`autonomous: false`). When the server
+has an LLM, it runs curation itself every minute (default) --
+classification, summarization, contradiction detection, concept
+synthesis -- and this skill should not duplicate that work.
+Deterministic curation (orphan linking, dedup, concept candidate
+detection, lifecycle transitions) always runs server-side regardless
+of LLM availability.
 
 ## When to Use
 
-- When any Gramaton response shows `"overdue": true` AND
-  `"autonomous": false` (no server-side LLM configured)
-- When the user explicitly asks for curation
-- When `autonomous: true`, the server handles classification
-  automatically -- do not duplicate its work
+- When a Gramaton response's `curation` envelope shows
+  `"overdue": true` AND `"autonomous": false`
+- When the user explicitly asks for manual curation
 
 ## Preview Changes
 

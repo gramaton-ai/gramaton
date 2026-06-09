@@ -261,7 +261,7 @@ gramaton_session_save(session_id="<id>", segments=[...])
 ```
 
 `prepare` returns extraction instructions plus already-saved
-segments (for dedup). `commit` submits extracted segments. Each
+segments (for dedup). `save` submits extracted segments. Each
 segment becomes a Session record (BM25-indexed); when
 `promote_to_memory: true` (default) it also becomes a Memory record
 (vector-embedded, full lifecycle, auto-supersession).
@@ -270,8 +270,8 @@ Set `promote_to_memory: false` for exploration, open questions, or
 dead ends — they stay searchable in Sessions without polluting
 Memory's vector space.
 
-Do not call `commit` without calling `prepare` first; the server
-rejects orphan commits.
+Do not call `save` without calling `prepare` first; the server
+rejects orphan saves.
 
 For pre-extracted facts (no LLM available, or external pipeline),
 use `gramaton_intake` instead — it bypasses the session flow and
