@@ -6,34 +6,31 @@ import (
 	"path/filepath"
 )
 
-// stepHooks is Step 4: install automatic-capture hooks for detected
+// stepHooks is Step 5: install automatic-capture hooks for detected
 // MCP clients. This wires Gramaton's session lifecycle (start / stop
-// / pre-compact / post-compact) to the client so session-prepare and
-// session-commit run automatically without the user having to
-// remember.
+// / pre-compact / post-compact) to the client so session prepare and
+// save run automatically without the user having to remember.
 //
 // Flow:
 //  1. Depend on Step 3's detection results: if no clients were
 //     detected, skip entirely with a short message.
 //  2. Ask one Yes/No "install auto-capture hooks for the detected
 //     clients? [Y/n]".
-//  3. On confirm, for each detected client:
-//     - Materialize embedded scripts to
-//       <configDir>/hooks/<client>/.
-//     - For Claude Code: auto-patch ~/.claude/settings.json to route
-//       the event hooks at our scripts. Preserves all other
-//       settings and user hooks.
-//     - For kiro-cli: scripts are materialized but settings auto-
-//       patching is skipped because kiro-cli's hook-config schema
-//       isn't documented in our corpus. Print the script paths and
-//       tell the user to wire them in via kiro-cli's config.
+//  3. On confirm, for each detected client: materialize the proxy
+//     scripts to <configDir>/hooks/<client>/, then wire them via
+//     the harness registry's WireHooks strategy (settings.json for
+//     Claude Code, hooks.json for Codex and Cursor — each patcher
+//     preserves all non-gramaton entries). Harnesses without a
+//     strategy (kiro-cli: per-agent schema, no default agent to
+//     patch) get the script paths printed with manual wiring
+//     guidance instead.
 //  4. Warn at the end that users need to restart their clients for
 //     the new hooks to take effect.
 //
 // Dependencies: this step re-runs Detect on the MCP backend rather
 // than threading detected clients through from Step 3. Both calls
 // go to the same backend; the cost is a couple of exec.LookPath
-// calls, negligible. Decouples the steps so Step 4 can run
+// calls, negligible. Decouples the steps so Step 5 can run
 // independently if we later add a "re-install hooks only" code path.
 func (w *Wizard) stepHooks(ctx context.Context) error {
 	w.writer.StepHeader(5, totalSteps, "Automatic knowledge capture (recommended)")
@@ -42,7 +39,7 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 	if len(clients) == 0 {
 		w.writer.Paragraph(
 			"No MCP clients detected, so there's nothing to install hooks into.",
-			"If you install Claude Code or kiro-cli later, re-run `gramaton init`.",
+			fmt.Sprintf("If you install %s later, re-run `gramaton init`.", harnessNamesForProse()),
 		)
 		return nil
 	}
@@ -86,46 +83,46 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 
 	installed := 0
 	for _, c := range clients {
-		// Translate the user-facing name to the embed-tree directory
-		// name. Detect uses "Claude Code"/"kiro-cli" for display;
-		// the hook backend uses "claude-code"/"kiro" for embed paths
-		// (matching the on-disk hooks/ layout at repo root).
-		embedName := hookDirName(c.Name)
-		if embedName == "" {
+		// The registry maps the user-facing name to the embed-tree
+		// directory name. Detect uses "Claude Code"/"kiro-cli" for
+		// display; the hook backend uses "claude-code"/"kiro" for
+		// embed paths (matching the on-disk hooks/ layout at repo
+		// root).
+		h := harnessByName(c.Name)
+		if h == nil || h.HookEmbedDir == "" {
 			w.writer.Warn(fmt.Sprintf("No hooks bundled for %s; skipping.", c.Name))
 			continue
 		}
 
-		paths, err := w.hookBackend.Materialize(embedName, w.configDir)
+		paths, err := w.hookBackend.Materialize(h.HookEmbedDir, w.configDir)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: materialize failed: %v", c.Name, err))
 			continue
 		}
 		w.writer.Check(fmt.Sprintf("%s: installed %d hook script(s) to %s",
-			c.Name, len(paths), filepath.Join(w.configDir, "hooks", embedName)))
+			c.Name, len(paths), filepath.Join(w.configDir, "hooks", h.HookEmbedDir)))
 
-		// Auto-patch only Claude Code's settings.json. kiro-cli's
-		// config format isn't verified; we print manual instructions
-		// instead.
-		switch c.Name {
-		case "Claude Code":
-			unchanged, err := w.hookBackend.RegisterClaudeHooks(ctx, paths)
+		if h.WireHooks != nil {
+			// The backend dispatches to the registry's per-harness
+			// wiring strategy (settings.json for Claude Code,
+			// hooks.json for Codex); going through the backend keeps
+			// the test seam.
+			unchanged, err := w.hookBackend.RegisterHooks(ctx, h.HookEmbedDir, paths)
 			if err != nil {
-				w.writer.Warn(fmt.Sprintf("%s: settings.json update failed: %v", c.Name, err))
+				w.writer.Warn(fmt.Sprintf("%s: hook config update failed: %v", c.Name, err))
 				continue
 			}
 			if unchanged {
 				w.writer.Check(fmt.Sprintf("%s: hook config already up to date", c.Name))
 			} else {
-				w.writer.Check(fmt.Sprintf("%s: updated ~/.claude/settings.json", c.Name))
+				w.writer.Check(fmt.Sprintf("%s: updated %s", c.Name, h.HookConfigPathHint()))
 			}
 			installed++
-
-		case "kiro-cli":
-			// kiro-cli hook registration mechanism is not verified in
-			// Gramaton's corpus. Print paths and manual-config guidance
-			// rather than guess a schema.
-			w.writer.Warn(fmt.Sprintf("%s: auto-config not yet supported. Wire these scripts into kiro-cli's hooks manually:", c.Name))
+		} else {
+			// Hook-config schema for this harness isn't verified (or
+			// can't be patched programmatically). Print paths and
+			// manual-config guidance rather than guess a schema.
+			w.writer.Warn(fmt.Sprintf("%s: auto-config not yet supported. Wire these scripts into %s's hooks manually:", c.Name, c.Name))
 			for _, p := range paths {
 				w.writer.Raw(fmt.Sprintf("        %s", p))
 			}
@@ -138,19 +135,4 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 		w.writer.Warn("Restart your AI client(s) so the hooks take effect.")
 	}
 	return nil
-}
-
-// hookDirName translates the DetectedClient.Name used in wizard
-// output ("Claude Code", "kiro-cli") to the embed-tree directory
-// name ("claude-code", "kiro"). Keeping the mapping local here
-// avoids coupling the DetectedClient struct to the embed layout;
-// when we add more clients, add them here.
-func hookDirName(clientName string) string {
-	switch clientName {
-	case "Claude Code":
-		return "claude-code"
-	case "kiro-cli":
-		return "kiro"
-	}
-	return ""
 }

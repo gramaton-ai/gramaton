@@ -32,6 +32,14 @@ func ClaudeCodeSessionStart(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	sessionStartCore(log, in)
+}
+
+// sessionStartCore is the claude-protocol SessionStart behavior,
+// shared by every harness whose stdin normalizes to HookInput
+// (Claude Code natively; Cursor via decodeCursorInput). Kiro's
+// AgentSpawn stays separate -- it has agent_id fallback and no cwd.
+func sessionStartCore(log *Logger, in HookInput) {
 	sessionID := in.SessionID
 	if sessionID == "" {
 		log.Info("no session_id in input, skipping")
@@ -93,6 +101,12 @@ func ClaudeCodeStop(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	stopCore(log, in)
+}
+
+// stopCore is the claude-protocol Stop behavior (turn-counter
+// increment), shared by Claude Code and Cursor.
+func stopCore(log *Logger, in HookInput) {
 	sessionID := in.SessionID
 	if sessionID == "" {
 		// Legacy behavior: silent exit for non-session contexts.
@@ -136,6 +150,13 @@ func ClaudeCodePreCompact(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	preCompactCore(log, in)
+}
+
+// preCompactCore is the claude-protocol PreCompact behavior
+// (archive transcript + leave the uncaptured-segments nudge flag),
+// shared by Claude Code and Cursor.
+func preCompactCore(log *Logger, in HookInput) {
 	clientID := in.SessionID
 	if clientID == "" {
 		log.Info("no session_id in input, skipping")
@@ -146,16 +167,32 @@ func ClaudeCodePreCompact(stdin io.Reader, stdout io.Writer) {
 		return
 	}
 
-	// Resolve the gramaton session id from the state file written
-	// by SessionStart. `gramaton session get` wants the gramaton
-	// id, not the client id.
-	gramatonID, err := readCurrentGramatonSessionID()
-	if err != nil {
-		log.Info("resolve gramaton session id: %v", err)
-		return
+	// Resolve the gramaton session id from the state SessionStart
+	// wrote. Prefer the per-cwd binding: with multiple hooked
+	// harnesses (or multiple instances in different directories)
+	// the global pointer is last-writer-wins and can belong to a
+	// different session — archiving this transcript there would
+	// attach it to the wrong conversation. Fall back to the global
+	// pointer for payloads without a cwd.
+	gramatonID := ""
+	if in.Cwd != "" {
+		id, err := readPerCwdGramatonSessionID(in.Cwd)
+		if err != nil {
+			log.Info("resolve per-cwd session id: %v", err)
+		} else if id != "" {
+			gramatonID = id
+		}
 	}
 	if gramatonID == "" {
-		log.Info("no session_id in current-session.json (SessionStart may not have run)")
+		id, err := readCurrentGramatonSessionID()
+		if err != nil {
+			log.Info("resolve gramaton session id: %v", err)
+			return
+		}
+		gramatonID = id
+	}
+	if gramatonID == "" {
+		log.Info("no session bound (SessionStart may not have run)")
 		return
 	}
 
@@ -285,6 +322,28 @@ func writePerCwdSession(log *Logger, gramatonID, clientID, cwd string) {
 		return
 	}
 	log.Info("wrote by-cwd file: %s", p)
+}
+
+// readPerCwdGramatonSessionID returns the session_id from the
+// per-cwd pointer file SessionStart wrote for cwd. Empty string if
+// the file is missing (caller falls back to the global pointer);
+// error only on a malformed file.
+func readPerCwdGramatonSessionID(cwd string) (string, error) {
+	p, err := PerCwdSessionPath(cwd)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", nil // missing is fine; caller decides
+	}
+	var payload struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", err
+	}
+	return payload.SessionID, nil
 }
 
 // readCurrentGramatonSessionID returns the session_id field from

@@ -3,7 +3,10 @@ package setup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -57,6 +60,13 @@ func newWizardForMCPTest(t *testing.T, backend MCPBackend, mcpConfirm string) (*
 	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm)
 
 	tmpDir := t.TempDir()
+	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey
+	// bypasses the injected backend and probes the real PATH + home.
+	// Sandbox both so dev machines with claude/codex installed don't
+	// shell out (slow) or read real user config (nondeterministic).
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 	cfg := config.Defaults()
 	cfg.DataDir = tmpDir + "/data"
 
@@ -66,7 +76,7 @@ func newWizardForMCPTest(t *testing.T, backend MCPBackend, mcpConfirm string) (*
 }
 
 func TestStepMCPNoClientsDetected(t *testing.T) {
-	backend := &fakeMCPBackend{} // empty client list
+	backend := &fakeMCPBackend{}                    // empty client list
 	wiz, buf := newWizardForMCPTest(t, backend, "") // no confirm needed
 
 	// The scripted prompter will have extra unused answers; that's
@@ -183,5 +193,130 @@ func TestStepMCPRegistrationFailsForOneClient(t *testing.T) {
 	// (Claude Code) was registered successfully.
 	if !strings.Contains(out, "Restart your AI client") {
 		t.Errorf("missing restart warning (partial success case):\n%s", out)
+	}
+}
+
+// TestRegisterWithCursorFreshCreate covers the fresh-install path:
+// no ~/.cursor/mcp.json exists. The file is created with the
+// gramaton stdio entry under mcpServers.
+func TestRegisterWithCursorFreshCreate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	already, err := registerWithCursor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("registerWithCursor: %v", err)
+	}
+	if already {
+		t.Error("fresh create should report newly registered")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
+	if err != nil {
+		t.Fatalf("mcp.json not created: %v", err)
+	}
+	var parsed struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, raw)
+	}
+	entry, ok := parsed.MCPServers["gramaton"]
+	if !ok {
+		t.Fatalf("gramaton entry missing:\n%s", raw)
+	}
+	if entry.Type != "stdio" || entry.Command != "gramaton" || len(entry.Args) != 1 || entry.Args[0] != "mcp" {
+		t.Errorf("entry = %+v, want stdio/gramaton/[mcp]", entry)
+	}
+}
+
+// TestRegisterWithCursorPreservesAndIdempotent seeds an mcp.json
+// with another server, a top-level unrelated key, a stale gramaton
+// entry, and a UTF-8 BOM. The stale entry is replaced, everything
+// else survives, and a second run reports alreadyRegistered without
+// rewriting the file.
+func TestRegisterWithCursorPreservesAndIdempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(cursorDir, "mcp.json")
+
+	initial := "\xEF\xBB\xBF" + `{
+  "unrelated": true,
+  "mcpServers": {
+    "other-server": {"type": "stdio", "command": "other", "args": []},
+    "gramaton": {"type": "stdio", "command": "/old/path/gramaton", "args": ["mcp", "--stale-flag"]}
+  }
+}`
+	if err := os.WriteFile(mcpPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	already, err := registerWithCursor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("first registerWithCursor: %v", err)
+	}
+	if already {
+		t.Error("stale entry should be replaced, reported as a new registration")
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	if !strings.Contains(content, `"other-server"`) {
+		t.Error("other server entry was lost")
+	}
+	if !strings.Contains(content, `"unrelated"`) {
+		t.Error("unrelated top-level key was lost")
+	}
+	if strings.Contains(content, "--stale-flag") {
+		t.Error("stale gramaton entry was not replaced")
+	}
+
+	already, err = registerWithCursor(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second registerWithCursor: %v", err)
+	}
+	if !already {
+		t.Error("second run should report alreadyRegistered")
+	}
+	raw2, _ := os.ReadFile(mcpPath)
+	if string(raw) != string(raw2) {
+		t.Error("mcp.json changed on idempotent second run")
+	}
+}
+
+// TestRegisterWithCursorMalformedJSON pins the won't-touch behavior.
+func TestRegisterWithCursorMalformedJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(cursorDir, "mcp.json")
+	garbage := "{not json"
+	if err := os.WriteFile(mcpPath, []byte(garbage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := registerWithCursor(context.Background(), ""); err == nil {
+		t.Fatal("expected parse error on malformed mcp.json")
+	}
+	raw, _ := os.ReadFile(mcpPath)
+	if string(raw) != garbage {
+		t.Error("malformed mcp.json was modified; must be left untouched")
 	}
 }

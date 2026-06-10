@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
-**Gramaton is an experimental local, versioned knowledge store for AI agents.** It carries epistemic metadata (confidence, temporality, lifecycle, provenance) on every record and links them in a property graph, so agents can retrieve knowledge with its context — across conversations, tools, and time.
+**Gramaton is experimental local, versioned epistemic memory for AI agents.** It carries epistemic metadata (confidence, temporality, lifecycle, provenance) on every record and links them in a property graph, so agents can retrieve knowledge with its context — across conversations, tools, and time.
 
 ## Why Gramaton
 
@@ -64,9 +64,9 @@ The wizard (when run in a terminal) walks five numbered steps plus a verificatio
 
 1. **Knowledge store** — choose an embedding provider. BERT is the default (pure-Go, local, no API cost) and downloads the 130MB model on first use. Ollama, OpenAI-compatible, and AWS Bedrock are also available, as is `skip` for memory-only / air-gapped setups.
 2. **Autonomous curation** — optionally configure an LLM provider for curation, reranking, and session extraction. Anthropic (Claude Haiku default), OpenAI-compatible, and AWS Bedrock are supported; skipping is fine — Gramaton runs with a deterministic-only curator otherwise.
-3. **Connecting to your AI tools** — auto-detects `claude` and `kiro` CLIs and registers the `gramaton` MCP entry in each.
-4. **Agent usage instructions** — offers to install Gramaton's CLAUDE.md / kiro instructions into each detected client so the agent knows how to use the store. Per-client opt-in.
-5. **Automatic knowledge save** — installs Gramaton's session-save hook scripts into your Claude Code / kiro-cli configs (pre-compact, post-compact, session-start, stop).
+3. **Connecting to your AI tools** — auto-detects Claude Code, Codex, and the Cursor IDE, and registers the `gramaton` MCP entry in each (via the vendor CLI where one exists, direct config write for Cursor).
+4. **Agent usage instructions** — offers to install Gramaton's agent-usage guidance into each detected client (Claude Code's `~/.claude/CLAUDE.md` and Codex's `~/.codex/AGENTS.md` get a version-stamped managed block; Cursor gets a `gramaton` skill). Per-client opt-in.
+5. **Automatic knowledge save** — installs Gramaton's session-save hooks for each detected client (session-start, stop, pre-compact, and post-compact where the harness supports it), wired into the client's hook config automatically.
 
 After Step 5, the wizard runs a verification pass: writes `~/.gramaton/config.yaml`, probes perms + writability, and summarizes what's configured.
 
@@ -231,7 +231,7 @@ Twelve `gramaton_collection_*` tools cover the full lifecycle: `create`, `list`,
 | `gramaton_jobs_list` | List active async jobs (save batches and future async ops) |
 | `gramaton_guide` | Live topic-addressable reference (save, search, sessions, collections, metadata, curation, temporal-queries) |
 
-Gramaton also ships prompt templates and agent instructions for [Claude Code](integration/claude-code/), [Kiro](integration/kiro/), and [custom agent frameworks](integration/docs/custom-agents.md).
+Gramaton also ships canonical agent guidance for [Claude Code](integration/claude-code/), [Codex](integration/codex/), [Cursor](integration/cursor/), and [custom agent frameworks](integration/docs/custom-agents.md) — all rendered from one template set and drift-tested against what `gramaton init` installs.
 
 <details>
 <summary><strong>CLI Reference</strong></summary>

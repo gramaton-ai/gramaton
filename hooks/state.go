@@ -1,5 +1,5 @@
-// Package hooks contains the handlers for Claude Code and Kiro
-// agent-lifecycle events that Gramaton surfaces through the
+// Package hooks contains the handlers for Claude Code, Kiro, and
+// Cursor agent-lifecycle events that Gramaton surfaces through the
 // `gramaton hook <event>` subcommand.
 //
 // Before Phase 2 of the Windows platform-support plan, these hooks
@@ -218,9 +218,10 @@ func PostCompactFlagPath(sessionID string) (string, error) {
 // files are findable by `gramaton session current`.
 //
 // Rules:
-//   /foo/bar           → foo-bar
-//   C:\Users\b\foo     → C-Users-b-foo
-//   C:/Users/b/foo     → C-Users-b-foo     (if caller already forward-slashed)
+//
+//	/foo/bar           → foo-bar
+//	C:\Users\b\foo     → C-Users-b-foo
+//	C:/Users/b/foo     → C-Users-b-foo     (if caller already forward-slashed)
 //
 // Do NOT use filepath.ToSlash here: it's a no-op on Unix so Windows
 // inputs reaching a Unix build (tests, mixed environments) would

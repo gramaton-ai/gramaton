@@ -1,3 +1,10 @@
+---
+name: gramaton
+description: "Persistent memory for this user via Gramaton MCP tools. Use when the user references past decisions, prior sessions, project context, or preferences; mentions a ticket (a ULID or project ticket codename); says remember, save, or store; asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs (collections). Covers search, save, session extraction, and collection workflows."
+---
+
+<!-- gramaton-managed v=0.1.0 (don't edit by hand — re-run `gramaton init --force` to update) -->
+
 ## Knowledge Store (Gramaton)
 
 Gramaton is your persistent storage for decisions, preferences, facts,
@@ -23,7 +30,7 @@ extraction).
 
 Gramaton is accessed via MCP tools. If MCP tools appear unavailable,
 first try to restore them — tell the user the MCP server looks
-disconnected and ask them to reconnect (for Claude Code: `/mcp` in the prompt, or
+disconnected and ask them to reconnect (for Cursor: toggle the gramaton server under Settings → MCP, or
 confirm `gramaton serve` / `gramaton init` is running). Only fall
 back to the CLI (`gramaton search "<query>" --top 5`,
 `gramaton inspect <id>`) if MCP recovery is impractical in the
@@ -35,36 +42,14 @@ Topics: metadata, save, search, sessions, collections, curation,
 temporal-queries. The guide is the authoritative live reference —
 prefer it over assumptions from memory.
 
-### Memory routing: Claude Code's auto-memory vs Gramaton
-
-Claude Code's harness ships a built-in auto-memory at
-`~/.claude/projects/<slug>/memory/`, passively loaded into every
-conversation via `MEMORY.md`. Gramaton is actively retrieved via
-MCP. Both want "remember this" content; route by access pattern.
-
-**Decision rule:** would the agent fail at its job if this content
-weren't loaded into every conversation?
-
-- **Yes** (e.g., behavioral rule like "never commit API keys") →
-  auto-memory.
-- **No** (e.g., specific decision like "we picked bbolt because X") →
-  Gramaton.
-
-Default to Gramaton. Auto-memory is for thin behavior rules that
-must shape every response; everything else (decisions, facts,
-research, tasks, context) goes to Gramaton. When in doubt, route
-to Gramaton.
-
-This routing overrides the auto-memory guidance in Claude Code's
-harness system prompt, which would otherwise direct most "remember
-this" content into auto-memory.
-
 ### Subagents and Gramaton
 
-Claude Code's background subagents cannot access MCP tools, and the
-CLI fallback requires interactive permission — a save delegated to a
-subagent stalls or silently fails. Call Gramaton tools from the main
-conversation only.
+Cursor subagents inherit all tools from the parent, including
+Gramaton's MCP tools, so a delegated task is able to write to the
+store. Keep saves and session extraction in the main conversation,
+and tell delegated tasks not to write to Gramaton: a subagent sees
+only its task brief, and partial-context saves produce fragmentary
+records.
 
 ### Retrieval
 
@@ -299,7 +284,7 @@ every save.
 `{"session_id": ..., "client_session_id": ...}` for the session bound
 to your current working directory. If nothing is bound yet (hooks
 not installed), start a session with `gramaton_session_start`. Safe
-under multiple concurrent Claude Code instances; each working
+under multiple concurrent Cursor instances; each working
 directory gets its own session file.
 
 For the full guide on extraction triggers, segment granularity,

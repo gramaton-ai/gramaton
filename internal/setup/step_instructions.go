@@ -3,82 +3,51 @@ package setup
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gramaton-ai/gramaton/internal/setup/templates"
 )
 
-// templateBase is the shared agent-usage guide installed into every
-// MCP client's user-scope instructions file. Per-client divergence is
-// expressed via addendum files (see templateForClient). Content lives
-// in sibling .md files so editors syntax-highlight it and diffs read
-// as prose rather than escaped Go strings.
-//
-//go:embed templates/base.md
-var templateBase string
-
-// templateClaudeAddendum is appended to the base template when
-// installing for Claude Code. Currently carries the auto-memory
-// routing rule that disambiguates Claude Code's harness-level
-// MEMORY.md store from Gramaton.
-//
-//go:embed templates/claude_addendum.md
-var templateClaudeAddendum string
-
-// templateKiroAddendum is appended to the base template when
-// installing for Kiro. Intentionally empty for now: Kiro has no
-// auto-memory analogue, and the planned multi-file install split
-// (per-topic steering files) is tracked as a separate follow-up.
-// Reserved here so future Kiro-specific guidance has a clear home.
-//
-//go:embed templates/kiro_addendum.md
-var templateKiroAddendum string
-
-// clientAddendumMarker is the placeholder in base.md where each
-// client's addendum slots in. Keeping it just after the introductory
-// framing (and before the deeper "### Retrieval" / "### Save"
-// sections) lets the routing rule register before the agent dives
-// into specific tool guidance.
-const clientAddendumMarker = "<!-- CLIENT_ADDENDUM -->"
-
-// templateForClient returns the agent-usage template body to install
-// for the named MCP client: the shared base, with the client's
-// addendum substituted at the CLIENT_ADDENDUM marker. Unknown
-// clients get the base template alone (graceful default for forward
+// templateForClient returns the agent-usage guidance body to install
+// for the named MCP client: the shared base, with the harness's
+// addendum and interpolation variables (both from the registry)
+// applied by templates.Render. Unknown clients get the base alone
+// with generic variables (graceful default for forward
 // compatibility).
 //
-// Adding a new client is dropping in a new addendum file and a case
-// here; install logic stays untouched.
+// Adding a new client is dropping in a new addendum file under
+// templates/guidance/ and referencing it from the harness registry;
+// install logic stays untouched.
 func templateForClient(clientName string) string {
-	// Normalize embedded templates to LF. The .md files live in the
-	// repo and may be checked out with CRLF on Windows (git's
-	// autocrlf=true is the default for Windows installs). The
-	// substitution patterns below use literal "\n", and the canonical
-	// integration/<client>/*.md snapshots are LF on disk, so writing
-	// CRLF here would both break the marker-strip Replace and
-	// produce host-dependent output.
-	base := strings.ReplaceAll(templateBase, "\r\n", "\n")
-	var addendum string
-	switch clientName {
-	case "Claude Code":
-		addendum = strings.TrimSpace(strings.ReplaceAll(templateClaudeAddendum, "\r\n", "\n"))
-	case "kiro-cli":
-		addendum = strings.TrimSpace(strings.ReplaceAll(templateKiroAddendum, "\r\n", "\n"))
+	h := harnessByName(clientName)
+	if h == nil {
+		return templates.Render("", templates.Vars{
+			ClientName:    clientName,
+			ReconnectHint: "re-establish the MCP connection",
+		})
 	}
+	return templates.Render(h.Addendum, templates.Vars{
+		ClientName:    h.Name,
+		ReconnectHint: h.ReconnectHint,
+	})
+}
 
-	body := base
-	if addendum == "" {
-		// Strip the marker line and the surrounding blank lines so
-		// the file doesn't carry a dangling HTML comment when no
-		// addendum applies.
-		body = strings.Replace(body, "\n"+clientAddendumMarker+"\n\n", "\n", 1)
-	} else {
-		body = strings.Replace(body, clientAddendumMarker, addendum, 1)
+// installBodyForClient returns the full file body Step 4 installs
+// for a client: the rendered guidance prose, preceded by the
+// harness's InstructionsHeader when one is defined (Cursor's
+// SKILL.md frontmatter + version stamp). The drift test renders
+// integration/ snapshots through this same function so the
+// checked-in references match what actually lands on disk.
+func installBodyForClient(clientName string) string {
+	body := templateForClient(clientName)
+	if h := harnessByName(clientName); h != nil && h.InstructionsHeader != nil {
+		body = h.InstructionsHeader() + body
 	}
-	return strings.TrimSpace(body) + "\n"
+	return body
 }
 
 // Fence markers bound the Gramaton-managed block inside the user's
@@ -89,10 +58,25 @@ func templateForClient(clientName string) string {
 // Users who want to customize agent behavior should add their own
 // sections outside the fence. The wizard never touches content
 // outside the fenced region.
+//
+// The BEGIN line carries a guidance-version stamp (v=X.Y.Z, GH issue
+// #80) that changes across releases, so fence DETECTION matches only
+// the stable instructionsFenceBeginPrefix — otherwise a file written
+// by one gramaton version would stop being recognized by the next
+// and the block would be appended a second time.
 const (
-	instructionsFenceBegin = "<!-- BEGIN gramaton-managed (don't edit by hand — re-run `gramaton init --force` to update) -->"
-	instructionsFenceEnd   = "<!-- END gramaton-managed -->"
+	instructionsFenceBeginPrefix = "<!-- BEGIN gramaton-managed"
+	instructionsFenceEnd         = "<!-- END gramaton-managed -->"
 )
+
+// instructionsFenceBegin returns the full versioned BEGIN marker
+// written on install. The stamp lets a later `gramaton init` (or the
+// server's drift check, GH issue #80) see how far behind an
+// installed guidance block is without hashing content.
+func instructionsFenceBegin() string {
+	return fmt.Sprintf("%s v=%s (don't edit by hand — re-run `gramaton init --force` to update) -->",
+		instructionsFenceBeginPrefix, templates.GuidanceVersion)
+}
 
 // stepInstructions is Step 4: offer to install Gramaton's agent-usage
 // guidance into each detected MCP client's instruction file.
@@ -116,8 +100,8 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 	if len(clients) == 0 {
 		w.writer.Paragraph(
 			"No MCP clients detected, so there's no CLAUDE.md (or equivalent)",
-			"to install instructions into. If you install Claude Code or",
-			"kiro-cli later, re-run `gramaton init --force`.",
+			fmt.Sprintf("to install instructions into. If you install %s", harnessNamesForProse()),
+			"later, re-run `gramaton init --force`.",
 		)
 		return nil
 	}
@@ -127,13 +111,15 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 		"won't use them unless its instruction file tells it when.",
 		"",
 		"This step updates each detected client's user-scope",
-		"instruction file. Claude Code's ~/.claude/CLAUDE.md gets a",
-		"managed `<!-- gramaton-managed -->` block (content outside",
-		"it is preserved); Kiro's ~/.kiro/steering/gramaton.md is a",
-		"dedicated file alongside your other steering topics.",
+		"instruction file. Claude Code's ~/.claude/CLAUDE.md and",
+		"Codex's ~/.codex/AGENTS.md get a managed",
+		"`<!-- gramaton-managed -->` block (content outside it is",
+		"preserved); Kiro's ~/.kiro/steering/gramaton.md and Cursor's",
+		"~/.cursor/skills/gramaton/SKILL.md are dedicated files",
+		"Gramaton owns end to end.",
 		"",
 		"You'll be asked once per detected client so you can install",
-		"for one and skip the other.",
+		"for some and skip others.",
 	)
 
 	installed := 0
@@ -165,7 +151,7 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 			continue
 		}
 
-		template := templateForClient(c.Name)
+		template := installBodyForClient(c.Name)
 		action, err := installInstructions(path, template, layout)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: write failed: %v", c.Name, err))
@@ -219,29 +205,35 @@ const (
 )
 
 // instructionsPathForClient returns the path + layout for a client's
-// user-scope instruction file. Returns an error for unknown clients
-// rather than guessing — the wizard prefers to surface gaps so we
-// can add support deliberately.
+// user-scope instruction file, resolved from the harness registry.
+// Returns an error for unknown clients (or registry entries without
+// an instructions path) rather than guessing — the wizard prefers
+// to surface gaps so we can add support deliberately.
+//
+// Harnesses with a ConfigRootEnv (Codex's CODEX_HOME) get their
+// config root swapped in for the home-relative directory when the
+// variable is set: [".codex", "AGENTS.md"] resolves to
+// $CODEX_HOME/AGENTS.md instead of ~/.codex/AGENTS.md.
 func instructionsPathForClient(clientName string) (string, instructionsLayout, error) {
+	h := harnessByName(clientName)
+	if h == nil || len(h.InstructionsRelPath) == 0 {
+		return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	}
+	if h.ConfigRootEnv != "" {
+		if root := os.Getenv(h.ConfigRootEnv); root != "" {
+			// Same guard as codexConfigDir: a relative value would
+			// scatter config under the wizard's cwd.
+			if !filepath.IsAbs(root) {
+				return "", 0, fmt.Errorf("%s is set but not an absolute path (%q); fix or unset it and re-run", h.ConfigRootEnv, root)
+			}
+			return filepath.Join(append([]string{root}, h.InstructionsRelPath[1:]...)...), h.InstructionsLayout, nil
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve home dir: %w", err)
 	}
-	switch clientName {
-	case "Claude Code":
-		// Claude Code loads ~/.claude/CLAUDE.md as one merged
-		// system-prompt piece; users routinely add their own
-		// content alongside. Fence the managed region.
-		return filepath.Join(home, ".claude", "CLAUDE.md"), fencedBlockInSharedFile, nil
-	case "kiro-cli":
-		// Kiro loads every .md in ~/.kiro/steering/ on session
-		// start, so single-purpose files are the idiomatic shape.
-		// Own gramaton.md entirely; users add siblings for their
-		// own topics.
-		// Verified: https://kiro.dev/docs/cli/steering/
-		return filepath.Join(home, ".kiro", "steering", "gramaton.md"), wholeFileOwned, nil
-	}
-	return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	return filepath.Join(append([]string{home}, h.InstructionsRelPath...)...), h.InstructionsLayout, nil
 }
 
 // installInstructions writes the gramaton-managed content into the
@@ -251,18 +243,18 @@ func instructionsPathForClient(clientName string) (string, instructionsLayout, e
 //
 // Semantics depend on layout:
 //
-//   fencedBlockInSharedFile (Claude Code's ~/.claude/CLAUDE.md):
-//     - File doesn't exist → create with just the fenced block.
-//     - Exists, no fenced block → append the fenced block after a
-//       blank-line separator; existing content preserved.
-//     - Exists with fenced block → replace only the fenced region.
-//     - Fenced content matches → "unchanged"; no rewrite.
+//	fencedBlockInSharedFile (Claude Code's ~/.claude/CLAUDE.md):
+//	  - File doesn't exist → create with just the fenced block.
+//	  - Exists, no fenced block → append the fenced block after a
+//	    blank-line separator; existing content preserved.
+//	  - Exists with fenced block → replace only the fenced region.
+//	  - Fenced content matches → "unchanged"; no rewrite.
 //
-//   wholeFileOwned (Kiro's ~/.kiro/steering/gramaton.md):
-//     - File doesn't exist → create with the full template.
-//     - File exists, content matches → "unchanged"; no rewrite.
-//     - File exists, content differs → overwrite.
-//     No merging; we own the full file.
+//	wholeFileOwned (Kiro's ~/.kiro/steering/gramaton.md):
+//	  - File doesn't exist → create with the full template.
+//	  - File exists, content matches → "unchanged"; no rewrite.
+//	  - File exists, content differs → overwrite.
+//	  No merging; we own the full file.
 //
 // Always uses tmp + rename for durability. For the shared-file path
 // a sibling `.bak` file is written before replacement in case the
@@ -301,7 +293,7 @@ func installWholeFile(path string, existing []byte, exists bool, body string) (s
 // content outside the BEGIN/END markers, gramaton-managed content
 // inside.
 func installFencedBlock(path string, existing []byte, exists bool, template string) (string, error) {
-	fenced := instructionsFenceBegin + "\n" + strings.TrimSpace(template) + "\n" + instructionsFenceEnd + "\n"
+	fenced := instructionsFenceBegin() + "\n" + strings.TrimSpace(template) + "\n" + instructionsFenceEnd + "\n"
 
 	if !exists {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -335,8 +327,13 @@ func installFencedBlock(path string, existing []byte, exists bool, template stri
 // Errors only when the begin/end fence markers are unbalanced — which
 // means the file was corrupted mid-write by some external actor; bail
 // rather than guess where the managed region ends.
+//
+// Detection keys off instructionsFenceBeginPrefix (not the full
+// versioned BEGIN line), so blocks written by any prior gramaton
+// version — including pre-stamp installs — are found and replaced
+// in place, stamp and all.
 func replaceOrAppendFence(existing []byte, fenced string) ([]byte, string, error) {
-	beginIdx := bytes.Index(existing, []byte(instructionsFenceBegin))
+	beginIdx := bytes.Index(existing, []byte(instructionsFenceBeginPrefix))
 	endIdx := bytes.Index(existing, []byte(instructionsFenceEnd))
 
 	if beginIdx == -1 && endIdx == -1 {
@@ -368,8 +365,12 @@ func replaceOrAppendFence(existing []byte, fenced string) ([]byte, string, error
 	// a trailing newline for cleanliness.
 	endMarkerEnd := endIdx + len(instructionsFenceEnd)
 	// Swallow the newline after the end marker too so we don't grow
-	// the file by one line on every idempotent re-run.
-	if endMarkerEnd < len(existing) && existing[endMarkerEnd] == '\n' {
+	// the file by one line on every idempotent re-run. CRLF-aware:
+	// a Windows-authored file has \r\n here, and swallowing only the
+	// \n would leave a stray \r behind.
+	if endMarkerEnd+1 < len(existing) && existing[endMarkerEnd] == '\r' && existing[endMarkerEnd+1] == '\n' {
+		endMarkerEnd += 2
+	} else if endMarkerEnd < len(existing) && existing[endMarkerEnd] == '\n' {
 		endMarkerEnd++
 	}
 

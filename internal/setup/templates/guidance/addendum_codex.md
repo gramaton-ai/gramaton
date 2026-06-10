@@ -1,0 +1,22 @@
+### Memory routing: Codex's native memories vs Gramaton
+
+Codex ships its own memory system under `~/.codex/memories/`,
+separate from Gramaton. Both want "remember this" content.
+
+Route knowledge to Gramaton by default: decisions, facts, research,
+preferences, and anything you would search for later. When the user
+says "remember this", that means `gramaton_save`. Do not mirror
+Gramaton saves into Codex's memories or vice versa — one store per
+fact.
+
+Treat Codex's native memories as session-local convenience, not the
+knowledge store of record. When the two disagree, verify against
+Gramaton and prefer it for durable knowledge.
+
+### Subagents and Gramaton
+
+Codex subagents can inherit Gramaton's MCP tools from the parent
+session, so a delegated task is able to write to the store. Keep
+saves and session extraction in the main conversation, and tell
+delegated tasks not to write to Gramaton: a subagent sees only its
+task brief, and partial-context saves produce fragmentary records.

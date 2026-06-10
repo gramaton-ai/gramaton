@@ -100,11 +100,11 @@ func New(prompter Prompter, writer Writer, cfg *config.Config, cfgPath, configDi
 	}
 }
 
-// totalSteps is the number shown in "Step N of M" headers. The wizard
-// has 5 logical steps but only 4 are user-facing (Step 0 -- branching
-// fresh vs import -- is a single prompt, not a numbered step). Kept
-// as a constant so a refactor that adds/removes a step updates every
-// header consistently.
+// totalSteps is the number shown in "Step N of M" headers. Five
+// numbered steps (bootstrap, LLM, MCP, instructions, hooks); Step 0
+// (the fresh-vs-import branch) and the closing verification pass are
+// unnumbered. Kept as a constant so a refactor that adds/removes a
+// step updates every header consistently.
 const totalSteps = 5
 
 // Run drives the full wizard flow. It returns a non-nil error only
@@ -117,14 +117,17 @@ const totalSteps = 5
 //  1. Knowledge-store bootstrap (data dir, embedding, model download).
 //  2. LLM provider + API key + cost caps (optional but strongly
 //     recommended).
-//  3. MCP client auto-detect + config injection (Claude Code, kiro-cli).
-//  4. Auto-capture hook installer.
-//  5. Verification + concrete next-steps block.
+//  3. MCP client auto-detect + config injection (harness registry:
+//     Claude Code, kiro-cli, Codex, Cursor).
+//  4. Agent-usage instructions installer.
+//  5. Auto-capture hook installer.
+//
+// followed by an unnumbered verification + next-steps wrap-up.
 //
 // The import branch (Step 0 -> [2]) skips Step 1's bootstrap (the
 // restored archive populates the data dir) but still walks through
-// Steps 2-4 because API keys, MCP registration, and hooks are all
-// per-machine and deliberately not included in backups.
+// Steps 2-5 because API keys, MCP registration, instructions, and
+// hooks are all per-machine and deliberately not included in backups.
 // addCleanup registers a function to be executed on wizard interrupt.
 // Called by steps after they write persistent state (e.g., API key
 // files). Safe for concurrent calls, though in practice the wizard
@@ -250,9 +253,9 @@ func (w *Wizard) Run(ctx context.Context) error {
 
 	if importing {
 		// runImport replaces Step 1 bootstrap: restore populates the
-		// data directory atomically from the archive. Steps 2-4 still
-		// run because keys are stripped from backups and MCP/hooks
-		// are per-machine.
+		// data directory atomically from the archive. Steps 2-5 still
+		// run because keys are stripped from backups and MCP/
+		// instructions/hooks are per-machine.
 		if err := w.runImport(ctx); err != nil {
 			return fmt.Errorf("import: %w", err)
 		}
@@ -290,7 +293,7 @@ func (w *Wizard) Run(ctx context.Context) error {
 func (w *Wizard) welcome() {
 	w.writer.Section("Welcome to Gramaton")
 	w.writer.Paragraph(
-		"A local, versioned knowledge store for AI agents.",
+		"Local, versioned epistemic memory for AI agents.",
 		"",
 		"I'll get you set up in about 2-3 minutes. Press Ctrl+C at",
 		"any time to exit -- nothing is persisted until the end of",
@@ -346,8 +349,8 @@ func (w *Wizard) nextSteps() {
 	w.writer.Paragraph(
 		"Next steps:",
 		"",
-		"  1. Restart your AI client (Claude Code, kiro-cli) so it",
-		"     picks up the new MCP configuration.",
+		"  1. Restart your AI client(s) so they",
+		"     pick up the new MCP configuration.",
 		"",
 		"  2. Try it -- in your AI assistant, say:",
 		"     \"Remember that my favorite editor is neovim.\"",

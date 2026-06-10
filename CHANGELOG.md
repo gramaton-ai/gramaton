@@ -7,7 +7,126 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Codex and Cursor join Claude Code as supported harnesses in
+  `gramaton init`.** Supported AI harnesses now live in a declarative
+  registry (`internal/setup/harness.go`); wizard steps iterate it
+  instead of switching on client names, so each harness declares its
+  detection probe, MCP registration strategy, guidance install
+  target, and hook wiring in one place.
+  - *Codex* (codex-cli + Desktop App, shared config): detected via
+    `codex` on PATH; registered with `codex mcp add gramaton --
+    gramaton mcp` (verified against codex-cli 0.133.0: add replaces
+    an existing entry idempotently and preserves user comments in
+    config.toml, so no TOML dependency was added); agent guidance
+    merges as a fenced block into `$CODEX_HOME/AGENTS.md`; hooks
+    (SessionStart/Stop/PreCompact/PostCompact) upsert into
+    `$CODEX_HOME/hooks.json` with both `command` (.sh) and
+    `commandWindows` (.cmd) variants materialized on every host.
+    `CODEX_HOME` relocation is honored throughout. Tool pre-approval
+    via `default_tools_approval_mode` is deferred (tracked locally).
+  - *Cursor IDE*: detected via `~/.cursor/` presence (the IDE ships
+    no CLI); registered by direct surgical upsert into
+    `~/.cursor/mcp.json` (other servers and unrelated keys
+    preserved); agent guidance installs as a personal Skill at
+    `~/.cursor/skills/gramaton/SKILL.md` whose always-in-context
+    description carries the retrieval triggers; hooks
+    (sessionStart/stop/preCompact) upsert into `~/.cursor/hooks.json`
+    using Cursor's flat entry schema with required `version: 1`.
+    New `gramaton hook cursor-*` events adapt Cursor's stdin
+    (`conversation_id` → session id, `workspace_roots[0]` → cwd)
+    onto the claude-protocol handlers.
+  - `gramaton preflight` and the wizard's verification step now
+    survey MCP registration per harness (`claude mcp list`,
+    `codex mcp list`, `~/.cursor/mcp.json`) and check hook scripts
+    for all four hook directories. All user-editable JSON config
+    reads (including the pre-existing Claude Code settings.json
+    patcher) now tolerate a UTF-8 BOM, refuse to touch files they
+    can't parse or whose envelope has the wrong shape, and abort if
+    the pre-rewrite backup cannot be written. Kiro-cli remains in
+    the registry bug-for-bug; Kiro integration work is deferred
+    until later (tracked locally).
+- **Installed agent guidance now carries a version stamp.** The
+  managed-block fence reads `<!-- BEGIN gramaton-managed v=X.Y.Z -->`
+  with the version from the new `internal/setup/templates` package
+  (`GuidanceVersion`, starting at 0.1.0); Cursor's whole-file
+  SKILL.md carries the same stamp in a comment after the frontmatter
+  (kiro-cli's parked `~/.kiro/steering/gramaton.md` remains
+  unstamped until that integration resumes). Fence detection matches
+  a stable prefix, so blocks written by earlier (pre-stamp) versions
+  upgrade in place instead of being appended twice. Groundwork for
+  outdated-guidance detection (#80); bump discipline documented in
+  CONTRIBUTING.md.
+- **Canonical guidance artifact for custom-agent builders.**
+  `integration/custom-agents/system-prompt.md` is a harness-neutral
+  render of the same templates the wizard installs, pinned by the
+  drift test; `integration/docs/custom-agents.md` now points at it
+  instead of hand-maintaining duplicate behavioral guidance, and
+  gains a session-lifecycle wiring section (custom agents have no
+  hooks — their loop calls `gramaton_session_start` at conversation
+  open and prepare/save at boundaries, persisting the session id).
+
+### Changed
+
+- **Agent-guidance prose is single-sourced and harness-neutral.**
+  The guidance installed for every harness renders from one
+  `internal/setup/templates/guidance/base.md` plus thin per-harness
+  addenda, with `{{client_name}}` / `{{mcp_reconnect_hint}}`
+  interpolation; a test forbids hardcoded harness names in the base.
+  The base also got a quality pass: project-specific ticket-codename
+  patterns generalized, the `gramaton_guide` topic list completed
+  (`temporal-queries` was missing), a `gramaton_session_start`
+  fallback documented for hookless setups, duplicated CLI-fallback
+  prose merged, and niche search patterns deferred to
+  `gramaton_guide(topic="search")`. Per-harness addenda carry what
+  is genuinely divergent: memory-routing rules (Claude Code
+  auto-memory, Codex `~/.codex/memories/`) and subagent-delegation
+  rules reflecting verified per-harness facts (Claude Code subagents
+  cannot reach MCP tools; Codex and Cursor subagents inherit them,
+  so delegated tasks are told not to write to the store).
+
+- **Project description now reads "epistemic memory" instead of
+  "knowledge store."** The one-line description changes from "A
+  local, versioned knowledge store for AI agents." to "Local,
+  versioned epistemic memory for AI agents." across the README
+  intro, the GitHub repository description, the `gramaton init`
+  welcome banner (`internal/setup/wizard.go`), and the CLI root
+  help (`cli/root.go`). Epistemic metadata is the product (design
+  decision D1); "knowledge store" undersold the differentiator and
+  read interchangeably with generic vector stores. Historical
+  CHANGELOG entries retain the old phrasing.
+
+### Removed
+
+- **Stale `integration/` reference docs cleared as precondition for
+  the multi-harness integration pass.** Deleted the four
+  `integration/kiro/gramaton-{search,save,curate,collections}.md`
+  files (not installed by the wizard, not pinned by any drift test,
+  and being replaced by whatever shape falls out of the
+  primary-source-driven Kiro integration design). Deleted
+  `integration/claude-code/subagent-{save,curate}.md` (self-described
+  legacy/fallback patterns from the pre-session-flow era; the
+  session flow and autonomous curation supersede them, and their
+  presence under `integration/claude-code/` invited confusion).
+  `README.md` and `docs/integrator-guide.md` updated to drop the
+  now-broken Kiro reference link. The Claude Code integration
+  surface (`integration/claude-code/CLAUDE.md` + the canonical
+  templates under `internal/setup/templates/`) is unchanged. The
+  empty `integration/kiro/` directory was also removed. This also
+  retires the interim "Kiro skills brought up to date" content
+  refresh that PR #79 made to two of the deleted files.
+
 ### Fixed
+
+- **Pre-compact transcript archives now target the per-cwd session.**
+  The pre-compact hook resolved the Gramaton session via the global
+  last-writer-wins pointer file, so with concurrent hooked sessions
+  in different working directories a transcript could be archived
+  against another directory's session. The hook now prefers the
+  per-cwd binding written by session-start (the same one `gramaton
+  session current` reads) and falls back to the global pointer only
+  when the hook payload carries no working directory.
 
 - **Integration docs and `gramaton init` template no longer carry
   stale terminology from the capture→save / session_commit→session_save
@@ -28,28 +147,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/v1/revert`, the addendum's "never commit API keys" auto-memory
   routing example) are intentionally preserved. Closes #77.
 
-- **Kiro skills brought up to date with the current integrator
-  surface.** `integration/kiro/gramaton-collections.md`: replaced
-  the stale "Passive save (observe)" cell in the
-  Knowledge-Graph-vs-Collections table with "Passive save via
-  sessions" -- the observe flow was removed when session extraction
-  took over (`/v1/observe` retired, replaced by the session
-  prepare/save pair). Added explicit coverage of the four orthogonal
-  behavior knobs (`curation`, `supersession`, `contradictions`,
-  `clear_mode`) and the `template` shortcut on
-  `gramaton_collection_create`. Rewrote the "Adding Items"
-  duplicate-handling note to reflect the curation-mode-aware
-  behavior introduced by D37 + the per-collection behavior knobs:
-  `curation: none` returns the existing item id with
-  `deduplicated: true` (idempotent); `curation: standard` returns
-  `ErrConflict`. Mentioned `gramaton_collection_add_batch` as the
-  preferred path for >10-item adds. `integration/kiro/gramaton-curate.md`:
-  added a top-of-file framing paragraph making it explicit the
-  skill is the fallback for the `autonomous: false` deployment
-  case (matching the framing already on
-  `integration/claude-code/subagent-curate.md`), and noting that
-  deterministic curation runs server-side regardless of LLM
-  availability.
+- **Stale "commit" terminology finished off in
+  `docs/integrator-guide.md`.** Two stragglers from the
+  capture→save / session_commit→session_save rename that issue #77's
+  grep (scoped to the templates and `custom-agents.md`) didn't
+  cover: "commit session segments" and "For Sessions, commit at the
+  triggers listed above" in the Agent prompt guidance section now
+  use "save".
 
 - **Capture-time auto-supersession now honors `supersession=none`
   opt-out.** Records whose effective supersession resolves to `none`

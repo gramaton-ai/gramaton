@@ -7,12 +7,13 @@
 //
 // The pre-OSS target audience is "tech-capable users" — developers who
 // can run `go install`. Even for them, a complete Gramaton install wires
-// together five moving parts: config file, data directory, embedding
-// model, LLM provider + API key, MCP client registration, automatic-
-// capture hooks. A bare `gramaton init` that drops out after creating
-// the data dir leaves four of those five steps undocumented in the
-// quickstart and invisible in `--help`. New users end up with a
-// half-wired install and assume Gramaton "doesn't really work."
+// together several moving parts: config file, data directory, embedding
+// model, LLM provider + API key, MCP client registration, agent-usage
+// instructions, automatic-capture hooks. A bare `gramaton init` that
+// drops out after creating the data dir leaves most of those steps
+// undocumented in the quickstart and invisible in `--help`. New users
+// end up with a half-wired install and assume Gramaton "doesn't
+// really work."
 //
 // The wizard walks the user through each of those steps once, with
 // a plain-English explanation at every decision point, auto-detection
@@ -48,12 +49,14 @@
 //	if err := wiz.Run(ctx); err != nil { ... }
 //
 // Steps (see wizard.go Run):
-//   0. Welcome + branch fresh-vs-import
-//   1. Knowledge-store bootstrap (config, data dir, embedding provider, model download)
-//   2. LLM provider (optional but strongly recommended) + API key + test call + cost caps
-//   3. MCP client auto-detect (Claude Code + kiro-cli) + config injection
-//   4. Hooks installer (auto-capture) for detected clients
-//   5. Verification + concrete next-steps block
+//  0. Welcome + branch fresh-vs-import
+//  1. Knowledge-store bootstrap (config, data dir, embedding provider, model download)
+//  2. LLM provider (optional but strongly recommended) + API key + test call + cost caps
+//  3. MCP client auto-detect (harness registry: Claude Code, kiro-cli, Codex, Cursor) + config injection
+//  4. Agent-usage instructions installer (per-client guidance files)
+//  5. Hooks installer (auto-capture) for detected clients
+//
+// followed by an unnumbered verification + next-steps wrap-up.
 //
 // Each step is idempotent and safe to re-run: re-running the wizard
 // against an existing install offers a menu to reconfigure individual
@@ -64,7 +67,7 @@
 // When the caller detects no TTY (or the user passes --non-interactive),
 // the wizard runs in a defaults-only path that completes Step 1 only
 // (bootstrap + BERT model download) and prints instructions for
-// completing Steps 2-4 manually. This preserves backward compatibility
+// completing Steps 2-5 manually. This preserves backward compatibility
 // with existing `gramaton init` invocations in scripts/CI and keeps
 // the --non-interactive exit behavior predictable.
 package setup

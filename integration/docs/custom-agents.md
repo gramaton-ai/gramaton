@@ -1,6 +1,54 @@
 # Custom Agent Integration
 
-How to integrate Gramaton with any agent framework.
+How to integrate Gramaton with any agent framework — code calling a
+model API directly (Anthropic, Bedrock, or any provider) in Python,
+Go, TypeScript, or anything else, with no harness wizard to lean on.
+
+Integration has three parts:
+
+1. **Connect** your agent to Gramaton (MCP, REST, or CLI — below).
+2. **Steer** the model with the canonical agent guidance
+   ([System Prompt](#system-prompt)).
+3. **Wire the session lifecycle** into your agent loop — the part
+   the harness hooks normally do for you
+   ([Session Lifecycle Wiring](#session-lifecycle-wiring)).
+
+## System Prompt
+
+Merge [`integration/custom-agents/system-prompt.md`](../custom-agents/system-prompt.md)
+into your agent's system prompt. It is the same canonical guidance
+`gramaton init` installs for Claude Code, Codex, and Cursor —
+rendered harness-neutral from the templates in
+`internal/setup/templates/guidance/` and pinned by a drift test, so
+it never lags the tool surface. It carries the retrieval triggers,
+save rules, metadata interpretation, and the session flow; don't
+hand-write your own version of that material.
+
+## Session Lifecycle Wiring
+
+On the supported harnesses, `gramaton init` installs lifecycle hooks
+that bind sessions automatically. A custom agent has no hooks — your
+agent loop owns this:
+
+1. **At conversation open**, call `gramaton_session_start` (or
+   `POST /v1/sessions`) with a stable `client_session_id` — your
+   framework's conversation/thread id. Persist the returned Gramaton
+   `session_id` alongside the conversation state.
+2. **Pass that `session_id`** to `gramaton_session_prepare` /
+   `gramaton_session_save` at boundaries: a task completes, the user
+   pivots topics, ~10 substantive turns pass, or you are about to
+   compact/truncate context. Always prepare before save.
+3. **Before compaction**, optionally archive the raw transcript via
+   `POST /v1/sessions/{id}/archive` so post-compaction extraction
+   still has source material.
+
+Note that `gramaton session current` (the CLI lookup the system
+prompt mentions) reads per-working-directory state written by the
+harness hooks. Without hooks it has nothing to find — use the
+`session_id` your loop persisted instead. The per-cwd binding is
+also last-writer-wins: two hooked agents sharing one working
+directory contend for it, which is another reason a custom agent
+should carry its own `session_id` explicitly.
 
 ## Access Methods
 
@@ -10,7 +58,7 @@ store. Choose based on your framework's capabilities:
 ### 1. MCP (Recommended)
 
 The fastest path. Gramaton exposes the full MCP tool surface
-(currently 38 tools across 9 clusters) via Streamable HTTP. Agents
+(currently 38 tools across 10 clusters) via Streamable HTTP. Agents
 call typed tools with structured parameters -- no shell, no escaping,
 no permission prompts.
 
@@ -133,7 +181,7 @@ GET    /v1/stats/llm                        LLM usage & cost stats
 POST   /v1/sessions                         Start a session
 GET    /v1/sessions/{id}                    Look up a session
 POST   /v1/sessions/{id}/prepare            Phase 1 of save flow
-POST   /v1/sessions/{id}/save             Phase 2 of save flow
+POST   /v1/sessions/{id}/save               Phase 2 of save flow
 POST   /v1/sessions/{id}/archive            Archive a session
 
 # Intake (replaces the retired /v1/observe)
@@ -213,87 +261,28 @@ gramaton status
 The CLI returns JSON to stdout. Write commands accept JSON via
 `--file` flag (preferred) or stdin.
 
-## Agent Behavior Guidelines
+## Custom-Agent-Specific Notes
 
-Regardless of which access method you use, your agent's system
-prompt should include these behavioral instructions:
+The behavioral guidance — retrieval triggers, save rules, session
+extraction, metadata interpretation — lives in the
+[system-prompt artifact](#system-prompt); it is deliberately not
+duplicated here. The notes below cover only what differs for custom
+builds.
 
-### When to Search
+### Intake (Pre-Extracted Facts)
 
-- Before answering questions about past decisions or context
-- When the user references prior sessions
-- When you need context beyond the current conversation
-- When uncertain whether the user expressed a preference before
-
-### When to Save
-
-- User makes a decision or states a preference
-- A significant fact, insight, or design rationale emerges
-- An architecture or design choice is made with reasoning
-- Research findings or domain knowledge are discussed
-- A constraint, requirement, or tradeoff is identified
-
-### When NOT to Save
-
-- Trivial exchanges, greetings, small talk
-- Questions without answers
-- Work-in-progress that hasn't solidified
-- Your own generated responses or analysis
-
-### Save Workflow
-
-The standard save workflow is three operations:
-
-1. **Save** the knowledge with classification metadata
-2. **Search** for related existing records
-3. **Link** the new record to related ones
-
-This creates a connected knowledge graph, not just a list of facts.
-
-### When to Extract from Conversation (Sessions)
-
-At natural breakpoints (end of task, topic change, session wind-down,
-before context compaction), call the two-phase session flow:
-
-```
-gramaton_session_prepare(session_id="<id>")
-gramaton_session_save(session_id="<id>", segments=[...])
-```
-
-`prepare` returns extraction instructions plus already-saved
-segments (for dedup). `save` submits extracted segments. Each
-segment becomes a Session record (BM25-indexed); when
-`promote_to_memory: true` (default) it also becomes a Memory record
-(vector-embedded, full lifecycle, auto-supersession).
-
-Set `promote_to_memory: false` for exploration, open questions, or
-dead ends — they stay searchable in Sessions without polluting
-Memory's vector space.
-
-Do not call `save` without calling `prepare` first; the server
-rejects orphan saves.
-
-For pre-extracted facts (no LLM available, or external pipeline),
-use `gramaton_intake` instead — it bypasses the session flow and
-queues facts directly for curation:
+For pre-extracted facts (no LLM available in your loop, or an
+external pipeline feeding Gramaton), use `gramaton_intake` — it
+bypasses the session flow and queues facts directly for curation:
 
 ```
 gramaton_intake(facts=["Decided to use JWT", "API v2 replaces v1"])
 ```
 
-Both paths are fire-and-forget: do not announce, do not call every
-turn. They are safety nets for knowledge the agent didn't explicitly
-save. Explicit `gramaton_save` remains the primary,
-high-quality, user-initiated save path.
-
-### Interpreting Metadata
-
-Results include `metadata_summary` -- a one-line LLM-readable trust
-assessment. Example: "Current. Durable, high-confidence (0.90),
-well-established. Last accessed 3 days ago."
-
-Use this for quick assessment. For critical decisions, check the
-raw fields (confidence, temporality, epistemic_status) directly.
+Intake and session extraction are both fire-and-forget safety nets:
+do not announce them, do not call them every turn. Explicit
+`gramaton_save` remains the primary, high-quality, user-initiated
+save path.
 
 ### Curation
 

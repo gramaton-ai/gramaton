@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/internal/setup/templates"
 )
 
 // updateIntegration, when set, rewrites the integration/<client>/*.md
@@ -22,18 +24,42 @@ var updateIntegration = flag.Bool(
 	"rewrite integration/<client>/*.md snapshot files from canonical templates",
 )
 
-// integrationSnapshots maps each detected MCP client name to the
-// repository-relative snapshot file that documents what `gramaton
-// init` installs for that client. The snapshots are user-readable
-// references linked from README.md and docs/integrator-guide.md;
-// keeping them honest matters because integrators read them to
-// understand the agent guidance.
+// integrationSnapshots maps each integration/<dir>/ snapshot file to
+// the canonical renderer it must match. The snapshots are
+// user-readable references linked from README.md and
+// docs/integrator-guide.md; keeping them honest matters because
+// integrators read them to understand the agent guidance.
+//
+// Most entries render through templateForClient (what `gramaton
+// init` installs for a detected harness). The custom-agents entry
+// has no harness behind it — it is the documentation-only artifact
+// builders of bespoke agents merge into their own system prompts.
 //
 // Paths are relative to the test file's package directory
 // (internal/setup/) -- the test resolves them against the repo root
 // at runtime.
-var integrationSnapshots = map[string]string{
-	"Claude Code": filepath.Join("..", "..", "integration", "claude-code", "CLAUDE.md"),
+var integrationSnapshots = map[string]struct {
+	rel    string
+	render func() string
+}{
+	"claude-code": {
+		rel:    filepath.Join("..", "..", "integration", "claude-code", "CLAUDE.md"),
+		render: func() string { return templateForClient(harnessClaudeCode) },
+	},
+	"codex": {
+		rel:    filepath.Join("..", "..", "integration", "codex", "AGENTS.md"),
+		render: func() string { return templateForClient(harnessCodex) },
+	},
+	"cursor": {
+		// Full SKILL.md including frontmatter + stamp, via the same
+		// composition the installer uses.
+		rel:    filepath.Join("..", "..", "integration", "cursor", "SKILL.md"),
+		render: func() string { return installBodyForClient(harnessCursor) },
+	},
+	"custom-agents": {
+		rel:    filepath.Join("..", "..", "integration", "custom-agents", "system-prompt.md"),
+		render: templates.CustomAgents,
+	},
 }
 
 // TestIntegrationSnapshotsMatchCanonical pins the snapshot files in
@@ -47,29 +73,32 @@ var integrationSnapshots = map[string]string{
 // what's useful for a reader who wants to understand the agent
 // guidance without thinking about install mechanics.
 func TestIntegrationSnapshotsMatchCanonical(t *testing.T) {
-	for client, rel := range integrationSnapshots {
-		t.Run(client, func(t *testing.T) {
-			want := templateForClient(client)
+	for name, snap := range integrationSnapshots {
+		t.Run(name, func(t *testing.T) {
+			want := snap.render()
 
 			if *updateIntegration {
-				if err := os.WriteFile(rel, []byte(want), 0o644); err != nil {
-					t.Fatalf("write %s: %v", rel, err)
+				if err := os.MkdirAll(filepath.Dir(snap.rel), 0o755); err != nil {
+					t.Fatalf("mkdir for %s: %v", snap.rel, err)
 				}
-				t.Logf("updated %s", rel)
+				if err := os.WriteFile(snap.rel, []byte(want), 0o644); err != nil {
+					t.Fatalf("write %s: %v", snap.rel, err)
+				}
+				t.Logf("updated %s", snap.rel)
 				return
 			}
 
-			got, err := os.ReadFile(rel)
+			got, err := os.ReadFile(snap.rel)
 			if err != nil {
-				t.Fatalf("read %s: %v", rel, err)
+				t.Fatalf("read %s: %v", snap.rel, err)
 			}
 			// Normalize line endings so a Windows checkout with
 			// autocrlf=true (CRLF on disk) matches the LF-only output
-			// of templateForClient. Repository convention is LF.
+			// of the renderers. Repository convention is LF.
 			gotLF := strings.ReplaceAll(string(got), "\r\n", "\n")
 			if gotLF != want {
-				t.Fatalf("%s is out of sync with templateForClient(%q).\nFix: go test ./internal/setup -update-integration",
-					rel, client)
+				t.Fatalf("%s is out of sync with its canonical renderer.\nFix: go test ./internal/setup -update-integration",
+					snap.rel)
 			}
 		})
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -181,41 +180,49 @@ func (w *Wizard) verifyLLM() {
 	}
 }
 
-// verifyMCPRegistration runs `claude mcp list` and reports whether
-// gramaton is registered. Skipped if `claude` isn't on PATH. Kiro-
-// cli's list format is unverified, so we don't survey it.
+// verifyMCPRegistration surveys each detected harness's MCP config
+// for a gramaton entry via the registry's per-harness strategy.
+// Harnesses with no survey strategy (kiro-cli: list-output format
+// unverified) or not detected on this machine produce no line at
+// all -- the absence of a client isn't a health problem.
+//
+// State-neutral phrasing throughout: this is a survey of what's
+// currently in each client's config, not an action this wizard just
+// performed. An entry may be present because Step 3 added it on
+// this run, a prior wizard run added it, or the user configured it
+// manually -- all three render the same ✓ because the user's end
+// state is the same.
 func (w *Wizard) verifyMCPRegistration(ctx context.Context) {
-	claudeBin, err := exec.LookPath("claude")
-	if err != nil {
-		// Not a warning -- user may not use Claude Code at all.
-		return
-	}
-	out, err := exec.CommandContext(ctx, claudeBin, "mcp", "list").CombinedOutput()
-	if err != nil {
-		w.writer.Warn("MCP: couldn't run `claude mcp list` to verify registration")
-		return
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "gramaton:") {
-			// State-neutral phrasing: this is a survey of what's
-			// currently in Claude Code's config, not an action this
-			// wizard just performed. An entry may be present because
-			// Step 3 added it on this run, a prior wizard run added
-			// it, or the user configured it manually -- all three
-			// cases render the same ✓ because the user's end state
-			// is the same.
-			w.writer.Check("MCP: gramaton entry present in Claude Code's config")
-			return
+	for _, h := range harnesses {
+		if h.VerifyMCPRegistered == nil {
+			continue
+		}
+		c, ok := detectHarness(h)
+		if !ok {
+			continue
+		}
+		registered, err := h.VerifyMCPRegistered(ctx, c.Binary)
+		if err != nil {
+			w.writer.Warn(fmt.Sprintf("MCP (%s): %v", h.Name, err))
+			continue
+		}
+		if registered {
+			w.writer.Check(fmt.Sprintf("MCP: gramaton entry present in %s's config", h.Name))
+		} else {
+			w.writer.Warn(fmt.Sprintf("MCP: gramaton not found in %s's config. If you declined Step 3 or it failed, register manually: %s", h.Name, h.ManualMCPHint))
 		}
 	}
-	w.writer.Warn("MCP: gramaton not found in Claude Code's config. If you declined Step 3 or it failed, register manually: claude mcp add --scope user gramaton gramaton -- mcp")
 }
 
 // verifyHooks walks <configDir>/hooks/<client>/ for each known
 // client and confirms the expected scripts exist and are executable.
 // Reports per-client ✓ or ⚠.
 func (w *Wizard) verifyHooks() {
-	for _, client := range []string{"claude-code", "kiro"} {
+	for _, h := range harnesses {
+		if h.HookEmbedDir == "" {
+			continue
+		}
+		client := h.HookEmbedDir
 		dir := filepath.Join(w.configDir, "hooks", client)
 		entries, err := os.ReadDir(dir)
 		if err != nil {

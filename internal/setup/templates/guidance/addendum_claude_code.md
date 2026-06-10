@@ -21,3 +21,10 @@ to Gramaton.
 This routing overrides the auto-memory guidance in Claude Code's
 harness system prompt, which would otherwise direct most "remember
 this" content into auto-memory.
+
+### Subagents and Gramaton
+
+Claude Code's background subagents cannot access MCP tools, and the
+CLI fallback requires interactive permission — a save delegated to a
+subagent stalls or silently fails. Call Gramaton tools from the main
+conversation only.
