@@ -60,6 +60,13 @@ func newWizardForMCPTest(t *testing.T, backend MCPBackend, mcpConfirm string) (*
 	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm)
 
 	tmpDir := t.TempDir()
+	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey
+	// bypasses the injected backend and probes the real PATH + home.
+	// Sandbox both so dev machines with claude/codex installed don't
+	// shell out (slow) or read real user config (nondeterministic).
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 	cfg := config.Defaults()
 	cfg.DataDir = tmpDir + "/data"
 

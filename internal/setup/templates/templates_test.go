@@ -74,16 +74,29 @@ func TestRenderEmptyAddendumStripsMarker(t *testing.T) {
 
 // TestCustomAgentsRenderClean pins the checked-in custom-agents
 // artifact's properties: fully interpolated, marker-free, and free
-// of any specific harness's name.
+// of any specific harness's name. The harness-name ban is
+// case-insensitive so "claude" or "~/.codex/" can't slip through in
+// lowercase prose.
 func TestCustomAgentsRenderClean(t *testing.T) {
 	got := CustomAgents()
 	if !strings.Contains(got, "## Knowledge Store (Gramaton)") {
 		t.Error("custom-agents render missing base content")
 	}
-	for _, banned := range []string{"{{", AddendumMarker, "Claude Code", "Codex", "Cursor", "kiro"} {
-		if strings.Contains(got, banned) {
+	for _, banned := range []string{"{{", strings.ToLower(AddendumMarker)} {
+		if strings.Contains(strings.ToLower(got), banned) {
 			t.Errorf("custom-agents render must not contain %q", banned)
 		}
+	}
+	// "Cursor" stays case-sensitive: lowercase "cursor" is a normal
+	// English word that could legitimately appear in prose.
+	lower := strings.ToLower(got)
+	for _, banned := range []string{"claude", "codex", "kiro"} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("custom-agents render must not mention harness %q (case-insensitive)", banned)
+		}
+	}
+	if strings.Contains(got, "Cursor") {
+		t.Error("custom-agents render must not mention harness \"Cursor\"")
 	}
 }
 
@@ -96,10 +109,20 @@ func TestAddendaEmbedded(t *testing.T) {
 	if !strings.Contains(AddendumCodex, "~/.codex/memories/") {
 		t.Error("Codex addendum missing the native-memories routing rule")
 	}
+	// Every harness with subagent support carries its own version of
+	// the subagent-delegation rule -- the facts differ per harness
+	// (Claude Code subagents CANNOT reach MCP; Codex and Cursor
+	// subagents CAN inherit it), so this cannot live in base.md.
+	for name, addendum := range map[string]string{
+		"Claude Code": AddendumClaudeCode,
+		"Codex":       AddendumCodex,
+		"Cursor":      AddendumCursor,
+	} {
+		if !strings.Contains(addendum, "### Subagents and Gramaton") {
+			t.Errorf("%s addendum missing the subagents section", name)
+		}
+	}
 	if strings.TrimSpace(AddendumKiro) != "" {
 		t.Error("Kiro addendum should be empty while Kiro work is parked; if it grew content, update this test deliberately")
-	}
-	if strings.TrimSpace(AddendumCursor) != "" {
-		t.Error("Cursor addendum should be empty (no verified native memory to route against); if it grew content, update this test deliberately")
 	}
 }

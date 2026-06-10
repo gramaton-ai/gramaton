@@ -59,6 +59,15 @@ type Harness struct {
 	// when no clients are detected or the user skips Step 3.
 	ManualMCPHint string
 
+	// VerifyMCPRegistered reports whether a gramaton entry is
+	// present in this harness's MCP config, for the wizard's
+	// unnumbered verification pass (and registration idempotency
+	// probes where the vendor CLI lacks replace-on-add). bin is the
+	// detected binary path, empty for dir-detected harnesses. Nil
+	// means the registration state can't be surveyed (kiro-cli:
+	// list-output format unverified) and the check is skipped.
+	VerifyMCPRegistered func(ctx context.Context, bin string) (bool, error)
+
 	// InstructionsRelPath locates the agent-guidance file this
 	// harness reads, as path elements relative to the user's home
 	// directory. Empty means Step 4 (instructions) cannot target
@@ -138,10 +147,11 @@ type Harness struct {
 // checkbox display and for test assertions.
 var harnesses = []Harness{
 	{
-		Name:          harnessClaudeCode,
-		DetectBinary:  "claude",
-		RegisterMCP:   registerWithClaudeCode,
-		ManualMCPHint: "claude mcp add --scope user gramaton gramaton -- mcp",
+		Name:                harnessClaudeCode,
+		DetectBinary:        "claude",
+		RegisterMCP:         registerWithClaudeCode,
+		ManualMCPHint:       "claude mcp add --scope user gramaton gramaton -- mcp",
+		VerifyMCPRegistered: verifyClaudeMCPRegistered,
 		// Claude Code loads ~/.claude/CLAUDE.md as one merged
 		// system-prompt piece; users routinely add their own
 		// content alongside. Fence the managed region.
@@ -182,8 +192,8 @@ var harnesses = []Harness{
 		ProxyStyle:          proxyNativePerOS,
 		// WireHooks nil: kiro's hook-config schema is per-agent and
 		// a fresh install has no default-agent config to patch
-		// (verified 2026-05-24). Parked with the
-		// rest of the Kiro integration.
+		// (verified 2026-05-24). Parked with the rest of the Kiro
+		// integration.
 	},
 	{
 		Name:         harnessCodex,
@@ -192,7 +202,8 @@ var harnesses = []Harness{
 		// Verified syntax (codex-cli 0.133.0): positional name, then
 		// `--` separating the server command. No --scope flag; the
 		// config.toml entry is user-global by nature.
-		ManualMCPHint: "codex mcp add gramaton -- gramaton mcp",
+		ManualMCPHint:       "codex mcp add gramaton -- gramaton mcp",
+		VerifyMCPRegistered: verifyCodexMCPRegistered,
 		// Codex loads $CODEX_HOME/AGENTS.md (default ~/.codex/) as
 		// user-global agent instructions, shared with user content --
 		// same merged-file model as Claude Code's CLAUDE.md, so the
@@ -219,9 +230,10 @@ var harnesses = []Harness{
 		// Cursor IDE ships no PATH binary (the standalone `agent`
 		// CLI is a separate product); the IDE's reliable footprint
 		// is its config dir, auto-created on first launch.
-		DetectDir:     ".cursor",
-		RegisterMCP:   registerWithCursor,
-		ManualMCPHint: `(Cursor has no CLI -- add to ~/.cursor/mcp.json under mcpServers: "gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]})`,
+		DetectDir:           ".cursor",
+		RegisterMCP:         registerWithCursor,
+		ManualMCPHint:       `(Cursor has no CLI -- add to ~/.cursor/mcp.json under mcpServers: "gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]})`,
+		VerifyMCPRegistered: verifyCursorMCPRegistered,
 		// Personal skills live at ~/.cursor/skills/<name>/SKILL.md
 		// (verified 2026-06-09 from Cursor's vendor-shipped
 		// create-skill skill; ~/.cursor/skills-cursor/ is
@@ -257,7 +269,7 @@ var harnesses = []Harness{
 // Cursor's 1024-char cap.
 const cursorSkillDescription = "Persistent memory for this user via Gramaton MCP tools. " +
 	"Use when the user references past decisions, prior sessions, project context, or preferences; " +
-	"mentions a ticket (a ULID or T-/P-/D-prefixed codename); says remember, save, or store; " +
+	"mentions a ticket (a ULID or project ticket codename); says remember, save, or store; " +
 	"asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs " +
 	"(collections). Covers search, save, session extraction, and collection workflows."
 

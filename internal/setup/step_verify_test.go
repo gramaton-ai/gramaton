@@ -21,6 +21,16 @@ import (
 func newVerifyFixture(t *testing.T) (*Wizard, *bytes.Buffer, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
+	// Hermeticity: stepVerify's MCP survey detects harnesses via the
+	// REAL PATH and home dir (it deliberately bypasses the wizard's
+	// backend seam). On a dev machine with claude/codex installed
+	// that means multi-second vendor-CLI shell-outs per test and
+	// reads of the developer's actual ~/.cursor/mcp.json. Empty the
+	// PATH and point home at the sandbox so detection finds nothing
+	// unless a test plants it.
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 	dataDir := filepath.Join(tmpDir, "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -40,6 +50,59 @@ func newVerifyFixture(t *testing.T) (*Wizard, *bytes.Buffer, string) {
 		tmpDir,
 	)
 	return wiz, &buf, tmpDir
+}
+
+// TestStepVerifyMCPSurveyCursor pins the registry-driven MCP survey
+// loop deterministically through its only pure-filesystem strategy:
+// Cursor. The fixture's sandboxed HOME means planting ~/.cursor/
+// makes the harness "detected" with no binaries or shell-outs.
+func TestStepVerifyMCPSurveyCursor(t *testing.T) {
+	t.Run("registered", func(t *testing.T) {
+		wiz, buf, home := newVerifyFixture(t)
+		cursorDir := filepath.Join(home, ".cursor")
+		if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		seed := `{"mcpServers": {"gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]}}}`
+		if err := os.WriteFile(filepath.Join(cursorDir, "mcp.json"), []byte(seed), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		wiz.stepVerify(context.Background())
+		if out := buf.String(); !strings.Contains(out, "MCP: gramaton entry present in Cursor's config") {
+			t.Errorf("missing registered survey line:\n%s", out)
+		}
+	})
+
+	t.Run("not registered", func(t *testing.T) {
+		wiz, buf, home := newVerifyFixture(t)
+		// Config dir exists (detected) but no mcp.json at all.
+		if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		wiz.stepVerify(context.Background())
+		out := buf.String()
+		if !strings.Contains(out, "MCP: gramaton not found in Cursor's config") {
+			t.Errorf("missing not-registered warn:\n%s", out)
+		}
+		// The warn must carry the harness's manual hint.
+		if !strings.Contains(out, "mcp.json") {
+			t.Errorf("not-registered warn missing manual hint:\n%s", out)
+		}
+	})
+
+	t.Run("not detected means no line", func(t *testing.T) {
+		wiz, buf, _ := newVerifyFixture(t)
+		wiz.stepVerify(context.Background())
+		// The data-dir line prints a TempDir path that embeds this
+		// test's name (which contains "Cursor"), so assert on the
+		// survey line shapes, not the bare harness name.
+		out := buf.String()
+		if strings.Contains(out, "Cursor's config") || strings.Contains(out, "MCP (Cursor)") {
+			t.Errorf("undetected harness should produce no survey line:\n%s", out)
+		}
+	})
 }
 
 // TestStepVerifySkipEverything confirms the baseline verify pass:

@@ -263,9 +263,9 @@ func TestStepLLMBedrockCustomCapsWithBadInputs(t *testing.T) {
 	// bad USD/day, bad calls/day, bad USD/cycle.
 	wiz, buf, _ := newWizardForLLMTest(t,
 		"3", "", "", "n",
-		"abc",       // invalid USD/day
-		"abc",       // invalid calls/day
-		"abc",       // invalid USD/cycle
+		"abc", // invalid USD/day
+		"abc", // invalid calls/day
+		"abc", // invalid USD/cycle
 	)
 	if err := wiz.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)

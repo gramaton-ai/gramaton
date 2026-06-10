@@ -221,6 +221,11 @@ func instructionsPathForClient(clientName string) (string, instructionsLayout, e
 	}
 	if h.ConfigRootEnv != "" {
 		if root := os.Getenv(h.ConfigRootEnv); root != "" {
+			// Same guard as codexConfigDir: a relative value would
+			// scatter config under the wizard's cwd.
+			if !filepath.IsAbs(root) {
+				return "", 0, fmt.Errorf("%s is set but not an absolute path (%q); fix or unset it and re-run", h.ConfigRootEnv, root)
+			}
 			return filepath.Join(append([]string{root}, h.InstructionsRelPath[1:]...)...), h.InstructionsLayout, nil
 		}
 	}
@@ -360,8 +365,12 @@ func replaceOrAppendFence(existing []byte, fenced string) ([]byte, string, error
 	// a trailing newline for cleanliness.
 	endMarkerEnd := endIdx + len(instructionsFenceEnd)
 	// Swallow the newline after the end marker too so we don't grow
-	// the file by one line on every idempotent re-run.
-	if endMarkerEnd < len(existing) && existing[endMarkerEnd] == '\n' {
+	// the file by one line on every idempotent re-run. CRLF-aware:
+	// a Windows-authored file has \r\n here, and swallowing only the
+	// \n would leave a stray \r behind.
+	if endMarkerEnd+1 < len(existing) && existing[endMarkerEnd] == '\r' && existing[endMarkerEnd+1] == '\n' {
+		endMarkerEnd += 2
+	} else if endMarkerEnd < len(existing) && existing[endMarkerEnd] == '\n' {
 		endMarkerEnd++
 	}
 

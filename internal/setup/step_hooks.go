@@ -6,34 +6,31 @@ import (
 	"path/filepath"
 )
 
-// stepHooks is Step 4: install automatic-capture hooks for detected
+// stepHooks is Step 5: install automatic-capture hooks for detected
 // MCP clients. This wires Gramaton's session lifecycle (start / stop
-// / pre-compact / post-compact) to the client so session-prepare and
-// session-commit run automatically without the user having to
-// remember.
+// / pre-compact / post-compact) to the client so session prepare and
+// save run automatically without the user having to remember.
 //
 // Flow:
 //  1. Depend on Step 3's detection results: if no clients were
 //     detected, skip entirely with a short message.
 //  2. Ask one Yes/No "install auto-capture hooks for the detected
 //     clients? [Y/n]".
-//  3. On confirm, for each detected client:
-//     - Materialize embedded scripts to
-//     <configDir>/hooks/<client>/.
-//     - For Claude Code: auto-patch ~/.claude/settings.json to route
-//     the event hooks at our scripts. Preserves all other
-//     settings and user hooks.
-//     - For kiro-cli: scripts are materialized but settings auto-
-//     patching is skipped because kiro-cli's hook-config schema
-//     isn't documented in our corpus. Print the script paths and
-//     tell the user to wire them in via kiro-cli's config.
+//  3. On confirm, for each detected client: materialize the proxy
+//     scripts to <configDir>/hooks/<client>/, then wire them via
+//     the harness registry's WireHooks strategy (settings.json for
+//     Claude Code, hooks.json for Codex and Cursor — each patcher
+//     preserves all non-gramaton entries). Harnesses without a
+//     strategy (kiro-cli: per-agent schema, no default agent to
+//     patch) get the script paths printed with manual wiring
+//     guidance instead.
 //  4. Warn at the end that users need to restart their clients for
 //     the new hooks to take effect.
 //
 // Dependencies: this step re-runs Detect on the MCP backend rather
 // than threading detected clients through from Step 3. Both calls
 // go to the same backend; the cost is a couple of exec.LookPath
-// calls, negligible. Decouples the steps so Step 4 can run
+// calls, negligible. Decouples the steps so Step 5 can run
 // independently if we later add a "re-install hooks only" code path.
 func (w *Wizard) stepHooks(ctx context.Context) error {
 	w.writer.StepHeader(5, totalSteps, "Automatic knowledge capture (recommended)")

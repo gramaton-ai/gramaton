@@ -70,10 +70,12 @@ var AddendumKiro string
 //go:embed guidance/addendum_codex.md
 var AddendumCodex string
 
-// AddendumCursor is reserved for Cursor-specific guidance.
-// Intentionally empty: Cursor has no verified native long-term
-// memory analogue to route against (its guidance installs as a
-// Skill, which the install layer handles — not the prose).
+// AddendumCursor carries Cursor-specific guidance: the
+// subagent-delegation rule (Cursor subagents inherit all parent
+// tools including MCP, verified from vendor docs 2026-06-09).
+// Cursor has no verified native long-term memory analogue, so
+// there is no memory-routing rule here; the SKILL.md install
+// mechanics live in the install layer, not the prose.
 //
 //go:embed guidance/addendum_cursor.md
 var AddendumCursor string

@@ -1,6 +1,6 @@
 ---
 name: gramaton
-description: "Persistent memory for this user via Gramaton MCP tools. Use when the user references past decisions, prior sessions, project context, or preferences; mentions a ticket (a ULID or T-/P-/D-prefixed codename); says remember, save, or store; asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs (collections). Covers search, save, session extraction, and collection workflows."
+description: "Persistent memory for this user via Gramaton MCP tools. Use when the user references past decisions, prior sessions, project context, or preferences; mentions a ticket (a ULID or project ticket codename); says remember, save, or store; asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs (collections). Covers search, save, session extraction, and collection workflows."
 ---
 
 <!-- gramaton-managed v=0.1.0 (don't edit by hand — re-run `gramaton init --force` to update) -->
@@ -11,9 +11,10 @@ Gramaton is your persistent storage for decisions, preferences, facts,
 research, and any knowledge that should survive beyond this session.
 Gramaton has three save paths:
 
-- **Memory** (`gramaton_save`, `gramaton_search`) — fuzzy,
-  semantic knowledge. User-initiated only. Decisions, context,
-  research, preferences. Ranked retrieval, best-match results.
+- **Memory** (`gramaton_save`, `gramaton_search`) — fuzzy, semantic
+  knowledge: decisions, context, research, preferences. Ranked
+  retrieval, best-match results. Direct saves are user-initiated
+  only; Sessions also promote records here.
 - **Sessions** (`gramaton_session_prepare`, `gramaton_session_save`)
   — automatic extraction from conversations. Two-phase flow.
   Produces both Session segments (for conversation recall) and
@@ -31,14 +32,24 @@ Gramaton is accessed via MCP tools. If MCP tools appear unavailable,
 first try to restore them — tell the user the MCP server looks
 disconnected and ask them to reconnect (for Cursor: toggle the gramaton server under Settings → MCP, or
 confirm `gramaton serve` / `gramaton init` is running). Only fall
-back to the `gramaton` CLI if MCP recovery is impractical in the
+back to the CLI (`gramaton search "<query>" --top 5`,
+`gramaton inspect <id>`) if MCP recovery is impractical in the
 moment.
 
 If you are unsure how Gramaton works, what a metadata field means,
 or when to use a given tool, call `gramaton_guide(topic=...)`.
-Topics: metadata, save, search, sessions, collections, curation.
-The guide is the authoritative live reference — prefer it over
-assumptions from memory.
+Topics: metadata, save, search, sessions, collections, curation,
+temporal-queries. The guide is the authoritative live reference —
+prefer it over assumptions from memory.
+
+### Subagents and Gramaton
+
+Cursor subagents inherit all tools from the parent, including
+Gramaton's MCP tools, so a delegated task is able to write to the
+store. Keep saves and session extraction in the main conversation,
+and tell delegated tasks not to write to Gramaton: a subagent sees
+only its task brief, and partial-context saves produce fragmentary
+records.
 
 ### Retrieval
 
@@ -50,11 +61,10 @@ composing any substantive response:**
 - A ULID (26 chars, starts with `0` or `1`, e.g. `01KPED88HKK...`).
   Prefer `gramaton_inspect(id=...)` — the record plus its related
   edges come back in one call.
-- A ticket codename matching `T-\d+`, `P0-\d+`, `P1-\d+`, `P2-\d+`,
-  `P3-\d+`, `D\d+`, or `D\d+` followed by a hyphen. These are
-  collection-item or design-decision identifiers.
-  Prefer `gramaton_inspect` if you can resolve the ticket to an ID
-  from earlier context; otherwise `gramaton_search(text="<ticket>")`.
+- A ticket or decision codename your project uses (T-12, P0-3,
+  D7-style identifiers). Prefer `gramaton_inspect` if you can
+  resolve it to an ID from earlier context; otherwise
+  `gramaton_search(text="<codename>")`.
 - The phrases "our current thoughts on X", "current plan for X",
   "status of X", "where are we on X", "what did we decide about X",
   or the word "backlog" (any use). Use `gramaton_search`.
@@ -105,21 +115,12 @@ one store.
 - Orphans: `gramaton_search(max_edges=0)`
 - Literal text: `gramaton_search(match="RWMutex")`
 - Similar to a record: `gramaton_search(similar_to="<id>")`
-- Random review: `gramaton_search(random=true, top=3)`
 - Exclude refuted: `gramaton_search(epistemic_status="!refuted")`
-- High importance: `gramaton_search(importance_min=0.7, sort="importance")`
-- Recently accessed: `gramaton_search(sort="last_accessed", top=10)`
-- Expiring soon: `gramaton_search(expires_before="2026-04-30")`
-- Heavily connected: `gramaton_search(min_edges=3, sort="edge_count")`
 - Sessions only: `gramaton_search(text="...", store="sessions")`
 - Store overview: `gramaton_stats()`
 - Find duplicates: `gramaton_duplicates(threshold=0.92)`
 - Graph traversal: `gramaton_explore(node_id="<id>", depth=2)`
-
-If MCP tools are truly unavailable after a reconnect attempt, fall
-back to the CLI:
-1. `gramaton search "<query>" --top 5`
-2. `gramaton inspect <id>`
+- More patterns: `gramaton_guide(topic="search")`
 
 Do NOT tell the user you're searching unless the results meaningfully
 change your answer. Searching should be as invisible as reading a file.
@@ -181,10 +182,10 @@ no search-first, no exploration. Just save.
 - Your own generated responses or analysis.
 
 **How to save:**
-Call `gramaton_save` directly — do NOT spawn background subagents.
-Background agents cannot access MCP tools and the CLI fallback
-requires interactive permission. Saves are fast (single HTTP call,
-under a second) so there is no need to background them.
+Call `gramaton_save` directly from the main conversation — do NOT
+delegate saves to subagents or background tasks. Saves are fast (a
+single call, under a second), and the knowledge being saved lives
+in your context, not a subagent's.
 
 **IMPORTANT: Save raw content, not summaries.** The `content`
 field should contain the actual source material — the full decision
@@ -281,9 +282,10 @@ every save.
 
 **Finding the session_id.** Run `gramaton session current` — returns
 `{"session_id": ..., "client_session_id": ...}` for the session bound
-to your current working directory. Safe under multiple concurrent
-Cursor instances; each working directory gets its own
-session file.
+to your current working directory. If nothing is bound yet (hooks
+not installed), start a session with `gramaton_session_start`. Safe
+under multiple concurrent Cursor instances; each working
+directory gets its own session file.
 
 For the full guide on extraction triggers, segment granularity,
 classification, and what makes good segment content, call
@@ -316,8 +318,7 @@ be linked to knowledge records via `gramaton_link`.
 
 ### Curation
 
-The server runs background curation on a configurable cadence
-(default 1 minute, set via `curation.interval` in config.yaml) to
+The server runs background curation on a configurable cadence to
 classify pending records, link orphans, detect duplicates, and
 synthesize concept nodes. You don't need to trigger it manually — but
 you can inspect or force it:
@@ -339,10 +340,6 @@ need to classify pending records manually as a fallback.
   reclassifying.
 - **`gramaton_explore`** — Graph traversal from a node; returns
   connected nodes and edges within a depth.
-- **`gramaton_branch`** — Version control for the store (list,
-  create, checkout, merge, discard).
-- **`gramaton_backup`** — Create a backup or check backup status.
-- **`gramaton_reembed`** — Regenerate stale embeddings when the model
-  changes.
-- **`gramaton_log`** — View commit history or per-record change
-  history.
+- Store admin (rarely needed mid-conversation): `gramaton_branch`
+  (store version control), `gramaton_backup`, `gramaton_reembed`,
+  `gramaton_log` (commit / per-record history).

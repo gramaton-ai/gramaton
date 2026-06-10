@@ -75,6 +75,14 @@ func TestHarnessRegistryInvariants(t *testing.T) {
 		if h.WireHooks != nil && h.HookConfigPathHint == "" {
 			t.Errorf("%s: WireHooks set but HookConfigPathHint empty", h.Name)
 		}
+
+		// InstructionsHeader is prepended to the whole rendered
+		// body; inside a fenced layout it would land INSIDE the
+		// managed fence of a shared file, which is never right
+		// (fenced layouts carry their stamp in the fence line).
+		if h.InstructionsHeader != nil && h.InstructionsLayout != wholeFileOwned {
+			t.Errorf("%s: InstructionsHeader requires the wholeFileOwned layout", h.Name)
+		}
 	}
 }
 
@@ -113,8 +121,8 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 		t.Fatal("kiro-cli missing from registry")
 	}
 	// Deliberately the legacy (broken) probe; see the registry
-	// comment. If this fails
-	// because someone fixed the binary name, delete this assertion.
+	// comment. If this fails because someone fixed the binary
+	// name, delete this assertion.
 	if kiro.DetectBinary != "kiro" {
 		t.Errorf("kiro-cli DetectBinary = %q, want kiro (bug-for-bug migration)", kiro.DetectBinary)
 	}

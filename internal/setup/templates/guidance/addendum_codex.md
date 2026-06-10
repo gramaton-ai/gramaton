@@ -12,3 +12,11 @@ fact.
 Treat Codex's native memories as session-local convenience, not the
 knowledge store of record. When the two disagree, verify against
 Gramaton and prefer it for durable knowledge.
+
+### Subagents and Gramaton
+
+Codex subagents can inherit Gramaton's MCP tools from the parent
+session, so a delegated task is able to write to the store. Keep
+saves and session extraction in the main conversation, and tell
+delegated tasks not to write to Gramaton: a subagent sees only its
+task brief, and partial-context saves produce fragmentary records.

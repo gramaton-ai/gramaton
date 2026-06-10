@@ -80,6 +80,10 @@ func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend Hook
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
 	t.Setenv("USERPROFILE", tmpDir) // Windows: os.UserHomeDir reads %USERPROFILE%, not $HOME
+	// Hermeticity: stepVerify's MCP survey probes the real PATH
+	// (bypassing the injected backends); empty it so dev machines
+	// with claude/codex installed don't shell out mid-test.
+	t.Setenv("PATH", "")
 	cfg := config.Defaults()
 	cfg.DataDir = tmpDir + "/data"
 
@@ -265,15 +269,19 @@ func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 
 	// Seed an existing settings.json with:
+	//   - a UTF-8 BOM (Windows Notepad prepends one; must parse)
 	//   - top-level "permissions" key (unrelated to hooks)
 	//   - user's own Stop hook (must be preserved)
+	//   - a matcher block with NO hooks array (not our shape; must
+	//     be preserved verbatim, not dropped)
 	//   - an old-style gramaton SessionStart hook (flat layout,
 	//     must be stripped and replaced)
-	initial := `{
+	initial := "\xEF\xBB\xBF" + `{
   "permissions": {"allow": ["thing"]},
   "hooks": {
     "Stop": [
-      {"hooks": [{"type": "command", "command": "/user/custom/stop.sh"}]}
+      {"hooks": [{"type": "command", "command": "/user/custom/stop.sh"}]},
+      {"matcher": "user-block-without-hooks-array"}
     ],
     "SessionStart": [
       {"hooks": [{"type": "command", "command": "~/.gramaton/hooks/session-start.sh"}]}
@@ -315,10 +323,15 @@ func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 	if !strings.Contains(content, "/user/custom/stop.sh") {
 		t.Errorf("user's custom stop hook was removed:\n%s", content)
 	}
+	// Matcher block without a hooks array preserved verbatim.
+	if !strings.Contains(content, "user-block-without-hooks-array") {
+		t.Errorf("hooks-less matcher block was dropped:\n%s", content)
+	}
 	// New-style gramaton paths present. Production normalizes
 	// backslashes to forward slashes before writing settings.json
 	// (Claude Code's bundled Git Bash on Windows interprets backslashes
-	// as escapes; see hooks.go:209-222 for the rationale). So an
+	// as escapes; see the wanted-map comment in registerClaudeHooks
+	// for the rationale). So an
 	// assertion against the raw filepath.Join output -- which is
 	// backslash-formed on Windows -- would miss. Normalize the way
 	// production does, then assert.
@@ -360,10 +373,10 @@ func TestRegisterClaudeHooksIdempotentAndPreserving(t *testing.T) {
 // file not found. Regression-test for a real bug discovered on a
 // Windows install, 2026-04-24.
 //
-// This test does NOT go through RegisterClaudeHooks because
+// This test does NOT go through registerClaudeHooks because
 // filepath.Base on macOS doesn't treat `\` as a separator (Unix
 // filesystems permit backslashes in filenames), so the
-// hookEventForClaude lookup inside RegisterClaudeHooks fails to
+// hookEventForConfig lookup inside registerClaudeHooks fails to
 // parse a faux-Windows path on macOS. The transformation itself
 // is what we're testing; the call-through chain is a separate
 // concern covered by TestRegisterClaudeHooksIdempotentAndPreserving.
@@ -529,6 +542,13 @@ func TestCodexConfigDir(t *testing.T) {
 	}
 	if got != override {
 		t.Errorf("CODEX_HOME codexConfigDir = %q, want %q", got, override)
+	}
+
+	// A relative CODEX_HOME must error, not scatter config under the
+	// wizard's cwd.
+	t.Setenv("CODEX_HOME", "relative/codex")
+	if _, err := codexConfigDir(); err == nil {
+		t.Error("relative CODEX_HOME should be rejected")
 	}
 }
 
@@ -815,8 +835,10 @@ func TestRegisterCursorHooksPreservesAndIdempotent(t *testing.T) {
 	}
 	hooksPath := filepath.Join(cursorDir, "hooks.json")
 
+	// version: 2 (not the 1 production writes when absent) so the
+	// preserved-verbatim assertion below is discriminating.
 	initial := "\xEF\xBB\xBF" + `{
-  "version": 1,
+  "version": 2,
   "hooks": {
     "stop": [
       {"command": "/user/custom/stop.sh", "failClosed": true}
@@ -847,6 +869,9 @@ func TestRegisterCursorHooksPreservesAndIdempotent(t *testing.T) {
 	if !strings.Contains(content, "/user/custom/stop.sh") {
 		t.Errorf("user's custom stop hook was removed:\n%s", content)
 	}
+	if !strings.Contains(content, `"version": 2`) {
+		t.Errorf("existing version value was not preserved:\n%s", content)
+	}
 	if !strings.Contains(content, `"failClosed": true`) {
 		t.Errorf("user entry's fields were not preserved verbatim:\n%s", content)
 	}
@@ -864,6 +889,58 @@ func TestRegisterCursorHooksPreservesAndIdempotent(t *testing.T) {
 	raw2, _ := os.ReadFile(hooksPath)
 	if string(raw) != string(raw2) {
 		t.Error("hooks.json changed on second idempotent call")
+	}
+}
+
+// TestRegisterCursorHooksMalformedJSON pins the won't-touch behavior
+// for the cursor patcher (the codex twin is separate code with its
+// own test).
+func TestRegisterCursorHooksMalformedJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(cursorDir, "hooks.json")
+	garbage := "{not json"
+	if err := os.WriteFile(hooksPath, []byte(garbage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (DefaultHookBackend{}).RegisterHooks(context.Background(), "cursor", cursorTestScripts(home)); err == nil {
+		t.Fatal("expected parse error on malformed hooks.json")
+	}
+	raw, _ := os.ReadFile(hooksPath)
+	if string(raw) != garbage {
+		t.Error("malformed hooks.json was modified; must be left untouched")
+	}
+}
+
+// TestRegisterCursorHooksEnvelopeTypeMismatch pins the won't-touch
+// behavior for parseable-but-wrong-shape files: a "hooks" value that
+// isn't an object is an error, not a silent replace.
+func TestRegisterCursorHooksEnvelopeTypeMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(cursorDir, "hooks.json")
+	seed := `{"version": 1, "hooks": "i am not an object"}`
+	if err := os.WriteFile(hooksPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (DefaultHookBackend{}).RegisterHooks(context.Background(), "cursor", cursorTestScripts(home)); err == nil {
+		t.Fatal("expected error on non-object hooks value")
+	}
+	raw, _ := os.ReadFile(hooksPath)
+	if string(raw) != seed {
+		t.Error("wrong-shape hooks.json was modified; must be left untouched")
 	}
 }
 

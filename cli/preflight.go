@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,10 +28,10 @@ import (
 //
 // Output:
 //
-//   ✓  passed
-//   ⚠  warning (won't break Gramaton, but worth noting)
-//   ✗  error  (something's broken; remediation follows)
-//   ○  skipped (irrelevant to this install)
+//	✓  passed
+//	⚠  warning (won't break Gramaton, but worth noting)
+//	✗  error  (something's broken; remediation follows)
+//	○  skipped (irrelevant to this install)
 //
 // Exits non-zero if any check returned ✗ so CI can gate on a clean run.
 var preflightCmd = &cobra.Command{
@@ -44,7 +47,8 @@ Checks include:
   - Server: running and PID alive (or cleanly not running)
   - Embedding provider: configured + key file present (if cloud)
   - LLM provider: configured + key file present + perms (if local)
-  - MCP registration: gramaton entry in Claude Code's config
+  - MCP registration: gramaton entry per harness (Claude Code,
+    Codex, Cursor; surveyed only when the harness is installed)
   - Hooks: installed scripts and exec bits per client
   - Recent errors: scan tail of ~/.gramaton/gramaton.log
 
@@ -374,6 +378,13 @@ func checkPreflightServer(cfgDir string) preflightResult {
 	}
 }
 
+// checkPreflightMCP surveys gramaton's MCP registration per harness.
+// The per-harness mechanics here intentionally mirror the wizard's
+// registry strategies (internal/setup's VerifyMCPRegistered funcs);
+// when a harness is added to the registry, extend this survey too.
+// The duplication is acknowledged shared-logic debt — preflight and
+// the wizard's verification pass are slated to converge in a future
+// `gramaton doctor`.
 func checkPreflightMCP(ctx context.Context) []preflightResult {
 	var results []preflightResult
 
@@ -416,16 +427,107 @@ func checkPreflightMCP(ctx context.Context) []preflightResult {
 			}
 		}
 	}
+	// Codex: same shell-out survey via `codex mcp list`. Substring
+	// match rather than a line-format assumption -- codex's list
+	// output is tabular and its exact shape isn't pinned in our
+	// corpus, but the server NAME appearing anywhere is a stable
+	// signal either way.
+	codexBin, err := exec.LookPath("codex")
+	if err == nil {
+		out, err := exec.CommandContext(ctx, codexBin, "mcp", "list").CombinedOutput()
+		switch {
+		case err != nil:
+			results = append(results, preflightResult{
+				name:    "MCP (Codex)",
+				status:  statusWarn,
+				message: "couldn't run `codex mcp list` to verify",
+				fixCmd:  "codex mcp list",
+				fixNote: "Run it manually to diagnose. Then `gramaton init --force` to re-register.",
+			})
+		case strings.Contains(string(out), "gramaton"):
+			results = append(results, preflightResult{
+				name:    "MCP (Codex)",
+				status:  statusOK,
+				message: "gramaton registered",
+			})
+		default:
+			results = append(results, preflightResult{
+				name:    "MCP (Codex)",
+				status:  statusWarn,
+				message: "gramaton not registered with Codex",
+				fixCmd:  "codex mcp add gramaton -- gramaton mcp",
+				fixNote: "Or re-run `gramaton init --force` to register.",
+			})
+		}
+	}
+
+	// Cursor: no CLI; survey ~/.cursor/mcp.json directly. Only
+	// surveyed when the config dir exists (the IDE's detection
+	// signal) -- no Cursor install, no line.
+	if home, err := os.UserHomeDir(); err == nil {
+		cursorDir := filepath.Join(home, ".cursor")
+		if fi, err := os.Stat(cursorDir); err == nil && fi.IsDir() {
+			mcpPath := filepath.Join(cursorDir, "mcp.json")
+			raw, err := os.ReadFile(mcpPath)
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+				results = append(results, preflightResult{
+					name:    "MCP (Cursor)",
+					status:  statusWarn,
+					message: "gramaton not registered with Cursor (no mcp.json)",
+					fixCmd:  "gramaton init --force",
+					fixNote: "The wizard creates ~/.cursor/mcp.json with the gramaton entry.",
+				})
+			case err != nil:
+				results = append(results, preflightResult{
+					name:    "MCP (Cursor)",
+					status:  statusWarn,
+					message: fmt.Sprintf("couldn't read %s: %v", mcpPath, err),
+					fixNote: "Check the file's permissions, then re-run.",
+				})
+			default:
+				var parsed struct {
+					MCPServers map[string]any `json:"mcpServers"`
+				}
+				raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) // Windows-editor BOM
+				if jsonErr := json.Unmarshal(raw, &parsed); jsonErr != nil {
+					results = append(results, preflightResult{
+						name:    "MCP (Cursor)",
+						status:  statusWarn,
+						message: "~/.cursor/mcp.json is not valid JSON",
+						fixNote: "Fix or remove the file, then `gramaton init --force`.",
+					})
+				} else if _, ok := parsed.MCPServers["gramaton"]; ok {
+					results = append(results, preflightResult{
+						name:    "MCP (Cursor)",
+						status:  statusOK,
+						message: "gramaton registered",
+					})
+				} else {
+					results = append(results, preflightResult{
+						name:    "MCP (Cursor)",
+						status:  statusWarn,
+						message: "gramaton not registered with Cursor",
+						fixCmd:  "gramaton init --force",
+						fixNote: "Or add the gramaton entry to ~/.cursor/mcp.json by hand.",
+					})
+				}
+			}
+		}
+	}
+
 	// Kiro CLI: would need a `kiro mcp list` equivalent; not surveyed
 	// here because Kiro's list-output format isn't in our corpus.
-	// Same omission as step_verify.
+	// Same omission as step_verify; Kiro integration work is parked.
 
 	return results
 }
 
 func checkPreflightHooks(cfgDir string) []preflightResult {
 	var results []preflightResult
-	for _, client := range []string{"claude-code", "kiro"} {
+	// Mirrors the harness registry's HookEmbedDir values (the
+	// registry is unexported by design); extend alongside it.
+	for _, client := range []string{"claude-code", "kiro", "codex", "cursor"} {
 		dir := filepath.Join(cfgDir, "hooks", client)
 		entries, err := os.ReadDir(dir)
 		if err != nil {

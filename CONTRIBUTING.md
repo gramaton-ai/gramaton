@@ -614,8 +614,9 @@ platforms, behavior or presentation differs). Examples:
 
 - `internal/setup/step_verify.go` — the perm-bit checks skip with
   a "NTFS ACL model" note under `runtime.GOOS == "windows"`.
-- `internal/setup/hooks.go` — `renderHookProxy` picks `.cmd` vs
-  `.sh` based on `runtime.GOOS` and the target client.
+- `internal/setup/hooks.go` — `proxyFilesFor` picks the proxy-script
+  variants from the harness's declared `ProxyStyle`, consulting
+  `runtime.GOOS` only for the native-per-OS style.
 
 Don't combine them. If a divergence grows past ~10 LOC or picks
 up a compile-gated API, promote to a two-file split.
@@ -951,8 +952,10 @@ that `gramaton init` installs into harness instruction files lives
 in `internal/setup/templates/guidance/` and carries its own version,
 `templates.GuidanceVersion`, stamped into the installed
 `<!-- BEGIN gramaton-managed v=X.Y.Z ... -->` fence marker. If your
-PR changes anything under `templates/guidance/` (or the rendering
-in `templates.Render`), bump `GuidanceVersion` in the same PR:
+PR changes anything under `templates/guidance/`, the rendering in
+`templates.Render`, or other installed guidance text (e.g. Cursor's
+skill description in `internal/setup/harness.go`), bump
+`GuidanceVersion` in the same PR:
 
 - **PATCH** — wording or typo fixes; an agent re-reading the
   guidance would not behave differently.

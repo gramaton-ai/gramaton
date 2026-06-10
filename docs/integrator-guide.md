@@ -41,7 +41,9 @@ Per-conversation save via a two-phase extraction flow. Optionally promotes segme
 
 **`promote_to_memory`:** omit (default `true`) for decisions, facts, and preferences that should compete in semantic search. Set to `false` for exploration, open questions, and dead ends — they stay findable by session-scoped search but don't pollute Memory's vector space.
 
-**Archiving raw transcripts** is opt-in at the Gramaton layer. The shipped hooks at `hooks/claude-code/` and `hooks/kiro/` wire it up automatically at compaction boundaries (`pre-compact.sh` calls `gramaton session archive`). The resulting archive sits compressed on disk and its path is recorded on the session node; the session state returned by `gramaton_session_get` and `_prepare` points at it so an agent can decompress and read the raw transcript if extracted knowledge seems incomplete. The archive itself is not indexed for search today.
+**Archiving raw transcripts** is opt-in at the Gramaton layer. The hooks `gramaton init` installs (proxy scripts under `~/.gramaton/hooks/<harness>/`) wire it up automatically at compaction boundaries — the pre-compact handler calls `gramaton session archive`. The resulting archive sits compressed on disk and its path is recorded on the session node; the session state returned by `gramaton_session_get` and `_prepare` points at it so an agent can decompress and read the raw transcript if extracted knowledge seems incomplete. The archive itself is not indexed for search today.
+
+**Session binding is per working directory — with one global exception.** The session-start hook maps the client's session id to a Gramaton session in a per-cwd state file, which is what `gramaton session current` reads. The binding is last-writer-wins: two hooked harnesses running concurrently in the same working directory (say, Claude Code and Codex) contend for it, and the most recent session-start owns the binding. Concurrent sessions in *different* directories get separate bindings — but note the pre-compact archive hook currently resolves the Gramaton session via a *global* pointer file (the most recent session-start anywhere), so heavily parallel multi-directory use can archive a transcript against the wrong session. Single-session use is unaffected.
 
 ### Collections — structured, exhaustive
 
@@ -355,15 +357,15 @@ Every MCP tool has a corresponding CLI subcommand. `gramaton --help` lists the s
 
 When writing system prompts or agent instructions for Gramaton integration:
 
-1. **Separate the three storage paths in the prompt.** Don't mix "search Memory for context" with "check the task collection" with "commit session segments." They're different operations with different triggers.
+1. **Separate the three storage paths in the prompt.** Don't mix "search Memory for context" with "check the task collection" with "save session segments." They're different operations with different triggers.
 2. **Be specific about when to search.** "Before answering questions about past decisions, project context, architecture, preferences, or domain knowledge" beats "search when relevant."
-3. **Be specific about when to save.** For Memory, save only when the user explicitly asks. For Sessions, commit at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
+3. **Be specific about when to save.** For Memory, save only when the user explicitly asks. For Sessions, save at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
 4. **Don't tell the agent to classify everything at save time.** Let curation handle unclassified records. Classify only when the agent is confident about metadata.
 5. **For collections, be explicit about the target.** "Add this to the Sprint Backlog collection" beats "save this task."
 6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before saving Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
 7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for save / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
-Working examples: [Claude Code integration](../integration/claude-code/CLAUDE.md) and [custom agent frameworks](../integration/docs/custom-agents.md).
+Working examples — all rendered from the same canonical template set and drift-tested: [Claude Code](../integration/claude-code/CLAUDE.md), [Codex](../integration/codex/AGENTS.md), [Cursor](../integration/cursor/SKILL.md), and [custom agent frameworks](../integration/docs/custom-agents.md).
 
 ### Verifying the install
 

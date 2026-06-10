@@ -214,6 +214,12 @@ func TestInstructionsPathForCodex(t *testing.T) {
 	if want := filepath.Join(relocated, "AGENTS.md"); got != want {
 		t.Errorf("relocated path = %q, want %q", got, want)
 	}
+
+	// A relative CODEX_HOME must error (same guard as codexConfigDir).
+	t.Setenv("CODEX_HOME", "relative/codex")
+	if _, _, err := instructionsPathForClient("Codex"); err == nil {
+		t.Error("relative CODEX_HOME should be rejected")
+	}
 }
 
 func TestInstallInstructionsWholeFileCreatedWithoutFenceMarkers(t *testing.T) {
@@ -321,6 +327,62 @@ func TestInstallInstructionsUpgradesUnversionedFence(t *testing.T) {
 	}
 	if n := strings.Count(gotStr, instructionsFenceBeginPrefix); n != 1 {
 		t.Errorf("found %d BEGIN markers, want exactly 1 (duplicate-append bug):\n%s", n, gotStr)
+	}
+}
+
+// TestInstallInstructionsCRLFFile covers a Windows-authored
+// instruction file: CRLF user content around a CRLF-terminated
+// legacy fence. The managed region must be replaced without
+// duplicating fences or leaving stray \r bytes around our block,
+// and a second run must be a byte-identical no-op.
+func TestInstallInstructionsCRLFFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	legacyBegin := "<!-- BEGIN gramaton-managed (don't edit by hand — re-run `gramaton init --force` to update) -->"
+	existing := "## User prelude\r\nprelude\r\n\r\n" +
+		legacyBegin + "\r\nold body\r\n" + instructionsFenceEnd + "\r\n" +
+		"\r\n## User epilogue\r\nepilogue\r\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	action, err := installInstructions(path, "new body", fencedBlockInSharedFile)
+	if err != nil {
+		t.Fatalf("install over CRLF file: %v", err)
+	}
+	if action != "updated" {
+		t.Errorf("action = %q, want updated", action)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+	if !strings.Contains(gotStr, "User prelude") || !strings.Contains(gotStr, "User epilogue") {
+		t.Errorf("CRLF user content lost:\n%q", gotStr)
+	}
+	if n := strings.Count(gotStr, instructionsFenceBeginPrefix); n != 1 {
+		t.Errorf("found %d BEGIN markers, want 1:\n%q", n, gotStr)
+	}
+	// The swallow must consume the full \r\n after the legacy END
+	// marker. The user's tail (their own blank line + epilogue) must
+	// follow our block byte-for-byte -- an LF-only swallow would
+	// leave the marker line's orphaned \r\n behind and grow the file
+	// by a blank line.
+	wantTail := instructionsFenceEnd + "\n" + "\r\n## User epilogue\r\nepilogue\r\n"
+	if !strings.HasSuffix(gotStr, wantTail) {
+		t.Errorf("tail after managed block != user's original tail:\n%q", gotStr)
+	}
+
+	// Idempotency on the now-mixed-endings file.
+	action, err = installInstructions(path, "new body", fencedBlockInSharedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "unchanged" {
+		t.Errorf("second run action = %q, want unchanged", action)
 	}
 }
 

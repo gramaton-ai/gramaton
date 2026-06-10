@@ -19,10 +19,10 @@ import (
 // As of Phase 2 of the Windows platform-support plan these are thin
 // proxy files that forward stdin to `gramaton hook <event>` and exit
 // with the subcommand's status. All real hook logic lives in the
-// hooks/ Go package (hooks/claude_code.go, hooks/kiro.go). This
-// simplification eliminates the embed_hooks/ tree duplication and
-// removes the hidden python3 dependency the old shell scripts
-// carried.
+// hooks/ Go package (hooks/claude_code.go, hooks/kiro.go,
+// hooks/cursor.go). This simplification eliminates the embed_hooks/
+// tree duplication and removes the hidden python3 dependency the old
+// shell scripts carried.
 //
 // Scripts are synthesized at init time from Go templates, so there's
 // no need to check proxy files into the repo. Line endings are
@@ -150,10 +150,10 @@ func proxyFilesFor(h *Harness, ev hookEventSpec) []proxyFile {
 	}
 }
 
-// HookBackend is the test seam for Step 4. Production uses
+// HookBackend is the test seam for Step 5. Production uses
 // DefaultHookBackend; tests inject a fake to exercise the wizard
 // orchestration without touching the real filesystem or the user's
-// Claude Code settings.json.
+// hook configs.
 type HookBackend interface {
 	// Materialize generates the proxy scripts for `client` into a
 	// canonical on-disk location (typically
@@ -277,14 +277,17 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 
 	// Read existing settings.json (may not exist -- first-time Claude
-	// Code users). We start with an empty map if missing.
+	// Code users). We start with an empty map if missing. The raw
+	// bytes are kept for the pre-rewrite backup.
 	existing := map[string]any{}
+	var original []byte
 	if raw, err := os.ReadFile(settingsPath); err == nil {
+		original = raw
 		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
-			return false, fmt.Errorf("parse settings.json: %w", err)
+			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", settingsPath, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("read settings.json: %w", err)
+		return false, fmt.Errorf("read %s: %w", settingsPath, err)
 	}
 
 	// Build the set of entries we want, keyed by event name.
@@ -313,9 +316,15 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 		return true, nil // nothing to register; technically unchanged
 	}
 
-	// Get or create the "hooks" sub-object.
-	hooksObj, _ := existing["hooks"].(map[string]any)
-	if hooksObj == nil {
+	// Get or create the "hooks" sub-object. A parseable file whose
+	// "hooks" value has the wrong TYPE gets the same won't-touch
+	// treatment as unparseable JSON -- silently replacing it would
+	// destroy whatever the user meant by it.
+	hooksObj, ok := existing["hooks"].(map[string]any)
+	if !ok {
+		if _, present := existing["hooks"]; present {
+			return false, fmt.Errorf("%s has a non-object \"hooks\" value; won't touch it -- fix by hand", settingsPath)
+		}
 		hooksObj = map[string]any{}
 	}
 
@@ -328,11 +337,14 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	for event, ourScript := range wanted {
 		// Pull existing matcher blocks for this event (Claude's
 		// schema is an array of objects, each with a "hooks" array).
+		// A non-array event value gets the won't-touch treatment.
 		var blocks []any
 		if raw, ok := hooksObj[event]; ok {
-			if arr, isArr := raw.([]any); isArr {
-				blocks = arr
+			arr, isArr := raw.([]any)
+			if !isArr {
+				return false, fmt.Errorf("%s has a non-array %q hooks value; won't touch it -- fix by hand", settingsPath, event)
 			}
+			blocks = arr
 		}
 
 		// Filter out any existing gramaton-owned command entries.
@@ -348,7 +360,14 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 				kept = append(kept, b)
 				continue
 			}
-			inner, _ := bm["hooks"].([]any)
+			inner, innerIsArr := bm["hooks"].([]any)
+			if !innerIsArr {
+				// Not the matcher-block shape we manage (missing or
+				// non-array hooks key); preserve verbatim rather
+				// than dropping the user's block.
+				kept = append(kept, b)
+				continue
+			}
 			newInner := make([]any, 0, len(inner))
 			for _, h := range inner {
 				hm, ok := h.(map[string]any)
@@ -398,12 +417,11 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 
 	existing["hooks"] = hooksObj
 
-	// Back up existing settings.json before writing.
-	if _, err := os.Stat(settingsPath); err == nil {
-		backupPath := fmt.Sprintf("%s.bak-%s", settingsPath, time.Now().UTC().Format("20060102T150405Z"))
-		if data, err := os.ReadFile(settingsPath); err == nil {
-			_ = os.WriteFile(backupPath, data, 0o600)
-		}
+	// Back up the existing settings.json before writing. A failed
+	// backup aborts: we are about to mutate the very file the backup
+	// protects.
+	if err := writeConfigBackup(settingsPath, original); err != nil {
+		return false, err
 	}
 
 	// Ensure parent dir exists (first-time Claude Code users may not
@@ -412,20 +430,27 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 		return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(settingsPath), err)
 	}
 
-	// Atomic write: tmp + rename.
-	tmp := settingsPath + ".tmp"
 	out, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
 		return false, fmt.Errorf("serialize settings: %w", err)
 	}
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return false, fmt.Errorf("write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, settingsPath); err != nil {
-		return false, fmt.Errorf("rename %s -> %s: %w", tmp, settingsPath, err)
-	}
+	return false, writeAtomic(settingsPath, out, 0o600)
+}
 
-	return false, nil
+// writeConfigBackup writes a timestamped .bak sibling of path holding
+// the original bytes, before a patcher rewrites the file. A nil/empty
+// original (file didn't exist) is a no-op. Failure is an error, not
+// best-effort: proceeding without a backup would leave the user's
+// only copy exposed to the rewrite.
+func writeConfigBackup(path string, original []byte) error {
+	if len(original) == 0 {
+		return nil
+	}
+	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
+		return fmt.Errorf("write backup %s: %w (aborting before modifying the original)", backupPath, err)
+	}
+	return nil
 }
 
 // isGramatonHookCommand reports whether a hook command string points
@@ -460,6 +485,12 @@ func cursorConfigDir() (string, error) {
 // ~/.codex.
 func codexConfigDir() (string, error) {
 	if root := os.Getenv("CODEX_HOME"); root != "" {
+		// Guard against a relative value: os.MkdirAll would silently
+		// fabricate the tree under whatever directory the wizard ran
+		// from, scattering config where codex will never look.
+		if !filepath.IsAbs(root) {
+			return "", fmt.Errorf("CODEX_HOME is set but not an absolute path (%q); fix or unset it and re-run", root)
+		}
 		return root, nil
 	}
 	home, err := os.UserHomeDir()
@@ -503,9 +534,9 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 	hooksPath := filepath.Join(dir, "hooks.json")
 
 	existing := map[string]any{}
-	exists := false
+	var original []byte
 	if raw, err := os.ReadFile(hooksPath); err == nil {
-		exists = true
+		original = raw
 		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
 			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", hooksPath, err)
 		}
@@ -541,8 +572,13 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 		return true, nil // nothing to register; technically unchanged
 	}
 
-	hooksObj, _ := existing["hooks"].(map[string]any)
-	if hooksObj == nil {
+	// Wrong-TYPE envelope values get the won't-touch treatment, same
+	// as unparseable JSON.
+	hooksObj, ok := existing["hooks"].(map[string]any)
+	if !ok {
+		if _, present := existing["hooks"]; present {
+			return false, fmt.Errorf("%s has a non-object \"hooks\" value; won't touch it -- fix by hand", hooksPath)
+		}
 		hooksObj = map[string]any{}
 	}
 
@@ -550,9 +586,11 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 	for event, pair := range wanted {
 		var blocks []any
 		if raw, ok := hooksObj[event]; ok {
-			if arr, isArr := raw.([]any); isArr {
-				blocks = arr
+			arr, isArr := raw.([]any)
+			if !isArr {
+				return false, fmt.Errorf("%s has a non-array %q hooks value; won't touch it -- fix by hand", hooksPath, event)
 			}
+			blocks = arr
 		}
 
 		// Filter out existing gramaton-owned entries (either command
@@ -564,7 +602,13 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 				kept = append(kept, b)
 				continue
 			}
-			inner, _ := bm["hooks"].([]any)
+			inner, innerIsArr := bm["hooks"].([]any)
+			if !innerIsArr {
+				// Not the matcher-block shape we manage; preserve
+				// verbatim rather than dropping the user's block.
+				kept = append(kept, b)
+				continue
+			}
 			newInner := make([]any, 0, len(inner))
 			for _, h := range inner {
 				hm, ok := h.(map[string]any)
@@ -612,12 +656,8 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 	}
 	existing["hooks"] = hooksObj
 
-	// Back up the existing file before rewriting.
-	if exists {
-		backupPath := fmt.Sprintf("%s.bak-%s", hooksPath, time.Now().UTC().Format("20060102T150405Z"))
-		if data, err := os.ReadFile(hooksPath); err == nil {
-			_ = os.WriteFile(backupPath, data, 0o600)
-		}
+	if err := writeConfigBackup(hooksPath, original); err != nil {
+		return false, err
 	}
 
 	// Ensure the config root exists (hooks.json is absent on a fresh
@@ -660,9 +700,9 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	hooksPath := filepath.Join(dir, "hooks.json")
 
 	existing := map[string]any{}
-	exists := false
+	var original []byte
 	if raw, err := os.ReadFile(hooksPath); err == nil {
-		exists = true
+		original = raw
 		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
 			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", hooksPath, err)
 		}
@@ -682,23 +722,30 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 		return true, nil // nothing to register; technically unchanged
 	}
 
+	// Wrong-TYPE envelope values get the won't-touch treatment, same
+	// as unparseable JSON.
+	hooksObj, ok := existing["hooks"].(map[string]any)
+	if !ok {
+		if _, present := existing["hooks"]; present {
+			return false, fmt.Errorf("%s has a non-object \"hooks\" value; won't touch it -- fix by hand", hooksPath)
+		}
+		hooksObj = map[string]any{}
+	}
+
 	changed := false
 	if _, ok := existing["version"]; !ok {
 		existing["version"] = 1
 		changed = true
 	}
 
-	hooksObj, _ := existing["hooks"].(map[string]any)
-	if hooksObj == nil {
-		hooksObj = map[string]any{}
-	}
-
 	for event, script := range wanted {
 		var entries []any
 		if raw, ok := hooksObj[event]; ok {
-			if arr, isArr := raw.([]any); isArr {
-				entries = arr
+			arr, isArr := raw.([]any)
+			if !isArr {
+				return false, fmt.Errorf("%s has a non-array %q hooks value; won't touch it -- fix by hand", hooksPath, event)
 			}
+			entries = arr
 		}
 
 		// Filter out existing gramaton-owned entries (flat shape:
@@ -736,12 +783,8 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	}
 	existing["hooks"] = hooksObj
 
-	// Back up the existing file before rewriting.
-	if exists {
-		backupPath := fmt.Sprintf("%s.bak-%s", hooksPath, time.Now().UTC().Format("20060102T150405Z"))
-		if data, err := os.ReadFile(hooksPath); err == nil {
-			_ = os.WriteFile(backupPath, data, 0o600)
-		}
+	if err := writeConfigBackup(hooksPath, original); err != nil {
+		return false, err
 	}
 
 	// ~/.cursor/ exists on any real Cursor install (it's the

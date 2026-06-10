@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // MCP client detection + registration for Step 3 of the wizard.
@@ -28,6 +27,10 @@ import (
 // specifically it also preserves user comments in config.toml, which
 // no Go TOML library round-trips — verified 2026-06-09.)
 //
+// Cursor is the documented exception: the IDE ships no CLI at all,
+// so registerWithCursor hand-edits ~/.cursor/mcp.json — the only
+// programmatic path Cursor offers.
+//
 // The trade-off: we depend on the client CLI being the same version
 // the user installed. That's fine for Claude Code (stable command
 // since it launched). kiro-cli's MCP-registration surface is less
@@ -44,9 +47,10 @@ import (
 // wherever the MCP client runs. For `go install`-based installs this
 // is the normal GOPATH/bin on PATH; for users who installed into a
 // non-PATH location, the registration succeeds but the client will
-// fail to find gramaton at runtime. Step 5 verification (future pass)
-// will re-run `claude mcp list` and flag connection failures so users
-// see this before it's too late.
+// fail to find gramaton at runtime. The wizard's verification pass
+// surveys registration PRESENCE per harness (the VerifyMCPRegistered
+// strategies below); actual connection testing is `gramaton
+// preflight` / future-doctor territory.
 
 // DetectedClient describes one MCP client installed on this system
 // that Step 3 can register Gramaton against. Name is a human-
@@ -115,25 +119,17 @@ func (DefaultMCPBackend) Register(ctx context.Context, client DetectedClient) (b
 // available everywhere.
 func registerWithClaudeCode(ctx context.Context, claudeBin string) (bool, error) {
 	// Idempotency check: is gramaton already in `claude mcp list`?
-	// We grep the output for a line starting with "gramaton:"
-	// matching the documented list format
-	// (see docs/benchmarks.md). If claude's output format changes
-	// in a future version we might false-negative here and re-add,
-	// which claude's own add command will then reject -- surfaced
-	// cleanly to the user.
-	listCmd := exec.CommandContext(ctx, claudeBin, "mcp", "list")
-	listOut, err := listCmd.CombinedOutput()
-	if err == nil {
-		for _, line := range strings.Split(string(listOut), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "gramaton:") {
-				return true, nil // already registered
-			}
-		}
+	// If claude's output format changes in a future version we might
+	// false-negative here and re-add, which claude's own add command
+	// will then reject -- surfaced cleanly to the user.
+	//
+	// A failed list (e.g., no MCP configured yet) is not a hard
+	// error -- we just proceed to add. If the real failure mode was
+	// something else (permissions, corrupted config), the add below
+	// will surface it.
+	if registered, err := verifyClaudeMCPRegistered(ctx, claudeBin); err == nil && registered {
+		return true, nil
 	}
-	// List may have failed (e.g., no MCP configured yet). That's not
-	// a hard error -- we just proceed to add. If the real failure
-	// mode was something else (permissions, corrupted config), the
-	// add below will surface it.
 
 	// claude mcp add --scope user gramaton gramaton -- mcp
 	addCmd := exec.CommandContext(ctx, claudeBin,
@@ -224,6 +220,64 @@ func registerWithKiroCli(ctx context.Context, kiroBin string) (bool, error) {
 	return false, nil
 }
 
+// verifyClaudeMCPRegistered surveys `claude mcp list` for a
+// gramaton entry (a line starting "gramaton:", matching the
+// documented list format -- see docs/benchmarks.md). Used both as
+// registerWithClaudeCode's idempotency probe and as Step 5's
+// registration survey.
+func verifyClaudeMCPRegistered(ctx context.Context, bin string) (bool, error) {
+	out, err := exec.CommandContext(ctx, bin, "mcp", "list").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("couldn't run `claude mcp list` to verify registration: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "gramaton:") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// verifyCodexMCPRegistered surveys `codex mcp list` for a gramaton
+// entry. Substring match rather than a line-format assumption:
+// codex's list output is tabular and its exact shape isn't pinned
+// in our corpus, but the server NAME appearing anywhere in the
+// output is a stable signal either way.
+func verifyCodexMCPRegistered(ctx context.Context, bin string) (bool, error) {
+	out, err := exec.CommandContext(ctx, bin, "mcp", "list").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("couldn't run `codex mcp list` to verify registration: %w", err)
+	}
+	return strings.Contains(string(out), "gramaton"), nil
+}
+
+// verifyCursorMCPRegistered checks ~/.cursor/mcp.json for a
+// gramaton entry under mcpServers. A missing file simply means not
+// registered (Cursor doesn't auto-create it); a present-but-
+// unparseable file is an error worth surfacing.
+func verifyCursorMCPRegistered(_ context.Context, _ string) (bool, error) {
+	dir, err := cursorConfigDir()
+	if err != nil {
+		return false, err
+	}
+	mcpPath := filepath.Join(dir, "mcp.json")
+	raw, err := os.ReadFile(mcpPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", mcpPath, err)
+	}
+	var parsed struct {
+		MCPServers map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(stripBOM(raw), &parsed); err != nil {
+		return false, fmt.Errorf("parse %s: %w", mcpPath, err)
+	}
+	_, ok := parsed.MCPServers["gramaton"]
+	return ok, nil
+}
+
 // registerWithCursor writes Gramaton's MCP entry directly into
 // ~/.cursor/mcp.json. Cursor IDE ships no CLI; direct file write is
 // the only documented programmatic registration path, and the file
@@ -246,9 +300,9 @@ func registerWithCursor(_ context.Context, _ string) (bool, error) {
 	mcpPath := filepath.Join(dir, "mcp.json")
 
 	existing := map[string]any{}
-	exists := false
+	var original []byte
 	if raw, err := os.ReadFile(mcpPath); err == nil {
-		exists = true
+		original = raw
 		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
 			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", mcpPath, err)
 		}
@@ -256,8 +310,13 @@ func registerWithCursor(_ context.Context, _ string) (bool, error) {
 		return false, fmt.Errorf("read %s: %w", mcpPath, err)
 	}
 
-	servers, _ := existing["mcpServers"].(map[string]any)
-	if servers == nil {
+	// Wrong-TYPE envelope values get the won't-touch treatment, same
+	// as unparseable JSON.
+	servers, ok := existing["mcpServers"].(map[string]any)
+	if !ok {
+		if _, present := existing["mcpServers"]; present {
+			return false, fmt.Errorf("%s has a non-object \"mcpServers\" value; won't touch it -- fix by hand", mcpPath)
+		}
 		servers = map[string]any{}
 	}
 
@@ -284,11 +343,8 @@ func registerWithCursor(_ context.Context, _ string) (bool, error) {
 
 	// Back up before rewriting, then atomic write. 0600 perms:
 	// mcp.json can carry API keys in env/headers for other servers.
-	if exists {
-		backupPath := fmt.Sprintf("%s.bak-%s", mcpPath, time.Now().UTC().Format("20060102T150405Z"))
-		if data, err := os.ReadFile(mcpPath); err == nil {
-			_ = os.WriteFile(backupPath, data, 0o600)
-		}
+	if err := writeConfigBackup(mcpPath, original); err != nil {
+		return false, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", dir, err)
