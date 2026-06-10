@@ -51,7 +51,7 @@
 //   0. Welcome + branch fresh-vs-import
 //   1. Knowledge-store bootstrap (config, data dir, embedding provider, model download)
 //   2. LLM provider (optional but strongly recommended) + API key + test call + cost caps
-//   3. MCP client auto-detect (Claude Code + kiro-cli) + config injection
+//   3. MCP client auto-detect (harness registry: Claude Code, kiro-cli, Codex) + config injection
 //   4. Hooks installer (auto-capture) for detected clients
 //   5. Verification + concrete next-steps block
 //

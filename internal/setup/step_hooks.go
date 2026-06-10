@@ -42,7 +42,7 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 	if len(clients) == 0 {
 		w.writer.Paragraph(
 			"No MCP clients detected, so there's nothing to install hooks into.",
-			"If you install Claude Code or kiro-cli later, re-run `gramaton init`.",
+			fmt.Sprintf("If you install %s later, re-run `gramaton init`.", harnessNamesForProse()),
 		)
 		return nil
 	}
@@ -105,20 +105,20 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 		w.writer.Check(fmt.Sprintf("%s: installed %d hook script(s) to %s",
 			c.Name, len(paths), filepath.Join(w.configDir, "hooks", h.HookEmbedDir)))
 
-		if h.AutoWireHooks {
-			// Today only Claude Code auto-wires (settings.json
-			// patching); the backend method and the success copy are
-			// still Claude-specific. Generalizing the wiring strategy
-			// is the Codex/Cursor harness work.
-			unchanged, err := w.hookBackend.RegisterClaudeHooks(ctx, paths)
+		if h.WireHooks != nil {
+			// The backend dispatches to the registry's per-harness
+			// wiring strategy (settings.json for Claude Code,
+			// hooks.json for Codex); going through the backend keeps
+			// the test seam.
+			unchanged, err := w.hookBackend.RegisterHooks(ctx, h.HookEmbedDir, paths)
 			if err != nil {
-				w.writer.Warn(fmt.Sprintf("%s: settings.json update failed: %v", c.Name, err))
+				w.writer.Warn(fmt.Sprintf("%s: hook config update failed: %v", c.Name, err))
 				continue
 			}
 			if unchanged {
 				w.writer.Check(fmt.Sprintf("%s: hook config already up to date", c.Name))
 			} else {
-				w.writer.Check(fmt.Sprintf("%s: updated ~/.claude/settings.json", c.Name))
+				w.writer.Check(fmt.Sprintf("%s: updated %s", c.Name, h.HookConfigPathHint))
 			}
 			installed++
 		} else {

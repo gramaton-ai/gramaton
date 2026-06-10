@@ -86,8 +86,8 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 	if len(clients) == 0 {
 		w.writer.Paragraph(
 			"No MCP clients detected, so there's no CLAUDE.md (or equivalent)",
-			"to install instructions into. If you install Claude Code or",
-			"kiro-cli later, re-run `gramaton init --force`.",
+			fmt.Sprintf("to install instructions into. If you install %s", harnessNamesForProse()),
+			"later, re-run `gramaton init --force`.",
 		)
 		return nil
 	}
@@ -97,13 +97,14 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 		"won't use them unless its instruction file tells it when.",
 		"",
 		"This step updates each detected client's user-scope",
-		"instruction file. Claude Code's ~/.claude/CLAUDE.md gets a",
-		"managed `<!-- gramaton-managed -->` block (content outside",
-		"it is preserved); Kiro's ~/.kiro/steering/gramaton.md is a",
+		"instruction file. Claude Code's ~/.claude/CLAUDE.md and",
+		"Codex's ~/.codex/AGENTS.md get a managed",
+		"`<!-- gramaton-managed -->` block (content outside it is",
+		"preserved); Kiro's ~/.kiro/steering/gramaton.md is a",
 		"dedicated file alongside your other steering topics.",
 		"",
 		"You'll be asked once per detected client so you can install",
-		"for one and skip the other.",
+		"for some and skip others.",
 	)
 
 	installed := 0
@@ -193,10 +194,20 @@ const (
 // Returns an error for unknown clients (or registry entries without
 // an instructions path) rather than guessing — the wizard prefers
 // to surface gaps so we can add support deliberately.
+//
+// Harnesses with a ConfigRootEnv (Codex's CODEX_HOME) get their
+// config root swapped in for the home-relative directory when the
+// variable is set: [".codex", "AGENTS.md"] resolves to
+// $CODEX_HOME/AGENTS.md instead of ~/.codex/AGENTS.md.
 func instructionsPathForClient(clientName string) (string, instructionsLayout, error) {
 	h := harnessByName(clientName)
 	if h == nil || len(h.InstructionsRelPath) == 0 {
 		return "", 0, fmt.Errorf("no instruction-file path defined for client %q", clientName)
+	}
+	if h.ConfigRootEnv != "" {
+		if root := os.Getenv(h.ConfigRootEnv); root != "" {
+			return filepath.Join(append([]string{root}, h.InstructionsRelPath[1:]...)...), h.InstructionsLayout, nil
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

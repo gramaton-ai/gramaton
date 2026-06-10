@@ -61,6 +61,18 @@ func TestHarnessRegistryInvariants(t *testing.T) {
 				t.Errorf("%s: rendered guidance has unfilled interpolation vars", h.Name)
 			}
 		}
+
+		// ConfigRootEnv swaps the env value in for the FIRST path
+		// element, so there must be at least a (root, file) pair.
+		if h.ConfigRootEnv != "" && len(h.InstructionsRelPath) < 2 {
+			t.Errorf("%s: ConfigRootEnv set but InstructionsRelPath %v has no root element to replace", h.Name, h.InstructionsRelPath)
+		}
+
+		// A wiring strategy needs the human-readable location for
+		// the wizard's success line.
+		if h.WireHooks != nil && h.HookConfigPathHint == "" {
+			t.Errorf("%s: WireHooks set but HookConfigPathHint empty", h.Name)
+		}
 	}
 }
 
@@ -87,10 +99,10 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 	if claude.HookEmbedDir != "claude-code" {
 		t.Errorf("Claude Code HookEmbedDir = %q, want claude-code", claude.HookEmbedDir)
 	}
-	if !claude.AutoWireHooks {
+	if claude.WireHooks == nil {
 		t.Error("Claude Code should auto-wire hooks (settings.json patching)")
 	}
-	if claude.WindowsCmdProxy {
+	if claude.ProxyStyle != proxyPosixOnly {
 		t.Error("Claude Code should keep .sh proxies on Windows (bundles Git Bash)")
 	}
 
@@ -107,11 +119,48 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 	if kiro.InstructionsLayout != wholeFileOwned {
 		t.Error("kiro-cli should use the whole-file layout")
 	}
-	if !kiro.WindowsCmdProxy {
+	if kiro.ProxyStyle != proxyNativePerOS {
 		t.Error("kiro-cli should use .cmd proxies on Windows")
 	}
-	if kiro.AutoWireHooks {
-		t.Error("kiro-cli must not auto-wire hooks (schema unverified)")
+	if kiro.WireHooks != nil {
+		t.Error("kiro-cli must not auto-wire hooks (per-agent schema; no default agent to patch)")
+	}
+}
+
+// TestHarnessRegistryCodexEntry pins the Codex entry to the facts
+// established by the 2026-05-24 vendor-docs research plus the
+// 2026-06-09 empirical verification.
+func TestHarnessRegistryCodexEntry(t *testing.T) {
+	codex := harnessByName("Codex")
+	if codex == nil {
+		t.Fatal("Codex missing from registry")
+	}
+	if codex.DetectBinary != "codex" {
+		t.Errorf("Codex DetectBinary = %q, want codex", codex.DetectBinary)
+	}
+	if codex.RegisterMCP == nil {
+		t.Error("Codex should register via the codex CLI")
+	}
+	if codex.ConfigRootEnv != "CODEX_HOME" {
+		t.Errorf("Codex ConfigRootEnv = %q, want CODEX_HOME", codex.ConfigRootEnv)
+	}
+	if codex.InstructionsLayout != fencedBlockInSharedFile {
+		t.Error("Codex should use the fenced-block layout (AGENTS.md is shared with user content)")
+	}
+	if !strings.Contains(codex.Addendum, "~/.codex/memories/") {
+		t.Error("Codex addendum should carry the native-memories routing rule")
+	}
+	if codex.ProxyStyle != proxyDualVariant {
+		t.Error("Codex should materialize both proxy variants (hooks.json command/commandWindows)")
+	}
+	if codex.WireHooks == nil {
+		t.Error("Codex should auto-wire hooks (hooks.json patching)")
+	}
+	if codex.HookEmbedDir != "codex" {
+		t.Errorf("Codex HookEmbedDir = %q, want codex", codex.HookEmbedDir)
+	}
+	if len(codex.HookEvents) != 4 {
+		t.Errorf("Codex should wire 4 lifecycle events, got %d", len(codex.HookEvents))
 	}
 }
 

@@ -46,6 +46,10 @@ var integrationSnapshots = map[string]struct {
 		rel:    filepath.Join("..", "..", "integration", "claude-code", "CLAUDE.md"),
 		render: func() string { return templateForClient(harnessClaudeCode) },
 	},
+	"codex": {
+		rel:    filepath.Join("..", "..", "integration", "codex", "AGENTS.md"),
+		render: func() string { return templateForClient(harnessCodex) },
+	},
 	"custom-agents": {
 		rel:    filepath.Join("..", "..", "integration", "custom-agents", "system-prompt.md"),
 		render: templates.CustomAgents,

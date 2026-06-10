@@ -13,14 +13,16 @@ import (
 //
 // # Why shell out to each client's own CLI (vs hand-editing its config)
 //
-// Each MCP client (Claude Code, kiro-cli) owns a config file schema.
-// Hand-editing that file requires us to understand the exact layout
-// (which keys are required, what shape `mcpServers` takes, how to
-// preserve other user-added servers) and keep up with schema changes
-// across client versions. Shelling out to `claude mcp add` delegates
-// the schema concern to the tool that owns it. Costs one subprocess
-// per registration; saves a class of "works on my machine but breaks
-// after a client update" bugs.
+// Each MCP client (Claude Code, kiro-cli, Codex) owns a config file
+// schema. Hand-editing that file requires us to understand the exact
+// layout (which keys are required, what shape `mcpServers` takes, how
+// to preserve other user-added servers) and keep up with schema
+// changes across client versions. Shelling out to `claude mcp add` /
+// `codex mcp add` delegates the schema concern to the tool that owns
+// it. Costs one subprocess per registration; saves a class of "works
+// on my machine but breaks after a client update" bugs. (For Codex
+// specifically it also preserves user comments in config.toml, which
+// no Go TOML library round-trips — verified 2026-06-09.)
 //
 // The trade-off: we depend on the client CLI being the same version
 // the user installed. That's fine for Claude Code (stable command
@@ -144,6 +146,34 @@ func registerWithClaudeCode(ctx context.Context, claudeBin string) (bool, error)
 		// callers add sentinel detection later.
 		return false, fmt.Errorf("claude mcp add failed: %w: %s %s",
 			err, strings.TrimSpace(string(out)), strings.TrimSpace(stderr.String()))
+	}
+	return false, nil
+}
+
+// registerWithCodex invokes `codex mcp add gramaton -- gramaton mcp`
+// to register Gramaton in Codex's user-global config.toml.
+//
+// No idempotency probe, deliberately: `codex mcp add` REPLACES an
+// existing entry with the same name. Verified empirically against
+// codex-cli 0.133.0 (2026-06-09, throwaway CODEX_HOME): re-running
+// add swaps the entry in place, exits 0, and preserves user comments
+// elsewhere in config.toml -- which also means re-registration never
+// damages a hand-edited config. Replace-on-add can't distinguish
+// "was already there" from "newly added", so alreadyRegistered is
+// always false; the end state is identical either way.
+//
+// CODEX_HOME is honored for free: the codex CLI inherits our
+// environment and writes wherever its own config-root resolution
+// points.
+func registerWithCodex(ctx context.Context, codexBin string) (bool, error) {
+	addCmd := exec.CommandContext(ctx, codexBin,
+		"mcp", "add",
+		"gramaton",
+		"--", "gramaton", "mcp")
+	out, err := addCmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("codex mcp add failed: %w: %s",
+			err, strings.TrimSpace(string(out)))
 	}
 	return false, nil
 }

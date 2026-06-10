@@ -16,6 +16,7 @@ import (
 const (
 	harnessClaudeCode = "Claude Code"
 	harnessKiroCLI    = "kiro-cli"
+	harnessCodex      = "Codex"
 )
 
 // Harness declaratively describes one supported AI harness (MCP
@@ -63,6 +64,14 @@ type Harness struct {
 	// this harness.
 	InstructionsRelPath []string
 
+	// ConfigRootEnv names an environment variable that relocates
+	// this harness's config root (Codex's CODEX_HOME). When the
+	// variable is set and non-empty, its value replaces the FIRST
+	// element of InstructionsRelPath -- the home-relative config
+	// dir -- when resolving the instructions path. Requires
+	// len(InstructionsRelPath) >= 2.
+	ConfigRootEnv string
+
 	// InstructionsLayout selects the install strategy for the
 	// guidance file: fenced block inside a shared user-owned file,
 	// or a whole file Gramaton owns end to end.
@@ -93,17 +102,24 @@ type Harness struct {
 	// output and test assertions.
 	HookEvents []hookEventSpec
 
-	// WindowsCmdProxy selects .cmd proxy scripts on Windows
-	// instead of .sh. Claude Code keeps .sh everywhere (it bundles
-	// Git Bash on Windows); Kiro CLI 2.x is native Windows with no
-	// bash, so it needs .cmd.
-	WindowsCmdProxy bool
+	// ProxyStyle selects which proxy-script variants Materialize
+	// writes: .sh always (Claude Code bundles Git Bash on Windows),
+	// .sh-or-.cmd by host OS (kiro: native Windows, no bash), or
+	// both variants on every host (Codex: its hook config carries
+	// command + commandWindows and picks at runtime).
+	ProxyStyle proxyStyle
 
-	// AutoWireHooks reports whether Step 5 can patch this
-	// harness's hook configuration automatically. When false, the
-	// wizard prints the materialized script paths with manual
-	// wiring guidance instead.
-	AutoWireHooks bool
+	// WireHooks patches this harness's hook configuration to route
+	// lifecycle events at the materialized scripts, preserving
+	// non-gramaton entries. Nil means Step 5 cannot wire hooks
+	// automatically -- the wizard prints the script paths with
+	// manual wiring guidance instead.
+	WireHooks func(ctx context.Context, scriptPaths []string) (unchanged bool, err error)
+
+	// HookConfigPathHint is the human-readable location WireHooks
+	// patches (e.g. "~/.claude/settings.json"), for wizard success
+	// copy. Required when WireHooks is set.
+	HookConfigPathHint string
 }
 
 // harnesses is the registry of supported AI harnesses, in detection
@@ -125,7 +141,9 @@ var harnesses = []Harness{
 		ReconnectHint:       "for Claude Code: `/mcp` in the prompt",
 		HookEmbedDir:        "claude-code",
 		HookEvents:          claudeCodeEvents,
-		AutoWireHooks:       true,
+		ProxyStyle:          proxyPosixOnly,
+		WireHooks:           registerClaudeHooks,
+		HookConfigPathHint:  "~/.claude/settings.json",
 	},
 	{
 		Name: harnessKiroCLI,
@@ -151,8 +169,40 @@ var harnesses = []Harness{
 		ReconnectHint:       "for kiro-cli: start a new session",
 		HookEmbedDir:        "kiro",
 		HookEvents:          kiroEvents,
-		WindowsCmdProxy:     true,
-		AutoWireHooks:       false,
+		ProxyStyle:          proxyNativePerOS,
+		// WireHooks nil: kiro's hook-config schema is per-agent and
+		// a fresh install has no default-agent config to patch
+		// (verified 2026-05-24). Parked with the
+		// rest of the Kiro integration.
+	},
+	{
+		Name:         harnessCodex,
+		DetectBinary: "codex",
+		RegisterMCP:  registerWithCodex,
+		// Verified syntax (codex-cli 0.133.0): positional name, then
+		// `--` separating the server command. No --scope flag; the
+		// config.toml entry is user-global by nature.
+		ManualMCPHint: "codex mcp add gramaton -- gramaton mcp",
+		// Codex loads $CODEX_HOME/AGENTS.md (default ~/.codex/) as
+		// user-global agent instructions, shared with user content --
+		// same merged-file model as Claude Code's CLAUDE.md, so the
+		// HTML-comment fence convention carries over unchanged.
+		// Verified: developers.openai.com/codex/guides/agents-md
+		// (2026-05-24).
+		InstructionsRelPath: []string{".codex", "AGENTS.md"},
+		ConfigRootEnv:       "CODEX_HOME",
+		InstructionsLayout:  fencedBlockInSharedFile,
+		Addendum:            templates.AddendumCodex,
+		ReconnectHint:       "for Codex: check `codex mcp list`, then start a new session",
+		HookEmbedDir:        "codex",
+		HookEvents:          codexEvents,
+		// Dual variant: Codex's hooks.json carries both command and
+		// commandWindows per entry, selecting per-OS at runtime, so
+		// both script variants must exist on disk regardless of the
+		// host this wizard ran on.
+		ProxyStyle:         proxyDualVariant,
+		WireHooks:          registerCodexHooks,
+		HookConfigPathHint: "~/.codex/hooks.json",
 	},
 }
 

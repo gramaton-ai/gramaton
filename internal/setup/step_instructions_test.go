@@ -184,6 +184,37 @@ func TestInstructionsPathForClient(t *testing.T) {
 	}
 }
 
+// TestInstructionsPathForCodex covers the ConfigRootEnv resolution
+// branch: ~/.codex/AGENTS.md by default, $CODEX_HOME/AGENTS.md when
+// the vendor relocation variable is set.
+func TestInstructionsPathForCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", "")
+
+	got, layout, err := instructionsPathForClient("Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".codex", "AGENTS.md"); got != want {
+		t.Errorf("default path = %q, want %q", got, want)
+	}
+	if layout != fencedBlockInSharedFile {
+		t.Errorf("layout = %v, want fencedBlockInSharedFile", layout)
+	}
+
+	relocated := filepath.Join(home, "elsewhere")
+	t.Setenv("CODEX_HOME", relocated)
+	got, _, err = instructionsPathForClient("Codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(relocated, "AGENTS.md"); got != want {
+		t.Errorf("relocated path = %q, want %q", got, want)
+	}
+}
+
 func TestInstallInstructionsWholeFileCreatedWithoutFenceMarkers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gramaton.md")
@@ -318,6 +349,19 @@ func TestTemplateForClientKiroOmitsRoutingBlock(t *testing.T) {
 	}
 }
 
+// TestTemplateForClientCodexIncludesMemoriesRouting pins Codex's
+// addendum substitution: the native-memories routing rule must be
+// present, and Claude Code's auto-memory rule must not leak in.
+func TestTemplateForClientCodexIncludesMemoriesRouting(t *testing.T) {
+	got := templateForClient("Codex")
+	if !strings.Contains(got, "Memory routing: Codex's native memories vs Gramaton") {
+		t.Error("Codex template missing the memories routing block")
+	}
+	if strings.Contains(got, "auto-memory") {
+		t.Error("Codex template should NOT carry Claude Code's auto-memory rule")
+	}
+}
+
 // TestTemplateForClientReconnectHints pins the rendered reconnect
 // parenthetical per client — the {{mcp_reconnect_hint}} splice is
 // the part of interpolation most likely to silently regress into
@@ -326,6 +370,7 @@ func TestTemplateForClientReconnectHints(t *testing.T) {
 	cases := []struct{ client, want string }{
 		{"Claude Code", "reconnect (for Claude Code: `/mcp` in the prompt, or"},
 		{"kiro-cli", "reconnect (for kiro-cli: start a new session, or"},
+		{"Codex", "reconnect (for Codex: check `codex mcp list`, then start a new session, or"},
 	}
 	for _, tc := range cases {
 		got := templateForClient(tc.client)
