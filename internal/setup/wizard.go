@@ -349,8 +349,8 @@ func (w *Wizard) nextSteps() {
 	w.writer.Paragraph(
 		"Next steps:",
 		"",
-		"  1. Restart your AI client (Claude Code, kiro-cli) so it",
-		"     picks up the new MCP configuration.",
+		"  1. Restart your AI client(s) so they",
+		"     pick up the new MCP configuration.",
 		"",
 		"  2. Try it -- in your AI assistant, say:",
 		"     \"Remember that my favorite editor is neovim.\"",

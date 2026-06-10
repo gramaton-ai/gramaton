@@ -135,10 +135,13 @@ type Harness struct {
 	// manual wiring guidance instead.
 	WireHooks func(ctx context.Context, scriptPaths []string) (unchanged bool, err error)
 
-	// HookConfigPathHint is the human-readable location WireHooks
-	// patches (e.g. "~/.claude/settings.json"), for wizard success
-	// copy. Required when WireHooks is set.
-	HookConfigPathHint string
+	// HookConfigPathHint resolves the location WireHooks patches,
+	// for wizard success copy. A func (resolved at print time)
+	// because some locations depend on the environment — Codex's
+	// hooks.json moves with CODEX_HOME, and printing the default
+	// path while writing the relocated one would mislead. Required
+	// when WireHooks is set.
+	HookConfigPathHint func() string
 }
 
 // harnesses is the registry of supported AI harnesses, in detection
@@ -163,7 +166,7 @@ var harnesses = []Harness{
 		HookEvents:          claudeCodeEvents,
 		ProxyStyle:          proxyPosixOnly,
 		WireHooks:           registerClaudeHooks,
-		HookConfigPathHint:  "~/.claude/settings.json",
+		HookConfigPathHint:  homeRelHint(".claude", "settings.json"),
 	},
 	{
 		Name: harnessKiroCLI,
@@ -223,7 +226,7 @@ var harnesses = []Harness{
 		// host this wizard ran on.
 		ProxyStyle:         proxyDualVariant,
 		WireHooks:          registerCodexHooks,
-		HookConfigPathHint: "~/.codex/hooks.json",
+		HookConfigPathHint: codexHooksPathHint,
 	},
 	{
 		Name: harnessCursor,
@@ -257,8 +260,31 @@ var harnesses = []Harness{
 		// this host.
 		ProxyStyle:         proxyNativePerOS,
 		WireHooks:          registerCursorHooks,
-		HookConfigPathHint: "~/.cursor/hooks.json",
+		HookConfigPathHint: homeRelHint(".cursor", "hooks.json"),
 	},
+}
+
+// homeRelHint returns a HookConfigPathHint func that resolves a
+// home-relative config path at print time, falling back to a
+// tilde-prefixed form if the home dir can't be resolved.
+func homeRelHint(elems ...string) func() string {
+	return func() string {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(append([]string{home}, elems...)...)
+		}
+		return "~/" + strings.Join(elems, "/")
+	}
+}
+
+// codexHooksPathHint resolves Codex's hooks.json location the same
+// way registerCodexHooks does, so the wizard's success line names
+// the file actually written when CODEX_HOME relocates the config
+// root.
+func codexHooksPathHint() string {
+	if dir, err := codexConfigDir(); err == nil {
+		return filepath.Join(dir, "hooks.json")
+	}
+	return "~/.codex/hooks.json"
 }
 
 // cursorSkillDescription is the YAML frontmatter description for the

@@ -148,8 +148,8 @@ func TestStepHooksClaudeCodeSuccess(t *testing.T) {
 	if !strings.Contains(out, "Claude Code: installed") {
 		t.Errorf("missing materialize check line:\n%s", out)
 	}
-	if !strings.Contains(out, "updated ~/.claude/settings.json") {
-		t.Errorf("missing settings.json update line:\n%s", out)
+	if !strings.Contains(out, "updated") || !strings.Contains(out, filepath.Join(".claude", "settings.json")) {
+		t.Errorf("missing resolved settings.json update line:\n%s", out)
 	}
 	// Restart warning should fire since at least one install succeeded.
 	if !strings.Contains(out, "Restart your AI client") {
@@ -474,8 +474,8 @@ func TestStepHooksCodexSuccess(t *testing.T) {
 	if len(hook.registerCalls) != 1 || hook.registerClients[0] != "codex" {
 		t.Fatalf("want 1 RegisterHooks call for codex, got clients %v", hook.registerClients)
 	}
-	if !strings.Contains(out, "updated ~/.codex/hooks.json") {
-		t.Errorf("missing hooks.json update line:\n%s", out)
+	if !strings.Contains(out, "updated") || !strings.Contains(out, filepath.Join(".codex", "hooks.json")) {
+		t.Errorf("missing resolved codex hooks.json update line:\n%s", out)
 	}
 }
 
@@ -731,8 +731,8 @@ func TestStepHooksCursorSuccess(t *testing.T) {
 	if len(hook.registerCalls) != 1 || hook.registerClients[0] != "cursor" {
 		t.Fatalf("want 1 RegisterHooks call for cursor, got clients %v", hook.registerClients)
 	}
-	if !strings.Contains(out, "updated ~/.cursor/hooks.json") {
-		t.Errorf("missing hooks.json update line:\n%s", out)
+	if !strings.Contains(out, "updated") || !strings.Contains(out, filepath.Join(".cursor", "hooks.json")) {
+		t.Errorf("missing resolved cursor hooks.json update line:\n%s", out)
 	}
 }
 

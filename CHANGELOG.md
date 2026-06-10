@@ -119,6 +119,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Pre-compact transcript archives now target the per-cwd session.**
+  The pre-compact hook resolved the Gramaton session via the global
+  last-writer-wins pointer file, so with concurrent hooked sessions
+  in different working directories a transcript could be archived
+  against another directory's session. The hook now prefers the
+  per-cwd binding written by session-start (the same one `gramaton
+  session current` reads) and falls back to the global pointer only
+  when the hook payload carries no working directory.
+
 - **Integration docs and `gramaton init` template no longer carry
   stale terminology from the capture→save / session_commit→session_save
   rename.** Issue #77 caught seven `commit` references in the prose

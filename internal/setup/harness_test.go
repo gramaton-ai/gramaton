@@ -71,9 +71,14 @@ func TestHarnessRegistryInvariants(t *testing.T) {
 		}
 
 		// A wiring strategy needs the human-readable location for
-		// the wizard's success line.
-		if h.WireHooks != nil && h.HookConfigPathHint == "" {
-			t.Errorf("%s: WireHooks set but HookConfigPathHint empty", h.Name)
+		// the wizard's success line, and it must resolve to a
+		// non-empty path.
+		if h.WireHooks != nil {
+			if h.HookConfigPathHint == nil {
+				t.Errorf("%s: WireHooks set but HookConfigPathHint nil", h.Name)
+			} else if h.HookConfigPathHint() == "" {
+				t.Errorf("%s: HookConfigPathHint resolves to empty", h.Name)
+			}
 		}
 
 		// InstructionsHeader is prepended to the whole rendered

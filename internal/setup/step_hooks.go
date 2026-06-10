@@ -115,7 +115,7 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 			if unchanged {
 				w.writer.Check(fmt.Sprintf("%s: hook config already up to date", c.Name))
 			} else {
-				w.writer.Check(fmt.Sprintf("%s: updated %s", c.Name, h.HookConfigPathHint))
+				w.writer.Check(fmt.Sprintf("%s: updated %s", c.Name, h.HookConfigPathHint()))
 			}
 			installed++
 		} else {

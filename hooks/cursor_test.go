@@ -156,3 +156,47 @@ func TestCursorPreCompactUncapturedWritesFlag(t *testing.T) {
 		t.Errorf("flag archive_path = %q", flag.ArchivePath)
 	}
 }
+
+// TestPreCompactPrefersPerCwdSession pins the multi-harness session
+// resolution: when the payload carries a cwd whose per-cwd binding
+// differs from the global pointer (another harness's session-start
+// ran more recently elsewhere), the archive must target the per-cwd
+// session, not the global one.
+func TestPreCompactPrefersPerCwdSession(t *testing.T) {
+	tmp := withTempHome(t)
+	stateDir := filepath.Join(tmp, ".gramaton", "hook-state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Global pointer: some OTHER harness's session won the last write.
+	global := `{"session_id":"01KGLOBALOTHERSESSION","client_session_id":"other"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "current-session.json"), []byte(global), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Per-cwd binding for OUR workspace.
+	perCwdPath, err := PerCwdSessionPath("/Users/dev/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	perCwd := `{"session_id":"01KPERCWDSESSION","client_session_id":"conv-abc","cwd":"/Users/dev/project"}`
+	if err := os.WriteFile(perCwdPath, []byte(perCwd), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var getID string
+	stubGramaton(t, func(args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "session" && args[1] == "get" {
+			getID = args[2]
+			// No uncaptured segments -> core exits before archiving.
+			return `{"topics":[]}`, nil
+		}
+		return "", nil
+	})
+
+	stdin := strings.NewReader(`{"conversation_id":"conv-abc","workspace_roots":["/Users/dev/project"]}`)
+	CursorPreCompact(stdin, &bytes.Buffer{})
+
+	if getID != "01KPERCWDSESSION" {
+		t.Errorf("session get targeted %q, want the per-cwd session (global pointer must not win)", getID)
+	}
+}
