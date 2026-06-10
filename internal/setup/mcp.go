@@ -3,10 +3,14 @@ package setup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MCP client detection + registration for Step 3 of the wizard.
@@ -218,6 +222,82 @@ func registerWithKiroCli(ctx context.Context, kiroBin string) (bool, error) {
 			err, strings.TrimSpace(string(out)))
 	}
 	return false, nil
+}
+
+// registerWithCursor writes Gramaton's MCP entry directly into
+// ~/.cursor/mcp.json. Cursor IDE ships no CLI; direct file write is
+// the only documented programmatic registration path, and the file
+// is NOT auto-created on a fresh install -- we create it (and any
+// missing parents). The bin parameter is unused: Cursor is
+// dir-detected, so there is no binary to record.
+//
+// The merge is surgical, same contract as the hook patchers: every
+// other server under mcpServers and every unrelated top-level key is
+// preserved; only the gramaton entry is upserted. Returns
+// alreadyRegistered=true when an identical gramaton entry is already
+// present; a differing gramaton entry (e.g. hand-edited args) is
+// replaced, matching the replace-on-add semantics of the CLI-based
+// registrations.
+func registerWithCursor(_ context.Context, _ string) (bool, error) {
+	dir, err := cursorConfigDir()
+	if err != nil {
+		return false, err
+	}
+	mcpPath := filepath.Join(dir, "mcp.json")
+
+	existing := map[string]any{}
+	exists := false
+	if raw, err := os.ReadFile(mcpPath); err == nil {
+		exists = true
+		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
+			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", mcpPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read %s: %w", mcpPath, err)
+	}
+
+	servers, _ := existing["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = map[string]any{}
+	}
+
+	// Schema verified from vendor docs (cursor.com/docs/context/mcp,
+	// 2026-05-24): standard mcpServers envelope, stdio transport.
+	// "gramaton" unqualified relies on PATH, same trade-off as the
+	// CLI-based registrations (documented at the top of this file).
+	desired := map[string]any{
+		"type":    "stdio",
+		"command": "gramaton",
+		"args":    []any{"mcp"},
+	}
+
+	if current, ok := servers["gramaton"]; ok {
+		curJSON, _ := json.Marshal(current)
+		wantJSON, _ := json.Marshal(desired)
+		if string(curJSON) == string(wantJSON) {
+			return true, nil // already registered, byte-identical
+		}
+	}
+
+	servers["gramaton"] = desired
+	existing["mcpServers"] = servers
+
+	// Back up before rewriting, then atomic write. 0600 perms:
+	// mcp.json can carry API keys in env/headers for other servers.
+	if exists {
+		backupPath := fmt.Sprintf("%s.bak-%s", mcpPath, time.Now().UTC().Format("20060102T150405Z"))
+		if data, err := os.ReadFile(mcpPath); err == nil {
+			_ = os.WriteFile(backupPath, data, 0o600)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("serialize mcp.json: %w", err)
+	}
+	return false, writeAtomic(mcpPath, out, 0o600)
 }
 
 // ErrNoMCPBackend is returned by a Wizard whose MCPBackend field was

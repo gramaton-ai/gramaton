@@ -77,6 +77,19 @@ var kiroEvents = []hookEventSpec{
 	{cliEvent: "kiro-stop", fileBase: "stop"},
 }
 
+// cursorEvents are the three lifecycle events Gramaton wires into
+// Cursor. Event keys are camelCase (Cursor's hooks.json convention,
+// verified from the vendor-shipped create-hook skill, 2026-06-09);
+// Cursor has no postCompact event. The cliEvents are
+// cursor-prefixed because the handlers adapt Cursor's stdin shape
+// (conversation_id / workspace_roots) before routing to the shared
+// claude-protocol cores.
+var cursorEvents = []hookEventSpec{
+	{cliEvent: "cursor-session-start", fileBase: "session-start", configEvent: "sessionStart"},
+	{cliEvent: "cursor-stop", fileBase: "stop", configEvent: "stop"},
+	{cliEvent: "cursor-pre-compact", fileBase: "pre-compact", configEvent: "preCompact"},
+}
+
 // proxyStyle selects which proxy-script variants Materialize writes
 // for a harness. The variants differ in interpreter (.sh vs .cmd)
 // and line endings, never in behavior.
@@ -431,6 +444,16 @@ func isGramatonHookCommand(cmd string) bool {
 	return strings.Contains(cmd, "/.gramaton/hooks/")
 }
 
+// cursorConfigDir resolves Cursor's config root: ~/.cursor. No env
+// relocation variable is documented for Cursor (unlike CODEX_HOME).
+func cursorConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".cursor"), nil
+}
+
 // codexConfigDir resolves Codex's config root: $CODEX_HOME when set
 // (vendor-supported relocation -- also honored implicitly by `codex
 // mcp add`, since the codex CLI inherits our environment), else
@@ -599,6 +622,130 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 
 	// Ensure the config root exists (hooks.json is absent on a fresh
 	// Codex install; the directory may be too under CODEX_HOME).
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("serialize hooks.json: %w", err)
+	}
+	return false, writeAtomic(hooksPath, out, 0o600)
+}
+
+// registerCursorHooks patches ~/.cursor/hooks.json to route Cursor's
+// lifecycle events at our materialized proxy scripts. Same
+// surgical-merge contract as the other patchers: preserve every
+// unrelated key and every hook entry that isn't gramaton-owned;
+// replace ours in place so re-runs are idempotent.
+//
+// Schema (verified 2026-06-09 from Cursor's vendor-shipped
+// create-hook skill -- NOT the nested matcher-block shape Claude
+// Code and Codex use; entries sit directly under the event):
+//
+//	{"version": 1,
+//	 "hooks": {"sessionStart": [{"command": "..."}]}}
+//
+// `version: 1` is required; we add it when absent and never touch an
+// existing value. There is no commandWindows field in Cursor's
+// schema, which is why the Cursor registry entry uses
+// proxyNativePerOS -- the command points at the variant materialized
+// for this host. The command path is written exactly as
+// materialized: Cursor executes it natively (no Git Bash in the
+// loop), so native separators are correct on every OS.
+func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) {
+	dir, err := cursorConfigDir()
+	if err != nil {
+		return false, err
+	}
+	hooksPath := filepath.Join(dir, "hooks.json")
+
+	existing := map[string]any{}
+	exists := false
+	if raw, err := os.ReadFile(hooksPath); err == nil {
+		exists = true
+		if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
+			return false, fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", hooksPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read %s: %w", hooksPath, err)
+	}
+
+	wanted := map[string]string{}
+	for _, p := range scriptPaths {
+		event := hookEventForConfig(cursorEvents, filepath.Base(p))
+		if event == "" {
+			continue
+		}
+		wanted[event] = p
+	}
+	if len(wanted) == 0 {
+		return true, nil // nothing to register; technically unchanged
+	}
+
+	changed := false
+	if _, ok := existing["version"]; !ok {
+		existing["version"] = 1
+		changed = true
+	}
+
+	hooksObj, _ := existing["hooks"].(map[string]any)
+	if hooksObj == nil {
+		hooksObj = map[string]any{}
+	}
+
+	for event, script := range wanted {
+		var entries []any
+		if raw, ok := hooksObj[event]; ok {
+			if arr, isArr := raw.([]any); isArr {
+				entries = arr
+			}
+		}
+
+		// Filter out existing gramaton-owned entries (flat shape:
+		// the command field sits directly on the entry).
+		kept := make([]any, 0, len(entries))
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				kept = append(kept, e)
+				continue
+			}
+			cmd, _ := em["command"].(string)
+			if isGramatonHookCommand(cmd) {
+				continue // drop; we'll add our canonical entry
+			}
+			kept = append(kept, e)
+		}
+
+		// Add our canonical entry. No matcher (omitted = every
+		// occurrence), no failClosed (Cursor defaults fail-open,
+		// which is what we want -- a Gramaton bug must never block
+		// the user's editor).
+		kept = append(kept, map[string]any{"command": script})
+
+		oldJSON, _ := json.Marshal(entries)
+		newJSON, _ := json.Marshal(kept)
+		if string(oldJSON) != string(newJSON) {
+			changed = true
+		}
+		hooksObj[event] = kept
+	}
+
+	if !changed {
+		return true, nil
+	}
+	existing["hooks"] = hooksObj
+
+	// Back up the existing file before rewriting.
+	if exists {
+		backupPath := fmt.Sprintf("%s.bak-%s", hooksPath, time.Now().UTC().Format("20060102T150405Z"))
+		if data, err := os.ReadFile(hooksPath); err == nil {
+			_ = os.WriteFile(backupPath, data, 0o600)
+		}
+	}
+
+	// ~/.cursor/ exists on any real Cursor install (it's the
+	// detection signal), but hooks.json does not -- create it.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", dir, err)
 	}

@@ -19,14 +19,14 @@ import (
 //     clients? [Y/n]".
 //  3. On confirm, for each detected client:
 //     - Materialize embedded scripts to
-//       <configDir>/hooks/<client>/.
+//     <configDir>/hooks/<client>/.
 //     - For Claude Code: auto-patch ~/.claude/settings.json to route
-//       the event hooks at our scripts. Preserves all other
-//       settings and user hooks.
+//     the event hooks at our scripts. Preserves all other
+//     settings and user hooks.
 //     - For kiro-cli: scripts are materialized but settings auto-
-//       patching is skipped because kiro-cli's hook-config schema
-//       isn't documented in our corpus. Print the script paths and
-//       tell the user to wire them in via kiro-cli's config.
+//     patching is skipped because kiro-cli's hook-config schema
+//     isn't documented in our corpus. Print the script paths and
+//     tell the user to wire them in via kiro-cli's config.
 //  4. Warn at the end that users need to restart their clients for
 //     the new hooks to take effect.
 //
@@ -139,4 +139,3 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 	}
 	return nil
 }
-

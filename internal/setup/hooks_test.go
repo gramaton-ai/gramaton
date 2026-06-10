@@ -690,6 +690,183 @@ func TestRegisterCodexHooksMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestStepHooksCursorSuccess(t *testing.T) {
+	mcp := &fakeMCPBackend{
+		clients: []DetectedClient{
+			{Name: "Cursor"}, // dir-detected: no binary
+		},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook := &fakeHookBackend{}
+	wiz, buf := newWizardForHooksTest(t, mcp, hook, "y", "y")
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if len(hook.materializeCalls) != 1 || hook.materializeCalls[0] != "cursor" {
+		t.Errorf("unexpected materialize calls: %v", hook.materializeCalls)
+	}
+	if len(hook.registerCalls) != 1 || hook.registerClients[0] != "cursor" {
+		t.Fatalf("want 1 RegisterHooks call for cursor, got clients %v", hook.registerClients)
+	}
+	if !strings.Contains(out, "updated ~/.cursor/hooks.json") {
+		t.Errorf("missing hooks.json update line:\n%s", out)
+	}
+}
+
+// TestMaterializeCursorNativePerOS pins the proxyNativePerOS
+// behavior for Cursor: exactly one variant per event, chosen from
+// the host OS (Cursor's hooks.json has no commandWindows field, so
+// the config can only point at one script).
+func TestMaterializeCursorNativePerOS(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := DefaultHookBackend{}.Materialize("cursor", tmp)
+	if err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	if len(paths) != len(cursorEvents) {
+		t.Fatalf("got %d scripts, want %d (one variant per event):\n%v", len(paths), len(cursorEvents), paths)
+	}
+	wantExt := ".sh"
+	if runtime.GOOS == "windows" {
+		wantExt = ".cmd"
+	}
+	for _, p := range paths {
+		if !strings.HasSuffix(p, wantExt) {
+			t.Errorf("%s: want %s variant on %s", p, wantExt, runtime.GOOS)
+		}
+	}
+}
+
+// cursorTestScripts returns the native-variant script paths for the
+// three Cursor events, as Materialize would produce them under tmp
+// on a POSIX host.
+func cursorTestScripts(tmp string) []string {
+	var scripts []string
+	for _, ev := range cursorEvents {
+		scripts = append(scripts,
+			filepath.Join(tmp, ".gramaton", "hooks", "cursor", ev.fileBase+".sh"))
+	}
+	return scripts
+}
+
+// TestRegisterCursorHooksFreshCreate covers the fresh-install path:
+// ~/.cursor/hooks.json does not exist (verified: Cursor doesn't
+// auto-create it). The file is created with version 1 and one flat
+// entry per event -- Cursor's schema has no nested matcher blocks.
+func TestRegisterCursorHooksFreshCreate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	unchanged, err := DefaultHookBackend{}.RegisterHooks(context.Background(), "cursor", cursorTestScripts(home))
+	if err != nil {
+		t.Fatalf("RegisterHooks: %v", err)
+	}
+	if unchanged {
+		t.Error("fresh create should report changed")
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, ".cursor", "hooks.json"))
+	if err != nil {
+		t.Fatalf("hooks.json not created: %v", err)
+	}
+	var parsed struct {
+		Version int `json:"version"`
+		Hooks   map[string][]struct {
+			Command string `json:"command"`
+			Hooks   []any  `json:"hooks"` // must stay empty: flat schema
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, raw)
+	}
+	if parsed.Version != 1 {
+		t.Errorf("version = %d, want 1 (required by Cursor's schema)", parsed.Version)
+	}
+	for _, ev := range cursorEvents {
+		entries := parsed.Hooks[ev.configEvent]
+		if len(entries) != 1 {
+			t.Fatalf("%s: want exactly 1 entry, got %+v", ev.configEvent, entries)
+		}
+		if !strings.HasSuffix(entries[0].Command, ev.fileBase+".sh") {
+			t.Errorf("%s: command = %q, want path ending %s.sh", ev.configEvent, entries[0].Command, ev.fileBase)
+		}
+		if len(entries[0].Hooks) != 0 {
+			t.Errorf("%s: entry has a nested hooks array -- Cursor's schema is flat", ev.configEvent)
+		}
+	}
+}
+
+// TestRegisterCursorHooksPreservesAndIdempotent seeds hooks.json
+// with an existing version, a user entry, a legacy gramaton entry,
+// and a UTF-8 BOM. User content survives, the legacy entry is
+// replaced, the existing version value is untouched, and the second
+// run is a byte-identical no-op.
+func TestRegisterCursorHooksPreservesAndIdempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(cursorDir, "hooks.json")
+
+	initial := "\xEF\xBB\xBF" + `{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {"command": "/user/custom/stop.sh", "failClosed": true}
+    ],
+    "sessionStart": [
+      {"command": "/Users/old/.gramaton/hooks/cursor/session-start.sh"}
+    ]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scripts := cursorTestScripts(home)
+	unchanged, err := DefaultHookBackend{}.RegisterHooks(context.Background(), "cursor", scripts)
+	if err != nil {
+		t.Fatalf("first RegisterHooks: %v", err)
+	}
+	if unchanged {
+		t.Error("first call should have reported changed")
+	}
+
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	if !strings.Contains(content, "/user/custom/stop.sh") {
+		t.Errorf("user's custom stop hook was removed:\n%s", content)
+	}
+	if !strings.Contains(content, `"failClosed": true`) {
+		t.Errorf("user entry's fields were not preserved verbatim:\n%s", content)
+	}
+	if strings.Contains(content, "/Users/old/.gramaton/") {
+		t.Errorf("legacy gramaton entry not replaced:\n%s", content)
+	}
+
+	unchanged, err = DefaultHookBackend{}.RegisterHooks(context.Background(), "cursor", scripts)
+	if err != nil {
+		t.Fatalf("second RegisterHooks: %v", err)
+	}
+	if !unchanged {
+		t.Error("second call should have reported unchanged")
+	}
+	raw2, _ := os.ReadFile(hooksPath)
+	if string(raw) != string(raw2) {
+		t.Error("hooks.json changed on second idempotent call")
+	}
+}
+
 // TestRegisterHooksUnknownClient pins the dispatch error path.
 func TestRegisterHooksUnknownClient(t *testing.T) {
 	if _, err := (DefaultHookBackend{}).RegisterHooks(context.Background(), "no-such-client", nil); err == nil {

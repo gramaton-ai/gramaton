@@ -14,6 +14,9 @@ func TestHookDispatchCoversAllEvents(t *testing.T) {
 		"kiro-agent-spawn",
 		"kiro-user-prompt-submit",
 		"kiro-stop",
+		"cursor-session-start",
+		"cursor-stop",
+		"cursor-pre-compact",
 	}
 	for _, ev := range want {
 		if _, ok := hookEvents[ev]; !ok {

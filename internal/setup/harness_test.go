@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/internal/setup/templates"
 )
 
 // TestHarnessRegistryInvariants pins the structural rules every
@@ -124,6 +126,83 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 	}
 	if kiro.WireHooks != nil {
 		t.Error("kiro-cli must not auto-wire hooks (per-agent schema; no default agent to patch)")
+	}
+}
+
+// TestHarnessRegistryCursorEntry pins the Cursor entry to the facts
+// established by the 2026-05-24 vendor-docs research plus the
+// 2026-06-09 vendor-shipped-skill verifications.
+func TestHarnessRegistryCursorEntry(t *testing.T) {
+	cursor := harnessByName("Cursor")
+	if cursor == nil {
+		t.Fatal("Cursor missing from registry")
+	}
+	if cursor.DetectBinary != "" {
+		t.Errorf("Cursor DetectBinary = %q, want empty (the IDE has no PATH binary)", cursor.DetectBinary)
+	}
+	if cursor.DetectDir != ".cursor" {
+		t.Errorf("Cursor DetectDir = %q, want .cursor", cursor.DetectDir)
+	}
+	if cursor.RegisterMCP == nil {
+		t.Error("Cursor should register via direct mcp.json write")
+	}
+	wantPath := []string{".cursor", "skills", "gramaton", "SKILL.md"}
+	if len(cursor.InstructionsRelPath) != len(wantPath) {
+		t.Fatalf("Cursor InstructionsRelPath = %v, want %v", cursor.InstructionsRelPath, wantPath)
+	}
+	for i := range wantPath {
+		if cursor.InstructionsRelPath[i] != wantPath[i] {
+			t.Errorf("Cursor InstructionsRelPath[%d] = %q, want %q", i, cursor.InstructionsRelPath[i], wantPath[i])
+		}
+	}
+	if cursor.InstructionsLayout != wholeFileOwned {
+		t.Error("Cursor should own SKILL.md end to end")
+	}
+	if cursor.InstructionsHeader == nil {
+		t.Fatal("Cursor needs an InstructionsHeader (SKILL.md frontmatter)")
+	}
+	if cursor.ProxyStyle != proxyNativePerOS {
+		t.Error("Cursor should use native per-OS proxies (no commandWindows in its hooks schema)")
+	}
+	if cursor.WireHooks == nil {
+		t.Error("Cursor should auto-wire hooks (hooks.json patching)")
+	}
+	if len(cursor.HookEvents) != 3 {
+		t.Errorf("Cursor should wire 3 lifecycle events (no postCompact), got %d", len(cursor.HookEvents))
+	}
+	for _, ev := range cursor.HookEvents {
+		if !strings.HasPrefix(ev.cliEvent, "cursor-") {
+			t.Errorf("Cursor cliEvent %q must be cursor-prefixed (stdin needs the adapter)", ev.cliEvent)
+		}
+	}
+}
+
+// TestCursorSkillHeader pins the SKILL.md preamble to Cursor's skill
+// contract: frontmatter as the very first bytes, lowercase name
+// within 64 chars, description within 1024 chars, and the version
+// stamp after (never before) the frontmatter.
+func TestCursorSkillHeader(t *testing.T) {
+	h := cursorSkillHeader()
+	if !strings.HasPrefix(h, "---\nname: gramaton\n") {
+		t.Errorf("frontmatter must open the file:\n%s", h)
+	}
+	if len(cursorSkillDescription) > 1024 {
+		t.Errorf("skill description is %d chars, Cursor caps at 1024", len(cursorSkillDescription))
+	}
+	if strings.Contains(cursorSkillDescription, `"`) {
+		t.Error("skill description must not contain double quotes (it is emitted inside a quoted YAML scalar)")
+	}
+	if strings.Contains(h, "disable-model-invocation") {
+		t.Error("disable-model-invocation must be omitted so Cursor auto-invokes the skill")
+	}
+	stamp := "<!-- gramaton-managed v=" + templates.GuidanceVersion
+	stampIdx := strings.Index(h, stamp)
+	closeIdx := strings.Index(h, "\n---\n")
+	if stampIdx == -1 {
+		t.Fatalf("header missing version stamp %q", stamp)
+	}
+	if closeIdx == -1 || stampIdx < closeIdx {
+		t.Error("version stamp must come AFTER the closing frontmatter delimiter")
 	}
 }
 

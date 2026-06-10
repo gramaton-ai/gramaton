@@ -50,6 +50,12 @@ var integrationSnapshots = map[string]struct {
 		rel:    filepath.Join("..", "..", "integration", "codex", "AGENTS.md"),
 		render: func() string { return templateForClient(harnessCodex) },
 	},
+	"cursor": {
+		// Full SKILL.md including frontmatter + stamp, via the same
+		// composition the installer uses.
+		rel:    filepath.Join("..", "..", "integration", "cursor", "SKILL.md"),
+		render: func() string { return installBodyForClient(harnessCursor) },
+	},
 	"custom-agents": {
 		rel:    filepath.Join("..", "..", "integration", "custom-agents", "system-prompt.md"),
 		render: templates.CustomAgents,

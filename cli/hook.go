@@ -34,9 +34,14 @@ var hookEvents = map[string]func(stdin *os.File, stdout *os.File){
 	"pre-compact":   func(in, out *os.File) { hooks.ClaudeCodePreCompact(in, out) },
 	"post-compact":  func(in, out *os.File) { hooks.ClaudeCodePostCompact(in, out) },
 	// Kiro
-	"kiro-agent-spawn":         func(in, out *os.File) { hooks.KiroAgentSpawn(in, out) },
-	"kiro-user-prompt-submit":  func(in, out *os.File) { hooks.KiroUserPromptSubmit(in, out) },
-	"kiro-stop":                func(in, out *os.File) { hooks.KiroStop(in, out) },
+	"kiro-agent-spawn":        func(in, out *os.File) { hooks.KiroAgentSpawn(in, out) },
+	"kiro-user-prompt-submit": func(in, out *os.File) { hooks.KiroUserPromptSubmit(in, out) },
+	"kiro-stop":               func(in, out *os.File) { hooks.KiroStop(in, out) },
+	// Cursor (stdin adapted: conversation_id → session id,
+	// workspace_roots[0] → cwd)
+	"cursor-session-start": func(in, out *os.File) { hooks.CursorSessionStart(in, out) },
+	"cursor-stop":          func(in, out *os.File) { hooks.CursorStop(in, out) },
+	"cursor-pre-compact":   func(in, out *os.File) { hooks.CursorPreCompact(in, out) },
 }
 
 func init() {
@@ -51,7 +56,7 @@ func runHook(cmd *cobra.Command, args []string) error {
 		// which are always swallowed). A proxy script calling a
 		// non-existent event is a programmer error and should be
 		// visible to whoever's installing / debugging the hook.
-		return fmt.Errorf("unknown hook event %q (valid: session-start, stop, pre-compact, post-compact, kiro-agent-spawn, kiro-user-prompt-submit, kiro-stop)", event)
+		return fmt.Errorf("unknown hook event %q (valid: session-start, stop, pre-compact, post-compact, kiro-agent-spawn, kiro-user-prompt-submit, kiro-stop, cursor-session-start, cursor-stop, cursor-pre-compact)", event)
 	}
 	// Handlers are fail-open — they log errors to
 	// ~/.gramaton/hooks.log and return without raising. We

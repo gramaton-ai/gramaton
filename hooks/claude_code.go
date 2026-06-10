@@ -32,6 +32,14 @@ func ClaudeCodeSessionStart(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	sessionStartCore(log, in)
+}
+
+// sessionStartCore is the claude-protocol SessionStart behavior,
+// shared by every harness whose stdin normalizes to HookInput
+// (Claude Code natively; Cursor via decodeCursorInput). Kiro's
+// AgentSpawn stays separate -- it has agent_id fallback and no cwd.
+func sessionStartCore(log *Logger, in HookInput) {
 	sessionID := in.SessionID
 	if sessionID == "" {
 		log.Info("no session_id in input, skipping")
@@ -93,6 +101,12 @@ func ClaudeCodeStop(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	stopCore(log, in)
+}
+
+// stopCore is the claude-protocol Stop behavior (turn-counter
+// increment), shared by Claude Code and Cursor.
+func stopCore(log *Logger, in HookInput) {
 	sessionID := in.SessionID
 	if sessionID == "" {
 		// Legacy behavior: silent exit for non-session contexts.
@@ -136,6 +150,13 @@ func ClaudeCodePreCompact(stdin io.Reader, stdout io.Writer) {
 		log.Info("parse stdin: %v", err)
 		return
 	}
+	preCompactCore(log, in)
+}
+
+// preCompactCore is the claude-protocol PreCompact behavior
+// (archive transcript + leave the uncaptured-segments nudge flag),
+// shared by Claude Code and Cursor.
+func preCompactCore(log *Logger, in HookInput) {
 	clientID := in.SessionID
 	if clientID == "" {
 		log.Info("no session_id in input, skipping")

@@ -36,6 +36,20 @@ func templateForClient(clientName string) string {
 	})
 }
 
+// installBodyForClient returns the full file body Step 4 installs
+// for a client: the rendered guidance prose, preceded by the
+// harness's InstructionsHeader when one is defined (Cursor's
+// SKILL.md frontmatter + version stamp). The drift test renders
+// integration/ snapshots through this same function so the
+// checked-in references match what actually lands on disk.
+func installBodyForClient(clientName string) string {
+	body := templateForClient(clientName)
+	if h := harnessByName(clientName); h != nil && h.InstructionsHeader != nil {
+		body = h.InstructionsHeader() + body
+	}
+	return body
+}
+
 // Fence markers bound the Gramaton-managed block inside the user's
 // CLAUDE.md. Content outside the fence is preserved verbatim across
 // runs; content inside is replaced on every `gramaton init` (with or
@@ -100,8 +114,9 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 		"instruction file. Claude Code's ~/.claude/CLAUDE.md and",
 		"Codex's ~/.codex/AGENTS.md get a managed",
 		"`<!-- gramaton-managed -->` block (content outside it is",
-		"preserved); Kiro's ~/.kiro/steering/gramaton.md is a",
-		"dedicated file alongside your other steering topics.",
+		"preserved); Kiro's ~/.kiro/steering/gramaton.md and Cursor's",
+		"~/.cursor/skills/gramaton/SKILL.md are dedicated files",
+		"Gramaton owns end to end.",
 		"",
 		"You'll be asked once per detected client so you can install",
 		"for some and skip others.",
@@ -136,7 +151,7 @@ func (w *Wizard) stepInstructions(_ context.Context) error {
 			continue
 		}
 
-		template := templateForClient(c.Name)
+		template := installBodyForClient(c.Name)
 		action, err := installInstructions(path, template, layout)
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: write failed: %v", c.Name, err))
@@ -223,18 +238,18 @@ func instructionsPathForClient(clientName string) (string, instructionsLayout, e
 //
 // Semantics depend on layout:
 //
-//   fencedBlockInSharedFile (Claude Code's ~/.claude/CLAUDE.md):
-//     - File doesn't exist → create with just the fenced block.
-//     - Exists, no fenced block → append the fenced block after a
-//       blank-line separator; existing content preserved.
-//     - Exists with fenced block → replace only the fenced region.
-//     - Fenced content matches → "unchanged"; no rewrite.
+//	fencedBlockInSharedFile (Claude Code's ~/.claude/CLAUDE.md):
+//	  - File doesn't exist → create with just the fenced block.
+//	  - Exists, no fenced block → append the fenced block after a
+//	    blank-line separator; existing content preserved.
+//	  - Exists with fenced block → replace only the fenced region.
+//	  - Fenced content matches → "unchanged"; no rewrite.
 //
-//   wholeFileOwned (Kiro's ~/.kiro/steering/gramaton.md):
-//     - File doesn't exist → create with the full template.
-//     - File exists, content matches → "unchanged"; no rewrite.
-//     - File exists, content differs → overwrite.
-//     No merging; we own the full file.
+//	wholeFileOwned (Kiro's ~/.kiro/steering/gramaton.md):
+//	  - File doesn't exist → create with the full template.
+//	  - File exists, content matches → "unchanged"; no rewrite.
+//	  - File exists, content differs → overwrite.
+//	  No merging; we own the full file.
 //
 // Always uses tmp + rename for durability. For the shared-file path
 // a sibling `.bak` file is written before replacement in case the

@@ -17,6 +17,7 @@ const (
 	harnessClaudeCode = "Claude Code"
 	harnessKiroCLI    = "kiro-cli"
 	harnessCodex      = "Codex"
+	harnessCursor     = "Cursor"
 )
 
 // Harness declaratively describes one supported AI harness (MCP
@@ -76,6 +77,15 @@ type Harness struct {
 	// guidance file: fenced block inside a shared user-owned file,
 	// or a whole file Gramaton owns end to end.
 	InstructionsLayout instructionsLayout
+
+	// InstructionsHeader, when non-nil, returns a preamble prepended
+	// verbatim to the rendered guidance body on install (Cursor's
+	// SKILL.md YAML frontmatter + version stamp). Only meaningful
+	// for wholeFileOwned layouts -- the fenced layout carries its
+	// stamp in the fence line and never needs a header. A func, not
+	// a string, because the stamp interpolates
+	// templates.GuidanceVersion.
+	InstructionsHeader func() string
 
 	// Addendum is the harness-specific guidance block substituted
 	// at the CLIENT_ADDENDUM marker in the base template. Empty
@@ -204,6 +214,64 @@ var harnesses = []Harness{
 		WireHooks:          registerCodexHooks,
 		HookConfigPathHint: "~/.codex/hooks.json",
 	},
+	{
+		Name: harnessCursor,
+		// Cursor IDE ships no PATH binary (the standalone `agent`
+		// CLI is a separate product); the IDE's reliable footprint
+		// is its config dir, auto-created on first launch.
+		DetectDir:     ".cursor",
+		RegisterMCP:   registerWithCursor,
+		ManualMCPHint: `(Cursor has no CLI -- add to ~/.cursor/mcp.json under mcpServers: "gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]})`,
+		// Personal skills live at ~/.cursor/skills/<name>/SKILL.md
+		// (verified 2026-06-09 from Cursor's vendor-shipped
+		// create-skill skill; ~/.cursor/skills-cursor/ is
+		// Cursor-internal -- NEVER write there). The skill
+		// description is always injected into the system prompt
+		// while the body loads on invocation, so the description
+		// carries the retrieval triggers. We own the whole file;
+		// the frontmatter + version stamp come from
+		// InstructionsHeader.
+		InstructionsRelPath: []string{".cursor", "skills", "gramaton", "SKILL.md"},
+		InstructionsLayout:  wholeFileOwned,
+		InstructionsHeader:  cursorSkillHeader,
+		Addendum:            templates.AddendumCursor,
+		ReconnectHint:       "for Cursor: toggle the gramaton server under Settings → MCP",
+		HookEmbedDir:        "cursor",
+		HookEvents:          cursorEvents,
+		// Native per-OS proxies: Cursor's hooks.json schema has no
+		// commandWindows field (vendor create-hook skill lists
+		// command/type/timeout/matcher/failClosed/loop_limit only),
+		// so the config points at the variant materialized for
+		// this host.
+		ProxyStyle:         proxyNativePerOS,
+		WireHooks:          registerCursorHooks,
+		HookConfigPathHint: "~/.cursor/hooks.json",
+	},
+}
+
+// cursorSkillDescription is the YAML frontmatter description for the
+// installed Cursor skill. Cursor injects every personal skill's
+// description into the system prompt (the body loads on invocation),
+// so this doubles as the always-on retrieval nudge: it must carry
+// the WHEN triggers, read in third person, and stay well under
+// Cursor's 1024-char cap.
+const cursorSkillDescription = "Persistent memory for this user via Gramaton MCP tools. " +
+	"Use when the user references past decisions, prior sessions, project context, or preferences; " +
+	"mentions a ticket (a ULID or T-/P-/D-prefixed codename); says remember, save, or store; " +
+	"asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs " +
+	"(collections). Covers search, save, session extraction, and collection workflows."
+
+// cursorSkillHeader returns the SKILL.md preamble: YAML frontmatter
+// followed by the gramaton-managed version stamp. The frontmatter
+// must be the very first bytes of the file (Cursor requires `---` on
+// line 1), which is why the stamp comment comes after it rather
+// than at the top like other gramaton-managed files.
+func cursorSkillHeader() string {
+	return "---\n" +
+		"name: gramaton\n" +
+		"description: \"" + cursorSkillDescription + "\"\n" +
+		"---\n\n" +
+		"<!-- gramaton-managed v=" + templates.GuidanceVersion + " (don't edit by hand — re-run `gramaton init --force` to update) -->\n\n"
 }
 
 // harnessByName returns the registry entry for a DetectedClient.Name

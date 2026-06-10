@@ -160,6 +160,7 @@ func TestInstructionsPathForClient(t *testing.T) {
 	}{
 		{"claude code", "Claude Code", filepath.Join(".claude", "CLAUDE.md"), fencedBlockInSharedFile, false},
 		{"kiro-cli", "kiro-cli", filepath.Join(".kiro", "steering", "gramaton.md"), wholeFileOwned, false},
+		{"cursor", "Cursor", filepath.Join(".cursor", "skills", "gramaton", "SKILL.md"), wholeFileOwned, false},
 		{"unknown", "SomeUnknownClient", "", 0, true},
 	}
 	for _, tc := range cases {
@@ -349,6 +350,29 @@ func TestTemplateForClientKiroOmitsRoutingBlock(t *testing.T) {
 	}
 }
 
+// TestInstallBodyForClientCursorComposition pins the full SKILL.md
+// shape: frontmatter as the very first bytes, exactly one version
+// stamp, the shared guidance body, and no other harness's addendum.
+func TestInstallBodyForClientCursorComposition(t *testing.T) {
+	got := installBodyForClient("Cursor")
+	if !strings.HasPrefix(got, "---\nname: gramaton\n") {
+		t.Errorf("SKILL.md must open with YAML frontmatter, got:\n%.80s", got)
+	}
+	if !strings.Contains(got, "## Knowledge Store (Gramaton)") {
+		t.Error("SKILL.md missing the guidance body")
+	}
+	if n := strings.Count(got, "<!-- gramaton-managed v="); n != 1 {
+		t.Errorf("SKILL.md has %d version stamps, want exactly 1", n)
+	}
+	if strings.Contains(got, "auto-memory") || strings.Contains(got, "~/.codex/memories/") {
+		t.Error("SKILL.md must not carry another harness's addendum")
+	}
+	// Other clients must not grow a header.
+	if strings.HasPrefix(installBodyForClient("Claude Code"), "---") {
+		t.Error("Claude Code body must not have a frontmatter header")
+	}
+}
+
 // TestTemplateForClientCodexIncludesMemoriesRouting pins Codex's
 // addendum substitution: the native-memories routing rule must be
 // present, and Claude Code's auto-memory rule must not leak in.
@@ -371,6 +395,7 @@ func TestTemplateForClientReconnectHints(t *testing.T) {
 		{"Claude Code", "reconnect (for Claude Code: `/mcp` in the prompt, or"},
 		{"kiro-cli", "reconnect (for kiro-cli: start a new session, or"},
 		{"Codex", "reconnect (for Codex: check `codex mcp list`, then start a new session, or"},
+		{"Cursor", "reconnect (for Cursor: toggle the gramaton server under Settings → MCP, or"},
 	}
 	for _, tc := range cases {
 		got := templateForClient(tc.client)
