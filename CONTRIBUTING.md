@@ -944,6 +944,32 @@ Releases consolidate `[Unreleased]` into a versioned section. The
 maintainer handles the version bump and tag; contributors should
 NOT bump versions in their PRs.
 
+### Guidance-template versioning
+
+One exception to "don't bump versions": the agent-guidance prose
+that `gramaton init` installs into harness instruction files lives
+in `internal/setup/templates/guidance/` and carries its own version,
+`templates.GuidanceVersion`, stamped into the installed
+`<!-- BEGIN gramaton-managed v=X.Y.Z ... -->` fence marker. If your
+PR changes anything under `templates/guidance/` (or the rendering
+in `templates.Render`), bump `GuidanceVersion` in the same PR:
+
+- **PATCH** — wording or typo fixes; an agent re-reading the
+  guidance would not behave differently.
+- **MINOR** — guidance an agent should re-read: new or renamed
+  tools, changed routing rules, changed retrieval triggers. Rule of
+  thumb while Gramaton is alpha: if the CHANGELOG entry for the
+  underlying change says BREAKING, the guidance bump is at least
+  minor.
+- **MAJOR** — reserved until Gramaton itself reaches 1.0.
+
+A minor-or-more gap between a user's installed stamp and the
+current constant is the signal for the "re-run `gramaton init
+--force`" nudge (#80), so never reuse a version: two different
+guidance texts must not carry the same stamp. Remember to refresh
+the checked-in snapshots (`go test ./internal/setup
+-update-integration`) in the same PR.
+
 ---
 
 ## Reporting bugs and getting help

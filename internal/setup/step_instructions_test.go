@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gramaton-ai/gramaton/internal/setup/templates"
 )
 
 // fencedBlockWith wraps `inner` in the gramaton fence markers the way
 // installInstructions writes them, for use in expected-output
 // assertions.
 func fencedBlockWith(inner string) string {
-	return instructionsFenceBegin + "\n" + strings.TrimSpace(inner) + "\n" + instructionsFenceEnd + "\n"
+	return instructionsFenceBegin() + "\n" + strings.TrimSpace(inner) + "\n" + instructionsFenceEnd + "\n"
 }
 
 func TestInstallInstructionsFreshFile(t *testing.T) {
@@ -65,7 +67,7 @@ func TestInstallInstructionsAppendsToExistingFile(t *testing.T) {
 	if !strings.Contains(string(got), "## Gramaton\nhi") {
 		t.Errorf("gramaton block missing:\n%s", string(got))
 	}
-	if !strings.Contains(string(got), instructionsFenceBegin) || !strings.Contains(string(got), instructionsFenceEnd) {
+	if !strings.Contains(string(got), instructionsFenceBegin()) || !strings.Contains(string(got), instructionsFenceEnd) {
 		t.Errorf("fence markers missing:\n%s", string(got))
 	}
 }
@@ -138,7 +140,7 @@ func TestInstallInstructionsUnbalancedFenceErrors(t *testing.T) {
 	path := filepath.Join(dir, "CLAUDE.md")
 
 	// Only BEGIN marker present.
-	broken := "## Stuff\n" + instructionsFenceBegin + "\nhalf-written block\n"
+	broken := "## Stuff\n" + instructionsFenceBegin() + "\nhalf-written block\n"
 	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +201,7 @@ func TestInstallInstructionsWholeFileCreatedWithoutFenceMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Kiro layout: no fence markers — file is ours end-to-end.
-	if strings.Contains(string(got), instructionsFenceBegin) {
+	if strings.Contains(string(got), instructionsFenceBeginPrefix) {
 		t.Errorf("whole-file layout should NOT contain fence markers:\n%s", string(got))
 	}
 	if !strings.Contains(string(got), "Gramaton") {
@@ -247,18 +249,46 @@ func TestInstallInstructionsWholeFileUnchangedWhenIdentical(t *testing.T) {
 	}
 }
 
-func TestTemplateBaseEmbedded(t *testing.T) {
-	// The embed directives pull templates/*.md into the binary.
-	// Verify the base template is non-empty + contains the expected
-	// structural heading so we catch empty-embed bugs.
-	if len(templateBase) == 0 {
-		t.Fatal("templateBase is empty — //go:embed directive broken")
+// TestInstallInstructionsUpgradesUnversionedFence covers the
+// migration path for files written before the BEGIN marker carried a
+// v= stamp: the legacy marker must still be recognized (detection
+// keys off instructionsFenceBeginPrefix) and replaced in place by
+// the versioned one — NOT left behind with a second block appended.
+func TestInstallInstructionsUpgradesUnversionedFence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	// The exact BEGIN line shipped by pre-stamp gramaton versions.
+	legacyBegin := "<!-- BEGIN gramaton-managed (don't edit by hand — re-run `gramaton init --force` to update) -->"
+	existing := "## User prelude\nprelude\n\n" + legacyBegin + "\nold guidance body\n" + instructionsFenceEnd + "\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(templateBase, "## Knowledge Store (Gramaton)") {
-		t.Error("templateBase missing canonical heading")
+
+	action, err := installInstructions(path, "new guidance body", fencedBlockInSharedFile)
+	if err != nil {
+		t.Fatalf("install over legacy fence: %v", err)
 	}
-	if !strings.Contains(templateBase, "gramaton_search") {
-		t.Error("templateBase missing retrieval guidance")
+	if action != "updated" {
+		t.Errorf("action = %q, want updated (legacy fence must be recognized, not appended after)", action)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+	if !strings.Contains(gotStr, "User prelude") {
+		t.Errorf("user content lost:\n%s", gotStr)
+	}
+	if strings.Contains(gotStr, "old guidance body") {
+		t.Errorf("legacy block content still present:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "v="+templates.GuidanceVersion) {
+		t.Errorf("upgraded fence missing version stamp:\n%s", gotStr)
+	}
+	if n := strings.Count(gotStr, instructionsFenceBeginPrefix); n != 1 {
+		t.Errorf("found %d BEGIN markers, want exactly 1 (duplicate-append bug):\n%s", n, gotStr)
 	}
 }
 
@@ -283,8 +313,28 @@ func TestTemplateForClientKiroOmitsRoutingBlock(t *testing.T) {
 	if strings.Contains(got, "Memory routing: Claude Code") {
 		t.Error("Kiro template should NOT carry the Claude-only routing block")
 	}
-	if strings.Contains(got, clientAddendumMarker) {
+	if strings.Contains(got, templates.AddendumMarker) {
 		t.Error("Kiro template still carries the unfilled CLIENT_ADDENDUM marker")
+	}
+}
+
+// TestTemplateForClientReconnectHints pins the rendered reconnect
+// parenthetical per client — the {{mcp_reconnect_hint}} splice is
+// the part of interpolation most likely to silently regress into
+// ungrammatical output.
+func TestTemplateForClientReconnectHints(t *testing.T) {
+	cases := []struct{ client, want string }{
+		{"Claude Code", "reconnect (for Claude Code: `/mcp` in the prompt, or"},
+		{"kiro-cli", "reconnect (for kiro-cli: start a new session, or"},
+	}
+	for _, tc := range cases {
+		got := templateForClient(tc.client)
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: rendered guidance missing %q", tc.client, tc.want)
+		}
+		if strings.Contains(got, "{{") {
+			t.Errorf("%s: rendered guidance has unfilled interpolation vars", tc.client)
+		}
 	}
 }
 
@@ -296,8 +346,11 @@ func TestTemplateForClientUnknownReturnsBaseAlone(t *testing.T) {
 	if strings.Contains(got, "Memory routing: Claude Code") {
 		t.Error("unknown client should not get Claude addendum")
 	}
-	if strings.Contains(got, clientAddendumMarker) {
+	if strings.Contains(got, templates.AddendumMarker) {
 		t.Error("unknown client template still carries the CLIENT_ADDENDUM marker")
+	}
+	if strings.Contains(got, "{{") {
+		t.Error("unknown client template has unfilled interpolation vars")
 	}
 }
 

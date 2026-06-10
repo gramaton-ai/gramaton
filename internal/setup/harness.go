@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gramaton-ai/gramaton/internal/setup/templates"
 )
 
 // Harness names. DetectedClient.Name, wizard output, and registry
@@ -72,6 +74,14 @@ type Harness struct {
 	// divergent guidance).
 	Addendum string
 
+	// ReconnectHint fills {{mcp_reconnect_hint}} in the guidance
+	// prose: a short clause telling the user how to re-attach a
+	// disconnected MCP server in this harness (e.g. "for Claude
+	// Code: `/mcp` in the prompt"). Required when
+	// InstructionsRelPath is set — an empty hint would leave the
+	// variable unfilled in the installed file.
+	ReconnectHint string
+
 	// HookEmbedDir is the directory name under <configDir>/hooks/
 	// that Materialize writes this harness's proxy scripts into
 	// (matching the historical hooks/ layout at repo root). Empty
@@ -111,7 +121,8 @@ var harnesses = []Harness{
 		// content alongside. Fence the managed region.
 		InstructionsRelPath: []string{".claude", "CLAUDE.md"},
 		InstructionsLayout:  fencedBlockInSharedFile,
-		Addendum:            templateClaudeAddendum,
+		Addendum:            templates.AddendumClaudeCode,
+		ReconnectHint:       "for Claude Code: `/mcp` in the prompt",
 		HookEmbedDir:        "claude-code",
 		HookEvents:          claudeCodeEvents,
 		AutoWireHooks:       true,
@@ -136,7 +147,8 @@ var harnesses = []Harness{
 		// own topics. Verified: https://kiro.dev/docs/cli/steering/
 		InstructionsRelPath: []string{".kiro", "steering", "gramaton.md"},
 		InstructionsLayout:  wholeFileOwned,
-		Addendum:            templateKiroAddendum,
+		Addendum:            templates.AddendumKiro,
+		ReconnectHint:       "for kiro-cli: start a new session",
 		HookEmbedDir:        "kiro",
 		HookEvents:          kiroEvents,
 		WindowsCmdProxy:     true,

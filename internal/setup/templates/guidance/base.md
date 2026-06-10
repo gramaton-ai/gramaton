@@ -22,10 +22,10 @@ extraction).
 
 Gramaton is accessed via MCP tools. If MCP tools appear unavailable,
 first try to restore them — tell the user the MCP server looks
-disconnected and ask them to reconnect (for Claude Code: `/mcp` in
-the prompt, or confirm `gramaton serve` / `gramaton init` is
-running). Only fall back to the `gramaton` CLI if MCP recovery is
-impractical in the moment.
+disconnected and ask them to reconnect ({{mcp_reconnect_hint}}, or
+confirm `gramaton serve` / `gramaton init` is running). Only fall
+back to the `gramaton` CLI if MCP recovery is impractical in the
+moment.
 
 If you are unsure how Gramaton works, what a metadata field means,
 or when to use a given tool, call `gramaton_guide(topic=...)`.
@@ -277,8 +277,8 @@ every save.
 **Finding the session_id.** Run `gramaton session current` — returns
 `{"session_id": ..., "client_session_id": ...}` for the session bound
 to your current working directory. Safe under multiple concurrent
-Claude Code instances; each working directory gets its own session
-file.
+{{client_name}} instances; each working directory gets its own
+session file.
 
 For the full guide on extraction triggers, segment granularity,
 classification, and what makes good segment content, call

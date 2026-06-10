@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,19 @@ func TestHarnessRegistryInvariants(t *testing.T) {
 		if h.RegisterMCP != nil && h.ManualMCPHint == "" {
 			t.Errorf("%s: RegisterMCP set but ManualMCPHint empty", h.Name)
 		}
+
+		// A harness Step 4 can install guidance for must fill every
+		// interpolation variable: an empty ReconnectHint (or any
+		// other gap) would ship literal {{...}} into the user's
+		// instruction file.
+		if len(h.InstructionsRelPath) > 0 {
+			if h.ReconnectHint == "" {
+				t.Errorf("%s: InstructionsRelPath set but ReconnectHint empty", h.Name)
+			}
+			if got := templateForClient(h.Name); strings.Contains(got, "{{") {
+				t.Errorf("%s: rendered guidance has unfilled interpolation vars", h.Name)
+			}
+		}
 	}
 }
 
@@ -63,6 +77,12 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 	}
 	if claude.InstructionsLayout != fencedBlockInSharedFile {
 		t.Error("Claude Code should use the fenced-block layout")
+	}
+	if !strings.Contains(claude.Addendum, "auto-memory") {
+		t.Error("Claude Code addendum should carry the auto-memory routing rule")
+	}
+	if !strings.Contains(claude.ReconnectHint, "/mcp") {
+		t.Error("Claude Code reconnect hint should mention /mcp")
 	}
 	if claude.HookEmbedDir != "claude-code" {
 		t.Errorf("Claude Code HookEmbedDir = %q, want claude-code", claude.HookEmbedDir)
