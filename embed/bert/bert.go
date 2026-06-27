@@ -25,14 +25,14 @@ type scratchPoolHook interface {
 // Default model is bge-small-en-v1.5 (384-dim, 12-layer BERT encoder).
 //
 // Thread-safety (RWMutex pattern):
-// - Embed takes RLock for the duration of each per-text Encode +
-//   Forward. Multiple goroutines can hold RLocks concurrently; the
-//   model is read-only after LoadModel and each Embed iteration uses
-//   its own Scratch from the pool, so concurrent Forward is safe.
-// - Close takes the full Lock and blocks until every in-flight
-//   RLock holder releases. After Close returns, model/tokenizer/
-//   scratchPool/st are all nil; Embed checks under RLock and returns
-//   "bert: provider closed" cleanly without segfault.
+//   - Embed takes RLock for the duration of each per-text Encode +
+//     Forward. Multiple goroutines can hold RLocks concurrently; the
+//     model is read-only after LoadModel and each Embed iteration uses
+//     its own Scratch from the pool, so concurrent Forward is safe.
+//   - Close takes the full Lock and blocks until every in-flight
+//     RLock holder releases. After Close returns, model/tokenizer/
+//     scratchPool/st are all nil; Embed checks under RLock and returns
+//     "bert: provider closed" cleanly without segfault.
 //
 // Critical: the RLock must wrap BOTH the nil-check AND Encode +
 // Forward. Releasing RLock between them would let Close Munmap the
@@ -184,12 +184,12 @@ func New(cfg config.EmbeddingConfig) (*Provider, error) {
 // empty input.
 //
 // Concurrency model:
-// - Single text (most common path; called from chunking and search
-//   in tight loops): runs inline without spawning goroutines.
-// - Multiple texts: bounded errgroup fanout. Each text's Encode +
-//   Forward runs in its own goroutine, holding RLock for the
-//   duration. Worker count bounded by Provider.maxWorkers (default
-//   min(GOMAXPROCS, 8)).
+//   - Single text (most common path; called from chunking and search
+//     in tight loops): runs inline without spawning goroutines.
+//   - Multiple texts: bounded errgroup fanout. Each text's Encode +
+//     Forward runs in its own goroutine, holding RLock for the
+//     duration. Worker count bounded by Provider.maxWorkers (default
+//     min(GOMAXPROCS, 8)).
 //
 // On any goroutine error (provider closed, ctx cancelled), the
 // errgroup's context is cancelled, in-flight goroutines exit at

@@ -135,5 +135,5 @@ func UnmarshalEdge(data []byte) (*Edge, error) {
 
 // writeStr and readStr delegate to the shared helpers in property.go
 // which include allocation bounds checking.
-func writeStr(buf *bytes.Buffer, s string) { writeString(buf, s) }
+func writeStr(buf *bytes.Buffer, s string)    { writeString(buf, s) }
 func readStr(r *bytes.Reader) (string, error) { return readString(r) }

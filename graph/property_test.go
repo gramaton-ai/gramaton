@@ -485,14 +485,14 @@ func TestUnmarshalUnknownType(t *testing.T) {
 
 func TestPropertiesClone(t *testing.T) {
 	ps := Properties{
-		"name":     StringProperty("test"),
-		"count":    Int64Property(5),
-		"vec":      VectorProperty([]float32{1, 2, 3}),
-		"tags":     StringListProperty([]string{"a", "b"}),
-		"raw":      BytesProperty([]byte{1, 2}),
-		"score":    Float64Property(0.9),
-		"active":   BoolProperty(true),
-		"created":  TimestampProperty(time.Now().UTC()),
+		"name":    StringProperty("test"),
+		"count":   Int64Property(5),
+		"vec":     VectorProperty([]float32{1, 2, 3}),
+		"tags":    StringListProperty([]string{"a", "b"}),
+		"raw":     BytesProperty([]byte{1, 2}),
+		"score":   Float64Property(0.9),
+		"active":  BoolProperty(true),
+		"created": TimestampProperty(time.Now().UTC()),
 	}
 
 	cp := ps.Clone()
@@ -528,14 +528,14 @@ func TestPropertiesCloneNil(t *testing.T) {
 func TestPropertiesMarshalRoundTrip(t *testing.T) {
 	ts := time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC)
 	ps := Properties{
-		"content":     StringProperty("We chose Kafka"),
-		"confidence":  Float64Property(0.9),
+		"content":      StringProperty("We chose Kafka"),
+		"confidence":   Float64Property(0.9),
 		"access_count": Int64Property(7),
-		"active":      BoolProperty(true),
-		"created_at":  TimestampProperty(ts),
-		"embedding":   VectorProperty([]float32{0.1, 0.2, 0.3}),
-		"keywords":    StringListProperty([]string{"kafka", "rabbitmq"}),
-		"bloom":       BytesProperty([]byte{0xFF, 0x00}),
+		"active":       BoolProperty(true),
+		"created_at":   TimestampProperty(ts),
+		"embedding":    VectorProperty([]float32{0.1, 0.2, 0.3}),
+		"keywords":     StringListProperty([]string{"kafka", "rabbitmq"}),
+		"bloom":        BytesProperty([]byte{0xFF, 0x00}),
 	}
 
 	data, err := ps.MarshalBinary()

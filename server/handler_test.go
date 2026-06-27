@@ -98,11 +98,11 @@ func TestClassifyRecord(t *testing.T) {
 	eng.Unlock()
 
 	w := doRequest(t, srv, "POST", "/v1/records/"+n.ID+"/classify", map[string]any{
-		"temporality":     "durable",
-		"confidence":      0.9,
-		"knowledge_type":  "semantic",
-		"keywords":        []string{"test"},
-		"summary_short":   "Test classification",
+		"temporality":    "durable",
+		"confidence":     0.9,
+		"knowledge_type": "semantic",
+		"keywords":       []string{"test"},
+		"summary_short":  "Test classification",
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())

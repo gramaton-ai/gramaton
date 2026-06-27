@@ -460,4 +460,3 @@ func findMetered(p llm.Provider) *llm.Metered {
 	}
 	return nil
 }
-

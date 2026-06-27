@@ -11,17 +11,17 @@ import (
 // --- Request types ---
 
 type saveRequest struct {
-	Content           string         `json:"content"`
-	Temporality       string         `json:"temporality,omitempty"`
-	Confidence        *float64       `json:"confidence,omitempty"`
-	KnowledgeType     string         `json:"knowledge_type,omitempty"`
-	EpistemicStatus   string         `json:"epistemic_status,omitempty"`
-	Importance        *float64       `json:"importance,omitempty"`
-	Keywords          []string       `json:"keywords,omitempty"`
-	SummaryShort      string         `json:"summary_short,omitempty"`
-	SourceRef         string         `json:"source_ref,omitempty"`
-	SourceCredibility *float64       `json:"source_credibility,omitempty"`
-	TestimonyHops     *int64         `json:"testimony_hops,omitempty"`
+	Content                string         `json:"content"`
+	Temporality            string         `json:"temporality,omitempty"`
+	Confidence             *float64       `json:"confidence,omitempty"`
+	KnowledgeType          string         `json:"knowledge_type,omitempty"`
+	EpistemicStatus        string         `json:"epistemic_status,omitempty"`
+	Importance             *float64       `json:"importance,omitempty"`
+	Keywords               []string       `json:"keywords,omitempty"`
+	SummaryShort           string         `json:"summary_short,omitempty"`
+	SourceRef              string         `json:"source_ref,omitempty"`
+	SourceCredibility      *float64       `json:"source_credibility,omitempty"`
+	TestimonyHops          *int64         `json:"testimony_hops,omitempty"`
 	ContextAbout           string         `json:"context_about,omitempty"`
 	ContextWho             string         `json:"context_who,omitempty"`
 	ContextPrompted        string         `json:"context_prompted,omitempty"`
@@ -31,10 +31,10 @@ type saveRequest struct {
 	ContextTimeSensitivity string         `json:"context_time_sensitivity,omitempty"`
 	ContextReliability     string         `json:"context_reliability,omitempty"`
 	ContextCaptureReason   string         `json:"context_capture_reason,omitempty"`
-	ValidFrom         string         `json:"valid_from,omitempty"`
-	ValidUntil        string         `json:"valid_until,omitempty"`
-	AssertedAsOf      string         `json:"asserted_as_of,omitempty"`
-	Meta              map[string]any `json:"meta,omitempty"`
+	ValidFrom              string         `json:"valid_from,omitempty"`
+	ValidUntil             string         `json:"valid_until,omitempty"`
+	AssertedAsOf           string         `json:"asserted_as_of,omitempty"`
+	Meta                   map[string]any `json:"meta,omitempty"`
 }
 
 // preEmbeddedVectors holds vectors computed outside the lock.
@@ -292,4 +292,3 @@ func setOptionalProps(props graph.Properties, req *saveRequest) {
 		}
 	}
 }
-

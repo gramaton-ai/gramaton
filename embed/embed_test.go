@@ -63,8 +63,8 @@ func (m *mockEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 	return out, nil
 }
 
-func (m *mockEmbedder) ModelID() string     { return "mock" }
-func (m *mockEmbedder) ContextWindow() int  { return 512 }
+func (m *mockEmbedder) ModelID() string    { return "mock" }
+func (m *mockEmbedder) ContextWindow() int { return 512 }
 
 type mockQueryEmbedder struct {
 	mockEmbedder

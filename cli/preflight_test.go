@@ -68,10 +68,10 @@ func TestCheckPreflightDataDirMissing(t *testing.T) {
 
 func TestCheckPreflightEmbeddingProviders(t *testing.T) {
 	cases := []struct {
-		name     string
-		provider string
+		name       string
+		provider   string
 		wantStatus preflightStatus
-		wantInMsg string
+		wantInMsg  string
 	}{
 		{"bert", "bert", statusOK, "BERT"},
 		{"ollama", "ollama", statusOK, "Ollama"},
@@ -265,9 +265,9 @@ func TestPrintPreflightResultIncludesIcon(t *testing.T) {
 
 func TestPrintPreflightResultShowsRemediationOnWarnError(t *testing.T) {
 	cases := []struct {
-		name        string
-		status      preflightStatus
-		shouldShow  bool
+		name       string
+		status     preflightStatus
+		shouldShow bool
 	}{
 		{"warn", statusWarn, true},
 		{"error", statusError, true},

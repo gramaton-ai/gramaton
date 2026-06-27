@@ -9,11 +9,11 @@ import (
 
 // DuplicatePair represents two records with high embedding similarity.
 type DuplicatePair struct {
-	IDA          string  `json:"id_a"`
-	SummaryA     string  `json:"summary_a,omitempty"`
-	IDB          string  `json:"id_b"`
-	SummaryB     string  `json:"summary_b,omitempty"`
-	Similarity   float64 `json:"similarity"`
+	IDA        string  `json:"id_a"`
+	SummaryA   string  `json:"summary_a,omitempty"`
+	IDB        string  `json:"id_b"`
+	SummaryB   string  `json:"summary_b,omitempty"`
+	Similarity float64 `json:"similarity"`
 }
 
 // structuralEdgeTypes are relationships where high similarity between

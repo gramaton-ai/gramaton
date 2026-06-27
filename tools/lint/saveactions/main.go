@@ -24,8 +24,9 @@
 // pragma.
 //
 // USAGE: go run ./tools/lint/saveactions [path]
-//   default path: current working directory.
-//   exits 0 = clean, 1 = violations (printed to stderr).
+//
+//	default path: current working directory.
+//	exits 0 = clean, 1 = violations (printed to stderr).
 package main
 
 import (
@@ -207,4 +208,3 @@ func saveMethodName(call *ast.CallExpr) string {
 func hasActionArg(call *ast.CallExpr) bool {
 	return len(call.Args) >= 2
 }
-

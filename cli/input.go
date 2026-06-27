@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
-
 	"github.com/gramaton-ai/gramaton/config"
 )
 
@@ -212,4 +211,3 @@ var validKnowledgeTypes = map[string]bool{
 var validEpistemicStatuses = map[string]bool{
 	"well_established": true, "probable": true, "speculative": true, "contested": true, "refuted": true,
 }
-

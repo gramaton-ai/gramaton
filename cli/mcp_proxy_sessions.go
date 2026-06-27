@@ -49,8 +49,8 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	})
 
 	type sessionCommitArgs struct {
-		SessionID string               `json:"session_id" jsonschema:"session ID to commit segments to"`
-		Segments  []api.SaveSegment  `json:"segments" jsonschema:"array of extracted knowledge segments"`
+		SessionID string            `json:"session_id" jsonschema:"session ID to commit segments to"`
+		Segments  []api.SaveSegment `json:"segments" jsonschema:"array of extracted knowledge segments"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_save",

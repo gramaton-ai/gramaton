@@ -1187,11 +1187,10 @@ func (a *API) SessionArchive(ctx context.Context, sessionID string, sourcePath s
 		"ratio", fmt.Sprintf("%.2f", ratio), "duration", dur)
 
 	return map[string]any{
-		"session_id":      sessionID,
-		"archive_path":    archivePath,
-		"original_size":   originalSize,
-		"compressed_size": compressedSize,
+		"session_id":        sessionID,
+		"archive_path":      archivePath,
+		"original_size":     originalSize,
+		"compressed_size":   compressedSize,
 		"compression_ratio": fmt.Sprintf("%.2f", ratio),
 	}, nil
 }
-

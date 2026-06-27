@@ -79,4 +79,3 @@ func (s *Server) serviceGuide(topic string) (map[string]any, *serviceError) {
 		"content": content,
 	}, nil
 }
-

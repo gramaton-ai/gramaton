@@ -8,8 +8,8 @@ import (
 
 // ValidationResult holds the outcome of a store integrity check.
 type ValidationResult struct {
-	Errors   []string `json:"errors,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
+	Errors   []string      `json:"errors,omitempty"`
+	Warnings []string      `json:"warnings,omitempty"`
 	Stats    ValidateStats `json:"stats"`
 }
 
@@ -177,4 +177,3 @@ func (r *ValidationResult) addError(format string, args ...any) {
 func (r *ValidationResult) addWarning(format string, args ...any) {
 	r.Warnings = append(r.Warnings, fmt.Sprintf(format, args...))
 }
-

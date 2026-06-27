@@ -1016,4 +1016,3 @@ func (e *Engine) EdgeCount() int {
 	defer e.mu.RUnlock()
 	return e.graph.EdgeCount()
 }
-

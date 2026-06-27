@@ -22,7 +22,7 @@ import (
 func TestBackupDoesNotBlockWrites(t *testing.T) {
 	srv, eng := setupTestServer(t)
 
-// Seed enough content to make the backup take measurable time.
+	// Seed enough content to make the backup take measurable time.
 	for i := 0; i < 50; i++ {
 		addRecord(t, eng, "backup blocker seed")
 	}

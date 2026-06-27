@@ -13,7 +13,7 @@ func edgeReq(itemContents []string, edges []EdgeSpec) SaveBatchRequest {
 	items := make([]SaveBatchItem, len(itemContents))
 	for i, c := range itemContents {
 		items[i] = SaveBatchItem{
-			ClientRef:      refName(i),
+			ClientRef:   refName(i),
 			SaveRequest: SaveRequest{Content: c},
 		}
 	}

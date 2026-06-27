@@ -44,7 +44,7 @@ type CommitAction struct {
 // state); avoid unless there's a real reason.
 const (
 	// User-driven actions (api/ cluster).
-	ActionSave                = "save"
+	ActionSave                   = "save"
 	ActionClassify               = "classify"
 	ActionUpdate                 = "update"
 	ActionResolve                = "resolve"
@@ -58,7 +58,7 @@ const (
 	ActionReembed                = "reembed"
 	ActionRepair                 = "repair"
 	ActionSessionCreate          = "session_create"
-	ActionSessionSave          = "session_save"
+	ActionSessionSave            = "session_save"
 	ActionSessionArchive         = "session_archive"
 	ActionCollectionCreate       = "collection_create"
 	ActionCollectionAdd          = "collection_add"

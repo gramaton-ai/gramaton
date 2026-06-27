@@ -8,7 +8,7 @@ import (
 func TestAddNode(t *testing.T) {
 	g := New()
 	props := Properties{
-		"content": StringProperty("We chose Kafka"),
+		"content":    StringProperty("We chose Kafka"),
 		"confidence": Float64Property(0.9),
 	}
 

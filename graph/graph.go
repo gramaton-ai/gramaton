@@ -25,8 +25,8 @@ var ErrNotFound = errors.New("not found")
 //
 // The graph is not thread-safe. The server layer handles write serialization.
 type Graph struct {
-	nodes map[string]*Node // in-memory node cache (lazy-loaded)
-	edgeStore EdgeStore     // edge storage and adjacency indexes
+	nodes     map[string]*Node // in-memory node cache (lazy-loaded)
+	edgeStore EdgeStore        // edge storage and adjacency indexes
 
 	// Dirty tracking for incremental saves.
 	dirtyNodes   map[string]struct{} // node IDs modified since last save
@@ -49,7 +49,7 @@ type Graph struct {
 	// back to the prolly tree on cache miss. nodeTotal is the count
 	// from the prolly tree (set during Load).
 	store     *storage.Store
-	nodeTotal int // total node count (prolly tree entries)
+	nodeTotal int         // total node count (prolly tree entries)
 	lru       *lruTracker // LRU eviction for node cache
 
 	entropy *ulid.MonotonicEntropy

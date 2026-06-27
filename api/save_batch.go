@@ -25,10 +25,10 @@ import (
 // canonicalized RequestHash provide cross-call idempotency.
 type SaveBatchRequest struct {
 	Items            []SaveBatchItem `json:"items" jsonschema:"items to capture (1 to MaxSyncBatchSize); each follows the gramaton_save shape with an optional client_ref"`
-	Edges            []EdgeSpec         `json:"edges,omitempty" jsonschema:"intra-batch and to-existing-record edges. Capped at 10x item count. Each edge resolves source/target via either an existing record id or an in-batch client_ref."`
-	Wait             *bool              `json:"wait,omitempty" jsonschema:"true (sync, default) returns the full result inline; false (async) returns a job_id to poll. Layer 5 implements async; Layer 3 rejects wait=false."`
-	ClientToken      string             `json:"client_token,omitempty" jsonschema:"UUID. With identical request body returns the prior JobID idempotently; with a different body the same token is rejected."`
-	SkipSupersession bool               `json:"skip_supersession,omitempty" jsonschema:"when true, dedup-driven supersession is disabled for the entire batch. For migration imports."`
+	Edges            []EdgeSpec      `json:"edges,omitempty" jsonschema:"intra-batch and to-existing-record edges. Capped at 10x item count. Each edge resolves source/target via either an existing record id or an in-batch client_ref."`
+	Wait             *bool           `json:"wait,omitempty" jsonschema:"true (sync, default) returns the full result inline; false (async) returns a job_id to poll. Layer 5 implements async; Layer 3 rejects wait=false."`
+	ClientToken      string          `json:"client_token,omitempty" jsonschema:"UUID. With identical request body returns the prior JobID idempotently; with a different body the same token is rejected."`
+	SkipSupersession bool            `json:"skip_supersession,omitempty" jsonschema:"when true, dedup-driven supersession is disabled for the entire batch. For migration imports."`
 }
 
 // EdgeSpec describes a single edge to create alongside the batch's

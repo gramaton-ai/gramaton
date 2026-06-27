@@ -32,17 +32,17 @@ func buildTinyModel(t *testing.T) (string, ModelConfig) {
 		// Embeddings.
 		"bert.embeddings.word_embeddings.weight":       {[]int{5, 2}, []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}},
 		"bert.embeddings.position_embeddings.weight":   {[]int{8, 2}, make([]float32, 16)},
-		"bert.embeddings.token_type_embeddings.weight":  {[]int{2, 2}, make([]float32, 4)},
+		"bert.embeddings.token_type_embeddings.weight": {[]int{2, 2}, make([]float32, 4)},
 		"bert.embeddings.LayerNorm.weight":             {[]int{2}, []float32{1, 1}},
 		"bert.embeddings.LayerNorm.bias":               {[]int{2}, []float32{0, 0}},
 
 		// Attention Q/K/V/O.
-		"bert.encoder.layer.0.attention.self.query.weight":  {[]int{2, 2}, []float32{1, 0, 0, 1}},
-		"bert.encoder.layer.0.attention.self.query.bias":    {[]int{2}, []float32{0, 0}},
-		"bert.encoder.layer.0.attention.self.key.weight":    {[]int{2, 2}, []float32{1, 0, 0, 1}},
-		"bert.encoder.layer.0.attention.self.key.bias":      {[]int{2}, []float32{0, 0}},
-		"bert.encoder.layer.0.attention.self.value.weight":  {[]int{2, 2}, []float32{1, 0, 0, 1}},
-		"bert.encoder.layer.0.attention.self.value.bias":    {[]int{2}, []float32{0, 0}},
+		"bert.encoder.layer.0.attention.self.query.weight":   {[]int{2, 2}, []float32{1, 0, 0, 1}},
+		"bert.encoder.layer.0.attention.self.query.bias":     {[]int{2}, []float32{0, 0}},
+		"bert.encoder.layer.0.attention.self.key.weight":     {[]int{2, 2}, []float32{1, 0, 0, 1}},
+		"bert.encoder.layer.0.attention.self.key.bias":       {[]int{2}, []float32{0, 0}},
+		"bert.encoder.layer.0.attention.self.value.weight":   {[]int{2, 2}, []float32{1, 0, 0, 1}},
+		"bert.encoder.layer.0.attention.self.value.bias":     {[]int{2}, []float32{0, 0}},
 		"bert.encoder.layer.0.attention.output.dense.weight": {[]int{2, 2}, []float32{1, 0, 0, 1}},
 		"bert.encoder.layer.0.attention.output.dense.bias":   {[]int{2}, []float32{0, 0}},
 

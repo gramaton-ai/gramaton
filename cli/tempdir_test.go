@@ -47,7 +47,7 @@ func TestIsInTempDir(t *testing.T) {
 	}{
 		{filepath.Join(dir, "test.json"), true},
 		{filepath.Join(dir, "sub", "test.json"), true},
-		{dir, false},                                      // the dir itself
+		{dir, false}, // the dir itself
 		{filepath.Join(os.TempDir(), "other.json"), false}, // sibling
 		{"/etc/passwd", false},                             // unrelated
 		{filepath.Join(dir, "..", "escape.json"), false},   // traversal

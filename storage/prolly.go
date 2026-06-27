@@ -17,17 +17,17 @@ import (
 // determined by a content hash (FNV-1a) over the key, producing
 // content-defined chunks that share structure across similar trees.
 type ProllyTree struct {
-	store          *Store
-	rootHash       string
+	store           *Store
+	rootHash        string
 	targetChunkSize int
-	splitMask      uint32
+	splitMask       uint32
 }
 
 // ProllyNode is a single node in the prolly tree. Serialized as JSON
 // and stored as a content-addressed chunk.
 type ProllyNode struct {
-	Leaf     bool           `json:"leaf"`
-	Entries  []ProllyEntry  `json:"entries"`
+	Leaf    bool          `json:"leaf"`
+	Entries []ProllyEntry `json:"entries"`
 }
 
 // ProllyEntry is a key-value pair in a leaf, or a key-pointer pair
@@ -691,4 +691,3 @@ func sortEntries(entries []ProllyEntry) {
 		return entries[i].Key < entries[j].Key
 	})
 }
-

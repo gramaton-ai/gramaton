@@ -19,7 +19,7 @@ func chunkedItems(n int) []SaveBatchItem {
 	out := make([]SaveBatchItem, n)
 	for i := range out {
 		out[i] = SaveBatchItem{
-			ClientRef:      fmt.Sprintf("ref-%d", i),
+			ClientRef:   fmt.Sprintf("ref-%d", i),
 			SaveRequest: SaveRequest{Content: fmt.Sprintf("chunked-%d", i)},
 		}
 	}

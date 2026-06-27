@@ -27,16 +27,16 @@ type CallMetrics struct {
 
 // UsageStats holds aggregated usage counters.
 type UsageStats struct {
-	StartedAt   time.Time        `json:"started_at"`
-	Calls       int              `json:"calls"`
-	ByTask      map[string]int   `json:"by_task"`
-	ByModel     map[string]int   `json:"by_model"`
-	InputTokens int              `json:"input_tokens"`
-	OutputTokens int             `json:"output_tokens"`
-	CostUSD     float64          `json:"cost_usd"`
-	Credits     float64          `json:"credits"`
-	Errors      int              `json:"errors"`
-	LatencySumMs int64           `json:"latency_sum_ms"` // for computing average
+	StartedAt    time.Time      `json:"started_at"`
+	Calls        int            `json:"calls"`
+	ByTask       map[string]int `json:"by_task"`
+	ByModel      map[string]int `json:"by_model"`
+	InputTokens  int            `json:"input_tokens"`
+	OutputTokens int            `json:"output_tokens"`
+	CostUSD      float64        `json:"cost_usd"`
+	Credits      float64        `json:"credits"`
+	Errors       int            `json:"errors"`
+	LatencySumMs int64          `json:"latency_sum_ms"` // for computing average
 }
 
 // UsageSummary is the full usage report returned by the API.

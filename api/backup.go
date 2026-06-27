@@ -60,16 +60,16 @@ type ExportRequest struct {
 
 	// Filter fields. Additive; absent fields mean "no filter on
 	// this dimension."
-	Text             string         `json:"text,omitempty" jsonschema:"vector-similarity query; ranks results by relevance (otherwise sorted by created_at desc)"`
-	Match            string         `json:"match,omitempty" jsonschema:"literal substring match across content fields (case-insensitive)"`
-	Store            string         `json:"store,omitempty" jsonschema:"memory|sessions|all (default: all)"`
-	Keywords         []string       `json:"keywords,omitempty" jsonschema:"keywords that must all be present"`
-	Temporality      string         `json:"temporality,omitempty"`
-	KnowledgeType    string         `json:"knowledge_type,omitempty"`
-	EpistemicStatus  string         `json:"epistemic_status,omitempty"`
-	Resolution       string         `json:"resolution,omitempty"`
-	ProcessingStatus string         `json:"processing_status,omitempty"`
-	Since            string         `json:"since,omitempty" jsonschema:"YYYY-MM-DD or RFC3339 lower bound on created_at"`
+	Text             string            `json:"text,omitempty" jsonschema:"vector-similarity query; ranks results by relevance (otherwise sorted by created_at desc)"`
+	Match            string            `json:"match,omitempty" jsonschema:"literal substring match across content fields (case-insensitive)"`
+	Store            string            `json:"store,omitempty" jsonschema:"memory|sessions|all (default: all)"`
+	Keywords         []string          `json:"keywords,omitempty" jsonschema:"keywords that must all be present"`
+	Temporality      string            `json:"temporality,omitempty"`
+	KnowledgeType    string            `json:"knowledge_type,omitempty"`
+	EpistemicStatus  string            `json:"epistemic_status,omitempty"`
+	Resolution       string            `json:"resolution,omitempty"`
+	ProcessingStatus string            `json:"processing_status,omitempty"`
+	Since            string            `json:"since,omitempty" jsonschema:"YYYY-MM-DD or RFC3339 lower bound on created_at"`
 	Meta             map[string]string `json:"meta,omitempty"`
 }
 
@@ -453,4 +453,3 @@ func (a *API) BackupImport(ctx context.Context, req ImportRequest) (ImportRespon
 		Errors:   result.Errors,
 	}, nil
 }
-

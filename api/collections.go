@@ -1294,17 +1294,17 @@ type CollectionAddBatchResponse struct {
 // CollectionAddBatch adds many items to a collection in one call. The
 // implementation runs in two phases:
 //
-//   Phase 1 (off-lock): schema-validate every item and batch-embed
-//   the concatenated text per item in a single provider call. Per-
-//   item validation failures are recorded without engaging the
-//   engine. An embed-call failure is tolerated -- items that would
-//   have been embedded fall back to embed-less add, preserving the
-//   rest of the batch.
+//	Phase 1 (off-lock): schema-validate every item and batch-embed
+//	the concatenated text per item in a single provider call. Per-
+//	item validation failures are recorded without engaging the
+//	engine. An embed-call failure is tolerated -- items that would
+//	have been embedded fall back to embed-less add, preserving the
+//	rest of the batch.
 //
-//   Phase 2 (write lock): load the collection + schema, run the
-//   dedup pass (existing members via CollCache plus intra-batch
-//   titles) and commit all passing items inside a single
-//   BatchIndexWrites transaction. One Save at the end.
+//	Phase 2 (write lock): load the collection + schema, run the
+//	dedup pass (existing members via CollCache plus intra-batch
+//	titles) and commit all passing items inside a single
+//	BatchIndexWrites transaction. One Save at the end.
 //
 // Best-effort semantics: per-item validation and dedup failures are
 // reported in Failed; items that pass pre-checks commit atomically.

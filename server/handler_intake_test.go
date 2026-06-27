@@ -8,11 +8,11 @@ import (
 func TestIntakeDeliberateSave(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	w := doRequest(t, srv, "POST", "/v1/intake", map[string]any{
-		"content":              "We decided to use PostgreSQL for the main database",
+		"content":                "We decided to use PostgreSQL for the main database",
 		"context_capture_reason": "recording architecture decision",
 		"context_source_type":    "team discussion",
-		"keywords":             []string{"postgresql", "database", "architecture"},
-		"summary_short":        "Chose PostgreSQL for main database",
+		"keywords":               []string{"postgresql", "database", "architecture"},
+		"summary_short":          "Chose PostgreSQL for main database",
 	})
 
 	if w.Code != http.StatusCreated {

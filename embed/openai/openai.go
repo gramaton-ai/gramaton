@@ -150,4 +150,3 @@ func (c *Client) ModelID() string {
 func (c *Client) ContextWindow() int {
 	return 0
 }
-

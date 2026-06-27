@@ -52,8 +52,8 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sessions/{id}/save", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
-			SessionID string               `json:"session_id"`
-			Segments  []api.SaveSegment  `json:"segments"`
+			SessionID string            `json:"session_id"`
+			Segments  []api.SaveSegment `json:"segments"`
 		}
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
@@ -154,8 +154,8 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	})
 
 	type sessionCommitArgs struct {
-		SessionID string               `json:"session_id" jsonschema:"session ID to commit segments to"`
-		Segments  []api.SaveSegment  `json:"segments" jsonschema:"array of extracted knowledge segments"`
+		SessionID string            `json:"session_id" jsonschema:"session ID to commit segments to"`
+		Segments  []api.SaveSegment `json:"segments" jsonschema:"array of extracted knowledge segments"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_save",

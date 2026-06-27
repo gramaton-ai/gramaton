@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-"time"
+	"time"
 )
 
 // PropertyType identifies the type of a property value.
@@ -651,4 +651,3 @@ func (p Property) FormatValue() string {
 		return fmt.Sprintf("Unknown(%d)", p.Type)
 	}
 }
-

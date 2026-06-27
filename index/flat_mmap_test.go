@@ -549,7 +549,7 @@ func TestCosineSimU8MatchesFloat32(t *testing.T) {
 		s := uint64(seed)
 		for i := range v {
 			s = s*1103515245 + 12345
-			x := float64(int64(s>>16)&0x7FFF) / 32768.0 * 2.0 - 1.0
+			x := float64(int64(s>>16)&0x7FFF)/32768.0*2.0 - 1.0
 			x /= math.Sqrt(float64(dim)) // keep components small
 			v[i] = float32(x)
 			sum += x * x
@@ -569,11 +569,11 @@ func TestCosineSimU8MatchesFloat32(t *testing.T) {
 		// proportionally small); looser for low-similarity pairs.
 		tol float64
 	}{
-		{"identical", mk(1), nil, 0.001},                                                      // a == b
-		{"very-similar", []float32{1, 0, 0}, []float32{0.99, 0.01, 0}, 0.05},                  // simple
-		{"orthogonal", []float32{1, 0, 0}, []float32{0, 1, 0}, 0.05},                          // simple
-		{"opposite", []float32{1, 0, 0}, []float32{-1, 0, 0}, 0.05},                           // simple
-		{"random-vs-random", mk(11), mk(22), 0.10},                                            // hardest
+		{"identical", mk(1), nil, 0.001},                                     // a == b
+		{"very-similar", []float32{1, 0, 0}, []float32{0.99, 0.01, 0}, 0.05}, // simple
+		{"orthogonal", []float32{1, 0, 0}, []float32{0, 1, 0}, 0.05},         // simple
+		{"opposite", []float32{1, 0, 0}, []float32{-1, 0, 0}, 0.05},          // simple
+		{"random-vs-random", mk(11), mk(22), 0.10},                           // hardest
 		{"random-vs-self-mostly", mixVecs(mk(33), mk(44), 0.95), mixVecs(mk(33), mk(44), 0.85), 0.10},
 	}
 

@@ -16,10 +16,10 @@ import (
 
 // concurrentMockLLM tracks concurrent calls to verify parallelism.
 type concurrentMockLLM struct {
-	delay       time.Duration
-	maxConcur   int64 // peak concurrent calls observed
-	curConcur   int64
-	totalCalls  int64
+	delay      time.Duration
+	maxConcur  int64 // peak concurrent calls observed
+	curConcur  int64
+	totalCalls int64
 }
 
 func (m *concurrentMockLLM) ModelID() string                { return "test-mock" }
@@ -36,7 +36,7 @@ func (m *concurrentMockLLM) CompleteStructured(_ context.Context, _ map[string]a
 type structuredCapableMock struct {
 	structuredCalls    int64
 	plainCalls         int64
-	forceStructuredErr error          // when non-nil, CompleteStructured returns this
+	forceStructuredErr error // when non-nil, CompleteStructured returns this
 	structuredResp     json.RawMessage
 	mu                 sync.Mutex // guard mutable state when parallelLLM runs on one goroutine
 	lastSchema         map[string]any
@@ -347,9 +347,9 @@ func (m *taskRecordingMockLLM) CompleteWithModel(ctx context.Context, _, _ strin
 func (m *taskRecordingMockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
 	return nil, nil
 }
-func (m *taskRecordingMockLLM) ModelID() string                                    { return "task-recorder" }
-func (m *taskRecordingMockLLM) ProviderName() string                               { return "task-recorder" }
-func (m *taskRecordingMockLLM) SupportsStructuredOutput() bool                     { return false }
+func (m *taskRecordingMockLLM) ModelID() string                { return "task-recorder" }
+func (m *taskRecordingMockLLM) ProviderName() string           { return "task-recorder" }
+func (m *taskRecordingMockLLM) SupportsStructuredOutput() bool { return false }
 
 // TestTaskCtxAttachesLabelOnSinglePath pins that the single-item
 // fast path in parallelLLM correctly attaches w.task to the context

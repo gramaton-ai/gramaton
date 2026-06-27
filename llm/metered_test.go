@@ -30,9 +30,9 @@ func (s *stubProvider) CompleteWithModel(_ context.Context, _, _ string) (string
 	return s.response, s.err
 }
 
-func (s *stubProvider) ModelID() string      { return "stub-model" }
-func (s *stubProvider) ProviderName() string                                             { return "stub" }
-func (s *stubProvider) SupportsStructuredOutput() bool                                   { return false }
+func (s *stubProvider) ModelID() string                { return "stub-model" }
+func (s *stubProvider) ProviderName() string           { return "stub" }
+func (s *stubProvider) SupportsStructuredOutput() bool { return false }
 func (s *stubProvider) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
 	return nil, nil
 }
@@ -191,8 +191,8 @@ func (s *structuredStub) Complete(_ context.Context, _ string) (string, error) {
 func (s *structuredStub) CompleteWithModel(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }
-func (s *structuredStub) ModelID() string             { return "structured-stub" }
-func (s *structuredStub) ProviderName() string        { return "stub" }
+func (s *structuredStub) ModelID() string                { return "structured-stub" }
+func (s *structuredStub) ProviderName() string           { return "stub" }
 func (s *structuredStub) SupportsStructuredOutput() bool { return true }
 func (s *structuredStub) CompleteStructured(_ context.Context, schema map[string]any, _ string) (json.RawMessage, error) {
 	s.calls++

@@ -62,11 +62,12 @@ func resolveFallbacks(version, commit, date string, info *debug.BuildInfo) (stri
 // property conventions, edge semantics, or serialization format.
 //
 // History:
-//   1 -- initial format (prolly trees, content-addressed chunks,
-//        property encoding, collection nodes with member_of edges)
-//   2 -- D7 timestamp-indexed commits (commit_timestamps bbolt
-//        bucket populated on every Save); collection schema gains
-//        clear_mode and curation fields with explicit defaults on
-//        existing collections. Migration is manual via `gramaton
-//        migrate` -- engine refuses to boot on v1 stores.
+//
+//	1 -- initial format (prolly trees, content-addressed chunks,
+//	     property encoding, collection nodes with member_of edges)
+//	2 -- D7 timestamp-indexed commits (commit_timestamps bbolt
+//	     bucket populated on every Save); collection schema gains
+//	     clear_mode and curation fields with explicit defaults on
+//	     existing collections. Migration is manual via `gramaton
+//	     migrate` -- engine refuses to boot on v1 stores.
 const StoreFormatVersion = 2

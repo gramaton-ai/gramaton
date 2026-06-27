@@ -17,9 +17,9 @@ func TestVerifyDedupJaccardLongContent(t *testing.T) {
 	}
 
 	cases := []struct {
-		name     string
-		a, b     string
-		want     bool
+		name string
+		a, b string
+		want bool
 	}{
 		{
 			name: "high overlap → consolidate",

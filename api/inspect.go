@@ -17,7 +17,7 @@ type InspectRequest struct {
 
 // RelatedEdge describes an edge connected to an inspected record.
 type RelatedEdge struct {
-	ID           string  `json:"id"`             // the other node's ID
+	ID           string  `json:"id"` // the other node's ID
 	EdgeType     string  `json:"edge_type"`
 	EdgeID       string  `json:"edge_id"`
 	EdgeWeight   float64 `json:"edge_weight"`

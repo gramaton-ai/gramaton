@@ -25,21 +25,21 @@ import (
 
 // AutonomousResult summarizes what an LLM curation cycle did.
 type AutonomousResult struct {
-	Classified             int                             `json:"classified"`
-	SummariesGenerated     int                             `json:"summaries_generated"`
-	ConceptsCreated        int                             `json:"concepts_created"`
-	ContradictionsDetected int                             `json:"contradictions_detected"`
+	Classified             int `json:"classified"`
+	SummariesGenerated     int `json:"summaries_generated"`
+	ConceptsCreated        int `json:"concepts_created"`
+	ContradictionsDetected int `json:"contradictions_detected"`
 	// NoContradictionEdges counts pairs the LLM affirmatively said are not
 	// contradicting/superseding. Each such pair gets a "no_contradiction"
 	// edge so subsequent cycles don't re-ask. Without this counter (and
 	// its underlying edge) the candidate pool does not drain on negative
 	// results -- see design-decisions.md D38.
-	NoContradictionEdges   int                             `json:"no_contradiction_edges"`
-	ManifestSummary        string                          `json:"manifest_summary,omitempty"`
-	ManifestCacheHit       bool                            `json:"manifest_cache_hit,omitempty"` // true when manifest summary was reused from prior-cycle cache
-	Errors                 int                             `json:"errors"`
-	LLMCalls               int                             `json:"llm_calls"`
-	ModelCounts            map[string]int                  `json:"model_counts,omitempty"` // per-model classification counts
+	NoContradictionEdges int            `json:"no_contradiction_edges"`
+	ManifestSummary      string         `json:"manifest_summary,omitempty"`
+	ManifestCacheHit     bool           `json:"manifest_cache_hit,omitempty"` // true when manifest summary was reused from prior-cycle cache
+	Errors               int            `json:"errors"`
+	LLMCalls             int            `json:"llm_calls"`
+	ModelCounts          map[string]int `json:"model_counts,omitempty"` // per-model classification counts
 
 	// Cycle-level token usage accounting. TokenUsage is the sum across
 	// all tasks; TokenUsageByTask breaks it down. Populated at the end

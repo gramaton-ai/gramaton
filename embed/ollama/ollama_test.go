@@ -36,7 +36,7 @@ func TestEmbed(t *testing.T) {
 		}
 
 		resp := embedResponse{
-			Model: req.Model,
+			Model:      req.Model,
 			Embeddings: make([][]float32, len(req.Input)),
 		}
 		for i := range req.Input {

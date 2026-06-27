@@ -56,7 +56,7 @@ func TestComplete(t *testing.T) {
 	t.Setenv("TEST_OPENAI_KEY", "test-key")
 	cfg := config.LLMConfig{
 		Provider:  "openai",
-		Models:     config.LLMModels{Medium:"gpt-4o"},
+		Models:    config.LLMModels{Medium: "gpt-4o"},
 		BaseURL:   srv.URL,
 		APIKeyEnv: "TEST_OPENAI_KEY",
 	}
@@ -317,7 +317,7 @@ func TestCompleteNoKey(t *testing.T) {
 
 	cfg := config.LLMConfig{
 		Provider: "openai",
-		Models:    config.LLMModels{Medium:"local-model"},
+		Models:   config.LLMModels{Medium: "local-model"},
 		BaseURL:  srv.URL,
 	}
 	c, err := New(cfg)

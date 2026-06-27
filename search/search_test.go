@@ -538,7 +538,7 @@ func TestSearchMissingField(t *testing.T) {
 
 	// n1 has temporality set.
 	n1 := g.AddNode(graph.Properties{
-		"content_full": graph.StringProperty("Classified record"),
+		"content_full":  graph.StringProperty("Classified record"),
 		"content_short": graph.StringProperty("Classified"),
 		"temporality":   graph.StringProperty("durable"),
 		"confidence":    graph.Float64Property(0.9),
@@ -546,7 +546,7 @@ func TestSearchMissingField(t *testing.T) {
 	})
 	// n2 does NOT have temporality.
 	n2 := g.AddNode(graph.Properties{
-		"content_full": graph.StringProperty("Unclassified record"),
+		"content_full":  graph.StringProperty("Unclassified record"),
 		"content_short": graph.StringProperty("Unclassified"),
 		"confidence":    graph.Float64Property(0.5),
 		"created_at":    graph.TimestampProperty(time.Now().UTC()),
@@ -632,14 +632,14 @@ func TestSearchFilterByImportanceMin(t *testing.T) {
 	vecIdx := index.NewFlatIndex()
 
 	n1 := g.AddNode(graph.Properties{
-		"content_full": graph.StringProperty("High importance record"),
+		"content_full":  graph.StringProperty("High importance record"),
 		"content_short": graph.StringProperty("High importance"),
 		"importance":    graph.Float64Property(0.9),
 		"confidence":    graph.Float64Property(0.8),
 		"created_at":    graph.TimestampProperty(time.Now().UTC()),
 	})
 	n2 := g.AddNode(graph.Properties{
-		"content_full": graph.StringProperty("Low importance record"),
+		"content_full":  graph.StringProperty("Low importance record"),
 		"content_short": graph.StringProperty("Low importance"),
 		"importance":    graph.Float64Property(0.2),
 		"confidence":    graph.Float64Property(0.8),
@@ -897,8 +897,8 @@ func TestMetadataSummaryExpirationVisibility(t *testing.T) {
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name     string
-		validUntil time.Time
+		name         string
+		validUntil   time.Time
 		wantContains string
 	}{
 		{

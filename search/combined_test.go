@@ -39,17 +39,17 @@ func setupCombinedGraph() (*graph.Graph, index.PropertyIndex, index.VectorIndex)
 
 	for _, r := range records {
 		props := graph.Properties{
-			"content_full":      graph.StringProperty(r.content),
-			"content_short":     graph.StringProperty(r.short),
-			"temporality":       graph.StringProperty(r.temp),
-			"knowledge_type":    graph.StringProperty(r.kt),
-			"epistemic_status":  graph.StringProperty(r.es),
-			"confidence":        graph.Float64Property(r.conf),
-			"importance":        graph.Float64Property(r.imp),
-			"content_keywords":  graph.StringListProperty(r.keywords),
-			"created_at":        graph.TimestampProperty(now.Add(-r.createdAgo)),
-			"access_count":      graph.Int64Property(r.accessCount),
-			"last_accessed":     graph.TimestampProperty(now.Add(-r.createdAgo / 2)),
+			"content_full":     graph.StringProperty(r.content),
+			"content_short":    graph.StringProperty(r.short),
+			"temporality":      graph.StringProperty(r.temp),
+			"knowledge_type":   graph.StringProperty(r.kt),
+			"epistemic_status": graph.StringProperty(r.es),
+			"confidence":       graph.Float64Property(r.conf),
+			"importance":       graph.Float64Property(r.imp),
+			"content_keywords": graph.StringListProperty(r.keywords),
+			"created_at":       graph.TimestampProperty(now.Add(-r.createdAgo)),
+			"access_count":     graph.Int64Property(r.accessCount),
+			"last_accessed":    graph.TimestampProperty(now.Add(-r.createdAgo / 2)),
 		}
 		n := g.AddNode(props)
 		for k, v := range n.Properties {
@@ -210,9 +210,9 @@ func TestCombinedTextAndFilters(t *testing.T) {
 	tool := New(g, propIdx, vecIdx, nil, emb, defaultCfg())
 
 	results, err := tool.Execute(context.Background(), Query{
-		Text:          "event streaming",
-		Temporality:   "durable",
-		Top:           10,
+		Text:        "event streaming",
+		Temporality: "durable",
+		Top:         10,
 	})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

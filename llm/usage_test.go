@@ -10,24 +10,24 @@ func TestUsageTrackerRecord(t *testing.T) {
 	tracker := NewUsageTracker("", 0, 0, 0)
 
 	tracker.Record(CallMetrics{
-		Provider:    "anthropic",
-		Model:       "claude-sonnet-4-6",
-		Task:        "classify",
-		InputTokens: 1000,
+		Provider:     "anthropic",
+		Model:        "claude-sonnet-4-6",
+		Task:         "classify",
+		InputTokens:  1000,
 		OutputTokens: 200,
-		CostUSD:     0.01,
-		LatencyMs:   500,
-		Success:     true,
+		CostUSD:      0.01,
+		LatencyMs:    500,
+		Success:      true,
 	})
 	tracker.Record(CallMetrics{
-		Provider:    "anthropic",
-		Model:       "claude-haiku-4-5",
-		Task:        "classify",
-		InputTokens: 500,
+		Provider:     "anthropic",
+		Model:        "claude-haiku-4-5",
+		Task:         "classify",
+		InputTokens:  500,
 		OutputTokens: 100,
-		CostUSD:     0.003,
-		LatencyMs:   200,
-		Success:     true,
+		CostUSD:      0.003,
+		LatencyMs:    200,
+		Success:      true,
 	})
 	tracker.Record(CallMetrics{
 		Provider:  "anthropic",

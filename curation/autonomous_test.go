@@ -58,7 +58,7 @@ func (m *mockLLM) CompleteWithModel(_ context.Context, model, _ string) (string,
 	return m.responses[idx%len(m.responses)], nil
 }
 
-func (m *mockLLM) ModelID() string      { return "mock-llm" }
+func (m *mockLLM) ModelID() string                { return "mock-llm" }
 func (m *mockLLM) ProviderName() string           { return "mock" }
 func (m *mockLLM) SupportsStructuredOutput() bool { return false }
 func (m *mockLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
@@ -3227,7 +3227,7 @@ func TestConceptShortSummary(t *testing.T) {
 		name     string
 		input    string
 		maxLen   int
-		wantMin  int // minimum length
+		wantMin  int  // minimum length
 		wantSelf bool // expect full input returned
 	}{
 		{
