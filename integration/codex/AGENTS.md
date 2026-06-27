@@ -50,14 +50,6 @@ Treat Codex's native memories as session-local convenience, not the
 knowledge store of record. When the two disagree, verify against
 Gramaton and prefer it for durable knowledge.
 
-### Subagents and Gramaton
-
-Codex subagents can inherit Gramaton's MCP tools from the parent
-session, so a delegated task is able to write to the store. Keep
-saves and session extraction in the main conversation, and tell
-delegated tasks not to write to Gramaton: a subagent sees only its
-task brief, and partial-context saves produce fragmentary records.
-
 ### Retrieval
 
 **When to search (triggers, not suggestions — act immediately):**
@@ -322,6 +314,18 @@ anything where missing an item is a failure.
 Collections have optional schemas that enforce field types and
 required fields. Items in collections are also graph nodes and can
 be linked to knowledge records via `gramaton_link`.
+
+### Subagents and Gramaton
+
+A subagent or delegated task that can reach Gramaton's MCP tools is
+able to write to the store. Keep semantic saves (`gramaton_save`) and
+session extraction in the main conversation anyway: a subagent sees
+only its task brief, so its saves land as fragmentary, poorly-linked
+records and can mis-fire auto-supersession. Recording a discrete item
+to a collection is different — a task or finding is self-contained, so
+adding it from a subagent is fine; returning items for the
+orchestrator to batch-add is usually cleaner (it dedupes and avoids
+repeated write prompts).
 
 ### Curation
 

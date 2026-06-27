@@ -141,6 +141,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory as gramaton-owned, so re-runs replace instead of append
   (#83). Default-layout installs are unaffected.
 
+- **Subagent guidance corrected and single-sourced (guidance `0.1.0`
+  → `0.2.0`).** The installed guidance claimed Claude Code background
+  subagents cannot access MCP tools and that a delegated save stalls
+  or silently fails. Current Claude Code inherits the parent session's
+  tools — including MCP tools — into subagents, and background-subagent
+  permission prompts surface in the parent session rather than
+  auto-denying, so the claim was wrong on both counts (#89). Because
+  the rule is now uniform across every supported harness (all inherit
+  the parent's MCP tools), the subagent section moved from the three
+  per-harness addenda into `base.md` once; the Cursor addendum, which
+  held nothing else, is now empty. The rule itself: a subagent can
+  write to the store, but keep semantic saves and session extraction
+  in the main conversation (a subagent sees only its task brief, so
+  its saves are fragmentary and can mis-fire supersession), while
+  adding a self-contained item to a collection from a subagent is
+  fine. Directive preserved; rationale corrected and de-duplicated.
+  Stamp bumped a minor step because the corrected capability claim is
+  guidance an agent should re-read.
+
 - **Pre-compact transcript archives now target the per-cwd session.**
   The pre-compact hook resolved the Gramaton session via the global
   last-writer-wins pointer file, so with concurrent hooked sessions
