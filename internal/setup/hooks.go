@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -376,7 +377,7 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 					continue
 				}
 				cmd, _ := hm["command"].(string)
-				if isGramatonHookCommand(cmd) {
+				if isGramatonHookCommand(cmd, scriptPaths) {
 					continue // drop this entry; we'll add our canonical one
 				}
 				newInner = append(newInner, h)
@@ -463,10 +464,33 @@ func writeConfigBackup(path string, original []byte) error {
 // the substring match so a settings.json command like
 // `C:\Users\b\.gramaton\hooks\claude-code\session-start.sh` is
 // recognized as ours.
-func isGramatonHookCommand(cmd string) bool {
+// isGramatonHookCommand reports whether a hook entry's command was
+// written by gramaton, so a re-run replaces it instead of appending a
+// duplicate. The default-layout signal is the `/.gramaton/hooks/`
+// path fragment. Hooks materialized under a relocated config dir
+// (`--config`, named stores) live outside ~/.gramaton/, so that
+// fragment misses them; scriptPaths -- the hooks we are writing this
+// run -- encode the active config dir, so any entry pointing into the
+// same directory is also ours (#83).
+func isGramatonHookCommand(cmd string, scriptPaths []string) bool {
 	cmd = strings.TrimSpace(cmd)
 	cmd = strings.ReplaceAll(cmd, `\`, "/")
-	return strings.Contains(cmd, "/.gramaton/hooks/")
+	if cmd == "" {
+		return false
+	}
+	if strings.Contains(cmd, "/.gramaton/hooks/") {
+		return true
+	}
+	for _, p := range scriptPaths {
+		dir := path.Dir(strings.ReplaceAll(p, `\`, "/"))
+		if dir == "" || dir == "." || dir == "/" {
+			continue
+		}
+		if strings.Contains(cmd, dir+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // cursorConfigDir resolves Cursor's config root: ~/.cursor. No env
@@ -618,7 +642,7 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 				}
 				cmd, _ := hm["command"].(string)
 				cmdWin, _ := hm["commandWindows"].(string)
-				if isGramatonHookCommand(cmd) || isGramatonHookCommand(cmdWin) {
+				if isGramatonHookCommand(cmd, scriptPaths) || isGramatonHookCommand(cmdWin, scriptPaths) {
 					continue // drop; we'll add our canonical entry
 				}
 				newInner = append(newInner, h)
@@ -758,7 +782,7 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 				continue
 			}
 			cmd, _ := em["command"].(string)
-			if isGramatonHookCommand(cmd) {
+			if isGramatonHookCommand(cmd, scriptPaths) {
 				continue // drop; we'll add our canonical entry
 			}
 			kept = append(kept, e)

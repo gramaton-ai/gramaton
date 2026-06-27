@@ -131,6 +131,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (it is polymorphic — scalar defaults are the common case and work;
   object/array defaults over MCP remain a known limitation).
 
+- **`gramaton init` recognizes its own hook entries under relocated
+  config dirs.** The hook-config patchers identified gramaton-owned
+  entries only by the `/.gramaton/hooks/` path fragment, so hooks
+  materialized under a relocated config dir (`--config`, named stores)
+  were not recognized on re-run and a fresh entry was appended beside
+  the stale one, accumulating duplicates. The ownership check now also
+  treats any entry pointing into the current run's hook-script
+  directory as gramaton-owned, so re-runs replace instead of append
+  (#83). Default-layout installs are unaffected.
+
 - **Pre-compact transcript archives now target the per-cwd session.**
   The pre-compact hook resolved the Gramaton session via the global
   last-writer-wins pointer file, so with concurrent hooked sessions
