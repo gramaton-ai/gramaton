@@ -119,6 +119,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`gramaton_collection_create` accepts a schema over MCP.** The
+  proxy typed the `schema` argument as `any`, which jsonschema-go
+  infers with no `type`, so MCP clients serialized the object as a
+  JSON string and the server rejected it (`cannot unmarshal string
+  into ... CollectionSchema`). The argument is now typed
+  `map[string]any` so the generated tool schema advertises
+  `type: object` and the value round-trips, matching the already-working
+  `gramaton_collection_add` `fields` argument (#88). The
+  `gramaton_collection_migrate` `value` argument keeps its `any` type
+  (it is polymorphic — scalar defaults are the common case and work;
+  object/array defaults over MCP remain a known limitation).
+
 - **Pre-compact transcript archives now target the per-cwd session.**
   The pre-compact hook resolved the Gramaton session via the global
   last-writer-wins pointer file, so with concurrent hooked sessions
