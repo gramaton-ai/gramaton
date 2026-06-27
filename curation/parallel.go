@@ -41,8 +41,8 @@ func isDeferrableLLMError(err error) bool {
 type llmWork struct {
 	id     string // record ID or identifier for logging
 	prompt string
-	model  string // model override; empty = use provider default
-	task   string // task label attached to ctx for usage metering
+	model  string         // model override; empty = use provider default
+	task   string         // task label attached to ctx for usage metering
 	schema map[string]any // optional JSON Schema for structured output
 }
 

@@ -291,7 +291,6 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		}
 	}
 
-
 	usageTracker := llm.NewUsageTracker(
 		cfg.ConfigDir,
 		engineCfg.LLM.CostLimits.MaxCallsPerDay,
@@ -313,10 +312,10 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	}
 
 	s := &Server{
-		engine:       engine,
-		cfg:          cfg,
-		log:          logger,
-		lastRequest:  time.Now(),
+		engine:           engine,
+		cfg:              cfg,
+		log:              logger,
+		lastRequest:      time.Now(),
 		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
 		shutdownCh:       make(chan string, 1),
@@ -1040,11 +1039,11 @@ type CurationStatus struct {
 	OrphanCount       int        `json:"orphan_count,omitempty"`
 	LastCurated       *time.Time `json:"last_curated,omitempty"`
 	Autonomous        bool       `json:"autonomous,omitempty"`
-	LLMCallsToday    int        `json:"llm_calls_today,omitempty"`
-	LLMDailyCap      int        `json:"llm_daily_cap,omitempty"`
-	LLMCapPct        int        `json:"llm_cap_pct,omitempty"`
-	Paused           bool       `json:"paused,omitempty"`
-	PauseReason      string     `json:"pause_reason,omitempty"`
+	LLMCallsToday     int        `json:"llm_calls_today,omitempty"`
+	LLMDailyCap       int        `json:"llm_daily_cap,omitempty"`
+	LLMCapPct         int        `json:"llm_cap_pct,omitempty"`
+	Paused            bool       `json:"paused,omitempty"`
+	PauseReason       string     `json:"pause_reason,omitempty"`
 }
 
 // ErrorResponse is the standard error wrapper. Includes the curation

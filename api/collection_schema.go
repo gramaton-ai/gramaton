@@ -58,12 +58,12 @@ type CollectionSchema struct {
 }
 
 const (
-	maxCollectionNameLen  = 128
-	maxSchemaFields       = 50
-	maxEnumValues         = 100
-	maxFieldNameLen       = 64
-	maxEnumValueLen       = 256
-	maxFieldStringLen     = 50000
+	maxCollectionNameLen = 128
+	maxSchemaFields      = 50
+	maxEnumValues        = 100
+	maxFieldNameLen      = 64
+	maxEnumValueLen      = 256
+	maxFieldStringLen    = 50000
 )
 
 // validateSchema checks that a schema definition is well-formed.

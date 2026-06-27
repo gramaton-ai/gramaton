@@ -79,7 +79,6 @@ func TestLookupMissingKey(t *testing.T) {
 	}
 }
 
-
 // --- Substring search ---
 
 func TestContains(t *testing.T) {

@@ -1081,8 +1081,8 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 // minor edits) easily exceed this; structurally similar but semantically
 // different documents fall well below.
 const (
-	dedupJaccardMin       = 0.3 // long-content threshold
-	dedupJaccardShortMin  = 0.5 // short-content threshold (stricter)
+	dedupJaccardMin        = 0.3 // long-content threshold
+	dedupJaccardShortMin   = 0.5 // short-content threshold (stricter)
 	dedupShortContentChars = 200
 )
 

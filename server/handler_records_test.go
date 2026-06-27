@@ -129,18 +129,18 @@ func TestValidateCaptureRequest(t *testing.T) {
 func TestCreateRecordFullProps(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequest(t, srv, "POST", "/v1/records", map[string]any{
-		"content":           "Full record with all fields",
-		"temporality":       "durable",
-		"confidence":        0.95,
-		"knowledge_type":    "semantic",
-		"epistemic_status":  "well_established",
-		"importance":        0.8,
-		"keywords":          []string{"full", "test"},
-		"summary_short":     "Full record test",
-		"source_ref":        "http://example.com/doc",
+		"content":            "Full record with all fields",
+		"temporality":        "durable",
+		"confidence":         0.95,
+		"knowledge_type":     "semantic",
+		"epistemic_status":   "well_established",
+		"importance":         0.8,
+		"keywords":           []string{"full", "test"},
+		"summary_short":      "Full record test",
+		"source_ref":         "http://example.com/doc",
 		"source_credibility": 0.9,
-		"context_about":     "testing",
-		"valid_from":        "2026-01-01T00:00:00Z",
+		"context_about":      "testing",
+		"valid_from":         "2026-01-01T00:00:00Z",
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())

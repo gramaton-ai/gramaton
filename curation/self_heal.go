@@ -39,10 +39,10 @@ type SelfHealResult struct {
 type selfHealOutcome string
 
 const (
-	outcomeClean       selfHealOutcome = "clean"         // no contamination
-	outcomeStripped    selfHealOutcome = "stripped"      // Tier-1 strip preserved enough prose
-	outcomeFallback    selfHealOutcome = "fallback"      // strip yielded empty; content_full first-sentences used
-	outcomeFlagged     selfHealOutcome = "flagged"       // nothing salvageable; record flagged for LLM repair
+	outcomeClean    selfHealOutcome = "clean"    // no contamination
+	outcomeStripped selfHealOutcome = "stripped" // Tier-1 strip preserved enough prose
+	outcomeFallback selfHealOutcome = "fallback" // strip yielded empty; content_full first-sentences used
+	outcomeFlagged  selfHealOutcome = "flagged"  // nothing salvageable; record flagged for LLM repair
 )
 
 // minSummaryAfterStrip is the floor below which a stripped result is
@@ -67,15 +67,15 @@ var sentenceEnder = regexp.MustCompile(`[.!?](\s|$)`)
 //
 // Cascade:
 //
-//   1. Detect via sanitize.Field — if stripping yields the same
-//      string, the record is clean, no-op.
-//   2. Strip tier — if the stripped result is ≥ minSummaryAfterStrip
-//      characters, store it.
-//   3. Fallback tier — extract the first 1-2 sentences from
-//      content_full as a degenerate summary (deterministic, no LLM).
-//      Stored when it yields non-empty output of reasonable length.
-//   4. Flag tier — nothing salvageable. Set `repair_needed_llm=true`
-//      on the record for a future LLM-escalation pass.
+//  1. Detect via sanitize.Field — if stripping yields the same
+//     string, the record is clean, no-op.
+//  2. Strip tier — if the stripped result is ≥ minSummaryAfterStrip
+//     characters, store it.
+//  3. Fallback tier — extract the first 1-2 sentences from
+//     content_full as a degenerate summary (deterministic, no LLM).
+//     Stored when it yields non-empty output of reasonable length.
+//  4. Flag tier — nothing salvageable. Set `repair_needed_llm=true`
+//     on the record for a future LLM-escalation pass.
 //
 // Caller must hold the engine write lock.
 func DetectAndRepairSummary(e *core.Engine, nodeID string, logger *slog.Logger) selfHealOutcome {

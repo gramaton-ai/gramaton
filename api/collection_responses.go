@@ -105,10 +105,10 @@ type CollectionUpdateResponse struct {
 
 // CollectionMoveResponse: {moved, item_id, from/to_collection_id}.
 type CollectionMoveResponse struct {
-	Moved              bool   `json:"moved"`
-	ItemID             string `json:"item_id"`
-	FromCollectionID   string `json:"from_collection_id"`
-	ToCollectionID     string `json:"to_collection_id"`
+	Moved            bool   `json:"moved"`
+	ItemID           string `json:"item_id"`
+	FromCollectionID string `json:"from_collection_id"`
+	ToCollectionID   string `json:"to_collection_id"`
 }
 
 // CollectionRenameResponse: {renamed, id, name}.

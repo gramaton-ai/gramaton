@@ -73,7 +73,7 @@ func (c *Client) warnAccessDenied(model string) {
 type modelFamily int
 
 const (
-	familyTitan  modelFamily = iota
+	familyTitan modelFamily = iota
 	familyCohere
 )
 

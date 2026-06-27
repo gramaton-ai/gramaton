@@ -344,11 +344,11 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 
 	// Collect all .md files.
 	type mdFile struct {
-		path     string
-		name     string // filename without extension
-		content  string
-		tags     []string
-		links    []string // [[wikilink]] targets
+		path    string
+		name    string // filename without extension
+		content string
+		tags    []string
+		links   []string // [[wikilink]] targets
 	}
 	var files []mdFile
 
@@ -619,4 +619,3 @@ func extractWikilinks(content string) []string {
 	}
 	return links
 }
-

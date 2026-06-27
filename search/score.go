@@ -16,7 +16,7 @@ type ScoreInputs struct {
 	Confidence      float64 // 0.0-1.0
 	Importance      float64 // 0.0-1.0
 	AccessCount     int64
-	ActivationBoost float64 // spreading activation from neighbors
+	ActivationBoost float64   // spreading activation from neighbors
 	ValidFrom       time.Time // zero if unset
 	ValidUntil      time.Time // zero if unset
 	CreatedAt       time.Time

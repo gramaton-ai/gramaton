@@ -25,15 +25,15 @@ func requireApprox(t *testing.T, name string, got, want []float32) {
 
 // Golden values computed via numpy:
 //
-//   import numpy as np
-//   a = np.array([[1,2,3],[4,5,6]], dtype=np.float32)
-//   b = np.array([[7,8],[9,10],[11,12]], dtype=np.float32)
-//   # b^T = [[7,9,11],[8,10,12]]
-//   print(a @ b)  # [[58,64],[139,154]]
+//	import numpy as np
+//	a = np.array([[1,2,3],[4,5,6]], dtype=np.float32)
+//	b = np.array([[7,8],[9,10],[11,12]], dtype=np.float32)
+//	# b^T = [[7,9,11],[8,10,12]]
+//	print(a @ b)  # [[58,64],[139,154]]
 func TestMatMul(t *testing.T) {
-	a := []float32{1, 2, 3, 4, 5, 6}       // [2, 3]
-	bT := []float32{7, 9, 11, 8, 10, 12}    // [2, 3] (rows of B transposed)
-	out := make([]float32, 4)                // [2, 2]
+	a := []float32{1, 2, 3, 4, 5, 6}     // [2, 3]
+	bT := []float32{7, 9, 11, 8, 10, 12} // [2, 3] (rows of B transposed)
+	out := make([]float32, 4)            // [2, 2]
 	MatMul(a, bT, 2, 3, 2, out)
 	requireApprox(t, "matmul", out, []float32{58, 64, 139, 154})
 }
@@ -181,13 +181,13 @@ func TestMatMulAdd(t *testing.T) {
 
 // Golden values computed via numpy:
 //
-//   x = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
-//   mean = x.mean(-1, keepdims=True)  # 2.0
-//   var = ((x - mean)**2).mean(-1, keepdims=True)  # 0.6667
-//   norm = (x - mean) / np.sqrt(var + 1e-12)  # [-1.2247, 0, 1.2247]
-//   w = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-//   b = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-//   out = norm * w + b  # [-1.2247, 0, 1.2247]
+//	x = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+//	mean = x.mean(-1, keepdims=True)  # 2.0
+//	var = ((x - mean)**2).mean(-1, keepdims=True)  # 0.6667
+//	norm = (x - mean) / np.sqrt(var + 1e-12)  # [-1.2247, 0, 1.2247]
+//	w = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+//	b = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+//	out = norm * w + b  # [-1.2247, 0, 1.2247]
 func TestLayerNorm(t *testing.T) {
 	x := []float32{1, 2, 3}
 	w := []float32{1, 1, 1}
@@ -208,10 +208,10 @@ func TestLayerNormWithAffine(t *testing.T) {
 
 // Golden values computed via Python:
 //
-//   import torch
-//   x = torch.tensor([-1.0, 0.0, 1.0, 2.0])
-//   torch.nn.functional.gelu(x, approximate='tanh')
-//   # tensor([-0.1588, 0.0000, 0.8412, 1.9545])
+//	import torch
+//	x = torch.tensor([-1.0, 0.0, 1.0, 2.0])
+//	torch.nn.functional.gelu(x, approximate='tanh')
+//	# tensor([-0.1588, 0.0000, 0.8412, 1.9545])
 func TestGELU(t *testing.T) {
 	x := []float32{-1.0, 0.0, 1.0, 2.0}
 	GELU(x)

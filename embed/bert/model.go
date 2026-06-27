@@ -33,20 +33,20 @@ type ModelConfig struct {
 // EmbeddingWeights holds the token, position, and segment embedding
 // tables plus the post-embedding layer norm.
 type EmbeddingWeights struct {
-	Word     []float32 // [VocabSize, HiddenSize]
-	Position []float32 // [MaxPositionEmbeds, HiddenSize]
+	Word      []float32 // [VocabSize, HiddenSize]
+	Position  []float32 // [MaxPositionEmbeds, HiddenSize]
 	TokenType []float32 // [2, HiddenSize]
-	LNWeight []float32 // [HiddenSize]
-	LNBias   []float32 // [HiddenSize]
+	LNWeight  []float32 // [HiddenSize]
+	LNBias    []float32 // [HiddenSize]
 }
 
 // EncoderLayer holds weights for one transformer encoder layer.
 type EncoderLayer struct {
-	Attn      AttentionWeights
-	AttnLN    LayerNormWeights
-	FFNUp     LinearWeights // HiddenSize -> IntermediateSize
-	FFNDown   LinearWeights // IntermediateSize -> HiddenSize
-	FFNLN     LayerNormWeights
+	Attn    AttentionWeights
+	AttnLN  LayerNormWeights
+	FFNUp   LinearWeights // HiddenSize -> IntermediateSize
+	FFNDown LinearWeights // IntermediateSize -> HiddenSize
+	FFNLN   LayerNormWeights
 }
 
 // AttentionWeights holds Q, K, V projection weights and the output

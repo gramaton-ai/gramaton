@@ -229,7 +229,7 @@ func TestBboltPropertySelectiveIndexing(t *testing.T) {
 	}
 
 	idx.Add("n1", "status", graph.StringProperty("active"))
-	idx.Add("n1", "color", graph.StringProperty("red"))       // NOT indexed
+	idx.Add("n1", "color", graph.StringProperty("red"))        // NOT indexed
 	idx.Add("n1", "meta.project", graph.StringProperty("foo")) // meta.* always indexed
 
 	// status should be findable.

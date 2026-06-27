@@ -12,20 +12,20 @@ import (
 // Fields are grouped by category for easy access in tests.
 type PopulatedStore struct {
 	// Work cluster (6 records)
-	WorkReorg        string // episodic: team restructured
-	WorkNewManager   string // episodic: new manager started
-	WorkDeadline     string // temporal: project due date
-	WorkMeeting      string // procedural: meeting cadence
-	WorkOldTool      string // historical, superseded: old project tool
-	WorkNewTool      string // durable: new project tool (supersedes old)
+	WorkReorg      string // episodic: team restructured
+	WorkNewManager string // episodic: new manager started
+	WorkDeadline   string // temporal: project due date
+	WorkMeeting    string // procedural: meeting cadence
+	WorkOldTool    string // historical, superseded: old project tool
+	WorkNewTool    string // durable: new project tool (supersedes old)
 
 	// Health cluster (6 records)
-	HealthDoctorVisit   string // episodic: annual checkup notes
-	HealthExercise      string // procedural: exercise routine
-	HealthAllergy       string // immutable: allergy info
-	HealthSleep         string // semantic: sleep discovery
-	HealthSupplement    string // refuted: supplement claim
-	HealthPrescription  string // temporal: prescription reminder
+	HealthDoctorVisit  string // episodic: annual checkup notes
+	HealthExercise     string // procedural: exercise routine
+	HealthAllergy      string // immutable: allergy info
+	HealthSleep        string // semantic: sleep discovery
+	HealthSupplement   string // refuted: supplement claim
+	HealthPrescription string // temporal: prescription reminder
 
 	// Cooking cluster (5 records)
 	CookingRecipe       string // procedural: favorite recipe
@@ -35,11 +35,11 @@ type PopulatedStore struct {
 	CookingTechnique    string // procedural: technique tip
 
 	// Travel cluster (5 records)
-	TravelSeat       string // immutable: flight seat preference
-	TravelPacking    string // procedural: packing list
-	TravelTrip       string // ephemeral: upcoming trip
-	TravelLoyalty    string // durable: loyalty program info
-	TravelPassport   string // temporal: passport renewal deadline
+	TravelSeat     string // immutable: flight seat preference
+	TravelPacking  string // procedural: packing list
+	TravelTrip     string // ephemeral: upcoming trip
+	TravelLoyalty  string // durable: loyalty program info
+	TravelPassport string // temporal: passport renewal deadline
 
 	// Finance cluster (4 records)
 	FinanceBudget     string // procedural: budget rule
@@ -48,10 +48,10 @@ type PopulatedStore struct {
 	FinanceInvestment string // speculative: investment idea
 
 	// Learning cluster (4 records)
-	LearnBook        string // reference: book recommendation
-	LearnCourse      string // episodic: course notes
-	LearnRetention   string // semantic: spaced repetition
-	LearnContested   string // contested: study technique
+	LearnBook      string // reference: book recommendation
+	LearnCourse    string // episodic: course notes
+	LearnRetention string // semantic: spaced repetition
+	LearnContested string // contested: study technique
 
 	// People (4 records)
 	PersonVendor   string // temporal: vendor contact
@@ -60,11 +60,11 @@ type PopulatedStore struct {
 	PersonDoctor   string // durable: doctor recommendation
 
 	// TODOs (5 records)
-	TodoOpen         string // unresolved, high importance
-	TodoCompleted    string // resolved: completed
-	TodoAbandoned    string // resolved: abandoned
-	TodoObsolete     string // resolved: obsolete
-	TodoOpenLow      string // unresolved, low importance
+	TodoOpen      string // unresolved, high importance
+	TodoCompleted string // resolved: completed
+	TodoAbandoned string // resolved: abandoned
+	TodoObsolete  string // resolved: obsolete
+	TodoOpenLow   string // unresolved, low importance
 
 	// Orphans (4 records) -- no keywords, no edges
 	Orphan1 string
@@ -78,8 +78,8 @@ type PopulatedStore struct {
 	Pending3 string
 
 	// Ephemeral/stale (3 records)
-	EphemeralRecent string // created today
-	EphemeralStale  string // created 2 weeks ago, never accessed
+	EphemeralRecent  string // created today
+	EphemeralStale   string // created 2 weeks ago, never accessed
 	EphemeralMeeting string // yesterday's meeting agenda
 
 	// Chunked (1 parent + 3 chunks)
@@ -110,7 +110,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("work", "team", "engineering", "reorg").
 		Summary("Engineering split into platform and product squads").
-		CreatedAt(now.Add(-30 * 24 * time.Hour)).AccessCount(8).LastAccessed(now.Add(-2 * 24 * time.Hour)).
+		CreatedAt(now.Add(-30*24*time.Hour)).AccessCount(8).LastAccessed(now.Add(-2*24*time.Hour)).
 		Embedding([]float32{0.9, 0.1, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -118,7 +118,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("work", "team", "manager", "communication").
 		Summary("New manager prefers async updates and weekly written summaries").
-		CreatedAt(now.Add(-7 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-7*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.85, 0.15, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -127,7 +127,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("work", "deadline", "project", "milestone").
 		Summary("Q2 milestone: API finalized + integration tests").
 		Importance(0.8).
-		CreatedAt(now.Add(-14 * 24 * time.Hour)).AccessCount(5).LastAccessed(now.Add(-3 * 24 * time.Hour)).
+		CreatedAt(now.Add(-14*24*time.Hour)).AccessCount(5).LastAccessed(now.Add(-3*24*time.Hour)).
 		Embedding([]float32{0.88, 0.12, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -135,7 +135,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(1.0).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("work", "team", "meeting", "retro").
 		Summary("Biweekly retro: went well / didn't / actions, 45min max").
-		CreatedAt(now.Add(-60 * 24 * time.Hour)).AccessCount(12).LastAccessed(now.Add(-5 * 24 * time.Hour)).
+		CreatedAt(now.Add(-60*24*time.Hour)).AccessCount(12).LastAccessed(now.Add(-5*24*time.Hour)).
 		Embedding([]float32{0.87, 0.13, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -143,9 +143,9 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("work", "project", "tracking", "tools").
 		Summary("Using shared spreadsheet for project tracking").
-		CreatedAt(now.Add(-90 * 24 * time.Hour)).AccessCount(15).LastAccessed(now.Add(-20 * 24 * time.Hour)).
-		ValidUntil(now.Add(-10 * 24 * time.Hour)).
-		Resolution("superseded").ResolvedAt(now.Add(-10 * 24 * time.Hour)).
+		CreatedAt(now.Add(-90*24*time.Hour)).AccessCount(15).LastAccessed(now.Add(-20*24*time.Hour)).
+		ValidUntil(now.Add(-10*24*time.Hour)).
+		Resolution("superseded").ResolvedAt(now.Add(-10*24*time.Hour)).
 		Embedding([]float32{0.86, 0.14, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -153,7 +153,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("work", "project", "tracking", "tools", "kanban").
 		Summary("Switched to kanban board for project tracking").
-		CreatedAt(now.Add(-10 * 24 * time.Hour)).AccessCount(6).LastAccessed(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-10*24*time.Hour)).AccessCount(6).LastAccessed(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.87, 0.13, 0.0, 0.0, 0.07, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -164,7 +164,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("temporal").Confidence(1.0).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("health", "doctor", "checkup", "medical").
 		Summary("Annual checkup: BP normal, cholesterol slightly high, follow up 6mo").
-		CreatedAt(now.Add(-45 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-30 * 24 * time.Hour)).
+		CreatedAt(now.Add(-45*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-30*24*time.Hour)).
 		Embedding([]float32{0.0, 0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -172,7 +172,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("health", "exercise", "fitness", "routine").
 		Summary("Weekly exercise: run 3x, strength 2x, yoga Sunday, rest Wed").
-		CreatedAt(now.Add(-20 * 24 * time.Hour)).AccessCount(10).LastAccessed(now.Add(-2 * 24 * time.Hour)).
+		CreatedAt(now.Add(-20*24*time.Hour)).AccessCount(10).LastAccessed(now.Add(-2*24*time.Hour)).
 		Embedding([]float32{0.0, 0.85, 0.15, 0.0, 0.0, 0.05, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -181,7 +181,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("health", "allergy", "food", "medical").
 		Summary("Shellfish allergy: hives + throat swelling, carry antihistamines").
 		Importance(0.9).
-		CreatedAt(now.Add(-180 * 24 * time.Hour)).AccessCount(4).LastAccessed(now.Add(-15 * 24 * time.Hour)).
+		CreatedAt(now.Add(-180*24*time.Hour)).AccessCount(4).LastAccessed(now.Add(-15*24*time.Hour)).
 		Embedding([]float32{0.0, 0.88, 0.12, 0.0, 0.0, 0.0, 0.05, 0.0}).
 		Add(t, eng)
 
@@ -189,7 +189,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.8).KnowledgeType("semantic").EpistemicStatus("probable").
 		Keywords("health", "sleep", "habits").
 		Summary("No screens 1hr before bed + 65F room = better sleep").
-		CreatedAt(now.Add(-25 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-10 * 24 * time.Hour)).
+		CreatedAt(now.Add(-25*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-10*24*time.Hour)).
 		Embedding([]float32{0.0, 0.87, 0.13, 0.0, 0.0, 0.0, 0.0, 0.05}).
 		Add(t, eng)
 
@@ -197,7 +197,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.7).KnowledgeType("semantic").EpistemicStatus("refuted").
 		Keywords("health", "sleep", "supplements").
 		Summary("Magnesium for sleep: refuted for non-deficient people").
-		CreatedAt(now.Add(-15 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-12 * 24 * time.Hour)).
+		CreatedAt(now.Add(-15*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-12*24*time.Hour)).
 		Embedding([]float32{0.0, 0.86, 0.14, 0.0, 0.0, 0.0, 0.0, 0.08}).
 		Add(t, eng)
 
@@ -206,7 +206,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("health", "prescription", "medical", "reminder").
 		Summary("Prescription refill: call pharmacy 2 days early").
 		Importance(0.7).
-		CreatedAt(now.Add(-5 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-3 * 24 * time.Hour)).
+		CreatedAt(now.Add(-5*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-3*24*time.Hour)).
 		Embedding([]float32{0.0, 0.9, 0.1, 0.0, 0.0, 0.0, 0.05, 0.0}).
 		Add(t, eng)
 
@@ -217,7 +217,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("cooking", "food", "recipe", "pasta").
 		Summary("Lemon garlic pasta: garlic + olive oil + lemon + pasta water + parm").
-		CreatedAt(now.Add(-40 * 24 * time.Hour)).AccessCount(7).LastAccessed(now.Add(-4 * 24 * time.Hour)).
+		CreatedAt(now.Add(-40*24*time.Hour)).AccessCount(7).LastAccessed(now.Add(-4*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.9, 0.1, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -225,7 +225,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.85).KnowledgeType("semantic").EpistemicStatus("well_established").
 		Keywords("cooking", "food", "substitution", "ingredients").
 		Summary("Greek yogurt substitutes for sour cream in most recipes").
-		CreatedAt(now.Add(-35 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-8 * 24 * time.Hour)).
+		CreatedAt(now.Add(-35*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-8*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.88, 0.12, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -233,7 +233,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("ephemeral").Confidence(1.0).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("cooking", "food", "dinner", "entertaining").
 		Summary("Dinner party: lemon pasta starter, grilled veg, chocolate mousse hit").
-		CreatedAt(now.Add(-3 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-2 * 24 * time.Hour)).
+		CreatedAt(now.Add(-3*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-2*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.87, 0.13, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -241,7 +241,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("semantic").EpistemicStatus("well_established").
 		Keywords("cooking", "food", "health", "diet", "sugar").
 		Summary("No refined sugar policy; honey/maple syrup instead, exceptions for occasions").
-		CreatedAt(now.Add(-60 * 24 * time.Hour)).AccessCount(5).LastAccessed(now.Add(-6 * 24 * time.Hour)).
+		CreatedAt(now.Add(-60*24*time.Hour)).AccessCount(5).LastAccessed(now.Add(-6*24*time.Hour)).
 		Embedding([]float32{0.0, 0.1, 0.85, 0.05, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -249,7 +249,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("cooking", "food", "technique", "roasting").
 		Summary("Crispy roasted veg: uniform cut, uncrowded, 425F, don't stir 15min").
-		CreatedAt(now.Add(-50 * 24 * time.Hour)).AccessCount(4).LastAccessed(now.Add(-7 * 24 * time.Hour)).
+		CreatedAt(now.Add(-50*24*time.Hour)).AccessCount(4).LastAccessed(now.Add(-7*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.9, 0.1, 0.0, 0.05, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -260,7 +260,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("immutable").Confidence(1.0).KnowledgeType("semantic").EpistemicStatus("well_established").
 		Keywords("travel", "flights", "preference").
 		Summary("Window seat default, aisle for 6+ hour flights").
-		CreatedAt(now.Add(-120 * 24 * time.Hour)).AccessCount(6).LastAccessed(now.Add(-14 * 24 * time.Hour)).
+		CreatedAt(now.Add(-120*24*time.Hour)).AccessCount(6).LastAccessed(now.Add(-14*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.9, 0.1, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -268,7 +268,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("travel", "packing", "checklist").
 		Summary("Packing: passport, chargers, meds, clothes, toiletries, headphones, kindle").
-		CreatedAt(now.Add(-100 * 24 * time.Hour)).AccessCount(9).LastAccessed(now.Add(-20 * 24 * time.Hour)).
+		CreatedAt(now.Add(-100*24*time.Hour)).AccessCount(9).LastAccessed(now.Add(-20*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.88, 0.12, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -276,7 +276,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("ephemeral").Confidence(0.9).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("travel", "trip", "planning").
 		Summary("Coast trip next weekend: book rental car, confirm hotel").
-		CreatedAt(now.Add(-2 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-2*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.87, 0.13, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -284,7 +284,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(1.0).KnowledgeType("reference").EpistemicStatus("well_established").
 		Keywords("travel", "hotel", "loyalty", "rewards").
 		Summary("Hotel loyalty: gold status, free breakfast, late checkout").
-		CreatedAt(now.Add(-80 * 24 * time.Hour)).AccessCount(4).LastAccessed(now.Add(-30 * 24 * time.Hour)).
+		CreatedAt(now.Add(-80*24*time.Hour)).AccessCount(4).LastAccessed(now.Add(-30*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.86, 0.14, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -293,7 +293,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("travel", "passport", "renewal", "deadline").
 		Summary("Passport expires in 8mo, renewal takes 6-8wk -- submit soon").
 		Importance(0.8).
-		CreatedAt(now.Add(-10 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-5 * 24 * time.Hour)).
+		CreatedAt(now.Add(-10*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-5*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.85, 0.15, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -304,7 +304,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("finance", "budget", "money", "savings").
 		Summary("50/30/20 budget rule, tracked monthly in spreadsheet").
-		CreatedAt(now.Add(-90 * 24 * time.Hour)).AccessCount(8).LastAccessed(now.Add(-7 * 24 * time.Hour)).
+		CreatedAt(now.Add(-90*24*time.Hour)).AccessCount(8).LastAccessed(now.Add(-7*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.9, 0.1, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -312,7 +312,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(1.0).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("finance", "work", "expense", "reimbursement").
 		Summary("Expense reports: photo receipt, upload within 30d, select cost center").
-		CreatedAt(now.Add(-70 * 24 * time.Hour)).AccessCount(6).LastAccessed(now.Add(-10 * 24 * time.Hour)).
+		CreatedAt(now.Add(-70*24*time.Hour)).AccessCount(6).LastAccessed(now.Add(-10*24*time.Hour)).
 		Embedding([]float32{0.1, 0.0, 0.0, 0.0, 0.88, 0.12, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -321,7 +321,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("finance", "tax", "deadline", "freelance").
 		Summary("Estimated tax due mid-June, set aside 25% of freelance income").
 		Importance(0.9).
-		CreatedAt(now.Add(-30 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-5 * 24 * time.Hour)).
+		CreatedAt(now.Add(-30*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-5*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.87, 0.13, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -329,7 +329,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.5).KnowledgeType("semantic").EpistemicStatus("speculative").
 		Keywords("finance", "investment", "savings", "research").
 		Summary("Considering index funds -- low fees, need to research tax advantages").
-		CreatedAt(now.Add(-12 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-11 * 24 * time.Hour)).
+		CreatedAt(now.Add(-12*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-11*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.86, 0.14, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -340,7 +340,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("reference").EpistemicStatus("well_established").
 		Keywords("learning", "books", "reading", "psychology").
 		Summary("Recommended: 'Thinking, Fast and Slow' -- cognitive biases, decisions").
-		CreatedAt(now.Add(-55 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-20 * 24 * time.Hour)).
+		CreatedAt(now.Add(-55*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-20*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.1, 0.0}).
 		Add(t, eng)
 
@@ -348,7 +348,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.85).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("learning", "course", "statistics", "bayesian").
 		Summary("Stats course done: Bayesian > frequentist for real-world decisions").
-		CreatedAt(now.Add(-22 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-15 * 24 * time.Hour)).
+		CreatedAt(now.Add(-22*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-15*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.88, 0.12, 0.0}).
 		Add(t, eng)
 
@@ -356,7 +356,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.9).KnowledgeType("semantic").EpistemicStatus("well_established").
 		Keywords("learning", "memory", "spaced-repetition", "study").
 		Summary("Spaced repetition works: review at 1d, 3d, 7d, 14d intervals").
-		CreatedAt(now.Add(-40 * 24 * time.Hour)).AccessCount(5).LastAccessed(now.Add(-3 * 24 * time.Hour)).
+		CreatedAt(now.Add(-40*24*time.Hour)).AccessCount(5).LastAccessed(now.Add(-3*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.87, 0.13, 0.0}).
 		Add(t, eng)
 
@@ -364,7 +364,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.5).KnowledgeType("semantic").EpistemicStatus("contested").
 		Keywords("learning", "study", "music", "focus").
 		Summary("Music while studying: contested evidence, depends on task and person").
-		CreatedAt(now.Add(-18 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-17 * 24 * time.Hour)).
+		CreatedAt(now.Add(-18*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-17*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.86, 0.14, 0.0}).
 		Add(t, eng)
 
@@ -375,7 +375,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("temporal").Confidence(1.0).KnowledgeType("reference").EpistemicStatus("well_established").
 		Keywords("people", "vendor", "contact", "work").
 		Summary("Sarah = vendor contact, contract renews March").
-		CreatedAt(now.Add(-60 * 24 * time.Hour)).AccessCount(4).LastAccessed(now.Add(-14 * 24 * time.Hour)).
+		CreatedAt(now.Add(-60*24*time.Hour)).AccessCount(4).LastAccessed(now.Add(-14*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.1}).
 		Add(t, eng)
 
@@ -383,7 +383,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.95).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("people", "neighbor", "home").
 		Summary("Neighbor Marcus (4B), dog Bear, will water plants").
-		CreatedAt(now.Add(-45 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-30 * 24 * time.Hour)).
+		CreatedAt(now.Add(-45*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-30*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.88, 0.12}).
 		Add(t, eng)
 
@@ -391,7 +391,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(1.0).KnowledgeType("reference").EpistemicStatus("well_established").
 		Keywords("people", "birthday", "gifts").
 		Summary("Alex birthday Sep 15: hiking gear, coffee, mystery novels").
-		CreatedAt(now.Add(-100 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-60 * 24 * time.Hour)).
+		CreatedAt(now.Add(-100*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-60*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.87, 0.13}).
 		Add(t, eng)
 
@@ -399,7 +399,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.85).KnowledgeType("semantic").EpistemicStatus("probable").
 		Keywords("people", "health", "doctor", "caffeine").
 		Summary("Doctor: caffeine under 200mg/day, try meditation for stress").
-		CreatedAt(now.Add(-30 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-20 * 24 * time.Hour)).
+		CreatedAt(now.Add(-30*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-20*24*time.Hour)).
 		Embedding([]float32{0.0, 0.15, 0.0, 0.0, 0.0, 0.0, 0.85, 0.0}).
 		Add(t, eng)
 
@@ -410,7 +410,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("todo", "home", "organizing").
 		Summary("TODO: Clean garage -- keep/donate/trash").
 		Importance(0.7).
-		CreatedAt(now.Add(-3 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-3*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9}).
 		Add(t, eng)
 
@@ -418,9 +418,9 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("temporal").Confidence(1.0).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("todo", "health", "dental").
 		Summary("DONE: Dental cleaning scheduled").
-		Resolution("completed").ResolvedAt(now.Add(-5 * 24 * time.Hour)).
-		ValidUntil(now.Add(-5 * 24 * time.Hour)).
-		CreatedAt(now.Add(-14 * 24 * time.Hour)).AccessCount(3).LastAccessed(now.Add(-5 * 24 * time.Hour)).
+		Resolution("completed").ResolvedAt(now.Add(-5*24*time.Hour)).
+		ValidUntil(now.Add(-5*24*time.Hour)).
+		CreatedAt(now.Add(-14*24*time.Hour)).AccessCount(3).LastAccessed(now.Add(-5*24*time.Hour)).
 		Embedding([]float32{0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.85}).
 		Add(t, eng)
 
@@ -428,9 +428,9 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("durable").Confidence(0.8).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("todo", "hobbies", "guitar", "music").
 		Summary("ABANDONED: Learn guitar -- never started").
-		Resolution("abandoned").ResolvedAt(now.Add(-7 * 24 * time.Hour)).
-		ValidUntil(now.Add(-7 * 24 * time.Hour)).
-		CreatedAt(now.Add(-60 * 24 * time.Hour)).AccessCount(2).LastAccessed(now.Add(-7 * 24 * time.Hour)).
+		Resolution("abandoned").ResolvedAt(now.Add(-7*24*time.Hour)).
+		ValidUntil(now.Add(-7*24*time.Hour)).
+		CreatedAt(now.Add(-60*24*time.Hour)).AccessCount(2).LastAccessed(now.Add(-7*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.85}).
 		Add(t, eng)
 
@@ -438,9 +438,9 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("temporal").Confidence(1.0).KnowledgeType("procedural").EpistemicStatus("well_established").
 		Keywords("todo", "work", "tools").
 		Summary("OBSOLETE: Renew old chat sub -- we switched platforms").
-		Resolution("obsolete").ResolvedAt(now.Add(-10 * 24 * time.Hour)).
-		ValidUntil(now.Add(-10 * 24 * time.Hour)).
-		CreatedAt(now.Add(-30 * 24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-10 * 24 * time.Hour)).
+		Resolution("obsolete").ResolvedAt(now.Add(-10*24*time.Hour)).
+		ValidUntil(now.Add(-10*24*time.Hour)).
+		CreatedAt(now.Add(-30*24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-10*24*time.Hour)).
 		Embedding([]float32{0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.85}).
 		Add(t, eng)
 
@@ -449,7 +449,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Keywords("todo", "photos", "organizing").
 		Summary("TODO: Organize photo library").
 		Importance(0.2).
-		CreatedAt(now.Add(-45 * 24 * time.Hour)).AccessCount(0).
+		CreatedAt(now.Add(-45*24*time.Hour)).AccessCount(0).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.88}).
 		Add(t, eng)
 
@@ -457,25 +457,25 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 
 	s.Orphan1 = Record("Look into that thing Jamie mentioned about the new bakery downtown").
 		Confidence(0.3).
-		CreatedAt(now.Add(-8 * 24 * time.Hour)).
+		CreatedAt(now.Add(-8*24*time.Hour)).
 		Embedding([]float32{0.2, 0.2, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
 	s.Orphan2 = Record("'The best time to plant a tree was 20 years ago. The second best time is now.'").
 		Confidence(0.5).
-		CreatedAt(now.Add(-20 * 24 * time.Hour)).
+		CreatedAt(now.Add(-20*24*time.Hour)).
 		Embedding([]float32{0.1, 0.1, 0.1, 0.1, 0.1, 0.3, 0.1, 0.1}).
 		Add(t, eng)
 
 	s.Orphan3 = Record("interesting article about urban farming, saved the link somewhere").
 		Confidence(0.4).
-		CreatedAt(now.Add(-12 * 24 * time.Hour)).
+		CreatedAt(now.Add(-12*24*time.Hour)).
 		Embedding([]float32{0.0, 0.1, 0.3, 0.0, 0.0, 0.2, 0.0, 0.0}).
 		Add(t, eng)
 
 	s.Orphan4 = Record("password for the wifi at the coffee shop is 'latteart2024'").
 		Temporality("ephemeral").Confidence(0.9).
-		CreatedAt(now.Add(-30 * 24 * time.Hour)).
+		CreatedAt(now.Add(-30*24*time.Hour)).
 		Embedding([]float32{0.1, 0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 0.0}).
 		Add(t, eng)
 
@@ -483,19 +483,19 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 
 	s.Pending1 = Record("Had a great conversation about sustainable architecture. The concept of passive houses is fascinating -- minimal energy for heating/cooling.").
 		Pending().
-		CreatedAt(now.Add(-2 * 24 * time.Hour)).
+		CreatedAt(now.Add(-2*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.0}).
 		Add(t, eng)
 
 	s.Pending2 = Record("Meeting notes from Thursday: discussed Q3 planning, need to hire two more engineers, budget approved for new monitoring tools.").
 		Pending().
-		CreatedAt(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.5, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
 	s.Pending3 = Record("Someone recommended a podcast about behavioral economics. Need to find the name.").
 		Pending().
-		CreatedAt(now.Add(-4 * 24 * time.Hour)).
+		CreatedAt(now.Add(-4*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -505,7 +505,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("ephemeral").Confidence(0.9).KnowledgeType("reference").EpistemicStatus("well_established").
 		Keywords("errands", "dry-cleaner", "hours").
 		Summary("Dry cleaner hours: weekday 6pm, Sat 3pm, Sun closed").
-		CreatedAt(now.Add(-6 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-2 * time.Hour)).
+		CreatedAt(now.Add(-6*time.Hour)).AccessCount(1).LastAccessed(now.Add(-2*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3}).
 		Add(t, eng)
 
@@ -513,7 +513,7 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("ephemeral").Confidence(1.0).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("reminder", "errands").
 		Summary("Pick up package before Friday").
-		CreatedAt(now.Add(-14 * 24 * time.Hour)).
+		CreatedAt(now.Add(-14*24*time.Hour)).
 		Embedding([]float32{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2}).
 		Add(t, eng)
 
@@ -521,25 +521,25 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 		Temporality("ephemeral").Confidence(0.95).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("work", "meeting", "agenda").
 		Summary("Yesterday sync: sprint review, blockers, PTO, follow up deployment").
-		CreatedAt(now.Add(-24 * time.Hour)).AccessCount(1).LastAccessed(now.Add(-20 * time.Hour)).
+		CreatedAt(now.Add(-24*time.Hour)).AccessCount(1).LastAccessed(now.Add(-20*time.Hour)).
 		Embedding([]float32{0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
 	// ---- Chunked record ----
 	// Simulate a long meeting transcript split into 3 chunks.
 
-	s.ChunkedParent = Record("Q3 planning meeting full transcript. Duration: 90 minutes. " +
-		"Attendees: team leads from all squads. " +
-		"Topics covered: hiring plan, budget allocation, technical debt priorities, " +
-		"cross-team dependencies, and milestone dates. " +
-		"Key decisions: approved two new headcount for platform squad, " +
-		"allocated 20% of sprint capacity to tech debt, " +
+	s.ChunkedParent = Record("Q3 planning meeting full transcript. Duration: 90 minutes. "+
+		"Attendees: team leads from all squads. "+
+		"Topics covered: hiring plan, budget allocation, technical debt priorities, "+
+		"cross-team dependencies, and milestone dates. "+
+		"Key decisions: approved two new headcount for platform squad, "+
+		"allocated 20% of sprint capacity to tech debt, "+
 		"set code freeze for August 15th.").
 		Temporality("temporal").Confidence(0.95).KnowledgeType("episodic").EpistemicStatus("well_established").
 		Keywords("work", "meeting", "planning", "Q3").
 		Summary("Q3 planning: 2 new hires, 20% tech debt, code freeze Aug 15").
 		Importance(0.8).
-		CreatedAt(now.Add(-5 * 24 * time.Hour)).AccessCount(4).LastAccessed(now.Add(-1 * 24 * time.Hour)).
+		CreatedAt(now.Add(-5*24*time.Hour)).AccessCount(4).LastAccessed(now.Add(-1*24*time.Hour)).
 		Embedding([]float32{0.7, 0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.0}).
 		Add(t, eng)
 
@@ -605,15 +605,14 @@ func PopulatedEngine(t *testing.T) (*core.Engine, *PopulatedStore) {
 	Edge(t, eng, s.CookingTechnique, s.CookingDinnerParty, "relates_to", 0.5)
 
 	// Cross-cluster links
-	Edge(t, eng, s.CookingDietary, s.HealthAllergy, "relates_to", 0.7)         // cooking + health overlap
-	Edge(t, eng, s.FinanceExpense, s.WorkDeadline, "discusses", 0.4)            // finance + work overlap
-	Edge(t, eng, s.TravelPassport, s.TravelTrip, "relates_to", 0.6)            // travel internal
-	Edge(t, eng, s.LearnRetention, s.LearnCourse, "relates_to", 0.7)           // learning internal
-	Edge(t, eng, s.TodoObsolete, s.WorkOldTool, "relates_to", 0.9)             // TODO linked to what made it obsolete
-	Edge(t, eng, s.FinanceBudget, s.FinanceInvestment, "relates_to", 0.5)      // finance internal
-	Edge(t, eng, s.PersonDoctor, s.HealthSleep, "discusses", 0.5)              // doctor advice about sleep
-	Edge(t, eng, s.EphemeralMeeting, s.WorkReorg, "relates_to", 0.4)           // meeting references reorg
+	Edge(t, eng, s.CookingDietary, s.HealthAllergy, "relates_to", 0.7)    // cooking + health overlap
+	Edge(t, eng, s.FinanceExpense, s.WorkDeadline, "discusses", 0.4)      // finance + work overlap
+	Edge(t, eng, s.TravelPassport, s.TravelTrip, "relates_to", 0.6)       // travel internal
+	Edge(t, eng, s.LearnRetention, s.LearnCourse, "relates_to", 0.7)      // learning internal
+	Edge(t, eng, s.TodoObsolete, s.WorkOldTool, "relates_to", 0.9)        // TODO linked to what made it obsolete
+	Edge(t, eng, s.FinanceBudget, s.FinanceInvestment, "relates_to", 0.5) // finance internal
+	Edge(t, eng, s.PersonDoctor, s.HealthSleep, "discusses", 0.5)         // doctor advice about sleep
+	Edge(t, eng, s.EphemeralMeeting, s.WorkReorg, "relates_to", 0.4)      // meeting references reorg
 
 	return eng, s
 }
-

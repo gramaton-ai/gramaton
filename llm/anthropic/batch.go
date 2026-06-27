@@ -13,8 +13,8 @@ import (
 
 // BatchRequest is a single request in a message batch.
 type BatchRequest struct {
-	CustomID string          `json:"custom_id"`
-	Params   BatchParams     `json:"params"`
+	CustomID string      `json:"custom_id"`
+	Params   BatchParams `json:"params"`
 }
 
 // BatchParams mirrors the Messages API params for a single batch item.
@@ -50,12 +50,12 @@ type batchCreateRequest struct {
 
 // BatchStatus represents the state of a message batch.
 type BatchStatus struct {
-	ID               string       `json:"id"`
-	ProcessingStatus string       `json:"processing_status"` // in_progress, ended, canceling, canceled, expired
+	ID               string        `json:"id"`
+	ProcessingStatus string        `json:"processing_status"` // in_progress, ended, canceling, canceled, expired
 	RequestCounts    RequestCounts `json:"request_counts"`
-	CreatedAt        string       `json:"created_at"`
-	EndedAt          string       `json:"ended_at,omitempty"`
-	ResultsURL       string       `json:"results_url,omitempty"`
+	CreatedAt        string        `json:"created_at"`
+	EndedAt          string        `json:"ended_at,omitempty"`
+	ResultsURL       string        `json:"results_url,omitempty"`
 }
 
 // RequestCounts tracks per-status counts in a batch.
@@ -80,9 +80,9 @@ type BatchResult struct {
 
 // BatchResultData holds the outcome of a single batch request.
 type BatchResultData struct {
-	Type    string           `json:"type"` // succeeded, errored, expired, canceled
+	Type    string            `json:"type"` // succeeded, errored, expired, canceled
 	Message *messagesResponse `json:"message,omitempty"`
-	Error   *apiError        `json:"error,omitempty"`
+	Error   *apiError         `json:"error,omitempty"`
 }
 
 // SubmitBatch creates a new message batch. Returns the batch ID.
@@ -192,4 +192,3 @@ func (c *Client) doBatchRequest(ctx context.Context, method, path string, body [
 
 	return respBody, nil
 }
-

@@ -81,7 +81,6 @@ func New(cfg config.LLMConfig) (*Client, error) {
 	}, nil
 }
 
-
 // messagesRequest is the Anthropic Messages API request body.
 type messagesRequest struct {
 	Model      string        `json:"model"`

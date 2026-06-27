@@ -57,12 +57,12 @@ func parseLevel(s string) slog.Level {
 // log files when they exceed a size threshold, and enforces a total
 // disk budget by deleting the oldest compressed files.
 type RotatingWriter struct {
-	mu         sync.Mutex
-	path       string // current log file path
-	file       *os.File
-	size       int64 // current file size
-	rotateAt   int64 // rotate when file exceeds this
-	maxTotal   int64 // total disk budget for all log files
+	mu       sync.Mutex
+	path     string // current log file path
+	file     *os.File
+	size     int64 // current file size
+	rotateAt int64 // rotate when file exceeds this
+	maxTotal int64 // total disk budget for all log files
 }
 
 // NewRotatingWriter creates a writer that rotates at rotateAt bytes

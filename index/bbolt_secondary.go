@@ -302,4 +302,3 @@ func (idx *BboltSecondaryIndex) NodesWithField(field string) []string {
 	})
 	return ids
 }
-

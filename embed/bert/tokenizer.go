@@ -336,15 +336,15 @@ func stripAccents(text string) string {
 
 // tokenizerJSON is the structure of a HuggingFace tokenizer.json file.
 type tokenizerJSON struct {
-	Model      tokenizerModel       `json:"model"`
-	AddedTokens []addedToken        `json:"added_tokens"`
-	Normalizer  *normalizerConfig   `json:"normalizer"`
-	Truncation  *truncationConfig   `json:"truncation"`
+	Model       tokenizerModel    `json:"model"`
+	AddedTokens []addedToken      `json:"added_tokens"`
+	Normalizer  *normalizerConfig `json:"normalizer"`
+	Truncation  *truncationConfig `json:"truncation"`
 }
 
 type tokenizerModel struct {
-	Type  string           `json:"type"`
-	Vocab map[string]int   `json:"vocab"`
+	Type  string         `json:"type"`
+	Vocab map[string]int `json:"vocab"`
 }
 
 type addedToken struct {

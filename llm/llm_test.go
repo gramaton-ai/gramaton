@@ -22,7 +22,7 @@ func TestNewEmptyProvider(t *testing.T) {
 func TestNewAnthropicProvider(t *testing.T) {
 	cfg := config.LLMConfig{
 		Provider:  "anthropic",
-		Models:     config.LLMModels{Medium:"claude-sonnet-4-6"},
+		Models:    config.LLMModels{Medium: "claude-sonnet-4-6"},
 		APIKeyEnv: "sk-ant-test-key",
 	}
 	p, err := New(cfg)
@@ -69,9 +69,9 @@ func (p fakeProvider) Complete(_ context.Context, _ string) (string, error) {
 func (p fakeProvider) CompleteWithModel(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }
-func (p fakeProvider) ModelID() string                  { return p.id }
-func (p fakeProvider) ProviderName() string             { return "fake" }
-func (p fakeProvider) SupportsStructuredOutput() bool   { return false }
+func (p fakeProvider) ModelID() string                { return p.id }
+func (p fakeProvider) ProviderName() string           { return "fake" }
+func (p fakeProvider) SupportsStructuredOutput() bool { return false }
 func (p fakeProvider) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
 	return nil, nil
 }

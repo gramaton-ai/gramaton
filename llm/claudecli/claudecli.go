@@ -155,4 +155,3 @@ func sumModelUsage(m map[string]cliModelUsageEntry) telemetry.CallUsage {
 	}
 	return u
 }
-

@@ -21,11 +21,11 @@ import (
 // noopLLM is a minimal LLM provider for tests that don't need real responses.
 type noopLLM struct{}
 
-func (noopLLM) Complete(_ context.Context, _ string) (string, error)                { return "", nil }
+func (noopLLM) Complete(_ context.Context, _ string) (string, error)             { return "", nil }
 func (noopLLM) CompleteWithModel(_ context.Context, _, _ string) (string, error) { return "", nil }
-func (noopLLM) ModelID() string                                                    { return "test-noop" }
-func (noopLLM) ProviderName() string                                               { return "noop" }
-func (noopLLM) SupportsStructuredOutput() bool                                     { return false }
+func (noopLLM) ModelID() string                                                  { return "test-noop" }
+func (noopLLM) ProviderName() string                                             { return "noop" }
+func (noopLLM) SupportsStructuredOutput() bool                                   { return false }
 func (noopLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
 	return nil, nil
 }

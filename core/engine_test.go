@@ -69,11 +69,11 @@ func TestLoadEngine(t *testing.T) {
 // configuring a real provider.
 type stubLLM struct{ id string }
 
-func (s *stubLLM) Complete(context.Context, string) (string, error)         { return "", nil }
+func (s *stubLLM) Complete(context.Context, string) (string, error) { return "", nil }
 func (s *stubLLM) CompleteWithModel(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (s *stubLLM) ModelID() string      { return s.id }
+func (s *stubLLM) ModelID() string                { return s.id }
 func (s *stubLLM) ProviderName() string           { return "stub" }
 func (s *stubLLM) SupportsStructuredOutput() bool { return false }
 func (s *stubLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string) (json.RawMessage, error) {
@@ -625,14 +625,14 @@ func TestCheckDedupShortContentSkipsJaccard(t *testing.T) {
 	// Two short records with same embedding but different content.
 	// Jaccard check should be skipped for short content.
 	nA := eng.Graph().AddNode(graph.Properties{
-		"content_full":  graph.StringProperty("user prefers dark mode"),
+		"content_full":   graph.StringProperty("user prefers dark mode"),
 		"embedding_full": graph.VectorProperty(vec),
 	})
 	eng.PropIdx().Add(nA.ID, "content_full", nA.Properties["content_full"])
 	eng.VecIdx().Add(nA.ID, vec)
 
 	nB := eng.Graph().AddNode(graph.Properties{
-		"content_full":  graph.StringProperty("user likes light theme"),
+		"content_full":   graph.StringProperty("user likes light theme"),
 		"embedding_full": graph.VectorProperty(vec),
 	})
 	eng.PropIdx().Add(nB.ID, "content_full", nB.Properties["content_full"])

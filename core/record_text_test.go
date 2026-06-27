@@ -269,4 +269,3 @@ func TestRecordContentFromFields_ParityWithRecordContent(t *testing.T) {
 		t.Errorf("parity violation:\n  RecordContentFromFields: %q\n  RecordContent:           %q", got, want)
 	}
 }
-

@@ -428,4 +428,3 @@ func removeFromIDSet(b *bolt.Bucket, key []byte, id string) {
 		}
 	}
 }
-

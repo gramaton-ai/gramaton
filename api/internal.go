@@ -125,11 +125,11 @@ func (a *API) setMetaProps(nodeID string, meta map[string]any) {
 			ss := make([]string, len(val))
 			for i, elem := range val {
 				// validateMeta enforces string elements; a checked assertion
-			// keeps a future validator drift from turning an internal
-			// type error into a panic inside the engine write lock.
-			if s, ok := elem.(string); ok {
-				ss[i] = s
-			}
+				// keeps a future validator drift from turning an internal
+				// type error into a panic inside the engine write lock.
+				if s, ok := elem.(string); ok {
+					ss[i] = s
+				}
 			}
 			a.engine.SetProp(nodeID, propKey, graph.StringListProperty(ss))
 		}
@@ -264,8 +264,6 @@ func parseDateArg(s string) (time.Time, error) {
 	}
 	return time.Time{}, fmt.Errorf("invalid date (expected RFC3339 or YYYY-MM-DD)")
 }
-
-
 
 // inspectMetadataSummary generates a human-readable metadata summary
 // for an Inspect response. Moved from server/handler_records.go; same

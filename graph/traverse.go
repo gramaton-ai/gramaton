@@ -2,9 +2,9 @@ package graph
 
 // TraverseOptions controls graph traversal behavior.
 type TraverseOptions struct {
-	MaxDepth       int
-	EdgeTypes      []string // nil means all types
-	MinEdgeWeight  float64
+	MaxDepth      int
+	EdgeTypes     []string // nil means all types
+	MinEdgeWeight float64
 }
 
 // SubgraphNode is a node in a traversal result.

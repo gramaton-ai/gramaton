@@ -516,10 +516,10 @@ func TestSemanticEdgeCount(t *testing.T) {
 	c := g.AddNode(nil)
 	d := g.AddNode(nil)
 
-	g.AddEdge(a.ID, b.ID, "related_to", 0.8, nil)     // semantic out
-	g.AddEdge(c.ID, a.ID, "supersedes", 0.9, nil)      // semantic in
-	g.AddEdge(a.ID, d.ID, "section_of", 1.0, nil)      // structural out (excluded)
-	g.AddEdge(d.ID, a.ID, "chunk_of", 1.0, nil)        // structural in (excluded)
+	g.AddEdge(a.ID, b.ID, "related_to", 0.8, nil) // semantic out
+	g.AddEdge(c.ID, a.ID, "supersedes", 0.9, nil) // semantic in
+	g.AddEdge(a.ID, d.ID, "section_of", 1.0, nil) // structural out (excluded)
+	g.AddEdge(d.ID, a.ID, "chunk_of", 1.0, nil)   // structural in (excluded)
 
 	count := g.SemanticEdgeCount(a.ID)
 	if count != 2 {

@@ -791,49 +791,49 @@ func TestModelForTaskRerankAndDecompose(t *testing.T) {
 
 func TestValidateRejectsInvalid(t *testing.T) {
 	cases := []struct {
-		name  string
+		name   string
 		mutate func(*Config)
-		want  string
+		want   string
 	}{
 		{
-			name:  "unknown llm provider",
+			name:   "unknown llm provider",
 			mutate: func(c *Config) { c.LLM.Provider = "gemini" },
-			want:  "llm.provider",
+			want:   "llm.provider",
 		},
 		{
-			name:  "unknown embedding provider",
+			name:   "unknown embedding provider",
 			mutate: func(c *Config) { c.Embedding.Provider = "cohere-local" },
-			want:  "embedding.provider",
+			want:   "embedding.provider",
 		},
 		{
-			name:  "negative port",
+			name:   "negative port",
 			mutate: func(c *Config) { c.Server.Port = -1 },
-			want:  "server.port",
+			want:   "server.port",
 		},
 		{
-			name:  "port too high",
+			name:   "port too high",
 			mutate: func(c *Config) { c.Server.Port = 70000 },
-			want:  "server.port",
+			want:   "server.port",
 		},
 		{
-			name:  "immutable decay non-zero",
+			name:   "immutable decay non-zero",
 			mutate: func(c *Config) { c.Decay.Rates.Immutable = 0.01 },
-			want:  "decay.rates.immutable",
+			want:   "decay.rates.immutable",
 		},
 		{
-			name:  "negative decay rate",
+			name:   "negative decay rate",
 			mutate: func(c *Config) { c.Decay.Rates.Ephemeral = -0.1 },
-			want:  "decay.rates.ephemeral",
+			want:   "decay.rates.ephemeral",
 		},
 		{
-			name:  "negative scoring weight",
+			name:   "negative scoring weight",
 			mutate: func(c *Config) { c.Scoring.WeightFreshness = -0.1 },
-			want:  "scoring.weight_freshness",
+			want:   "scoring.weight_freshness",
 		},
 		{
-			name:  "negative bm25 weight",
+			name:   "negative bm25 weight",
 			mutate: func(c *Config) { c.Search.BM25WeightShort = -0.5 },
-			want:  "search.bm25_weight_short",
+			want:   "search.bm25_weight_short",
 		},
 	}
 	for _, tc := range cases {
@@ -889,4 +889,3 @@ func TestLoadRejectsInvariantViolation(t *testing.T) {
 		t.Fatalf("error should name the offending key; got %q", err.Error())
 	}
 }
-

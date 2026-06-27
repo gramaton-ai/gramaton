@@ -898,14 +898,14 @@ func TestQualityAuditShortSummary(t *testing.T) {
 // Two regression-grade specific assertions (beyond the original
 // stability check):
 //
-//   1. A SECOND RunDeterministic over the same store proposes ZERO
-//      new concepts for the existing kafka keyword, proving
-//      existingConcepts was populated correctly.
-//   2. A FRESH concept node with template-style content_short and
-//      missing embedding_short triggers Rule 3 (flag_embed),
-//      bumping QualityFlags. The pre-fix merged loop's
-//      unconditional `continue` after the concept branch dropped
-//      this — concept embeddings drifted silently.
+//  1. A SECOND RunDeterministic over the same store proposes ZERO
+//     new concepts for the existing kafka keyword, proving
+//     existingConcepts was populated correctly.
+//  2. A FRESH concept node with template-style content_short and
+//     missing embedding_short triggers Rule 3 (flag_embed),
+//     bumping QualityFlags. The pre-fix merged loop's
+//     unconditional `continue` after the concept branch dropped
+//     this — concept embeddings drifted silently.
 func TestRunDeterministicMergedLoopBranchesByNodeType(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
@@ -957,8 +957,8 @@ func TestRunDeterministicMergedLoopBranchesByNodeType(t *testing.T) {
 	// embedding_short, this pin ONLY catches when concept-Rule-3 fall-
 	// through is preserved.
 	freshConcept := eng.Graph().AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("Concept page for redis covering caching patterns and replication strategies and lots of detail to push past the 100 char floor of Rule 2."),
-		"content_short":     graph.StringProperty("Cache + replication"), // 19 chars; ≠ keyword; would also trip Rule 2
+		"content_full":  graph.StringProperty("Concept page for redis covering caching patterns and replication strategies and lots of detail to push past the 100 char floor of Rule 2."),
+		"content_short": graph.StringProperty("Cache + replication"), // 19 chars; ≠ keyword; would also trip Rule 2
 		// No embedding_short — Rule 3 candidate.
 		"processing_status": graph.StringProperty("processed"),
 		"node_type":         graph.StringProperty("concept"),

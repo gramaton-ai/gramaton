@@ -71,9 +71,9 @@ func TestSaveStripsContaminationInContextFields(t *testing.T) {
 	ctx := context.Background()
 
 	resp, apiErr := a.Save(ctx, SaveRequest{
-		Content:       "Content body.",
-		ContextAbout:  "Clean topic." + contaminationTail,
-		ContextWho:    "Alice and Bob." + contaminationTail,
+		Content:      "Content body.",
+		ContextAbout: "Clean topic." + contaminationTail,
+		ContextWho:   "Alice and Bob." + contaminationTail,
 	})
 	if apiErr != nil {
 		t.Fatalf("Capture: %v", apiErr)

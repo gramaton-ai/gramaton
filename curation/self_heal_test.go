@@ -233,11 +233,11 @@ func TestDetectAndRepairSummaryClearsStaleFlagOnTier1Clean(t *testing.T) {
 	eng := setupSelfHealTest(t)
 	eng.Lock()
 	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":       graph.StringProperty("Body."),
-		"content_short":      graph.StringProperty("Already-clean summary with no contamination."),
-		"repair_needed_llm":  graph.BoolProperty(true),
-		repairInputHashKey:   graph.StringProperty("0123456789abcdef"),
-		"repair_method":      graph.StringProperty("flagged"),
+		"content_full":      graph.StringProperty("Body."),
+		"content_short":     graph.StringProperty("Already-clean summary with no contamination."),
+		"repair_needed_llm": graph.BoolProperty(true),
+		repairInputHashKey:  graph.StringProperty("0123456789abcdef"),
+		"repair_method":     graph.StringProperty("flagged"),
 	})
 	if _, err := eng.Save("seed"); err != nil {
 		eng.Unlock()
@@ -275,11 +275,11 @@ func TestDetectAndRepairSummaryClearsStaleFlagOnTier2Stripped(t *testing.T) {
 
 	eng.Lock()
 	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":       graph.StringProperty("Full content unused by this test."),
-		"content_short":      graph.StringProperty(cleanPrefix + tail),
-		"repair_needed_llm":  graph.BoolProperty(true),
-		repairInputHashKey:   graph.StringProperty("staleHashFromPriorCycle"),
-		"repair_method":      graph.StringProperty("flagged"),
+		"content_full":      graph.StringProperty("Full content unused by this test."),
+		"content_short":     graph.StringProperty(cleanPrefix + tail),
+		"repair_needed_llm": graph.BoolProperty(true),
+		repairInputHashKey:  graph.StringProperty("staleHashFromPriorCycle"),
+		"repair_method":     graph.StringProperty("flagged"),
 	})
 	if _, err := eng.Save("seed"); err != nil {
 		eng.Unlock()
@@ -319,11 +319,11 @@ func TestDetectAndRepairSummaryClearsStaleFlagOnTier3Fallback(t *testing.T) {
 
 	eng.Lock()
 	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":       graph.StringProperty("First full sentence here. Second sentence provides context. Third one wraps it up."),
-		"content_short":      graph.StringProperty("Tiny." + tail), // strip yields "Tiny." (5 chars) -> Tier-2 fails (< 50 chars)
-		"repair_needed_llm":  graph.BoolProperty(true),
-		repairInputHashKey:   graph.StringProperty("staleHash"),
-		"repair_method":      graph.StringProperty("flagged"),
+		"content_full":      graph.StringProperty("First full sentence here. Second sentence provides context. Third one wraps it up."),
+		"content_short":     graph.StringProperty("Tiny." + tail), // strip yields "Tiny." (5 chars) -> Tier-2 fails (< 50 chars)
+		"repair_needed_llm": graph.BoolProperty(true),
+		repairInputHashKey:  graph.StringProperty("staleHash"),
+		"repair_method":     graph.StringProperty("flagged"),
 	})
 	if _, err := eng.Save("seed"); err != nil {
 		eng.Unlock()

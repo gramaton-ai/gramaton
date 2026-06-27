@@ -324,4 +324,3 @@ func serializeValue(val graph.Property) string {
 	}
 	return string(data)
 }
-

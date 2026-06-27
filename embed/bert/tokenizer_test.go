@@ -304,8 +304,8 @@ func TestStripAccents(t *testing.T) {
 	tests := []struct {
 		input, want string
 	}{
-		{"hello", "hello"},               // no change
-		{"cafe\u0301", "cafe"},           // combining accent stripped (é decomposed)
+		{"hello", "hello"},                   // no change
+		{"cafe\u0301", "cafe"},               // combining accent stripped (é decomposed)
 		{"ASCII only 123", "ASCII only 123"}, // fast path
 	}
 

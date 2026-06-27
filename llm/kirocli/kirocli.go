@@ -4,9 +4,9 @@
 package kirocli
 
 import (
-	"encoding/json"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -218,4 +218,3 @@ func stripCodeFences(s string) string {
 	}
 	return strings.TrimSpace(s)
 }
-

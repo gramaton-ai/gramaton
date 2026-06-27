@@ -349,4 +349,3 @@ func (c *Client) CompleteStructured(ctx context.Context, schema map[string]any, 
 	// already checked.
 	return json.RawMessage(result.Choices[0].Message.Content), nil
 }
-

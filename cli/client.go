@@ -239,4 +239,3 @@ func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
 
 	return &envelope, nil
 }
-

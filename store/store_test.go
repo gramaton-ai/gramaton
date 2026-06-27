@@ -15,10 +15,10 @@ func TestValidateName(t *testing.T) {
 	}
 
 	invalid := []string{
-		"default",   // reserved
-		"",          // empty
-		"-leading",  // starts with hyphen
-		"_leading",  // starts with underscore
+		"default",  // reserved
+		"",         // empty
+		"-leading", // starts with hyphen
+		"_leading", // starts with underscore
 		"has space",
 		"has/slash",
 		"has.dot",

@@ -123,5 +123,3 @@ func proxyDelete(path string) (*mcp.CallToolResult, any, error) {
 	}
 	return proxyResult(env.Data)
 }
-
-

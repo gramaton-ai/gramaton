@@ -18,10 +18,8 @@ import (
 // If a future test introduces a real leak goleak's report will name
 // the leaking stack so the failure is actionable.
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m,
-		// goleak's default ignores cover the testing framework
-		// itself. We add nothing here yet -- if a stable
-		// known-good goroutine emerges, IgnoreTopFunction is the
-		// right tool.
-	)
+	// goleak's default ignores cover the testing framework itself. We
+	// add nothing here yet -- if a stable known-good goroutine emerges,
+	// IgnoreTopFunction is the right tool.
+	goleak.VerifyTestMain(m)
 }

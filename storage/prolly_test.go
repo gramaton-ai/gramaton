@@ -636,10 +636,10 @@ func TestProllyTreeUpdateMultiple(t *testing.T) {
 
 	// Multiple mutations: insert, update, delete.
 	err := tree.Update([]ProllyMutation{
-		{Key: "k0010", Value: "modified"},     // update
-		{Key: "k0050", Delete: true},          // delete
-		{Key: "k0200", Value: "appended"},     // insert at end
-		{Key: "k0000a", Value: "inserted"},    // insert in middle
+		{Key: "k0010", Value: "modified"},  // update
+		{Key: "k0050", Delete: true},       // delete
+		{Key: "k0200", Value: "appended"},  // insert at end
+		{Key: "k0000a", Value: "inserted"}, // insert in middle
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)

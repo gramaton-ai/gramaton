@@ -78,11 +78,11 @@ func TestApplyClassificationClearsAttempts(t *testing.T) {
 	// failures via the autonomous path) and a captured-status state.
 	eng.Lock()
 	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":         graph.StringProperty("content needing classification"),
-		"processing_status":    graph.StringProperty("captured"),
-		"classify_attempts":    graph.Int64Property(2),
-		"last_classify_error":  graph.StringProperty("transient API timeout"),
-		"created_at":           graph.TimestampProperty(time.Now().UTC()),
+		"content_full":        graph.StringProperty("content needing classification"),
+		"processing_status":   graph.StringProperty("captured"),
+		"classify_attempts":   graph.Int64Property(2),
+		"last_classify_error": graph.StringProperty("transient API timeout"),
+		"created_at":          graph.TimestampProperty(time.Now().UTC()),
 	})
 	for k, v := range n.Properties {
 		eng.PropIdx().Add(n.ID, k, v)

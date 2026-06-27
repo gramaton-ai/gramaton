@@ -87,7 +87,7 @@ func WithReranker(r reranker) ToolOption {
 
 // Sort field constants.
 const (
-	SortScore         = ""              // default: effective_score (or created_at if no text)
+	SortScore         = "" // default: effective_score (or created_at if no text)
 	SortCreatedAt     = "created_at"
 	SortLastAccessed  = "last_accessed"
 	SortAccessCount   = "access_count"
@@ -111,20 +111,20 @@ func ValidSort(s string) bool {
 
 // Query specifies search parameters.
 type Query struct {
-	Text            string
-	ConfidenceMin   *float64
-	ConfidenceMax   *float64
-	ImportanceMin   *float64
-	ImportanceMax   *float64
-	Temporality      string // exact match, or "!value" for negation
-	KnowledgeType    string // exact match, or "!value" for negation
-	EpistemicStatus  string // exact match, or "!value" for negation
-	Resolution       string // exact match, "!value" for negation, or "unresolved" (no resolution set)
-	ProcessingStatus string // exact match, or "!value" for negation. Values: captured | processed | stuck | deleted.
-	Missing         []string // field names that must not be set
-	Keywords          []string   // exact keyword match (all must be present)
-	AccessCountMin    *int64     // minimum access count
-	AccessCountMax    *int64     // maximum access count
+	Text               string
+	ConfidenceMin      *float64
+	ConfidenceMax      *float64
+	ImportanceMin      *float64
+	ImportanceMax      *float64
+	Temporality        string     // exact match, or "!value" for negation
+	KnowledgeType      string     // exact match, or "!value" for negation
+	EpistemicStatus    string     // exact match, or "!value" for negation
+	Resolution         string     // exact match, "!value" for negation, or "unresolved" (no resolution set)
+	ProcessingStatus   string     // exact match, or "!value" for negation. Values: captured | processed | stuck | deleted.
+	Missing            []string   // field names that must not be set
+	Keywords           []string   // exact keyword match (all must be present)
+	AccessCountMin     *int64     // minimum access count
+	AccessCountMax     *int64     // maximum access count
 	LastAccessedAfter  *time.Time // accessed after this time
 	LastAccessedBefore *time.Time // accessed before this time
 	ValidAfter         *time.Time // valid_from after this time
@@ -136,7 +136,7 @@ type Query struct {
 	NearNode           string     // graph filter: only return nodes within MaxHops of this node
 	MaxHops            int        // max graph distance from NearNode (default 2)
 	Since              *time.Time
-	IncludeHistorical bool
+	IncludeHistorical  bool
 	// ExcludeConcepts filters out node_type=concept results. Set by the
 	// api layer for default search to keep concept nodes out of records
 	// retrieval (concepts are derivative summaries; they compete with
@@ -145,8 +145,8 @@ type Query struct {
 	// filter); api.Search flips it via SearchRequest.IncludeConcepts.
 	ExcludeConcepts bool
 	Top             int
-	MinEdges        *int   // minimum total edge count (in + out)
-	MaxEdges        *int   // maximum total edge count
+	MinEdges        *int              // minimum total edge count (in + out)
+	MaxEdges        *int              // maximum total edge count
 	Sort            string            // field to sort by (default: effective_score)
 	Order           string            // "asc" or "desc" (default: "desc")
 	Random          bool              // return random results (ignores sort/score)
@@ -167,8 +167,8 @@ type Facets struct {
 // meta.* field values found across results so agents can narrow
 // their query.
 type Suggestions struct {
-	Reason           string                       `json:"reason"`
-	AvailableFilters map[string]map[string]int    `json:"available_filters,omitempty"`
+	Reason           string                    `json:"reason"`
+	AvailableFilters map[string]map[string]int `json:"available_filters,omitempty"`
 }
 
 // ComputeSuggestions builds refinement suggestions from search results.
@@ -239,34 +239,34 @@ func ComputeFacets(results []Result) Facets {
 
 // Result is a single search result.
 type Result struct {
-	ID                  string  `json:"id"`
-	ParentID            string  `json:"parent_id,omitempty"`             // non-empty for observations (D14)
-	ParentSummary       string  `json:"parent_summary,omitempty"`        // parent's content_short (D14 rev)
-	ParentContentLength int     `json:"parent_content_length,omitempty"` // parent's content_full byte length (D14 rev)
-	MatchedBy           string  `json:"matched_by,omitempty"`            // "vector", "bm25", or "both" (D14)
-	Keywords        []string `json:"keywords,omitempty"`
-	SummaryShort    string  `json:"summary_short,omitempty"`
-	MetadataSummary string  `json:"metadata_summary"`
-	Confidence      float64 `json:"confidence"`
-	Temporality     string  `json:"temporality"`
-	KnowledgeType   string  `json:"knowledge_type,omitempty"`
-	EpistemicStatus string  `json:"epistemic_status,omitempty"`
-	Resolution      string  `json:"resolution,omitempty"`
-	ValidFrom       string  `json:"valid_from,omitempty"`
-	ValidUntil      string  `json:"valid_until,omitempty"`
-	AssertedAsOf    string  `json:"asserted_as_of,omitempty"`
-	EffectiveScore  float64 `json:"effective_score"`
-	LastAccessed    string  `json:"last_accessed,omitempty"`
-	CreatedAt       string  `json:"created_at,omitempty"`
-	AccessCount     int64   `json:"access_count,omitempty"`
-	Importance      float64 `json:"importance,omitempty"`
-	ContentLength   int     `json:"content_length,omitempty"`
-	EdgeCount       int      `json:"edge_count,omitempty"`
-	Staleness       float64  `json:"staleness,omitempty"`
-	Collections     []string `json:"collections,omitempty"`
-	Store           string   `json:"store,omitempty"`      // "memory" or "sessions"
-	SessionID       string   `json:"session_id,omitempty"` // for session segments: parent session node ID
-	TopicName       string   `json:"topic_name,omitempty"` // for session segments: parent topic name
+	ID                  string   `json:"id"`
+	ParentID            string   `json:"parent_id,omitempty"`             // non-empty for observations (D14)
+	ParentSummary       string   `json:"parent_summary,omitempty"`        // parent's content_short (D14 rev)
+	ParentContentLength int      `json:"parent_content_length,omitempty"` // parent's content_full byte length (D14 rev)
+	MatchedBy           string   `json:"matched_by,omitempty"`            // "vector", "bm25", or "both" (D14)
+	Keywords            []string `json:"keywords,omitempty"`
+	SummaryShort        string   `json:"summary_short,omitempty"`
+	MetadataSummary     string   `json:"metadata_summary"`
+	Confidence          float64  `json:"confidence"`
+	Temporality         string   `json:"temporality"`
+	KnowledgeType       string   `json:"knowledge_type,omitempty"`
+	EpistemicStatus     string   `json:"epistemic_status,omitempty"`
+	Resolution          string   `json:"resolution,omitempty"`
+	ValidFrom           string   `json:"valid_from,omitempty"`
+	ValidUntil          string   `json:"valid_until,omitempty"`
+	AssertedAsOf        string   `json:"asserted_as_of,omitempty"`
+	EffectiveScore      float64  `json:"effective_score"`
+	LastAccessed        string   `json:"last_accessed,omitempty"`
+	CreatedAt           string   `json:"created_at,omitempty"`
+	AccessCount         int64    `json:"access_count,omitempty"`
+	Importance          float64  `json:"importance,omitempty"`
+	ContentLength       int      `json:"content_length,omitempty"`
+	EdgeCount           int      `json:"edge_count,omitempty"`
+	Staleness           float64  `json:"staleness,omitempty"`
+	Collections         []string `json:"collections,omitempty"`
+	Store               string   `json:"store,omitempty"`      // "memory" or "sessions"
+	SessionID           string   `json:"session_id,omitempty"` // for session segments: parent session node ID
+	TopicName           string   `json:"topic_name,omitempty"` // for session segments: parent topic name
 }
 
 // Execute runs the search query and returns results. This calls
@@ -1040,7 +1040,6 @@ func timestampSinceOK(props graph.Properties, key string, threshold *time.Time) 
 	v, ok := props.GetTimestamp(key)
 	return !ok || !v.Before(*threshold)
 }
-
 
 func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	inputs := ScoreInputs{
