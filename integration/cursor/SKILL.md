@@ -3,7 +3,7 @@ name: gramaton
 description: "Persistent memory for this user via Gramaton MCP tools. Use when the user references past decisions, prior sessions, project context, or preferences; mentions a ticket (a ULID or project ticket codename); says remember, save, or store; asks about plans, status, or architecture; or works with tasks, TODOs, and backlogs (collections). Covers search, save, session extraction, and collection workflows."
 ---
 
-<!-- gramaton-managed v=0.1.0 (don't edit by hand — re-run `gramaton init --force` to update) -->
+<!-- gramaton-managed v=0.2.0 (don't edit by hand — re-run `gramaton init --force` to update) -->
 
 ## Knowledge Store (Gramaton)
 
@@ -41,15 +41,6 @@ or when to use a given tool, call `gramaton_guide(topic=...)`.
 Topics: metadata, save, search, sessions, collections, curation,
 temporal-queries. The guide is the authoritative live reference —
 prefer it over assumptions from memory.
-
-### Subagents and Gramaton
-
-Cursor subagents inherit all tools from the parent, including
-Gramaton's MCP tools, so a delegated task is able to write to the
-store. Keep saves and session extraction in the main conversation,
-and tell delegated tasks not to write to Gramaton: a subagent sees
-only its task brief, and partial-context saves produce fragmentary
-records.
 
 ### Retrieval
 
@@ -315,6 +306,18 @@ anything where missing an item is a failure.
 Collections have optional schemas that enforce field types and
 required fields. Items in collections are also graph nodes and can
 be linked to knowledge records via `gramaton_link`.
+
+### Subagents and Gramaton
+
+A subagent or delegated task that can reach Gramaton's MCP tools is
+able to write to the store. Keep semantic saves (`gramaton_save`) and
+session extraction in the main conversation anyway: a subagent sees
+only its task brief, so its saves land as fragmentary, poorly-linked
+records and can mis-fire auto-supersession. Recording a discrete item
+to a collection is different — a task or finding is self-contained, so
+adding it from a subagent is fine; returning items for the
+orchestrator to batch-add is usually cleaner (it dedupes and avoids
+repeated write prompts).
 
 ### Curation
 

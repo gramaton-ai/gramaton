@@ -685,6 +685,69 @@ func TestRegisterCodexHooksIdempotentAndPreserving(t *testing.T) {
 	}
 }
 
+// TestRegisterHooksRelocatedConfigDirReplaceNotAppend is the
+// regression for #83: hooks materialized under a relocated config dir
+// (--config, named stores) point outside ~/.gramaton/, so the legacy
+// `/.gramaton/hooks/` ownership fragment misses them and a re-run used
+// to append a fresh entry beside the stale one. The ownership check
+// now also recognizes any entry pointing into the current scriptPaths
+// directory, so a re-run replaces rather than appends.
+func TestRegisterHooksRelocatedConfigDirReplaceNotAppend(t *testing.T) {
+	tmp := t.TempDir()
+	codexHome := filepath.Join(tmp, ".codex")
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(codexHome, "hooks.json")
+
+	// scriptPaths under a relocated store dir -- deliberately NOT under
+	// ~/.gramaton/, so only the directory-prefix signal identifies them.
+	var scripts []string
+	for _, ev := range codexEvents {
+		scripts = append(scripts,
+			filepath.Join(tmp, "store", "hooks", "codex", ev.fileBase+".sh"),
+			filepath.Join(tmp, "store", "hooks", "codex", ev.fileBase+".cmd"),
+		)
+	}
+
+	ctx := context.Background()
+	if _, err := (DefaultHookBackend{}).RegisterHooks(ctx, "codex", scripts); err != nil {
+		t.Fatalf("first RegisterHooks: %v", err)
+	}
+	first, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unchanged, err := (DefaultHookBackend{}).RegisterHooks(ctx, "codex", scripts)
+	if err != nil {
+		t.Fatalf("second RegisterHooks: %v", err)
+	}
+	if !unchanged {
+		t.Error("re-run under a relocated config dir should be a no-op; the existing entry was not recognized as gramaton-owned (#83)")
+	}
+	second, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("hooks.json changed on idempotent re-run under a relocated dir:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+
+	// Pin the specific failure mode: one SessionStart block, not a
+	// duplicated pair.
+	var doc struct {
+		Hooks map[string][]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(second, &doc); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+	if got := len(doc.Hooks["SessionStart"]); got != 1 {
+		t.Errorf("expected exactly 1 SessionStart block after re-run, found %d:\n%s", got, second)
+	}
+}
+
 // TestRegisterCodexHooksMalformedJSON pins the won't-touch-it
 // behavior: a hooks.json we can't parse is an error, not a clobber.
 func TestRegisterCodexHooksMalformedJSON(t *testing.T) {

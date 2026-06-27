@@ -272,6 +272,67 @@ func TestProxyDeleteNotExposed(t *testing.T) {
 	}
 }
 
+func TestProxyCollectionCreateSchemaAdvertisesObjectType(t *testing.T) {
+	// Regression for #88: the collection_create `schema` argument must
+	// advertise type:object in the published tool input schema. When the
+	// proxy field was typed `any`, jsonschema-go emitted no type, so MCP
+	// clients serialized the object argument as a JSON string and the
+	// server rejected it with input_error. Inspecting the published
+	// schema catches the regression without a live backend (callProxy
+	// can't -- it marshals the argument itself, bypassing the client-side
+	// stringification that is the actual bug).
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name: "gramaton-test", Version: "0.0.0",
+	}, nil)
+	registerProxyTools(mcpServer)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go mcpServer.Run(ctx, serverTransport)
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "test-client", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	found := false
+	for _, tool := range res.Tools {
+		if tool.Name != "gramaton_collection_create" {
+			continue
+		}
+		found = true
+
+		// InputSchema round-trips as JSON over the transport; re-marshal
+		// and read the `schema` property's advertised type.
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal input schema: %v", err)
+		}
+		var doc struct {
+			Properties map[string]struct {
+				Type string `json:"type"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("parse input schema: %v\nraw: %s", err, raw)
+		}
+		if got := doc.Properties["schema"].Type; got != "object" {
+			t.Fatalf("collection_create `schema` arg advertises type %q, want \"object\" -- an untyped arg makes MCP clients stringify the object (#88)", got)
+		}
+	}
+	if !found {
+		t.Fatal("gramaton_collection_create tool not registered")
+	}
+}
+
 func TestProxyUnlink(t *testing.T) {
 	// Capture two records and link them.
 	dataA := callProxy(t, "gramaton_save", map[string]any{"content": "Record A"})

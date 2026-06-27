@@ -300,6 +300,18 @@ Collections have optional schemas that enforce field types and
 required fields. Items in collections are also graph nodes and can
 be linked to knowledge records via `gramaton_link`.
 
+### Subagents and Gramaton
+
+A subagent or delegated task that can reach Gramaton's MCP tools is
+able to write to the store. Keep semantic saves (`gramaton_save`) and
+session extraction in the main conversation anyway: a subagent sees
+only its task brief, so its saves land as fragmentary, poorly-linked
+records and can mis-fire auto-supersession. Recording a discrete item
+to a collection is different — a task or finding is self-contained, so
+adding it from a subagent is fine; returning items for the
+orchestrator to batch-add is usually cleaner (it dedupes and avoids
+repeated write prompts).
+
 ### Curation
 
 The server runs background curation on a configurable cadence to

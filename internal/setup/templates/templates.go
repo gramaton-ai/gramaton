@@ -33,7 +33,7 @@ import (
 // should re-read (new/renamed tools, changed routing rules), MAJOR
 // reserved post-1.0. A minor-or-more gap triggers the user-facing
 // "re-run `gramaton init --force`" nudge.
-const GuidanceVersion = "0.1.0"
+const GuidanceVersion = "0.2.0"
 
 // AddendumMarker is the placeholder line in base.md where a
 // harness's addendum is substituted. It sits just after the
@@ -70,12 +70,12 @@ var AddendumKiro string
 //go:embed guidance/addendum_codex.md
 var AddendumCodex string
 
-// AddendumCursor carries Cursor-specific guidance: the
-// subagent-delegation rule (Cursor subagents inherit all parent
-// tools including MCP, verified from vendor docs 2026-06-09).
-// Cursor has no verified native long-term memory analogue, so
-// there is no memory-routing rule here; the SKILL.md install
-// mechanics live in the install layer, not the prose.
+// AddendumCursor is reserved for Cursor-specific guidance.
+// Intentionally empty (the marker is stripped at render time):
+// Cursor has no verified native long-term memory analogue to route
+// around, and the universal subagent-delegation rule now lives in
+// base.md. The SKILL.md install mechanics live in the install layer,
+// not the prose.
 //
 //go:embed guidance/addendum_cursor.md
 var AddendumCursor string

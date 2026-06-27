@@ -109,18 +109,27 @@ func TestAddendaEmbedded(t *testing.T) {
 	if !strings.Contains(AddendumCodex, "~/.codex/memories/") {
 		t.Error("Codex addendum missing the native-memories routing rule")
 	}
-	// Every harness with subagent support carries its own version of
-	// the subagent-delegation rule -- the facts differ per harness
-	// (Claude Code subagents CANNOT reach MCP; Codex and Cursor
-	// subagents CAN inherit it), so this cannot live in base.md.
+	// The subagent-delegation rule is now uniform across every
+	// supported harness (all inherit the parent's MCP tools), so it
+	// lives once in base.md rather than being duplicated per addendum.
+	if !strings.Contains(base, "### Subagents and Gramaton") {
+		t.Error("base.md missing the universal subagents section")
+	}
 	for name, addendum := range map[string]string{
 		"Claude Code": AddendumClaudeCode,
 		"Codex":       AddendumCodex,
 		"Cursor":      AddendumCursor,
+		"Kiro":        AddendumKiro,
 	} {
-		if !strings.Contains(addendum, "### Subagents and Gramaton") {
-			t.Errorf("%s addendum missing the subagents section", name)
+		if strings.Contains(addendum, "### Subagents and Gramaton") {
+			t.Errorf("%s addendum still carries the subagents section; it now belongs in base.md only", name)
 		}
+	}
+	// Cursor and Kiro addenda carry no harness-specific prose -- the
+	// marker is stripped at render time. If either grows content,
+	// update these assertions deliberately.
+	if strings.TrimSpace(AddendumCursor) != "" {
+		t.Error("Cursor addendum should be empty now that the subagent rule lives in base.md")
 	}
 	if strings.TrimSpace(AddendumKiro) != "" {
 		t.Error("Kiro addendum should be empty while Kiro work is parked; if it grew content, update this test deliberately")

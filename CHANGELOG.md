@@ -119,6 +119,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`gramaton_collection_create` accepts a schema over MCP.** The
+  proxy typed the `schema` argument as `any`, which jsonschema-go
+  infers with no `type`, so MCP clients serialized the object as a
+  JSON string and the server rejected it (`cannot unmarshal string
+  into ... CollectionSchema`). The argument is now typed
+  `map[string]any` so the generated tool schema advertises
+  `type: object` and the value round-trips, matching the already-working
+  `gramaton_collection_add` `fields` argument (#88). The
+  `gramaton_collection_migrate` `value` argument keeps its `any` type
+  (it is polymorphic — scalar defaults are the common case and work;
+  object/array defaults over MCP remain a known limitation).
+
+- **`gramaton init` recognizes its own hook entries under relocated
+  config dirs.** The hook-config patchers identified gramaton-owned
+  entries only by the `/.gramaton/hooks/` path fragment, so hooks
+  materialized under a relocated config dir (`--config`, named stores)
+  were not recognized on re-run and a fresh entry was appended beside
+  the stale one, accumulating duplicates. The ownership check now also
+  treats any entry pointing into the current run's hook-script
+  directory as gramaton-owned, so re-runs replace instead of append
+  (#83). Default-layout installs are unaffected.
+
+- **Subagent guidance corrected and single-sourced (guidance `0.1.0`
+  → `0.2.0`).** The installed guidance claimed Claude Code background
+  subagents cannot access MCP tools and that a delegated save stalls
+  or silently fails. Current Claude Code inherits the parent session's
+  tools — including MCP tools — into subagents, and background-subagent
+  permission prompts surface in the parent session rather than
+  auto-denying, so the claim was wrong on both counts (#89). Because
+  the rule is now uniform across every supported harness (all inherit
+  the parent's MCP tools), the subagent section moved from the three
+  per-harness addenda into `base.md` once; the Cursor addendum, which
+  held nothing else, is now empty. The rule itself: a subagent can
+  write to the store, but keep semantic saves and session extraction
+  in the main conversation (a subagent sees only its task brief, so
+  its saves are fragmentary and can mis-fire supersession), while
+  adding a self-contained item to a collection from a subagent is
+  fine. Directive preserved; rationale corrected and de-duplicated.
+  Stamp bumped a minor step because the corrected capability claim is
+  guidance an agent should re-read.
+
 - **Pre-compact transcript archives now target the per-cwd session.**
   The pre-compact hook resolved the Gramaton session via the global
   last-writer-wins pointer file, so with concurrent hooked sessions
