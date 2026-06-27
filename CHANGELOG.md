@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.4] - 2026-06-27
+
 ### Added
 
 - **Codex and Cursor join Claude Code as supported harnesses in
