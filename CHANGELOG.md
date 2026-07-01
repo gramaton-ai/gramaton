@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Benchmark-shaped tests moved out of the test budget (#54).**
+  `TestCollectionPerformance` (100-item bulk loop, ~15s/run) is now
+  `BenchmarkCollectionBulk`, with a small `TestCollectionBulkCounts`
+  sibling that restores the bulk-count and `ItemCount` assertions on
+  every platform — including Windows CI, where the old test was
+  skipped outright. `TestSaveBatchWallClockSpeedup` (informational-
+  only since the #36 softening) is now the
+  `BenchmarkSaveSequential`/`BenchmarkSaveBatch` pair. Hard
+  regression gates (`TestSaveBatchLockHoldTime`, the embed speedup
+  gates) deliberately stay tests. The api test fixtures
+  (`setupTestAPI`, `setupReembedAPI`, `setupBatchAPI`) now take
+  `testing.TB` so tests and benchmarks share them. Run benchmarks
+  with `go test -run '^$' -bench . ./api/`.
+
 ## [0.3.0-alpha.4] - 2026-06-27
 
 ### Added

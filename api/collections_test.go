@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1096,33 +1095,19 @@ func TestCollectionNaNRejection(t *testing.T) {
 	}
 }
 
-func TestCollectionPerformance(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping performance test")
-	}
-	if runtime.GOOS == "windows" {
-		// Perf-shape test; structural correctness is covered by smaller
-		// sibling tests (TestCollectionAdd*, TestCollectionItems*). On
-		// slow Windows CI runners this consumes ~15-50s of the api
-		// package's 10-min budget under race + parallel-suite load,
-		// pushing the package over its budget. Linux/macOS still run
-		// full size.
-		t.Skip("perf-shape test; structural correctness covered by smaller siblings; saves Windows CI budget")
-	}
+// TestCollectionBulkCounts: after a run of schema-validated adds,
+// CollectionItems.Count and CollectionList's ItemCount both reflect
+// every add. Small N so it runs on every platform including Windows
+// CI; the 100-item perf-shape version of this test is now
+// BenchmarkCollectionBulk (#54).
+func TestCollectionBulkCounts(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	schema := &CollectionSchema{
-		Fields: []SchemaField{
-			{Name: "title", Type: FieldTypeString, Required: true},
-			{Name: "status", Type: FieldTypeEnum, Required: true, Values: []string{"open", "done"}},
-			{Name: "priority", Type: FieldTypeNumber, Required: false},
-		},
-	}
-	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Perf Test", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Bulk Counts", Schema: bulkBenchSchema()})
 	collID := result.ID
 
-	const numItems = 100
+	const numItems = 10
 	for i := 0; i < numItems; i++ {
 		_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 			Fields: map[string]any{
@@ -1151,6 +1136,53 @@ func TestCollectionPerformance(t *testing.T) {
 	colls := list.Collections
 	if colls[0].ItemCount != numItems {
 		t.Errorf("item_count = %v, want %d", colls[0].ItemCount, numItems)
+	}
+}
+
+func bulkBenchSchema() *CollectionSchema {
+	return &CollectionSchema{
+		Fields: []SchemaField{
+			{Name: "title", Type: FieldTypeString, Required: true},
+			{Name: "status", Type: FieldTypeEnum, Required: true, Values: []string{"open", "done"}},
+			{Name: "priority", Type: FieldTypeNumber, Required: false},
+		},
+	}
+}
+
+// BenchmarkCollectionBulk: the former TestCollectionPerformance body
+// (100 schema-validated adds + a sorted items read + a list with item
+// counts per iteration), moved out of the test budget (#54). Run with:
+//
+//	go test -run '^$' -bench CollectionBulk ./api/
+func BenchmarkCollectionBulk(b *testing.B) {
+	a, _ := setupTestAPI(b)
+	ctx := context.Background()
+
+	const numItems = 100
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: fmt.Sprintf("Perf Test %d", i), Schema: bulkBenchSchema()})
+		if apiErr != nil {
+			b.Fatalf("create: %v", apiErr)
+		}
+		collID := result.ID
+		for j := 0; j < numItems; j++ {
+			if _, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
+				Fields: map[string]any{
+					"title":    fmt.Sprintf("Task %d", j),
+					"status":   "open",
+					"priority": float64(j % 4),
+				},
+			}); apiErr != nil {
+				b.Fatalf("add %d: %v", j, apiErr)
+			}
+		}
+		if _, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{Sort: "priority"}); apiErr != nil {
+			b.Fatalf("items: %v", apiErr)
+		}
+		if _, apiErr := a.CollectionList(ctx, CollectionListRequest{}); apiErr != nil {
+			b.Fatalf("list: %v", apiErr)
+		}
 	}
 }
 
