@@ -208,7 +208,9 @@ func TestProxyGuide(t *testing.T) {
 		t.Fatalf("expected non-empty topics list, got %v", data["topics"])
 	}
 
-	// Every advertised topic round-trips to content through the proxy.
+	// One advertised topic round-trips to content through the proxy
+	// (per-topic content coverage lives server-side in
+	// TestGuideReturnsContentForEachTopic).
 	topic, _ := topics[0].(string)
 	if topic == "" {
 		t.Fatalf("expected string topic, got %v", topics[0])

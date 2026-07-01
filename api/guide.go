@@ -57,6 +57,13 @@ func (a *API) Guide(ctx context.Context, req GuideRequest) (GuideResponse, *APIE
 		}, nil
 	}
 
+	// Cap before any use: an invalid topic is echoed into the WARN
+	// log and the error message below, so bound it like other
+	// topic-shaped input (api/diff.go).
+	if len(req.Topic) > MaxTopicLength {
+		return GuideResponse{}, ErrInvalid(fmt.Sprintf("topic exceeds maximum length of %d", MaxTopicLength))
+	}
+
 	topic := strings.ToLower(strings.TrimSpace(req.Topic))
 
 	// Validate topic.

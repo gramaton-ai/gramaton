@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -42,5 +43,16 @@ func TestGuideEveryTopicHasEmbeddedContent(t *testing.T) {
 		if !valid[name] {
 			t.Errorf("embedded guide file %q has no entry in validGuideTopics", entry.Name())
 		}
+	}
+}
+
+// TestGuideRejectsOverlongTopic pins the input cap: an invalid topic
+// is echoed into the log and the not-found message, so topic-shaped
+// input is bounded before use like api/diff.go's.
+func TestGuideRejectsOverlongTopic(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	_, apiErr := a.Guide(context.Background(), GuideRequest{Topic: strings.Repeat("x", MaxTopicLength+1)})
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("expected input_error for overlong topic, got %+v", apiErr)
 	}
 }
