@@ -29,6 +29,10 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
 	registerCollectionProxyTools(mcpServer)
 	registerSessionProxyTools(mcpServer)
+	// Intake: api-typed binding in mcp_proxy_intake.go.
+	registerIntakeProxyTools(mcpServer)
+	// Guide: api-typed binding in mcp_proxy_guide.go.
+	registerGuideProxyTools(mcpServer)
 }
 
 // --- helpers ---

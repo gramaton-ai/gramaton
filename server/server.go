@@ -723,6 +723,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Intake (unified write endpoint)
 	mux.HandleFunc("POST /v1/intake", s.handleIntake)
 
+	// Guide cluster: migrated to api package. Shim in bindings_guide.go.
+	s.registerGuideRoutes(mux)
+
 	// Operations (not yet migrated to api)
 	mux.HandleFunc("POST /v1/revert", s.handleRevert)
 	mux.HandleFunc("POST /v1/ingest", s.handleIngest)

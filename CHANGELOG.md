@@ -7,6 +7,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gramaton_guide` and `gramaton_intake` are now reachable through
+  the `gramaton mcp` stdio proxy** (#95). Both tools were registered
+  only on the in-process MCP server surface, so agents connected the
+  way `gramaton init` configures them saw 41 tools instead of 43 —
+  even though the installed guidance and the README instruct them to
+  call `gramaton_guide(topic=...)`. Guide migrated to the canonical
+  api surface: `api.Guide` with typed request/response, a new
+  `GET /v1/guide?topic=...` endpoint, and the guide markdown moved to
+  `api/guide/` (the invalid-topic error code changed from
+  `topic_not_found` to the standard `not_found`). Intake's MCP input
+  struct and tool description moved to shared
+  `api.IntakeRequest`/`api.IntakeDescription` definitions consumed by
+  both transports. The guide tool description's topic list is now
+  generated from the server's valid-topic list — it had drifted
+  (advertised the removed `capture` topic and omitted `save` and
+  `temporal-queries`). A proxy-side tool-registry test now pins the
+  proxy tool set the way `server/mcp_harness_test.go` pins the
+  server's, so a server-only registration fails tests instead of
+  shipping.
+
 ## [0.3.0-alpha.4] - 2026-06-27
 
 ### Added

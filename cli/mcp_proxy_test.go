@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -68,6 +69,171 @@ func callProxy(t *testing.T, toolName string, args any) map[string]any {
 		t.Fatalf("parse result for %s: %v\nraw: %s", toolName, err, tc.Text)
 	}
 	return data
+}
+
+// TestProxyToolRegistry is the proxy-side twin of the server's
+// TestMCPToolRegistry (server/mcp_harness_test.go). The stdio proxy
+// (`gramaton mcp`) is the surface agents actually connect through,
+// so a tool registered only in server/ is invisible to them -- the
+// gap #95 reports for gramaton_guide and gramaton_intake. This test
+// lists the proxy's registered tools via an in-memory client and
+// asserts the set matches the expected snapshot, so any future
+// server-only registration fails here instead of shipping.
+//
+// The expected set is the server surface minus deliberate policy
+// exclusions: destructive operations (gramaton_delete) are not
+// exposed to agents via MCP -- see the registerDeleteProxy comment
+// in registerProxyTools and TestProxyDeleteNotExposed. Do NOT add
+// destructive tools here just to mirror the server.
+func TestProxyToolRegistry(t *testing.T) {
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name: "gramaton-test", Version: "0.0.0",
+	}, nil)
+	registerProxyTools(mcpServer)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go mcpServer.Run(ctx, serverTransport)
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "test-client", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	got := make([]string, 0, len(res.Tools))
+	for _, tool := range res.Tools {
+		got = append(got, tool.Name)
+		if tool.Description == "" {
+			t.Errorf("tool %q has empty description", tool.Name)
+		}
+	}
+	sort.Strings(got)
+
+	// Snapshot of proxy-registered tools (alphabetised).
+	// Adding a tool: register it in a cli/mcp_proxy_*.go cluster AND
+	// append it here AND add it to the server harness snapshot.
+	// Removing: drop both registrations and both snapshots.
+	want := []string{
+		"gramaton_backup",
+		"gramaton_branch",
+		"gramaton_classify",
+		"gramaton_collection_add",
+		"gramaton_collection_add_batch",
+		"gramaton_collection_create",
+		"gramaton_collection_delete",
+		"gramaton_collection_items",
+		"gramaton_collection_list",
+		"gramaton_collection_migrate",
+		"gramaton_collection_move",
+		"gramaton_collection_remove",
+		"gramaton_collection_rename",
+		"gramaton_collection_schema",
+		"gramaton_collection_update",
+		"gramaton_curation",
+		"gramaton_diff",
+		"gramaton_duplicates",
+		"gramaton_explore",
+		"gramaton_guide",
+		"gramaton_history",
+		"gramaton_inspect",
+		"gramaton_intake",
+		"gramaton_jobs_list",
+		"gramaton_link",
+		"gramaton_log",
+		"gramaton_pending",
+		"gramaton_reembed",
+		"gramaton_resolve",
+		"gramaton_save",
+		"gramaton_save_batch",
+		"gramaton_save_batch_cancel",
+		"gramaton_save_batch_result",
+		"gramaton_save_batch_status",
+		"gramaton_search",
+		"gramaton_session_get",
+		"gramaton_session_prepare",
+		"gramaton_session_save",
+		"gramaton_session_start",
+		"gramaton_stats",
+		"gramaton_status",
+		"gramaton_unlink",
+		"gramaton_update",
+	}
+
+	missing := diffToolNames(want, got)
+	unexpected := diffToolNames(got, want)
+
+	if len(missing) > 0 {
+		t.Errorf("proxy MCP tools missing from registration (expected but not found): %v\n"+
+			"Agents connect through the `gramaton mcp` proxy -- a tool absent here is unreachable\n"+
+			"even if server/ registers it. If you intentionally removed a tool, drop it from the\n"+
+			"want list above.", missing)
+	}
+	if len(unexpected) > 0 {
+		t.Errorf("proxy MCP tools found that are not in the snapshot: %v\n"+
+			"If you intentionally added a tool, add it to the want list above (alphabetised)\n"+
+			"and to the server snapshot in server/mcp_harness_test.go. If it is destructive,\n"+
+			"it should not be proxy-registered at all.", unexpected)
+	}
+}
+
+// diffToolNames returns elements present in a but not b.
+func diffToolNames(a, b []string) []string {
+	bset := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		bset[s] = struct{}{}
+	}
+	var missing []string
+	for _, s := range a {
+		if _, ok := bset[s]; !ok {
+			missing = append(missing, s)
+		}
+	}
+	return missing
+}
+
+func TestProxyGuide(t *testing.T) {
+	// No topic: returns the topic list.
+	data := callProxy(t, "gramaton_guide", struct{}{})
+	topics, ok := data["topics"].([]any)
+	if !ok || len(topics) == 0 {
+		t.Fatalf("expected non-empty topics list, got %v", data["topics"])
+	}
+
+	// Every advertised topic round-trips to content through the proxy.
+	topic, _ := topics[0].(string)
+	if topic == "" {
+		t.Fatalf("expected string topic, got %v", topics[0])
+	}
+	data = callProxy(t, "gramaton_guide", map[string]any{"topic": topic})
+	if data["topic"] != topic {
+		t.Fatalf("expected topic %q, got %v", topic, data["topic"])
+	}
+	if content, _ := data["content"].(string); content == "" {
+		t.Fatal("expected non-empty content")
+	}
+}
+
+func TestProxyIntake(t *testing.T) {
+	data := callProxy(t, "gramaton_intake", map[string]any{
+		"content":                "Test proxy intake: water boils at 100C at sea level",
+		"context_capture_reason": "proxy integration test",
+	})
+	id, ok := data["id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("expected non-empty id, got %v", data["id"])
+	}
+	if data["route"] != "knowledge" {
+		t.Fatalf("expected route=knowledge, got %v", data["route"])
+	}
 }
 
 func TestProxySearch(t *testing.T) {

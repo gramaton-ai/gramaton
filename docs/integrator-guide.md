@@ -393,6 +393,6 @@ The boundary: **Gramaton stores and retrieves. Your agent thinks and decides.**
 
 ## Live reference
 
-`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `save`, `search`, `sessions`, `collections`, `metadata`, `curation`, `temporal-queries`. The guide content lives in the repo at `server/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
+`gramaton_guide(topic=...)` is the authoritative in-MCP reference. Topics as of this writing: `save`, `search`, `sessions`, `collections`, `metadata`, `curation`, `temporal-queries`. The guide content lives in the repo at `api/guide/*.md` and ships in the binary — it updates with each release, so it's always in sync with the running server's behavior.
 
 When you're unsure about a field, a trigger, or a flow, call the guide rather than guessing. That's its job.
