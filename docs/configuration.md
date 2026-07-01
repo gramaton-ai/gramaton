@@ -408,6 +408,7 @@ Controls when candidate keywords become concept nodes.
 ```yaml
 concepts:
   emergence_threshold: 3             # min records sharing a keyword to become a candidate
+  max_keyword_pct: 0.2               # skip keywords on more than this fraction of records (corpus-wide vocabulary)
   member_overlap_threshold: 0.6      # Jaccard above which a candidate aliases an existing concept (0 disables)
 ```
 
