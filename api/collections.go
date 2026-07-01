@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/storage"
@@ -303,6 +304,35 @@ const CollectionDeleteDescription = "Retire a collection (reversible). Items and
 const CollectionSchemaDescription = "Read a collection's schema and migration status."
 
 const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
+
+// CollectionMigrateInputSchema builds the MCP input schema for the
+// migrate tool from a transport's input struct T. The migrate `value`
+// argument is `any` in Go (a migration default is genuinely
+// polymorphic: scalars are the dominant case, but an enum[] field
+// takes an array default). jsonschema inference leaves an `any` field
+// type-less, and MCP clients stringify arguments with no advertised
+// type, so object and array defaults arrived as JSON strings and
+// failed validation (#91). Inference is kept for every other argument;
+// only `value` is overridden with an explicit multi-type schema.
+// Shared by the MCP server binding and the CLI proxy -- same
+// anti-drift role as the XxxDescription constants above.
+func CollectionMigrateInputSchema[T any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[T](nil)
+	if err != nil {
+		// Registration-time failure on a static struct is a programming
+		// error, not a runtime condition; mcp.AddTool panics on invalid
+		// schemas for the same reason.
+		panic("collection_migrate input schema: " + err.Error())
+	}
+	if _, ok := schema.Properties["value"]; !ok {
+		panic("collection_migrate input struct has no `value` field")
+	}
+	schema.Properties["value"] = &jsonschema.Schema{
+		Types:       []string{"string", "number", "boolean", "array", "object", "null"},
+		Description: "value to set on all items missing this field; any JSON type (use null for explicit null)",
+	}
+	return schema
+}
 
 const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On curation=standard, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure."
 
