@@ -951,15 +951,15 @@ type ChunkingConfig struct {
 // ConceptsConfig controls concept emergence thresholds. Concepts are
 // synthesized from repeated keywords; these knobs decide when a keyword
 // cluster is promoted to a concept node.
+//
+// NOTE: MinContentLengthDirect (an anti-spam gate for a direct concept
+// capture path that never shipped) was declared but never wired; it was
+// removed in the #100 cleanup. Add a field here only when introducing
+// the code path that reads it.
 type ConceptsConfig struct {
 	// EmergenceThreshold: minimum number of records sharing a keyword
 	// before it becomes a candidate concept.
 	EmergenceThreshold int `yaml:"emergence_threshold"`
-
-	// MinContentLengthDirect: minimum content length for a record to
-	// count toward the emergence threshold directly (short records
-	// contribute less evidence).
-	MinContentLengthDirect int `yaml:"min_content_length_direct"`
 
 	// MaxKeywordPct: skip keywords that appear in more than this
 	// fraction of records (0-1.0). Ubiquitous keywords don't make
@@ -1266,7 +1266,6 @@ func Defaults() Config {
 		Concepts: ConceptsConfig{
 			EmergenceThreshold:     3,
 			MaxKeywordPct:          0.2,
-			MinContentLengthDirect: 50,
 			MemberOverlapThreshold: 0.6,
 		},
 

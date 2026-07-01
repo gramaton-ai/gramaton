@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **`concepts.min_content_length_direct` config key removed** (#100)
+  -- declared, defaulted (50), and documented as an anti-spam gate
+  for direct concept creation, but never read anywhere: the feature
+  it was designed for never shipped, and concept emergence uses only
+  `emergence_threshold`, `max_keyword_pct`, and
+  `member_overlap_threshold`. No behavior change. Note: config
+  loading is strict, so a `config.yaml` that still contains this key
+  now fails loud at load time with the offending key + line (the
+  same surface as typos, matching the earlier config-drift sweep);
+  delete the line to fix.
+
 ## [0.3.0-alpha.4] - 2026-06-27
 
 ### Added
