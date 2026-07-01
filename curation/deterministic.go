@@ -192,9 +192,27 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// by the member-set overlap gate live here, and we want
 			// future cycles to short-circuit on them just like primary
 			// keywords.
+			// cooccurring_keywords (stamped at emergence) marks which
+			// content_keywords entries are correlated terms rather than
+			// the primary or Phase F aliases. Those still suppress
+			// emergence (a "messaging" concept shouldn't fragment off a
+			// "kafka" one) but never become attachment claims: records
+			// sharing only a co-occurring term are not instances of the
+			// concept. Concepts created before this property existed
+			// have no marker; their content_keywords claims fall back
+			// to the live-population Jaccard gate at attach time.
+			cooccurring := make(map[string]struct{})
+			if coKws, ok := n.Properties.GetStringList("cooccurring_keywords"); ok {
+				for _, kw := range coKws {
+					cooccurring[kw] = struct{}{}
+				}
+			}
 			if kws, ok := n.Properties.GetStringList("content_keywords"); ok {
 				for _, kw := range kws {
 					existingConcepts[kw] = struct{}{}
+					if _, isCo := cooccurring[kw]; isCo {
+						continue
+					}
 					// content_keywords also carries co-occurring
 					// keywords, a weaker ownership signal than the
 					// primary -- never displace an existing claim.
@@ -501,16 +519,20 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				continue
 			}
 			if !claim.primary {
-				// The keyword resolved through content_keywords, which
-				// stores Phase F aliases and merely co-occurring
-				// "related terms" indistinguishably. A genuine alias's
-				// live population still substantially overlaps the
-				// concept's members (that overlap is what admitted the
-				// alias in Phase F); a co-occurring keyword's does not.
-				// Re-apply the same gate here, else records sharing
-				// only a co-occurring keyword (e.g. tagged "messaging"
-				// against a "kafka" concept) would be permanently
-				// attached as false evidence. A disabled threshold
+				// The keyword resolved through content_keywords. On
+				// concepts stamped with cooccurring_keywords, co-terms
+				// never produce claims, so a non-primary claim is a
+				// Phase F alias; on older concepts the marker doesn't
+				// exist and aliases are indistinguishable from
+				// co-occurring "related terms". Either way, gate on
+				// live-population overlap -- a genuine alias's records
+				// substantially overlap the concept's members; records
+				// sharing only a correlated keyword (e.g. tagged
+				// "messaging" against a "kafka" concept) must not be
+				// attached as false evidence. The gate is best-effort
+				// for legacy full-coverage co-terms (trickle arrivals
+				// can ratchet past it), which is why new emergences
+				// persist provenance instead. A disabled threshold
 				// (<= 0) turns non-primary attachment off entirely
 				// rather than open.
 				if overlapThreshold <= 0 ||
@@ -837,6 +859,28 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 				allKeywords = deduped
 
+				// Record which content_keywords entries are merely
+				// co-occurring stamps (not the primary, not Phase F
+				// aliases). The attachment path (#99) reads this to
+				// skip them structurally: a co-occurring term's records
+				// are correlated with, not instances of, the concept,
+				// and the live-population Jaccard gate alone cannot
+				// separate a full-coverage co-term from a genuine alias
+				// (trickle arrivals ratchet past it one record per
+				// cycle). Provenance is known here at write time -- keep
+				// it instead of discarding it into the mixed list.
+				aliasSet := make(map[string]struct{}, len(aliases)+1)
+				aliasSet[c.Keyword] = struct{}{}
+				for _, kw := range aliases {
+					aliasSet[kw] = struct{}{}
+				}
+				var cooccurringOnly []string
+				for _, kw := range coKeywords {
+					if _, isAlias := aliasSet[kw]; !isAlias {
+						cooccurringOnly = append(cooccurringOnly, kw)
+					}
+				}
+
 				props := graph.Properties{
 					"content_full":      graph.StringProperty(templateFull),
 					"content_short":     graph.StringProperty(templateShort),
@@ -852,6 +896,9 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					"evidence_count":    graph.Int64Property(int64(c.Count)),
 					"created_at":        graph.TimestampProperty(now),
 					"access_count":      graph.Int64Property(0),
+				}
+				if len(cooccurringOnly) > 0 {
+					props["cooccurring_keywords"] = graph.StringListProperty(cooccurringOnly)
 				}
 
 				cn := ws.AddNode(props)

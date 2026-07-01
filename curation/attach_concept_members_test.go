@@ -341,3 +341,200 @@ func TestConceptAttachmentIsIdempotent(t *testing.T) {
 		t.Errorf("cycle 3 inbound instance_of edges = %d, want 4 (no duplicates)", got)
 	}
 }
+
+// TestConceptStampedCoKeywordNeverAttaches pins the provenance fix
+// for the trickle-ratchet residual: a co-occurring keyword stamped at
+// emergence (below the candidate threshold then, so never Phase-F
+// evaluated) must never attach evidence, regardless of what the
+// live-population Jaccard says. The Jaccard gate alone is
+// arrival-timing sensitive: under a permissive threshold, or after
+// membership decay (superseded/GC'd members shrink the denominator),
+// trickle arrivals pass it one record per cycle and each false attach
+// raises J for the next. The fixture uses a permissive threshold
+// (0.3) under which the stamped co-term's first arrival would pass
+// the gate (J = 2/4 = 0.5 > 0.3) if provenance didn't skip it
+// structurally.
+//
+// (A co-term covering ALL members at emergence can't be stamped: its
+// count matches the primary's, so it reaches candidacy and is folded
+// as a Phase F alias at full overlap instead -- alias semantics own
+// that case by construction.)
+func TestConceptStampedCoKeywordNeverAttaches(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
+	cfg.Concepts.MemberOverlapThreshold = 0.3
+
+	now := time.Now().UTC()
+
+	// Filler records with unshared keywords (see store-shape note).
+	addNode(t, eng, "Filler record one", "durable", 0.9, []string{"fillerone"}, now)
+	addNode(t, eng, "Filler record two", "durable", 0.9, []string{"fillertwo"}, now)
+	addNode(t, eng, "Filler record three", "durable", 0.9, []string{"fillerthree"}, now)
+
+	// Three kafka seeds; two carry "messaging" (count 2 < threshold 3
+	// at cycle 1, so it is stamped as a co-occurring keyword, not
+	// Phase-F folded).
+	addNode(t, eng, "Kafka seed record", "durable", 0.9, []string{"kafka"}, now.Add(-3*time.Hour))
+	addNode(t, eng, "Kafka seed record two", "durable", 0.9, []string{"kafka", "messaging"}, now.Add(-2*time.Hour))
+	addNode(t, eng, "Kafka seed record three", "durable", 0.9, []string{"kafka", "messaging"}, now.Add(-time.Hour))
+
+	first := RunDeterministic(eng, cfg, nil)
+	if first.ConceptsCreated != 1 {
+		t.Fatalf("cycle 1 ConceptsCreated = %d, want 1", first.ConceptsCreated)
+	}
+	conceptID := findConceptByKeyword(t, eng, "kafka")
+	if conceptID == "" {
+		t.Fatal("no concept node with concept_keyword=kafka after cycle 1")
+	}
+
+	// Emergence must have persisted the co-term provenance.
+	eng.RLock()
+	cn, _ := eng.Graph().GetNode(conceptID)
+	coKws, _ := cn.Properties.GetStringList("cooccurring_keywords")
+	eng.RUnlock()
+	found := false
+	for _, kw := range coKws {
+		if kw == "messaging" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("cooccurring_keywords = %v, want to contain %q", coKws, "messaging")
+	}
+
+	// Trickle: one unrelated messaging-only record per cycle. First
+	// arrival makes "messaging" a candidate (2 seeds + 1 new = 3) with
+	// J = 2/4 = 0.5 > 0.3 -- the Jaccard gate alone would admit it;
+	// provenance must block it every cycle.
+	for cycle := 2; cycle <= 4; cycle++ {
+		addNode(t, eng, "Unrelated messaging record", "durable", 0.9, []string{"messaging"}, now)
+		res := RunDeterministic(eng, cfg, nil)
+		if res.ConceptMembersAttached != 0 {
+			t.Fatalf("cycle %d ConceptMembersAttached = %d, want 0 (co-term provenance must block attachment)", cycle, res.ConceptMembersAttached)
+		}
+		if res.ConceptsCreated != 0 {
+			t.Errorf("cycle %d ConceptsCreated = %d, want 0 (co-term still suppresses emergence)", cycle, res.ConceptsCreated)
+		}
+	}
+	if got := len(inboundInstanceOfSources(t, eng, conceptID)); got != 3 {
+		t.Fatalf("inbound instance_of edges = %d, want 3 (unchanged after trickle)", got)
+	}
+}
+
+// TestConceptAttachRejectsAtExactThreshold pins the gate boundary on
+// the legacy path (no cooccurring_keywords marker): attachment
+// requires the Jaccard to strictly EXCEED member_overlap_threshold,
+// matching Phase F admission semantics. Fixture arithmetic: 3 members
+// all carrying the alias + 2 new alias-only records gives J = 3/5 =
+// 0.6, exactly the threshold, which must be rejected.
+func TestConceptAttachRejectsAtExactThreshold(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
+	cfg.Concepts.MemberOverlapThreshold = 0.6
+
+	now := time.Now().UTC()
+
+	addNode(t, eng, "Filler record one", "durable", 0.9, []string{"fillerone"}, now)
+	addNode(t, eng, "Filler record two", "durable", 0.9, []string{"fillertwo"}, now)
+
+	var memberIDs []string
+	for i := 0; i < 3; i++ {
+		id := addNode(t, eng, "Primary keyword member", "durable", 0.9,
+			[]string{"primarykw", "aliaskw"}, now.Add(-time.Duration(i)*time.Hour))
+		memberIDs = append(memberIDs, id)
+	}
+
+	eng.Lock()
+	conceptNode := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Concept: primarykw."),
+		"content_short":     graph.StringProperty("primarykw cluster"),
+		"content_keywords":  graph.StringListProperty([]string{"primarykw", "aliaskw"}),
+		"processing_status": graph.StringProperty("processed"),
+		"synthesis_status":  graph.StringProperty("complete"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("primarykw"),
+		"temporality":       graph.StringProperty("durable"),
+		"knowledge_type":    graph.StringProperty("conceptual"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range conceptNode.Properties {
+		eng.PropIdx().Add(conceptNode.ID, k, v)
+	}
+	for _, mid := range memberIDs {
+		eng.Graph().AddEdge(mid, conceptNode.ID, "instance_of", 0.8, nil)
+	}
+	eng.Save("seed concept")
+	eng.Unlock()
+
+	// Two alias-only records: J = |{3 members}| / |{3 members + 2 new}|
+	// = 0.6 exactly.
+	addNode(t, eng, "Alias keyword record", "durable", 0.9, []string{"aliaskw"}, now)
+	addNode(t, eng, "Alias keyword record two", "durable", 0.9, []string{"aliaskw"}, now)
+
+	result := RunDeterministic(eng, cfg, nil)
+	if result.ConceptMembersAttached != 0 {
+		t.Errorf("ConceptMembersAttached = %d, want 0 (J == threshold must be rejected)", result.ConceptMembersAttached)
+	}
+	if got := len(inboundInstanceOfSources(t, eng, conceptNode.ID)); got != 3 {
+		t.Fatalf("inbound instance_of edges = %d, want 3 (unchanged)", got)
+	}
+}
+
+// TestConceptAttachDisabledThresholdTurnsAliasPathOff pins the
+// disable branch: member_overlap_threshold = 0 turns non-primary
+// attachment off entirely (closed, not open). The fixture would
+// attach at the default threshold (J = 3/4 = 0.75).
+func TestConceptAttachDisabledThresholdTurnsAliasPathOff(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
+	cfg.Concepts.MemberOverlapThreshold = 0
+
+	now := time.Now().UTC()
+
+	addNode(t, eng, "Filler record one", "durable", 0.9, []string{"fillerone"}, now)
+	addNode(t, eng, "Filler record two", "durable", 0.9, []string{"fillertwo"}, now)
+
+	var memberIDs []string
+	for i := 0; i < 3; i++ {
+		id := addNode(t, eng, "Primary keyword member", "durable", 0.9,
+			[]string{"primarykw", "aliaskw"}, now.Add(-time.Duration(i)*time.Hour))
+		memberIDs = append(memberIDs, id)
+	}
+
+	eng.Lock()
+	conceptNode := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("Concept: primarykw."),
+		"content_short":     graph.StringProperty("primarykw cluster"),
+		"content_keywords":  graph.StringListProperty([]string{"primarykw", "aliaskw"}),
+		"processing_status": graph.StringProperty("processed"),
+		"synthesis_status":  graph.StringProperty("complete"),
+		"node_type":         graph.StringProperty("concept"),
+		"concept_keyword":   graph.StringProperty("primarykw"),
+		"temporality":       graph.StringProperty("durable"),
+		"knowledge_type":    graph.StringProperty("conceptual"),
+		"created_at":        graph.TimestampProperty(now),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range conceptNode.Properties {
+		eng.PropIdx().Add(conceptNode.ID, k, v)
+	}
+	for _, mid := range memberIDs {
+		eng.Graph().AddEdge(mid, conceptNode.ID, "instance_of", 0.8, nil)
+	}
+	eng.Save("seed concept")
+	eng.Unlock()
+
+	addNode(t, eng, "Alias keyword record", "durable", 0.9, []string{"aliaskw"}, now)
+
+	result := RunDeterministic(eng, cfg, nil)
+	if result.ConceptMembersAttached != 0 {
+		t.Errorf("ConceptMembersAttached = %d, want 0 (disabled gate must turn alias attachment off)", result.ConceptMembersAttached)
+	}
+	if got := len(inboundInstanceOfSources(t, eng, conceptNode.ID)); got != 3 {
+		t.Fatalf("inbound instance_of edges = %d, want 3 (unchanged)", got)
+	}
+}
