@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Concept nodes now accumulate evidence after creation (#99). The
+  deterministic curation cycle previously skipped any candidate
+  keyword that already had a concept node, so records captured after
+  emergence never got an `instance_of` edge and `evidence_count`
+  could only hold or shrink. The cycle now resolves the keyword
+  (primary `concept_keyword` or any alias in `content_keywords`) to
+  its concept and links the not-yet-linked members, capped at 200
+  attachment edges per cycle; enrichment recomputes `evidence_count`
+  from the new edges in the same cycle. Concept nodes also no longer
+  count as evidence for their own keyword in candidate detection.
+
 ## [0.3.0-alpha.4] - 2026-06-27
 
 ### Added
