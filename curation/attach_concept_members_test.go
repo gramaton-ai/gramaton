@@ -137,21 +137,32 @@ func TestConceptAttachesNewMembersAfterEmergence(t *testing.T) {
 }
 
 // TestConceptAttachesMembersMatchingAliasKeyword covers the alias
-// path: the new records' keyword matches an entry in the concept's
-// content_keywords rather than its primary concept_keyword. The
-// attachment must resolve through the alias to the same concept.
+// path: the new record's keyword matches an entry in the concept's
+// content_keywords rather than its primary concept_keyword. Because
+// content_keywords stores Phase F aliases and co-occurring "related
+// terms" indistinguishably, non-primary attachment is gated by the
+// member-overlap (Jaccard) threshold -- so the fixture mirrors a
+// genuine alias's shape: the members themselves carry the alias
+// keyword (the population overlap is what admitted the alias in
+// Phase F to begin with).
 func TestConceptAttachesMembersMatchingAliasKeyword(t *testing.T) {
 	eng := setupEngine(t)
 	cfg := eng.Config()
 	cfg.Concepts.EmergenceThreshold = 3
+	cfg.Concepts.MemberOverlapThreshold = 0.6
 
 	now := time.Now().UTC()
 
-	// Three linked members carrying the primary keyword.
+	// Filler records with unshared keywords (see store-shape note).
+	addNode(t, eng, "Filler record one", "durable", 0.9, []string{"fillerone"}, now)
+	addNode(t, eng, "Filler record two", "durable", 0.9, []string{"fillertwo"}, now)
+
+	// Three linked members carrying the primary keyword AND the alias
+	// (a merged alias's population overlaps the concept's members).
 	var memberIDs []string
 	for i := 0; i < 3; i++ {
 		id := addNode(t, eng, "Primary keyword member", "durable", 0.9,
-			[]string{"primarykw"}, now.Add(-time.Duration(i)*time.Hour))
+			[]string{"primarykw", "aliaskw"}, now.Add(-time.Duration(i)*time.Hour))
 		memberIDs = append(memberIDs, id)
 	}
 
@@ -180,42 +191,107 @@ func TestConceptAttachesMembersMatchingAliasKeyword(t *testing.T) {
 	eng.Save("seed concept")
 	eng.Unlock()
 
-	// Three new records carrying ONLY the alias keyword.
-	var aliasIDs []string
-	for i := 0; i < 3; i++ {
-		id := addNode(t, eng, "Alias keyword record", "durable", 0.9,
-			[]string{"aliaskw"}, now)
-		aliasIDs = append(aliasIDs, id)
-	}
+	// One new record carrying ONLY the alias keyword. The alias
+	// candidate's live population is then {3 members, this record}:
+	// Jaccard vs the member set = 3/4 = 0.75 > 0.6, so the gate
+	// admits the attachment.
+	aliasID := addNode(t, eng, "Alias keyword record", "durable", 0.9,
+		[]string{"aliaskw"}, now)
 
 	result := RunDeterministic(eng, cfg, nil)
 	if result.ConceptsCreated != 0 {
 		t.Errorf("ConceptsCreated = %d, want 0 (alias resolves to existing concept)", result.ConceptsCreated)
 	}
-	if result.ConceptMembersAttached != 3 {
-		t.Errorf("ConceptMembersAttached = %d, want 3", result.ConceptMembersAttached)
+	if result.ConceptMembersAttached != 1 {
+		t.Errorf("ConceptMembersAttached = %d, want 1", result.ConceptMembersAttached)
 	}
 
 	sources := inboundInstanceOfSources(t, eng, conceptNode.ID)
-	if len(sources) != 6 {
-		t.Fatalf("inbound instance_of edges = %d, want 6 (3 original + 3 alias-matched)", len(sources))
+	if len(sources) != 4 {
+		t.Fatalf("inbound instance_of edges = %d, want 4 (3 original + 1 alias-matched)", len(sources))
 	}
 	sourceSet := make(map[string]struct{}, len(sources))
 	for _, s := range sources {
 		sourceSet[s] = struct{}{}
 	}
-	for _, id := range aliasIDs {
-		if _, ok := sourceSet[id]; !ok {
-			t.Errorf("alias-matched record %s has no instance_of edge to the concept", id)
-		}
+	if _, ok := sourceSet[aliasID]; !ok {
+		t.Errorf("alias-matched record %s has no instance_of edge to the concept", aliasID)
 	}
 
 	eng.RLock()
 	c, _ := eng.Graph().GetNode(conceptNode.ID)
 	ec, _ := c.Properties.GetInt64("evidence_count")
 	eng.RUnlock()
-	if ec != 6 {
-		t.Errorf("evidence_count = %d, want 6 after attachment + enrichment", ec)
+	if ec != 4 {
+		t.Errorf("evidence_count = %d, want 4 after attachment + enrichment", ec)
+	}
+}
+
+// TestConceptDoesNotAttachViaCoOccurringKeyword pins the guard on the
+// non-primary attachment path: content_keywords also carries the
+// co-occurring "related terms" stamped at emergence, and records
+// sharing only such a term must NOT become instances of the concept.
+// Shape: a "kafka" concept emerges with "messaging" recorded as a
+// co-occurring keyword (2 of 3 seeds carry it); unrelated records
+// tagged only "messaging" then cross the candidate threshold. Their
+// population barely overlaps the concept's members (Jaccard 2/5 =
+// 0.4 <= 0.6), so the gate must reject the attachment -- pre-gate,
+// they would have been permanently linked as false evidence.
+func TestConceptDoesNotAttachViaCoOccurringKeyword(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.Concepts.EmergenceThreshold = 3
+	cfg.Concepts.MemberOverlapThreshold = 0.6
+
+	now := time.Now().UTC()
+
+	// Filler records with unshared keywords (see store-shape note).
+	addNode(t, eng, "Filler record one", "durable", 0.9, []string{"fillerone"}, now)
+	addNode(t, eng, "Filler record two", "durable", 0.9, []string{"fillertwo"}, now)
+
+	// Three kafka seeds; two also carry "messaging" so emergence
+	// records it as a co-occurring keyword (below the emergence
+	// threshold itself at cycle 1).
+	addNode(t, eng, "Kafka seed record", "durable", 0.9, []string{"kafka"}, now.Add(-3*time.Hour))
+	addNode(t, eng, "Kafka seed record two", "durable", 0.9, []string{"kafka", "messaging"}, now.Add(-2*time.Hour))
+	addNode(t, eng, "Kafka seed record three", "durable", 0.9, []string{"kafka", "messaging"}, now.Add(-time.Hour))
+
+	first := RunDeterministic(eng, cfg, nil)
+	if first.ConceptsCreated != 1 {
+		t.Fatalf("cycle 1 ConceptsCreated = %d, want 1", first.ConceptsCreated)
+	}
+	conceptID := findConceptByKeyword(t, eng, "kafka")
+	if conceptID == "" {
+		t.Fatal("no concept node with concept_keyword=kafka after cycle 1")
+	}
+	eng.RLock()
+	cn, _ := eng.Graph().GetNode(conceptID)
+	kws, _ := cn.Properties.GetStringList("content_keywords")
+	eng.RUnlock()
+	hasCoKW := false
+	for _, kw := range kws {
+		if kw == "messaging" {
+			hasCoKW = true
+		}
+	}
+	if !hasCoKW {
+		t.Fatalf("fixture broke: concept content_keywords %v missing co-occurring %q", kws, "messaging")
+	}
+
+	// Two unrelated records tagged only with the co-occurring keyword,
+	// pushing it over the candidate threshold (2 seeds + 2 new = 4).
+	addNode(t, eng, "Unrelated messaging record", "durable", 0.9, []string{"messaging"}, now)
+	addNode(t, eng, "Unrelated messaging record two", "durable", 0.9, []string{"messaging"}, now)
+
+	second := RunDeterministic(eng, cfg, nil)
+	if second.ConceptMembersAttached != 0 {
+		t.Errorf("cycle 2 ConceptMembersAttached = %d, want 0 (co-occurring keyword must not attach)", second.ConceptMembersAttached)
+	}
+	if second.ConceptsCreated != 0 {
+		t.Errorf("cycle 2 ConceptsCreated = %d, want 0 (co-occurring keyword is claimed by the existing concept)", second.ConceptsCreated)
+	}
+	if got := len(inboundInstanceOfSources(t, eng, conceptID)); got != 3 {
+		t.Fatalf("cycle 2 inbound instance_of edges = %d, want 3 (unchanged)", got)
 	}
 }
 

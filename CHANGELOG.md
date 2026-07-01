@@ -17,8 +17,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (primary `concept_keyword` or any alias in `content_keywords`) to
   its concept and links the not-yet-linked members, capped at 200
   attachment edges per cycle; enrichment recomputes `evidence_count`
-  from the new edges in the same cycle. Concept nodes also no longer
-  count as evidence for their own keyword in candidate detection.
+  from the new edges in the same cycle. Keywords resolved through
+  `content_keywords` — which stores Phase F aliases and merely
+  co-occurring "related terms" indistinguishably — attach only when
+  the keyword's live population passes the `member_overlap_threshold`
+  Jaccard gate against the concept's members, so records sharing
+  only a co-occurring term are not linked as false evidence. Concept
+  nodes also no longer count as evidence for their own keyword in
+  candidate detection.
 
 ## [0.3.0-alpha.4] - 2026-06-27
 

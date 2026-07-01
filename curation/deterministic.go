@@ -120,11 +120,21 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	var qualityIssues []qualityIssue
 	existingConcepts := make(map[string]struct{})
 	// conceptIDByKeyword resolves a keyword back to the concept node
-	// that owns it -- via its primary concept_keyword or any keyword
-	// in its content_keywords (aliases and co-occurring terms). The
-	// candidate loop below uses it to attach new members to an
-	// existing concept instead of skipping the keyword outright (#99).
-	conceptIDByKeyword := make(map[string]string)
+	// that owns it. A claim records HOW the keyword resolved: via the
+	// concept's primary concept_keyword, or via content_keywords --
+	// which mixes Phase F aliases with the co-occurring "related
+	// terms" stamped at emergence and cannot tell them apart. The
+	// candidate loop below uses claims to attach new members to an
+	// existing concept instead of skipping the keyword outright
+	// (#99); non-primary claims must additionally pass the Phase F
+	// member-overlap gate before attaching, because attaching on
+	// co-occurrence alone would link unrelated records as false
+	// evidence.
+	type keywordClaim struct {
+		conceptID string
+		primary   bool
+	}
+	conceptIDByKeyword := make(map[string]keywordClaim)
 	// existingConceptMembers maps each concept's node ID to the set of
 	// member record IDs (collected via inbound instance_of edges). Used
 	// by Phase F's member-set overlap gate to suppress emergence of
@@ -167,7 +177,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				// Primary keywords always win keyword->concept
 				// resolution (unconditional write; the alias loop
 				// below only fills unclaimed slots).
-				conceptIDByKeyword[kw] = id
+				conceptIDByKeyword[kw] = keywordClaim{conceptID: id, primary: true}
 				if contentShort == kw && hasFullContent {
 					qualityIssues = append(qualityIssues, qualityIssue{
 						nodeID: id,
@@ -189,7 +199,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					// keywords, a weaker ownership signal than the
 					// primary -- never displace an existing claim.
 					if _, claimed := conceptIDByKeyword[kw]; !claimed {
-						conceptIDByKeyword[kw] = id
+						conceptIDByKeyword[kw] = keywordClaim{conceptID: id}
 					}
 				}
 			}
@@ -483,13 +493,32 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// missing edges and enrichConcepts recomputes
 			// evidence_count from them in the same cycle. c.NodeIDs is
 			// already observation- and concept-filtered above.
-			conceptID, ok := conceptIDByKeyword[c.Keyword]
+			claim, ok := conceptIDByKeyword[c.Keyword]
 			if !ok {
 				// Keyword claimed earlier in this loop by a pending
 				// emission or alias merge; no stored concept to
 				// attach to yet. The next cycle resolves it.
 				continue
 			}
+			if !claim.primary {
+				// The keyword resolved through content_keywords, which
+				// stores Phase F aliases and merely co-occurring
+				// "related terms" indistinguishably. A genuine alias's
+				// live population still substantially overlaps the
+				// concept's members (that overlap is what admitted the
+				// alias in Phase F); a co-occurring keyword's does not.
+				// Re-apply the same gate here, else records sharing
+				// only a co-occurring keyword (e.g. tagged "messaging"
+				// against a "kafka" concept) would be permanently
+				// attached as false evidence. A disabled threshold
+				// (<= 0) turns non-primary attachment off entirely
+				// rather than open.
+				if overlapThreshold <= 0 ||
+					index.JaccardSimilarity(c.NodeIDs, existingConceptMembers[claim.conceptID]) <= overlapThreshold {
+					continue
+				}
+			}
+			conceptID := claim.conceptID
 			linked := make(map[string]struct{}, len(existingConceptMembers[conceptID]))
 			for _, mid := range existingConceptMembers[conceptID] {
 				linked[mid] = struct{}{}
@@ -898,9 +927,23 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				if _, ok := ws.Graph().GetNode(att.conceptID); !ok {
 					continue
 				}
+				// Re-diff against inbound edges under the write lock: a
+				// caller may have linked a queued member (gramaton_link)
+				// between the read phase and this batch. AddEdge does
+				// not dedupe and enrichConcepts counts inbound edges,
+				// so a duplicate would double-count evidence forever.
+				linked := make(map[string]struct{})
+				for _, edge := range ws.Graph().EdgesTo(att.conceptID) {
+					if edge.Type == "instance_of" {
+						linked[edge.SourceID] = struct{}{}
+					}
+				}
 				attached := false
 				for _, memberID := range att.memberIDs {
 					if _, ok := ws.Graph().GetNode(memberID); !ok {
+						continue
+					}
+					if _, dup := linked[memberID]; dup {
 						continue
 					}
 					if _, err := ws.AddEdge(memberID, att.conceptID, "instance_of", 0.8, nil); err != nil {
