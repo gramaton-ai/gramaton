@@ -18,12 +18,14 @@ import (
 // Hook scripts for automatic-capture integration with MCP clients.
 //
 // As of Phase 2 of the Windows platform-support plan these are thin
-// proxy files that forward stdin to `gramaton hook <event>` and exit
-// with the subcommand's status. All real hook logic lives in the
-// hooks/ Go package (hooks/claude_code.go, hooks/kiro.go,
-// hooks/cursor.go). This simplification eliminates the embed_hooks/
-// tree duplication and removes the hidden python3 dependency the old
-// shell scripts carried.
+// proxy files that forward stdin to `<gramaton> hook <event>` and
+// exit with the subcommand's status. The binary is invoked by the
+// absolute path resolved at materialize time, with a bare `gramaton`
+// PATH lookup as fallback (see shProxyBody for why). All real hook
+// logic lives in the hooks/ Go package (hooks/claude_code.go,
+// hooks/kiro.go, hooks/cursor.go). This simplification eliminates
+// the embed_hooks/ tree duplication and removes the hidden python3
+// dependency the old shell scripts carried.
 //
 // Scripts are synthesized at init time from Go templates, so there's
 // no need to check proxy files into the repo. Line endings are
@@ -122,21 +124,87 @@ type proxyFile struct {
 	name, body string
 }
 
+// resolveGramatonExecutable returns the absolute path of the running
+// gramaton binary, for embedding into generated proxy scripts. At
+// materialize time the binary location is genuinely known --
+// os.Executable() is the very binary the hooks should invoke.
+// Returns "" when the path can't be resolved (proxy generation then
+// falls back to the bare `gramaton` PATH-lookup form rather than
+// failing init).
+//
+// Symlinks are deliberately not resolved further: for a
+// Homebrew-style install, /opt/homebrew/bin/gramaton is the stable
+// path that survives upgrades, while the versioned Cellar target it
+// points at does not. Matches the plain-os.Executable convention in
+// cli/serve.go.
+func resolveGramatonExecutable() string {
+	exe, err := os.Executable()
+	if err != nil || !filepath.IsAbs(exe) {
+		return ""
+	}
+	return exe
+}
+
+// shProxyBody renders the POSIX proxy script. When the gramaton
+// binary's absolute path is known it is written into the script:
+// harnesses invoke hooks through a non-interactive bash subshell
+// that reads no rc files, so a PATH addition living only in
+// ~/.zshrc (the common macOS `go install` setup) leaves bare
+// `gramaton` unresolvable inside the hook and capture silently
+// degrades ("Stop hook error: Failed with non-blocking status
+// code"). A bare-PATH exec stays as the last line so the script
+// still works if the binary has moved since init; re-running
+// `gramaton init` refreshes the embedded path.
+//
+// The embedded path is forward-slash normalized: Claude Code on
+// Windows runs .sh hooks through bundled Git Bash, which treats
+// backslashes as escape characters (same reasoning, and same
+// strings.ReplaceAll idiom, as registerClaudeHooks). Quoted because
+// install paths can contain spaces. Bash double quotes neutralize
+// spaces but still expand $ and backticks and interpret a stray
+// double quote, so a path containing any of those would render a
+// script that silently probes the wrong location (or worse) -- for
+// such paths the body falls back to the bare-PATH form instead of
+// embedding them.
+func shProxyBody(cliEvent, exePath string) string {
+	p := strings.ReplaceAll(exePath, `\`, "/")
+	if p == "" || strings.ContainsAny(p, "$`\"") {
+		return fmt.Sprintf("#!/bin/bash\nexec gramaton hook %s\n", cliEvent)
+	}
+	return fmt.Sprintf("#!/bin/bash\nif [ -x \"%s\" ]; then\n  exec \"%s\" hook %s\nfi\nexec gramaton hook %s\n",
+		p, p, cliEvent, cliEvent)
+}
+
+// cmdProxyBody renders the Windows batch proxy. Same absolute-path
+// rationale as shProxyBody, with the same bare-PATH fallback when
+// the embedded path no longer exists. The path is written exactly
+// as materialized -- cmd.exe wants native backslashed paths, so no
+// forward-slash normalization here. Quoted for spaces.
+func cmdProxyBody(cliEvent, exePath string) string {
+	if exePath == "" {
+		return fmt.Sprintf("@gramaton hook %s\r\n", cliEvent)
+	}
+	return fmt.Sprintf("@if exist \"%s\" (\"%s\" hook %s) else (gramaton hook %s)\r\n",
+		exePath, exePath, cliEvent, cliEvent)
+}
+
 // proxyFilesFor synthesizes the proxy-script variants for one event
-// under the harness's ProxyStyle.
+// under the harness's ProxyStyle. exePath is the absolute path of
+// the gramaton binary ("" when unresolvable -- the bodies then fall
+// back to a bare PATH lookup).
 //
 // Line endings are chosen deliberately: LF for .sh so bash can
 // read the shebang intact (CRLF-prefixed `#!/bin/bash\r` makes
 // bash look for a binary named `bash\r` and fail); CRLF for .cmd
 // so cmd.exe treats the file as a native batch script.
-func proxyFilesFor(h *Harness, ev hookEventSpec) []proxyFile {
+func proxyFilesFor(h *Harness, ev hookEventSpec, exePath string) []proxyFile {
 	sh := proxyFile{
 		name: ev.fileBase + ".sh",
-		body: fmt.Sprintf("#!/bin/bash\nexec gramaton hook %s\n", ev.cliEvent),
+		body: shProxyBody(ev.cliEvent, exePath),
 	}
 	cmd := proxyFile{
 		name: ev.fileBase + ".cmd",
-		body: fmt.Sprintf("@gramaton hook %s\r\n", ev.cliEvent),
+		body: cmdProxyBody(ev.cliEvent, exePath),
 	}
 	switch h.ProxyStyle {
 	case proxyNativePerOS:
@@ -199,9 +267,10 @@ func (DefaultHookBackend) Materialize(client string, configDir string) ([]string
 		return nil, fmt.Errorf("mkdir %s: %w", destDir, err)
 	}
 
+	exePath := resolveGramatonExecutable()
 	var paths []string
 	for _, ev := range h.HookEvents {
-		for _, pf := range proxyFilesFor(h, ev) {
+		for _, pf := range proxyFilesFor(h, ev, exePath) {
 			destPath := filepath.Join(destDir, pf.name)
 			if err := os.WriteFile(destPath, []byte(pf.body), 0o755); err != nil {
 				return nil, fmt.Errorf("write %s: %w", destPath, err)
