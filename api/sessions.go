@@ -303,6 +303,10 @@ func (a *API) SessionStart(ctx context.Context, clientSessionID string, source s
 		"client_session_id": graph.StringProperty(clientSessionID),
 		"created_at":        graph.TimestampProperty(now),
 	}
+	// Author attribution (see api/save.go for the stamping contract).
+	if author := a.engine.Config().Author.String(); author != "" {
+		props["author"] = graph.StringProperty(author)
+	}
 	n := a.engine.Graph().AddNode(props)
 	a.engine.IndexNode(n.ID, "", nil)
 
@@ -850,6 +854,11 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	edgesCreated := 0
 	var superseded []map[string]any
 
+	// Author attribution: composed once for the whole commit; stamped
+	// on topic, segment, and promoted Memory nodes below (see
+	// api/save.go for the stamping contract).
+	author := a.engine.Config().Author.String()
+
 	// Track IDs created in this batch for auto-supersession exclusion.
 	batchIDs := make(map[string]struct{}, len(segments))
 
@@ -862,6 +871,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 				"knowledge_type": graph.StringProperty("topic"),
 				"topic_name":     graph.StringProperty(seg.TopicName),
 				"created_at":     graph.TimestampProperty(now),
+			}
+			if author != "" {
+				props["author"] = graph.StringProperty(author)
 			}
 			topicNode := a.engine.Graph().AddNode(props)
 			a.engine.IndexNode(topicNode.ID, "", nil)
@@ -885,6 +897,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			"knowledge_type": graph.StringProperty("segment"),
 			"content":        graph.StringProperty(seg.Content),
 			"created_at":     graph.TimestampProperty(now),
+		}
+		if author != "" {
+			segProps["author"] = graph.StringProperty(author)
 		}
 		// Persist summary_short on the segment too (not just on the
 		// promoted Memory record). The lean-state branch in
@@ -925,6 +940,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			"processing_status": graph.StringProperty("processed"),
 			"created_at":        graph.TimestampProperty(now),
 			"access_count":      graph.Int64Property(0),
+		}
+		if author != "" {
+			memProps["author"] = graph.StringProperty(author)
 		}
 		if seg.Temporality != "" {
 			memProps["temporality"] = graph.StringProperty(seg.Temporality)

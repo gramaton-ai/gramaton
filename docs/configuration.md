@@ -32,6 +32,18 @@ gramaton --store <name> serve
 gramaton --store <name> search "..."
 ```
 
+## Author
+
+```yaml
+author:
+  name: Ada Lovelace              # optional
+  email: ada@example.com          # optional
+```
+
+The identity that records created in the store are attributed to. Works like git's `user.name` / `user.email`: the two fields compose into a single string at use time — `Ada Lovelace <ada@example.com>` when both are set, the name alone when only `name` is set, the bare email (no angle brackets) when only `email` is set. The composed identity is stamped as a set-once `author` property on records created in the store. If both fields are blank, records get no author property.
+
+`gramaton init` collects the identity (interactively, or from the `--author` flag / the OS account name in non-interactive mode). Edit the fields here any time; changes apply to records created afterwards — existing records keep the author they were stamped with.
+
 ## Server
 
 ```yaml

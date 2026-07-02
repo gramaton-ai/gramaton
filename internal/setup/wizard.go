@@ -113,7 +113,8 @@ const totalSteps = 5
 // are reported via the Writer and Run returns nil.
 //
 // Step order:
-//  0. Welcome banner + fresh-vs-import branch.
+//  0. Welcome banner + author identity (unnumbered) +
+//     fresh-vs-import branch.
 //  1. Knowledge-store bootstrap (data dir, embedding, model download).
 //  2. LLM provider + API key + cost caps (optional but strongly
 //     recommended).
@@ -245,6 +246,14 @@ func (w *Wizard) Run(ctx context.Context) error {
 	defer w.runCleanups()
 
 	w.welcome()
+
+	// Author identity first: it frames everything that follows
+	// ("records created in your store carry this identity") and is
+	// the one question every install path -- fresh or import --
+	// answers the same way. Unnumbered, like askImportOrFresh.
+	if err := w.stepIdentity(); err != nil {
+		return fmt.Errorf("identity step: %w", err)
+	}
 
 	importing, err := w.askImportOrFresh()
 	if err != nil {

@@ -168,6 +168,40 @@ func writeRecordsJSONL(w io.Writer, records []ExportRecord) error {
 	return nil
 }
 
+// csvHeader is the column list for CSV export, shared by both CSV
+// writers (the StreamRecords "csv" case and writeRecordsCSV) so the
+// two cannot drift. csvRow produces values in the same order. Import
+// maps columns by header name, so appending columns at the end is
+// compatible with older consumers. The trailing "author" column
+// carries record attribution so it survives an export/import round
+// trip (see safePropTypes in import.go).
+var csvHeader = []string{
+	"id", "summary_short", "content_full", "temporality",
+	"confidence", "knowledge_type", "epistemic_status",
+	"importance", "keywords", "created_at", "valid_from",
+	"valid_until", "source_ref", "author",
+}
+
+// csvRow builds a record's CSV row in csvHeader order.
+func csvRow(rec ExportRecord) []string {
+	return []string{
+		rec.ID,
+		propString(rec.Properties, "content_short"),
+		propString(rec.Properties, "content_full"),
+		propString(rec.Properties, "temporality"),
+		propString(rec.Properties, "confidence"),
+		propString(rec.Properties, "knowledge_type"),
+		propString(rec.Properties, "epistemic_status"),
+		propString(rec.Properties, "importance"),
+		formatKeywords(rec.Properties),
+		propString(rec.Properties, "created_at"),
+		propString(rec.Properties, "valid_from"),
+		propString(rec.Properties, "valid_until"),
+		propString(rec.Properties, "source_ref"),
+		propString(rec.Properties, "author"),
+	}
+}
+
 // StreamRecords writes records for `ids` to `w` in the given
 // format, taking a per-record read lock and releasing it before
 // the write. Avoids holding the engine lock across I/O for the
@@ -229,13 +263,7 @@ func StreamRecords(w io.Writer, e *core.Engine, format string, ids []string) err
 
 	case "csv":
 		cw := csv.NewWriter(w)
-		header := []string{
-			"id", "summary_short", "content_full", "temporality",
-			"confidence", "knowledge_type", "epistemic_status",
-			"importance", "keywords", "created_at", "valid_from",
-			"valid_until", "source_ref",
-		}
-		if err := cw.Write(header); err != nil {
+		if err := cw.Write(csvHeader); err != nil {
 			return err
 		}
 		for _, id := range ids {
@@ -245,22 +273,7 @@ func StreamRecords(w io.Writer, e *core.Engine, format string, ids []string) err
 			if !ok {
 				continue
 			}
-			row := []string{
-				rec.ID,
-				propString(rec.Properties, "content_short"),
-				propString(rec.Properties, "content_full"),
-				propString(rec.Properties, "temporality"),
-				propString(rec.Properties, "confidence"),
-				propString(rec.Properties, "knowledge_type"),
-				propString(rec.Properties, "epistemic_status"),
-				propString(rec.Properties, "importance"),
-				formatKeywords(rec.Properties),
-				propString(rec.Properties, "created_at"),
-				propString(rec.Properties, "valid_from"),
-				propString(rec.Properties, "valid_until"),
-				propString(rec.Properties, "source_ref"),
-			}
-			if err := cw.Write(row); err != nil {
+			if err := cw.Write(csvRow(rec)); err != nil {
 				return err
 			}
 		}
@@ -382,34 +395,12 @@ func writeRecordsCSV(w io.Writer, records []ExportRecord) error {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 
-	// Header.
-	header := []string{
-		"id", "summary_short", "content_full", "temporality",
-		"confidence", "knowledge_type", "epistemic_status",
-		"importance", "keywords", "created_at", "valid_from",
-		"valid_until", "source_ref",
-	}
-	if err := cw.Write(header); err != nil {
+	if err := cw.Write(csvHeader); err != nil {
 		return err
 	}
 
 	for _, rec := range records {
-		row := []string{
-			rec.ID,
-			propString(rec.Properties, "content_short"),
-			propString(rec.Properties, "content_full"),
-			propString(rec.Properties, "temporality"),
-			propString(rec.Properties, "confidence"),
-			propString(rec.Properties, "knowledge_type"),
-			propString(rec.Properties, "epistemic_status"),
-			propString(rec.Properties, "importance"),
-			formatKeywords(rec.Properties),
-			propString(rec.Properties, "created_at"),
-			propString(rec.Properties, "valid_from"),
-			propString(rec.Properties, "valid_until"),
-			propString(rec.Properties, "source_ref"),
-		}
-		if err := cw.Write(row); err != nil {
+		if err := cw.Write(csvRow(rec)); err != nil {
 			return err
 		}
 	}

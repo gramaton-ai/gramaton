@@ -447,6 +447,74 @@ func TestPreChunkShortContent(t *testing.T) {
 	}
 }
 
+// TestApplyChunksInheritsAuthor pins author propagation through the
+// structural-split path: section sub-nodes inherit the parent
+// record's `author` via chunking's inheritedMetadataKeys -- they are
+// never re-stamped from config.
+func TestApplyChunksInheritsAuthor(t *testing.T) {
+	eng := setupTestEngine(t)
+	const author = "Ada Lovelace <ada@example.com>"
+
+	// Markdown-structured content so SplitSections detects sections
+	// (the metadata-inheriting path); long enough to exceed the
+	// chunking threshold.
+	var sb strings.Builder
+	for i := 0; i < 4; i++ {
+		sb.WriteString("## Section heading ")
+		sb.WriteString(strings.Repeat("x", i+1))
+		sb.WriteString("\n\n")
+		for j := 0; j < 20; j++ {
+			sb.WriteString("Body sentence for the author inheritance test. ")
+		}
+		sb.WriteString("\n\n")
+	}
+	content := sb.String()
+
+	pre := eng.PreChunk(context.Background(), content, "", "")
+	if pre == nil {
+		t.Fatal("PreChunk should return a result for long content")
+	}
+	if len(pre.Sections) == 0 {
+		t.Fatal("expected structural sections (the author-inheriting path); markdown headings were not detected")
+	}
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(content),
+		"author":       graph.StringProperty(author),
+	})
+	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
+	eng.Unlock()
+	if numChunks == 0 {
+		t.Fatal("ApplyChunks should create section nodes")
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	sections := 0
+	for _, e := range eng.Graph().EdgesTo(n.ID) {
+		if e.Type != "section_of" {
+			continue
+		}
+		sections++
+		child, ok := eng.Graph().GetNode(e.SourceID)
+		if !ok {
+			t.Fatalf("section node %s missing", e.SourceID)
+		}
+		got, has := child.Properties.GetString("author")
+		if !has {
+			t.Errorf("section %s has no author property, want inherited %q", e.SourceID, author)
+			continue
+		}
+		if got != author {
+			t.Errorf("section %s author = %q, want inherited %q", e.SourceID, got, author)
+		}
+	}
+	if sections != numChunks {
+		t.Fatalf("expected %d section_of children, got %d", numChunks, sections)
+	}
+}
+
 func TestRebuildAllIndexes(t *testing.T) {
 	eng := setupTestEngine(t)
 	eng.Lock()

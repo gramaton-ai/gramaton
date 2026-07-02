@@ -19,6 +19,15 @@ package config
 //     spot without scrolling.
 var commentRegistry = map[string]string{
 
+	// -------------------------------------------------------------
+	// Author identity
+	// -------------------------------------------------------------
+	"author": `author: identity that records created in the store are
+attributed to. Git-style: name and email compose into
+"Name <email>" (name or email alone also works). Leave both
+blank and records carry no author. Collected by gramaton init;
+edit here any time -- only affects records created afterwards.`,
+
 	// =============================================================
 	// LLM block: umbrella banner with model-staleness pointer
 	// =============================================================

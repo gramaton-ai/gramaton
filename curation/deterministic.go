@@ -18,6 +18,16 @@ import (
 	"github.com/gramaton-ai/gramaton/search"
 )
 
+// NodeAuthor is the system-author identity stamped on nodes the
+// curation subsystem creates itself (concept nodes in
+// deterministic.go, observation nodes in observe.go). System-created
+// records carry this constant unconditionally -- never the operator's
+// configured author -- so provenance distinguishes derived nodes from
+// user-initiated captures. The author backfill (cli/backfill.go)
+// stamps the same constant when retro-attributing curation-created
+// nodes in pre-attribution stores.
+const NodeAuthor = "curation"
+
 // ensureLogger returns a no-op logger if the provided logger is nil.
 func ensureLogger(logger *slog.Logger) *slog.Logger {
 	if logger != nil {
@@ -896,6 +906,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					"evidence_count":    graph.Int64Property(int64(c.Count)),
 					"created_at":        graph.TimestampProperty(now),
 					"access_count":      graph.Int64Property(0),
+					"author":            graph.StringProperty(NodeAuthor),
 				}
 				if len(cooccurringOnly) > 0 {
 					props["cooccurring_keywords"] = graph.StringListProperty(cooccurringOnly)

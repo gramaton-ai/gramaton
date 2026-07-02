@@ -54,6 +54,12 @@ func TestEmergeOverlapGateMergesAliasesIntoNewConcept(t *testing.T) {
 		t.Fatal("expected one concept node, got none")
 	}
 
+	// System-created node: carries the curation author constant, never
+	// the operator's configured identity.
+	if author, ok := concept.Properties.GetString("author"); !ok || author != NodeAuthor {
+		t.Errorf("concept author = %q (present=%v), want %q", author, ok, NodeAuthor)
+	}
+
 	got, _ := concept.Properties.GetStringList("content_keywords")
 	gotSet := make(map[string]struct{}, len(got))
 	for _, k := range got {

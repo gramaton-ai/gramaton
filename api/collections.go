@@ -412,6 +412,10 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 		"processing_status": graph.StringProperty("processed"),
 		"access_count":      graph.Int64Property(0),
 	}
+	// Author attribution (see api/save.go for the stamping contract).
+	if author := a.engine.Config().Author.String(); author != "" {
+		props["author"] = graph.StringProperty(author)
+	}
 	if req.Description != "" {
 		props["collection_description"] = graph.StringProperty(req.Description)
 	}
@@ -1248,6 +1252,10 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		"access_count":      graph.Int64Property(0),
 		"processing_status": graph.StringProperty(initialProcessingStatus(CollectionCuration(coll))),
 	}
+	// Author attribution (see api/save.go for the stamping contract).
+	if author := a.engine.Config().Author.String(); author != "" {
+		props["author"] = graph.StringProperty(author)
+	}
 	n := a.engine.Graph().AddNode(props)
 	a.setFieldProps(n.ID, req.Fields)
 
@@ -1495,6 +1503,10 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	// curation knob; computed once and reused per item below.
 	itemProcessingStatus := initialProcessingStatus(CollectionCuration(coll))
 
+	// Author attribution: composed once for the whole batch (see
+	// api/save.go for the stamping contract).
+	author := a.engine.Config().Author.String()
+
 	added := make([]BatchAddSuccess, 0, len(survivors))
 	emb := a.engine.Embedder()
 	var modelID string
@@ -1559,6 +1571,9 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 				"created_at":        graph.TimestampProperty(time.Now().UTC()),
 				"access_count":      graph.Int64Property(0),
 				"processing_status": graph.StringProperty(itemProcessingStatus),
+			}
+			if author != "" {
+				props["author"] = graph.StringProperty(author)
 			}
 			n := ws.AddNode(props)
 			a.setFieldPropsIn(ws, n.ID, s.item.Fields)

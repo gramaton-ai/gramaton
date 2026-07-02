@@ -57,6 +57,12 @@ var DefaultIndexedFields = []string{
 	"processing_status",
 	"synthesis_status",
 	"content_keywords",
+	// author is the set-once provenance identity stamped at record
+	// creation; indexed so author-scoped filters can use the property
+	// index. Existing stores absorb this addition automatically:
+	// core's rebuildPrimaryIfMissing always rebuilds the property
+	// index at startup.
+	"author",
 }
 
 // NewBboltPropertyIndex opens or creates a bbolt-backed property index.

@@ -63,15 +63,20 @@ var safePropTypes = map[string]safePropType{
 	"context_related":     propTypeString,
 	"resolution":          propTypeString,
 	"resolution_note":     propTypeString,
-	"confidence":          propTypeFloat,
-	"importance":          propTypeFloat,
-	"source_credibility":  propTypeFloat,
-	"testimony_hops":      propTypeInt64,
-	"content_keywords":    propTypeStringList,
-	"created_at":          propTypeTimestamp,
-	"valid_from":          propTypeTimestamp,
-	"valid_until":         propTypeTimestamp,
-	"asserted_as_of":      propTypeTimestamp,
+	// author is preserved on JSONL/CSV re-import so a record's
+	// original attribution survives an export/import round trip.
+	// Rows without an author stay author-less; the importer's own
+	// configured identity is never re-stamped here.
+	"author":             propTypeString,
+	"confidence":         propTypeFloat,
+	"importance":         propTypeFloat,
+	"source_credibility": propTypeFloat,
+	"testimony_hops":     propTypeInt64,
+	"content_keywords":   propTypeStringList,
+	"created_at":         propTypeTimestamp,
+	"valid_from":         propTypeTimestamp,
+	"valid_until":        propTypeTimestamp,
+	"asserted_as_of":     propTypeTimestamp,
 }
 
 // safeProperties is retained as a name-only set for callers that
@@ -418,6 +423,12 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 	// rationale; same structure).
 	nameToID := make(map[string]string, len(files))
 	edgesCreated := 0
+	// Author attribution: an Obsidian import is the user ingesting
+	// their own vault, so every imported note is stamped with the
+	// configured author identity (composed once for the batch). This
+	// differs from JSONL/CSV import, which preserves the source row's
+	// author instead. Empty composed identity stamps nothing.
+	author := e.Config().Author.String()
 	batchErr := e.WithWriteBatch("import obsidian", func(ws *core.WriteSession) (bool, error) {
 		// Pass 1: create nodes, build name-to-ID map for wikilinks.
 		for _, f := range files {
@@ -428,6 +439,9 @@ func ImportObsidian(vaultPath string, e *core.Engine, maxContent int) (*ImportRe
 				"processing_status": graph.StringProperty("captured"),
 				"created_at":        graph.TimestampProperty(time.Now().UTC()),
 				"access_count":      graph.Int64Property(0),
+			}
+			if author != "" {
+				props["author"] = graph.StringProperty(author)
 			}
 			if len(f.tags) > 0 {
 				props["content_keywords"] = graph.StringListProperty(f.tags)

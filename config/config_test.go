@@ -182,6 +182,120 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+// TestAuthorConfigString pins the git-style composition rules: both
+// fields set -> "Name <email>", name only -> bare name, email only ->
+// bare email (no angle brackets), neither -> "". Whitespace on either
+// field is trimmed before composing so a hand-edited config with a
+// stray trailing space doesn't stamp "Ada  <ada@example.com>".
+func TestAuthorConfigString(t *testing.T) {
+	tests := []struct {
+		name   string
+		author AuthorConfig
+		want   string
+	}{
+		{"both set", AuthorConfig{Name: "Ada Lovelace", Email: "ada@example.com"}, "Ada Lovelace <ada@example.com>"},
+		{"name only", AuthorConfig{Name: "Ada Lovelace"}, "Ada Lovelace"},
+		{"email only", AuthorConfig{Email: "ada@example.com"}, "ada@example.com"},
+		{"neither", AuthorConfig{}, ""},
+		{"whitespace trimmed", AuthorConfig{Name: "  Ada Lovelace ", Email: "\tada@example.com  "}, "Ada Lovelace <ada@example.com>"},
+		{"whitespace-only fields collapse to empty", AuthorConfig{Name: "   ", Email: " \t"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.author.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSaveAndLoadAuthor round-trips an author block through Save +
+// Load. Also pins the omitempty behavior: a blank author renders no
+// author: key at all (blank is a meaningful "no attribution" state,
+// not a block of empty strings for the user to puzzle over).
+func TestSaveAndLoadAuthor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cfg := Defaults()
+	cfg.Author.Name = "Ada Lovelace"
+	cfg.Author.Email = "ada@example.com"
+
+	if err := Save(cfg, path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Author.Name != "Ada Lovelace" {
+		t.Errorf("Author.Name = %q, want %q", loaded.Author.Name, "Ada Lovelace")
+	}
+	if loaded.Author.Email != "ada@example.com" {
+		t.Errorf("Author.Email = %q, want %q", loaded.Author.Email, "ada@example.com")
+	}
+
+	// Blank author: the rendered file must not contain the key.
+	blankPath := filepath.Join(dir, "blank.yaml")
+	if err := Save(Defaults(), blankPath); err != nil {
+		t.Fatalf("Save blank: %v", err)
+	}
+	data, err := os.ReadFile(blankPath)
+	if err != nil {
+		t.Fatalf("read blank: %v", err)
+	}
+	if strings.Contains(string(data), "author:") {
+		t.Errorf("blank author should be omitted from rendered config, got author: key")
+	}
+}
+
+// TestLoadWithoutAuthorBlockYieldsBlankAuthor asserts configs written
+// before the author field existed (no author: key) load cleanly with
+// blank fields -- no defaults sneak in, because blank means "no
+// attribution" by design.
+func TestLoadWithoutAuthorBlockYieldsBlankAuthor(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte("server:\n  port: 4242\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Author.Name != "" || cfg.Author.Email != "" {
+		t.Errorf("Author = %+v, want blank fields", cfg.Author)
+	}
+}
+
+// TestLoadTrimsAuthorWhitespace covers the trimConfigStrings hook for
+// the author fields: a hand-edited config with trailing whitespace in
+// name/email loads clean.
+func TestLoadTrimsAuthorWhitespace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte("author:\n  name: \"Ada Lovelace  \"\n  email: \"  ada@example.com\"\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Author.Name != "Ada Lovelace" {
+		t.Errorf("Author.Name = %q, want trimmed %q", cfg.Author.Name, "Ada Lovelace")
+	}
+	if cfg.Author.Email != "ada@example.com" {
+		t.Errorf("Author.Email = %q, want trimmed %q", cfg.Author.Email, "ada@example.com")
+	}
+}
+
 // TestLoadCoercesLegacyFlagAction asserts that pre-2026-04 configs with
 // dedup.action: "flag" are silently coerced to "supersede" at load time.
 // See design-decisions.md D37: "flag" never had behavior distinct from

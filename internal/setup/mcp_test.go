@@ -48,16 +48,18 @@ func (f *fakeMCPBackend) Register(_ context.Context, c DetectedClient) (bool, er
 //
 // Answers layout (in order the scripted prompter will consume):
 //
-//	[0]: Step 0 fresh-vs-import choice  (pass "1" for fresh)
-//	[1]: Step 1 embedding menu choice   (pass "5" for skip)
-//	[2]: Step 2 LLM menu choice         (pass "5" for skip)
-//	[3]: Step 3 YesNo confirm           (caller controls)
+//	[0]: identity name   ("" = accept the OS-account default)
+//	[1]: identity email  ("" = skip)
+//	[2]: Step 0 fresh-vs-import choice  (pass "1" for fresh)
+//	[3]: Step 1 embedding menu choice   (pass "5" for skip)
+//	[4]: Step 2 LLM menu choice         (pass "5" for skip)
+//	[5]: Step 3 YesNo confirm           (caller controls)
 func newWizardForMCPTest(t *testing.T, backend MCPBackend, mcpConfirm string) (*Wizard, *bytes.Buffer) {
 	t.Helper()
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm)
+	prompter := NewScriptedPrompter("", "", "1", "5", "5", mcpConfirm)
 
 	tmpDir := t.TempDir()
 	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey
