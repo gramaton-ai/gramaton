@@ -363,3 +363,47 @@ func TestBuildSafePropsRejectsSystemProps(t *testing.T) {
 		t.Fatal("access_count should be blocked")
 	}
 }
+
+// TestImportCSVPreservesContentShort: gramaton's own CSV export
+// writes content_short under the header summary_short; the importer
+// must map that column back, so a CSV export/import round trip keeps
+// every record's summary. Regression test for the alias gap where
+// the column was silently dropped (issue #111).
+func TestImportCSVPreservesContentShort(t *testing.T) {
+	src := setupTestEngine(t)
+	id := addTestRecord(t, src, "Round trip content", "The original summary", "durable", 0.9, nil)
+
+	var buf strings.Builder
+	if err := StreamRecords(&buf, src, "csv", []string{id}); err != nil {
+		t.Fatalf("StreamRecords csv: %v", err)
+	}
+	if !strings.Contains(buf.String(), "summary_short") {
+		t.Fatalf("CSV export header lost the summary_short column:\n%s", buf.String())
+	}
+
+	dst := setupTestEngine(t)
+	result, err := ImportCSV(strings.NewReader(buf.String()), dst, 1024*1024)
+	if err != nil {
+		t.Fatalf("ImportCSV: %v", err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("expected 1 imported, got %d", result.Imported)
+	}
+
+	dst.RLock()
+	defer dst.RUnlock()
+	found := false
+	for _, nid := range dst.Graph().AllNodeIDs() {
+		n, _ := dst.Graph().GetNode(nid)
+		if content, _ := n.Properties.GetString("content_full"); content != "Round trip content" {
+			continue
+		}
+		found = true
+		if short, _ := n.Properties.GetString("content_short"); short != "The original summary" {
+			t.Errorf("content_short = %q, want %q preserved across the CSV round trip", short, "The original summary")
+		}
+	}
+	if !found {
+		t.Fatal("imported record not found in destination store")
+	}
+}

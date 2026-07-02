@@ -89,6 +89,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **CSV import no longer drops summaries** (#111). The CSV exporter
+  writes `content_short` under the header `summary_short`, but the
+  importer only recognized `summary`/`title`/`name`, so a CSV
+  export/import round trip silently lost every record's summary. The
+  importer now maps the `summary_short` column back to
+  `content_short`.
 - **`gramaton_guide` is now reachable through the `gramaton mcp`
   stdio proxy** (#95). The tool was registered only on the in-process
   MCP server surface, so agents connected the way `gramaton init`
