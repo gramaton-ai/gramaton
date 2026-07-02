@@ -570,11 +570,26 @@ func timeEmbed(t *testing.T, p *Provider, texts []string) time.Duration {
 	return time.Since(start)
 }
 
+// skipSpeedupGateUnderRace skips a throughput-gate test when the
+// binary is built with -race: the detector's instrumentation
+// serializes enough of the parallel inference path that the gated
+// ratios (1.8x-2.5x) reliably miss on machines where the uninstrumented
+// gates pass. The race lane exists to catch data races, which the
+// correctness tests in this package still exercise; measuring
+// throughput under it gates on noise.
+func skipSpeedupGateUnderRace(t *testing.T) {
+	t.Helper()
+	if raceDetectorEnabled {
+		t.Skip("throughput gate skipped under -race: instrumentation distorts the parallel/sequential ratio")
+	}
+}
+
 // TestEmbedSpeedupGateSingleCall4 — N=8 single-call wall-clock vs
 // 8 sequential single-text calls. Asserts >=1.8x speedup at
 // effective 4-worker concurrency. Conservative for memory-
 // bandwidth-bound matmul. Skips when NumCPU < 4.
 func TestEmbedSpeedupGateSingleCall4(t *testing.T) {
+	skipSpeedupGateUnderRace(t)
 	if runtime.NumCPU() < 4 {
 		t.Skipf("requires NumCPU >= 4, got %d", runtime.NumCPU())
 	}
@@ -614,6 +629,7 @@ func TestEmbedSpeedupGateSingleCall4(t *testing.T) {
 // sequential. Asserts >=2.5x at maxWorkers=8. Skips when
 // NumCPU < 8.
 func TestEmbedSpeedupGateSingleCall8(t *testing.T) {
+	skipSpeedupGateUnderRace(t)
 	if runtime.NumCPU() < 8 {
 		t.Skipf("requires NumCPU >= 8, got %d", runtime.NumCPU())
 	}
@@ -650,6 +666,7 @@ func TestEmbedSpeedupGateSingleCall8(t *testing.T) {
 // each calling Embed(N=1). Aggregate wall-clock vs sequential 4
 // separate calls. Asserts >=1.8x. Skips when NumCPU < 4.
 func TestEmbedSpeedupGateMultiCaller4(t *testing.T) {
+	skipSpeedupGateUnderRace(t)
 	if runtime.NumCPU() < 4 {
 		t.Skipf("requires NumCPU >= 4, got %d", runtime.NumCPU())
 	}
@@ -699,6 +716,7 @@ func TestEmbedSpeedupGateMultiCaller4(t *testing.T) {
 // TestEmbedSpeedupGateMultiCaller8 — 8 concurrent goroutines.
 // Asserts >=2.5x. Skips when NumCPU < 8.
 func TestEmbedSpeedupGateMultiCaller8(t *testing.T) {
+	skipSpeedupGateUnderRace(t)
 	if runtime.NumCPU() < 8 {
 		t.Skipf("requires NumCPU >= 8, got %d", runtime.NumCPU())
 	}
