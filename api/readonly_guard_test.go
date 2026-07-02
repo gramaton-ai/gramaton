@@ -33,6 +33,13 @@ const (
 // read-only decision, one entry per exported method on *API. Entries
 // carry a comment when the classification is not obvious from the
 // method name.
+//
+// MANUAL INVARIANT: server/mcp_readonly.go carries the MCP-facing
+// twin of this classification, keyed by tool name (an MCP tool is
+// write iff any operation reachable through it is guardWrite here).
+// When reclassifying a method or adding an operation, keep the two
+// consistent -- there is no automated cross-check because this map
+// lives in a test file.
 var readOnlyClassification = map[string]string{
 	// Records cluster.
 	"Save":         guardWrite,

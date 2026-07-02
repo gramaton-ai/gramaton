@@ -17,6 +17,12 @@ func printEnvelope(resp *server.ResponseEnvelope) error {
 		data = map[string]any{"data": resp.Data}
 	}
 	data["curation"] = resp.Curation
+	// Mirror the envelope's only-when-frozen store_readonly flag so
+	// CLI consumers see the frozen state on every server-backed
+	// response, same as HTTP/MCP consumers do.
+	if resp.StoreReadonly {
+		data["store_readonly"] = true
+	}
 	return printJSON(data)
 }
 

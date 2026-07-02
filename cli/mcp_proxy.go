@@ -39,6 +39,21 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	registerGuideProxyTools(mcpServer)
 }
 
+// registerProxyToolsReadOnly registers the read-only tool surface for
+// a frozen store: the full registration minus every write-classified
+// tool (server/mcp_readonly.go is the classification's home; the
+// proxy and the server's own MCP surface share it). Register-then-
+// remove keeps the per-cluster registration functions untouched, and
+// the observable result is identical to never registering the write
+// tools: ListTools omits them and CallTool fails with an
+// unknown-tool error. The api-layer guards remain the enforcement
+// backstop; hiding the tools just stops agents from planning around
+// writes that would only ever return "forbidden".
+func registerProxyToolsReadOnly(mcpServer *mcp.Server) {
+	registerProxyTools(mcpServer)
+	mcpServer.RemoveTools(server.MCPWriteToolNames()...)
+}
+
 // --- helpers ---
 
 func proxyErr(msg string) (*mcp.CallToolResult, any, error) {
