@@ -37,6 +37,9 @@ type MmapFlatIndex struct {
 	region *mmap.Region // platform-abstracted mmap handle
 	data   []byte       // alias of region.Bytes() cached for hot-path access
 	dim    int
+	// noSync skips file.Sync on flush/compact. Test-only; set by the
+	// engine under core.WithVolatileStorage.
+	noSync bool
 	qscale float32 // quantization scale for this dimension
 
 	// In-memory ID-to-offset map for filtered scans and Remove.
@@ -134,6 +137,14 @@ func NewMmapFlatIndex(path string, dim int) (*MmapFlatIndex, error) {
 	}
 
 	return idx, nil
+}
+
+// SetNoSync toggles durability syncs for this index. Test-only; see
+// core.WithVolatileStorage.
+func (idx *MmapFlatIndex) SetNoSync(v bool) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.noSync = v
 }
 
 func (idx *MmapFlatIndex) writeHeader(count int) error {
@@ -335,8 +346,10 @@ func (idx *MmapFlatIndex) Flush() error {
 	if err := idx.writeHeader(idx.count); err != nil {
 		return fmt.Errorf("flat index: write header: %w", err)
 	}
-	if err := idx.file.Sync(); err != nil {
-		return fmt.Errorf("flat index: sync: %w", err)
+	if !idx.noSync {
+		if err := idx.file.Sync(); err != nil {
+			return fmt.Errorf("flat index: sync: %w", err)
+		}
 	}
 	return idx.remap()
 }
@@ -421,8 +434,10 @@ func (idx *MmapFlatIndex) rewriteFromOffsetsLocked(liveBuffered []bufferedEntry)
 	if err := idx.writeHeader(idx.count); err != nil {
 		return fmt.Errorf("flat index: write header: %w", err)
 	}
-	if err := idx.file.Sync(); err != nil {
-		return fmt.Errorf("flat index: sync: %w", err)
+	if !idx.noSync {
+		if err := idx.file.Sync(); err != nil {
+			return fmt.Errorf("flat index: sync: %w", err)
+		}
 	}
 	return idx.remap()
 }

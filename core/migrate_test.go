@@ -47,6 +47,7 @@ func (f *migrateFixture) openEngine(t *testing.T) *Engine {
 	t.Helper()
 	eng, err := LoadEngineWithOptions(f.cfgDir, nil, []EngineOption{
 		WithVectorIndex(index.NewFlatIndex()),
+		WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

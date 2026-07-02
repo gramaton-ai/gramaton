@@ -28,6 +28,7 @@ func NewEngine(t *testing.T) *core.Engine {
 	}
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

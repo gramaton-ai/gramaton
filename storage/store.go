@@ -29,7 +29,18 @@ import (
 // chunks exist on disk even if the process crashes mid-write.
 type Store struct {
 	root string
+
+	// noSync skips the per-blob fsync and parent-dir fsync. Set ONLY
+	// via core.WithVolatileStorage for throwaway test stores --
+	// durability protects against power loss, which no test outcome
+	// survives anyway. There is deliberately no config surface for
+	// this; production stores always sync.
+	noSync bool
 }
+
+// SetNoSync toggles durability syncs for this store. Test-only; see
+// core.WithVolatileStorage.
+func (s *Store) SetNoSync(v bool) { s.noSync = v }
 
 // New creates a Store rooted at the given directory. The directory is
 // created if it does not exist.
@@ -96,8 +107,10 @@ func (s *Store) Write(data []byte) (string, error) {
 	if _, err := tmp.Write(compressed); err != nil {
 		return "", fmt.Errorf("storage: write temp file: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		return "", fmt.Errorf("storage: sync temp file: %w", err)
+	if !s.noSync {
+		if err := tmp.Sync(); err != nil {
+			return "", fmt.Errorf("storage: sync temp file: %w", err)
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return "", fmt.Errorf("storage: close temp file: %w", err)
@@ -111,8 +124,10 @@ func (s *Store) Write(data []byte) (string, error) {
 	// lose the entry on ext4 with certain mount options and on older
 	// filesystems. The advertised "atomic, content-addressed" store
 	// must actually be atomic on disk.
-	if err := fsyncDir(filepath.Dir(path)); err != nil {
-		return "", fmt.Errorf("storage: fsync parent dir: %w", err)
+	if !s.noSync {
+		if err := fsyncDir(filepath.Dir(path)); err != nil {
+			return "", fmt.Errorf("storage: fsync parent dir: %w", err)
+		}
 	}
 
 	success = true
