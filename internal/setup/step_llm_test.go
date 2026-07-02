@@ -238,11 +238,18 @@ func TestStepLLMBedrockBranch(t *testing.T) {
 	if wiz.cfg.LLM.Region != "us-west-2" {
 		t.Errorf("Region: got %q, want us-west-2 (default)", wiz.cfg.LLM.Region)
 	}
-	if !strings.HasPrefix(wiz.cfg.LLM.Models.Medium, "anthropic.claude-") {
-		t.Errorf("LLM.Models.Medium: got %q, want anthropic.claude-* Bedrock ID", wiz.cfg.LLM.Models.Medium)
+	// us-west-2 maps to the us. geography, so the defaults must be
+	// the exact US cross-region inference profile IDs -- base model
+	// IDs are rejected by Bedrock with ResourceNotFoundException in
+	// most regions.
+	if got, want := wiz.cfg.LLM.Models.Low, "us.anthropic.claude-haiku-4-5-20251001-v1:0"; got != want {
+		t.Errorf("LLM.Models.Low: got %q, want %q", got, want)
 	}
-	if wiz.cfg.LLM.Models.Low == "" || wiz.cfg.LLM.Models.Medium == "" || wiz.cfg.LLM.Models.High == "" {
-		t.Errorf("Models tier map should be populated with Bedrock IDs, got: %+v", wiz.cfg.LLM.Models)
+	if got, want := wiz.cfg.LLM.Models.Medium, "us.anthropic.claude-sonnet-4-6"; got != want {
+		t.Errorf("LLM.Models.Medium: got %q, want %q", got, want)
+	}
+	if got, want := wiz.cfg.LLM.Models.High, "us.anthropic.claude-opus-4-8"; got != want {
+		t.Errorf("LLM.Models.High: got %q, want %q", got, want)
 	}
 	if !wiz.cfg.LLM.Rerank.Enabled {
 		t.Errorf("Search.RerankEnabled: should flip to true when LLM is configured")
@@ -252,6 +259,116 @@ func TestStepLLMBedrockBranch(t *testing.T) {
 	}
 	if !strings.Contains(out, "Spending caps set") {
 		t.Errorf("caps confirmation missing:\n%s", out)
+	}
+}
+
+// TestStepLLMBedrockEURegionPrefix covers [3] Bedrock with an
+// explicit EU region: the wizard-written defaults must carry the
+// eu. inference-profile prefix, not us. -- writing a US profile ID
+// into an eu-west-1 config was the shape of the original bug (base
+// IDs that only a hand-edit could fix).
+func TestStepLLMBedrockEURegionPrefix(t *testing.T) {
+	// [3] = Bedrock, profile = "", region = "eu-west-1", default caps "y".
+	wiz, _, _ := newWizardForLLMTest(t, "3", "", "eu-west-1", "y")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if wiz.cfg.LLM.Region != "eu-west-1" {
+		t.Errorf("Region: got %q, want eu-west-1", wiz.cfg.LLM.Region)
+	}
+	if got, want := wiz.cfg.LLM.Models.Low, "eu.anthropic.claude-haiku-4-5-20251001-v1:0"; got != want {
+		t.Errorf("LLM.Models.Low: got %q, want %q", got, want)
+	}
+	if got, want := wiz.cfg.LLM.Models.Medium, "eu.anthropic.claude-sonnet-4-6"; got != want {
+		t.Errorf("LLM.Models.Medium: got %q, want %q", got, want)
+	}
+	if got, want := wiz.cfg.LLM.Models.High, "eu.anthropic.claude-opus-4-8"; got != want {
+		t.Errorf("LLM.Models.High: got %q, want %q", got, want)
+	}
+}
+
+// TestBedrockGeoPrefix pins the region -> inference-profile-prefix
+// mapping to the geography source regions documented on the AWS
+// model pages for the three wizard defaults (see the constants in
+// step_llm.go for the cited URLs). Regions outside a documented
+// geography fall back to the global profile, which the docs list as
+// available from every commercial region.
+func TestBedrockGeoPrefix(t *testing.T) {
+	cases := []struct {
+		region string
+		want   string
+	}{
+		// US geography.
+		{"us-east-1", "us."},
+		{"us-east-2", "us."},
+		{"us-west-1", "us."},
+		{"us-west-2", "us."},
+		{"ca-central-1", "us."},
+
+		// ca-west-1 is a US-geo source for Sonnet 4.6 / Opus 4.8 but
+		// not for Haiku 4.5, so it must take the global fallback (one
+		// prefix serves all three tiers).
+		{"ca-west-1", "global."},
+
+		// EU geography.
+		{"eu-central-1", "eu."},
+		{"eu-central-2", "eu."},
+		{"eu-north-1", "eu."},
+		{"eu-south-1", "eu."},
+		{"eu-south-2", "eu."},
+		{"eu-west-1", "eu."},
+		{"eu-west-2", "eu."},
+		{"eu-west-3", "eu."},
+
+		// Japan geography.
+		{"ap-northeast-1", "jp."},
+		{"ap-northeast-3", "jp."},
+
+		// Australia geography.
+		{"ap-southeast-2", "au."},
+		{"ap-southeast-4", "au."},
+
+		// ap-southeast-6 (New Zealand) is an AU-geo source for the
+		// Low and Medium tier models but not for Opus 4.8 (High), so
+		// it must take the global fallback (tier asymmetry, like
+		// ca-west-1).
+		{"ap-southeast-6", "global."},
+
+		// Asia-Pacific regions with no geo profile: global only.
+		{"ap-east-2", "global."},
+		{"ap-northeast-2", "global."},
+		{"ap-south-1", "global."},
+		{"ap-south-2", "global."},
+		{"ap-southeast-1", "global."},
+		{"ap-southeast-3", "global."},
+		{"ap-southeast-5", "global."},
+		{"ap-southeast-7", "global."},
+
+		// Other commercial regions with no geo profile: global only.
+		{"sa-east-1", "global."},
+		{"mx-central-1", "global."},
+		{"af-south-1", "global."},
+		{"il-central-1", "global."},
+		{"me-central-1", "global."},
+		{"me-south-1", "global."},
+
+		// GovCloud is outside the commercial catalog; must not claim
+		// the us. mapping just because of the "us-" name prefix.
+		{"us-gov-east-1", "global."},
+		{"us-gov-west-1", "global."},
+
+		// Unknown / future / malformed inputs fall back to global.
+		{"xx-fake-1", "global."},
+		{"", "global."},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.region, func(t *testing.T) {
+			if got := bedrockGeoPrefix(tc.region); got != tc.want {
+				t.Errorf("bedrockGeoPrefix(%q) = %q, want %q", tc.region, got, tc.want)
+			}
+		})
 	}
 }
 

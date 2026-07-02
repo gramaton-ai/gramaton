@@ -404,8 +404,10 @@ func (w *Wizard) llmBedrock(ctx context.Context) error {
 		profile = p
 
 		w.writer.Paragraph(
-			"Which AWS region? (Anthropic models are available in us-east-1,",
-			"us-west-2, eu-central-1, ap-northeast-1, ap-south-1.)",
+			"Which AWS region? Gramaton reaches Anthropic models through",
+			"Bedrock cross-region inference profiles, so any commercial",
+			"region works (e.g. us-east-1, us-west-2, eu-west-1,",
+			"eu-central-1, ap-northeast-1, ap-southeast-2).",
 		)
 		w.writer.Prompt(">")
 		r, err := w.prompter.Text("us-west-2")
@@ -468,11 +470,18 @@ func (w *Wizard) llmBedrock(ctx context.Context) error {
 	w.cfg.LLM.Provider = "bedrock"
 	w.cfg.LLM.Region = region
 	w.cfg.LLM.AWSProfile = profile
-	// Bedrock model IDs use the anthropic.claude-<tier>-<version>-<date>-v<n>:0
-	// format. These values track current Bedrock catalog for Anthropic.
-	w.cfg.LLM.Models.Low = "anthropic.claude-haiku-4-5-20250514-v1:0"
-	w.cfg.LLM.Models.Medium = "anthropic.claude-sonnet-4-6-20250514-v1:0"
-	w.cfg.LLM.Models.High = "anthropic.claude-opus-4-7-20250514-v1:0"
+	// Newer Claude models on Bedrock reject the base foundation-model
+	// ID with ResourceNotFoundException in most regions; invocation
+	// goes through a cross-region inference profile whose ID is the
+	// base model ID with a geography prefix (us. / eu. / jp. / au. /
+	// global.). Derive the prefix from the region the user just gave
+	// us so the persisted config works on the first LLM call. Users
+	// who hand-edit config.yaml keep whatever ID they enter verbatim;
+	// this only shapes the wizard's defaults.
+	prefix := bedrockGeoPrefix(region)
+	w.cfg.LLM.Models.Low = prefix + bedrockModelLow
+	w.cfg.LLM.Models.Medium = prefix + bedrockModelMedium
+	w.cfg.LLM.Models.High = prefix + bedrockModelHigh
 
 	w.writer.Blank()
 	w.writer.Check("Bedrock with Anthropic models configured.")
@@ -481,6 +490,89 @@ func (w *Wizard) llmBedrock(ctx context.Context) error {
 	}
 	w.writer.Check(fmt.Sprintf("  Region: %s", region))
 	return w.cfgCapsPrompt(ctx)
+}
+
+// Base bedrock-runtime model IDs for the wizard's Low/Medium/High
+// Bedrock defaults. Verified 2026-07-02 against the per-model pages
+// under the AWS "models at a glance" catalog:
+//
+//	https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
+//	https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
+//	https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+//
+// These are never written to config as-is: llmBedrock prepends the
+// geography prefix from bedrockGeoPrefix, because these models are
+// invocable in most regions only through cross-region inference
+// profiles (base ID rejected with ResourceNotFoundException).
+//
+// All three models offer the same profile family (us., eu., jp.,
+// au., global.), but their documented SOURCE-REGION lists differ per
+// model, so bedrockGeoPrefix only maps a region to a geography when
+// that region is a documented source for ALL THREE tiers (the
+// asymmetric regions -- ca-west-1, ap-southeast-6 -- fall back to
+// global., see below). Claude Sonnet 5 was considered for Medium and
+// rejected: as of the verification date its only documented geo
+// profile is us. (plus global.), so a region-derived eu./jp./au.
+// prefix would fabricate an ID that does not exist.
+const (
+	bedrockModelLow    = "anthropic.claude-haiku-4-5-20251001-v1:0"
+	bedrockModelMedium = "anthropic.claude-sonnet-4-6"
+	bedrockModelHigh   = "anthropic.claude-opus-4-8"
+)
+
+// bedrockGeoPrefix maps an AWS region to the cross-region inference
+// profile prefix to prepend to the wizard's default Claude model IDs.
+// The mapping mirrors the documented source regions of each geography
+// profile on the model pages cited above (verified 2026-07-02):
+//
+//	us. -- us-east-1, us-east-2, us-west-1, us-west-2, ca-central-1
+//	eu. -- eu-central-1, eu-central-2, eu-north-1, eu-south-1,
+//	       eu-south-2, eu-west-1, eu-west-2, eu-west-3
+//	jp. -- ap-northeast-1 (Tokyo), ap-northeast-3 (Osaka)
+//	au. -- ap-southeast-2 (Sydney), ap-southeast-4 (Melbourne)
+//
+// There is no blanket Asia-Pacific ("apac.") profile for these
+// models; Japan and Australia geographies are separate, and the
+// remaining ap-* regions (Singapore, Seoul, Mumbai, ...) have no geo
+// profile at all. Everything unmatched falls back to the global
+// profile: the AWS docs mark Global as available from every
+// commercial region listed on those pages, so global. is the
+// only documented answer for regions outside a geography (and the
+// least-wrong guess for regions we don't recognize). Known
+// limitation: partition regions absent from the commercial catalog
+// (us-gov-*, cn-*) are not served by these models per the same
+// pages, so no prefix would help there; the wizard's credential
+// verification and the bedrock client's error hints surface that
+// case.
+func bedrockGeoPrefix(region string) string {
+	switch {
+	case strings.HasPrefix(region, "us-gov-"):
+		// Not part of the commercial catalog; fall back to the
+		// documented default rather than claiming a us. mapping the
+		// docs don't support.
+		return "global."
+	case strings.HasPrefix(region, "us-"):
+		return "us."
+	case region == "ca-central-1":
+		// Documented source region of the US geo profile for all
+		// three default models. ca-west-1 is deliberately absent: it
+		// is not a documented US-geo source for Claude Haiku 4.5
+		// (the Low tier), so it takes the global fallback instead.
+		return "us."
+	case strings.HasPrefix(region, "eu-"):
+		return "eu."
+	case region == "ap-northeast-1", region == "ap-northeast-3":
+		return "jp."
+	case region == "ap-southeast-2", region == "ap-southeast-4":
+		// ap-southeast-6 (New Zealand) is deliberately absent: it is
+		// a documented AU-geo source for Claude Haiku 4.5 and
+		// Sonnet 4.6 but NOT for Opus 4.8 (the High tier), so it
+		// takes the global fallback instead -- same tier asymmetry as
+		// ca-west-1 above.
+		return "au."
+	default:
+		return "global."
+	}
 }
 
 // callerIdentity is the small subset of sts.GetCallerIdentityOutput

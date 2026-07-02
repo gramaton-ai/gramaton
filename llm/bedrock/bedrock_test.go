@@ -112,8 +112,8 @@ func TestNewMissingModel(t *testing.T) {
 }
 
 func TestModelID(t *testing.T) {
-	c := &Client{model: "anthropic.claude-sonnet-4-6-20250514-v1:0"}
-	if got := c.ModelID(); got != "anthropic.claude-sonnet-4-6-20250514-v1:0" {
+	c := &Client{model: "us.anthropic.claude-sonnet-4-6"}
+	if got := c.ModelID(); got != "us.anthropic.claude-sonnet-4-6" {
 		t.Errorf("ModelID() = %q", got)
 	}
 }
@@ -159,7 +159,7 @@ func TestComplete(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}
 
-	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	c := testClient(t, "us.anthropic.claude-sonnet-4-6", handler)
 	got, err := c.Complete(context.Background(), "say hello")
 	// The Converse API uses Smithy serialization which may not match
 	// our simple JSON mock. If we get an error about deserialization,
@@ -200,7 +200,7 @@ func TestCompleteRecordsUsage(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}
 
-	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	c := testClient(t, "us.anthropic.claude-sonnet-4-6", handler)
 	recorder := &telemetry.UsageRecorder{}
 	ctx := telemetry.WithUsageRecorder(context.Background(), recorder)
 	ctx = telemetry.WithTask(ctx, "classify")
@@ -222,7 +222,7 @@ func TestCompleteRecordsUsage(t *testing.T) {
 // TestSupportsStructuredOutput confirms Bedrock advertises
 // structured output via Converse tool-use.
 func TestSupportsStructuredOutput(t *testing.T) {
-	c := &Client{model: "anthropic.claude-sonnet-4-6-20250514-v1:0"}
+	c := &Client{model: "us.anthropic.claude-sonnet-4-6"}
 	if !c.SupportsStructuredOutput() {
 		t.Error("Bedrock.SupportsStructuredOutput() = false; want true")
 	}
@@ -259,7 +259,7 @@ func TestCompleteStructured(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}
 
-	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	c := testClient(t, "us.anthropic.claude-sonnet-4-6", handler)
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -310,7 +310,7 @@ func TestCompleteStructuredMissingToolUseBlock(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}
 
-	c := testClient(t, "anthropic.claude-sonnet-4-6-20250514-v1:0", handler)
+	c := testClient(t, "us.anthropic.claude-sonnet-4-6", handler)
 	_, err := c.CompleteStructured(context.Background(), map[string]any{"type": "object"}, "prompt")
 	if err == nil {
 		t.Fatal("expected error when response has no tool_use block")
@@ -332,7 +332,7 @@ func TestNewWithEnvCreds(t *testing.T) {
 
 	cfg := config.LLMConfig{
 		Provider:              "bedrock",
-		Models:                config.LLMModels{Medium: "anthropic.claude-sonnet-4-6-20250514-v1:0"},
+		Models:                config.LLMModels{Medium: "us.anthropic.claude-sonnet-4-6"},
 		Region:                "us-east-1",
 		AWSAccessKeyIDEnv:     "TEST_BEDROCK_AKID",
 		AWSSecretAccessKeyEnv: "TEST_BEDROCK_SECRET",
@@ -341,7 +341,7 @@ func TestNewWithEnvCreds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() = %v", err)
 	}
-	if c.ModelID() != "anthropic.claude-sonnet-4-6-20250514-v1:0" {
+	if c.ModelID() != "us.anthropic.claude-sonnet-4-6" {
 		t.Errorf("ModelID() = %q", c.ModelID())
 	}
 }
@@ -355,7 +355,7 @@ func TestCompleteIntegration(t *testing.T) {
 
 	cfg := config.LLMConfig{
 		Provider: "bedrock",
-		Models:   config.LLMModels{Medium: "anthropic.claude-sonnet-4-6-20250514-v1:0"},
+		Models:   config.LLMModels{Medium: "us.anthropic.claude-sonnet-4-6"},
 		Region:   "us-west-2",
 	}
 

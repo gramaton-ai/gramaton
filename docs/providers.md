@@ -148,10 +148,12 @@ Uses the Bedrock Converse API, which is model-agnostic — works with any Conver
 ```yaml
 llm:
   provider: bedrock
-  model: anthropic.claude-sonnet-4-6-20250514-v1:0
+  model: us.anthropic.claude-sonnet-4-6
   region: us-west-2
   aws_profile: my-profile
 ```
+
+**Model ID format:** newer Claude models on Bedrock are invocable in most regions only through *cross-region inference profiles* — the base model ID with a geography prefix (`us.`, `eu.`, `jp.`, `au.`, or `global.`). Passing the bare base ID (e.g. `anthropic.claude-sonnet-4-6`) returns `ResourceNotFoundException` outside the few in-region-enabled regions. `gramaton init` derives the prefix from your region automatically; when editing config by hand, copy the inference profile ID from the model's page in the AWS Bedrock "models at a glance" catalog.
 
 Auth works the same as Bedrock embeddings — see [AWS auth patterns](#aws-auth-patterns) below.
 
@@ -262,7 +264,7 @@ embedding:
 
 llm:
   provider: bedrock
-  model: anthropic.claude-sonnet-4-6-20250514-v1:0
+  model: us.anthropic.claude-sonnet-4-6
   region: us-west-2
   aws_profile: work
 ```
@@ -277,7 +279,7 @@ embedding:
 
 llm:
   provider: bedrock
-  model: anthropic.claude-sonnet-4-6-20250514-v1:0
+  model: us.anthropic.claude-sonnet-4-6
   region: us-west-2
   aws_profile: platform-team
 ```

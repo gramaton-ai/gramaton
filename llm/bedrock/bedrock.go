@@ -43,7 +43,7 @@ func (c *Client) classifyBedrockError(err error, model string) error {
 	}
 	var rnf *types.ResourceNotFoundException
 	if errors.As(err, &rnf) {
-		return fmt.Errorf("%w (hint: model %q is not available in this region; check region setting and the model-id format -- inference profiles use prefixes like us.anthropic.…)", err, model)
+		return fmt.Errorf("%w (hint: model %q is not available in this region; check region setting and the model-id format -- newer Claude models require a cross-region inference profile ID, i.e. a geography prefix like us.anthropic.…, eu.anthropic.…, or global.anthropic.…)", err, model)
 	}
 	return err
 }
