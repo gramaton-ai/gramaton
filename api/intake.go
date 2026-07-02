@@ -1,13 +1,33 @@
 package api
 
-// IntakeRequest is the agent-facing wire contract for the intake
-// operation (POST /v1/intake and the gramaton_intake MCP tool),
-// shared by the in-process MCP registration and the CLI MCP proxy so
-// the field sets can't drift. The operation itself has not been
-// migrated to this package yet -- server.serviceIntake remains the
+// IntakeRequest is the wire contract for the intake operation
+// (POST /v1/intake, mirrored by the in-process MCP registration in
+// server/mcp_intake.go). The operation itself has not been migrated
+// to this package yet -- server.serviceIntake remains the
 // implementation, and the HTTP handler keeps its own parse struct
 // (which additionally accepts classification hints and the retired
 // mode tombstone).
+//
+// What intake is for: it is the write path into Memory for callers
+// that don't know the metadata taxonomy. The caller describes the
+// source in plain language (context_source_type, context_reliability,
+// context_capture_reason, ...) and the server owns the epistemic
+// judgment -- an LLM maps the signals onto temporality/confidence/
+// epistemic status when configured, otherwise the record lands as
+// "captured" and curation classifies it later.
+//
+// History: intake began (2026-04) as the intended unified front door
+// for all writes, replacing the capture/observe/collection_add
+// choice. The design moved on to the three storage paths agents are
+// taught today (gramaton_save with agent-side classification,
+// session prepare/save extraction, collections), which superseded
+// intake for agent use. It is retained as the taxonomy-free HTTP
+// endpoint for external integrations -- scripts and source systems
+// POSTing content without agent-grade classification -- and is
+// DELIBERATELY not registered in the agent-facing `gramaton mcp`
+// proxy: a second Memory-write tool there would compete with the
+// installed three-path guidance (see registerProxyTools in
+// cli/mcp_proxy.go and TestProxyIntakeNotExposed).
 type IntakeRequest struct {
 	Content                string         `json:"content,omitempty" jsonschema:"the knowledge or fact to store"`
 	ContextSourceType      string         `json:"context_source_type,omitempty" jsonschema:"what kind of source (e.g. published academic article, personal observation, team discussion)"`

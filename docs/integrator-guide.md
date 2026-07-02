@@ -20,7 +20,7 @@ Best-match retrieval ranked by composite score. Not exhaustive.
 
 **Write paths:**
 - `gramaton_save` — user-initiated direct save. Full control over metadata.
-- `gramaton_intake` — deliberate write endpoint. Same surface, optionally lets the server classify via LLM if one is configured.
+- `POST /v1/intake` — HTTP-only write path for external integrations (scripts, source systems) that don't know the metadata taxonomy: the caller describes the source in plain-language context signals and the server classifies (via LLM when configured, otherwise deferred to curation). Deliberately not exposed as an agent MCP tool — agents use the three storage paths instead.
 - Session commit with `promote_to_memory: true` (the default) — each committed segment also lands as a Memory record.
 - `gramaton ingest` CLI — bulk-load text files.
 
@@ -59,7 +59,7 @@ Named containers with optional schema. Every item returned, guaranteed complete.
 
 > *Will missing one item be a failure?*
 > **Yes** → Collection.
-> **No** → Memory (direct via save/intake, or via session extraction).
+> **No** → Memory (direct via save — or `POST /v1/intake` for external integrations — or via session extraction).
 
 If the answer is ambiguous, start with Memory. It's easier to escalate a Memory record into a Collection item later than to back-fill a Collection with records that were originally saved as fuzzy memory.
 
@@ -115,7 +115,7 @@ Content is what was said. The context envelope is everything else that was true 
 | `context_findable_by` | Terms, names, IDs someone might search for later |
 | `context_related` | Known related records or topics |
 
-Filling these deliberately at save time produces records that are retrievable by project, ticket ID, or team — not just by the exact words in `content`. The `gramaton_intake` tool expects them explicitly.
+Filling these deliberately at save time produces records that are retrievable by project, ticket ID, or team — not just by the exact words in `content`. The intake endpoint (`POST /v1/intake`) expects them explicitly.
 
 ### `meta` for structured source data
 

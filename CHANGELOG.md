@@ -9,25 +9,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **`gramaton_guide` and `gramaton_intake` are now reachable through
-  the `gramaton mcp` stdio proxy** (#95). Both tools were registered
-  only on the in-process MCP server surface, so agents connected the
-  way `gramaton init` configures them saw 41 tools instead of 43 —
-  even though the installed guidance and the README instruct them to
-  call `gramaton_guide(topic=...)`. Guide migrated to the canonical
-  api surface: `api.Guide` with typed request/response, a new
+- **`gramaton_guide` is now reachable through the `gramaton mcp`
+  stdio proxy** (#95). The tool was registered only on the in-process
+  MCP server surface, so agents connected the way `gramaton init`
+  configures them couldn't call it — even though the installed
+  guidance and the README instruct them to call
+  `gramaton_guide(topic=...)`. Guide migrated to the canonical api
+  surface: `api.Guide` with typed request/response, a new
   `GET /v1/guide?topic=...` endpoint, and the guide markdown moved to
   `api/guide/` (the invalid-topic error code changed from
-  `topic_not_found` to the standard `not_found`). Intake's MCP input
-  struct and tool description moved to shared
-  `api.IntakeRequest`/`api.IntakeDescription` definitions consumed by
-  both transports. The guide tool description's topic list is now
-  generated from the server's valid-topic list — it had drifted
-  (advertised the removed `capture` topic and omitted `save` and
-  `temporal-queries`). A proxy-side tool-registry test now pins the
-  proxy tool set the way `server/mcp_harness_test.go` pins the
-  server's, so a server-only registration fails tests instead of
-  shipping.
+  `topic_not_found` to the standard `not_found`). The guide tool
+  description's topic list is now generated from the server's
+  valid-topic list — it had drifted (advertised the removed `capture`
+  topic and omitted `save` and `temporal-queries`). A proxy-side
+  tool-registry test now pins the proxy tool set the way
+  `server/mcp_harness_test.go` pins the server's, so a server-only
+  registration fails tests instead of shipping.
+- **`gramaton_intake` is deliberately proxy-excluded, and its purpose
+  is now documented** (#95). Intake began as the intended unified
+  write endpoint before the three storage paths (save / sessions /
+  collections) superseded it for agent use; it remains the
+  taxonomy-free `POST /v1/intake` HTTP path for external integrations
+  that describe a source in plain-language context signals and let
+  the server classify. Exposing it as a second agent-facing
+  Memory-write tool would compete with the installed guidance, so the
+  proxy registry test encodes the exclusion as policy (alongside
+  `gramaton_delete`). Its MCP input struct and tool description moved
+  to shared `api.IntakeRequest`/`api.IntakeDescription` definitions,
+  with the history documented in `api/intake.go` and the write-path
+  roles clarified in `docs/integrator-guide.md`.
 
 ## [0.3.0-alpha.4] - 2026-06-27
 

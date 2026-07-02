@@ -75,16 +75,20 @@ func callProxy(t *testing.T, toolName string, args any) map[string]any {
 // TestMCPToolRegistry (server/mcp_harness_test.go). The stdio proxy
 // (`gramaton mcp`) is the surface agents actually connect through,
 // so a tool registered only in server/ is invisible to them -- the
-// gap #95 reports for gramaton_guide and gramaton_intake. This test
-// lists the proxy's registered tools via an in-memory client and
-// asserts the set matches the expected snapshot, so any future
-// server-only registration fails here instead of shipping.
+// gap #95 reports for gramaton_guide. This test lists the proxy's
+// registered tools via an in-memory client and asserts the set
+// matches the expected snapshot, so any future server-only
+// registration fails here instead of shipping.
 //
 // The expected set is the server surface minus deliberate policy
 // exclusions: destructive operations (gramaton_delete) are not
-// exposed to agents via MCP -- see the registerDeleteProxy comment
-// in registerProxyTools and TestProxyDeleteNotExposed. Do NOT add
-// destructive tools here just to mirror the server.
+// exposed to agents via MCP, and gramaton_intake is HTTP-only --
+// agents write through the three storage paths (save / sessions /
+// collections) per the installed guidance, while intake serves
+// external integrations that don't know the metadata taxonomy (see
+// api/intake.go). See the exclusion comments in registerProxyTools
+// plus TestProxyDeleteNotExposed / TestProxyIntakeNotExposed. Do NOT
+// add excluded tools here just to mirror the server.
 func TestProxyToolRegistry(t *testing.T) {
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name: "gramaton-test", Version: "0.0.0",
@@ -145,7 +149,6 @@ func TestProxyToolRegistry(t *testing.T) {
 		"gramaton_guide",
 		"gramaton_history",
 		"gramaton_inspect",
-		"gramaton_intake",
 		"gramaton_jobs_list",
 		"gramaton_link",
 		"gramaton_log",
@@ -224,17 +227,33 @@ func TestProxyGuide(t *testing.T) {
 	}
 }
 
-func TestProxyIntake(t *testing.T) {
-	data := callProxy(t, "gramaton_intake", map[string]any{
-		"content":                "Test proxy intake: water boils at 100C at sea level",
-		"context_capture_reason": "proxy integration test",
-	})
-	id, ok := data["id"].(string)
-	if !ok || id == "" {
-		t.Fatalf("expected non-empty id, got %v", data["id"])
+func TestProxyIntakeNotExposed(t *testing.T) {
+	// gramaton_intake is intentionally HTTP-only (POST /v1/intake).
+	// Agents write through the three storage paths the guidance
+	// teaches (save / sessions / collections); intake exists for
+	// external integrations -- see api/intake.go for the history.
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name: "gramaton-test", Version: "0.0.0",
+	}, nil)
+	registerProxyTools(mcpServer)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go mcpServer.Run(ctx, serverTransport)
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "test-client", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
 	}
-	if data["route"] != "knowledge" {
-		t.Fatalf("expected route=knowledge, got %v", data["route"])
+
+	_, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "gramaton_intake",
+	})
+	if err == nil {
+		t.Fatal("gramaton_intake should not be registered as a proxy MCP tool")
 	}
 }
 
