@@ -966,6 +966,17 @@ type ConceptsConfig struct {
 	// meaningful concepts.
 	MaxKeywordPct float64 `yaml:"max_keyword_pct"`
 
+	// MinContentLengthDirect is a retired knob that was never read
+	// (#100): the direct-concept-capture gate it was meant for never
+	// shipped. Kept ONLY as a load-tolerated tombstone -- configs
+	// rendered while the key had a default (50) keep loading after
+	// upgrade instead of failing strict decoding, matching the
+	// legacy-value precedent on dedup's `action: flag`. No default
+	// is set and nothing reads it, so render omits it and the stale
+	// line disappears from configs on their next rewrite. Safe to
+	// delete from any config.yaml.
+	MinContentLengthDirect int `yaml:"min_content_length_direct,omitempty"`
+
 	// MemberOverlapThreshold: Jaccard similarity above which a new
 	// candidate is treated as an alias for an existing concept (or a
 	// peer candidate emitted earlier in the same cycle) rather than

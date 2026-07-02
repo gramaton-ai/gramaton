@@ -876,22 +876,20 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsRemovedConceptsKey(t *testing.T) {
+func TestLoadToleratesRemovedConceptsKey(t *testing.T) {
 	// concepts.min_content_length_direct was declared but never read
-	// (removed in #100). Per the config-drift precedent, removed keys
-	// are not shimmed: strict decoding rejects them with the offending
-	// name, the same loud-fail surface as typos, so operators delete
-	// the stale line instead of trusting a knob that does nothing.
+	// (#100). Unlike a typo, this key was RENDERED into every config
+	// generated while it had a default, so strict rejection would
+	// break existing installs on upgrade. It is kept as an inert
+	// load-tolerated tombstone (matching dedup's legacy `action:
+	// flag` precedent): loading succeeds, nothing reads the value,
+	// and render omits it once absent.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	os.WriteFile(path, []byte("concepts:\n  min_content_length_direct: 50\n"), 0o600)
 
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected strict YAML to reject removed key, got nil")
-	}
-	if !strings.Contains(err.Error(), "min_content_length_direct") {
-		t.Fatalf("error should name the offending key; got %q", err.Error())
+	if _, err := Load(path); err != nil {
+		t.Fatalf("config with retired concepts key must keep loading, got %v", err)
 	}
 }
 
