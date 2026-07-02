@@ -103,18 +103,24 @@ func (c *Client) CompleteStructured(_ context.Context, _ map[string]any, _ strin
 	return nil, fmt.Errorf("claude-cli: structured output not supported (subprocess wrapper)")
 }
 
+// runArgs builds the argv for a single claude -p invocation. `--tools ""`
+// disables all built-in tools (no tool access needed for classification);
+// this replaced the removed `--no-allowedTools` boolean flag, which the
+// current CLI rejects as an unknown option.
+func runArgs(model string) []string {
+	return []string{
+		"-p",
+		"--output-format", "json",
+		"--model", model,
+		"--tools", "",
+	}
+}
+
 func (c *Client) run(ctx context.Context, model, prompt string) (string, error) {
 	if !modelPattern.MatchString(model) {
 		return "", fmt.Errorf("claudecli: rejected model %q (must match [A-Za-z0-9._:/-]+)", model)
 	}
-	args := []string{
-		"-p",
-		"--output-format", "json",
-		"--model", model,
-		"--no-allowedTools", // no tool access needed for classification
-	}
-
-	cmd := exec.CommandContext(ctx, c.binary, args...)
+	cmd := exec.CommandContext(ctx, c.binary, runArgs(model)...)
 	cmd.Stdin = bytes.NewBufferString(prompt)
 
 	var stdout, stderr bytes.Buffer

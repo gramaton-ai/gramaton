@@ -232,7 +232,11 @@ func ImportCSV(r io.Reader, e *core.Engine, maxContent int) (*ImportResult, erro
 	for i, col := range header {
 		name := strings.TrimSpace(strings.ToLower(col))
 		switch name {
-		case "summary", "title", "name":
+		// summary_short is what gramaton's own CSV export writes for
+		// the content_short property (the exporter's header keeps the
+		// user-facing field name) -- without this alias a CSV
+		// export/import round trip silently drops every summary.
+		case "summary", "summary_short", "title", "name":
 			name = "content_short"
 		case "content", "body", "text":
 			name = "content_full"
