@@ -105,6 +105,7 @@ func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithVectorIndex(index.NewFlatIndex()),
 		core.WithEmbedder(emb),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

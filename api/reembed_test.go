@@ -68,6 +68,7 @@ func setupReembedAPI(t testing.TB, emb core.EngineOption, customize func(*config
 	opts := []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	}
 	if emb != nil {
 		opts = append(opts, emb)

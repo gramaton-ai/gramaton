@@ -49,6 +49,7 @@ func setupTestAPI(t testing.TB) (*API, *core.Engine) {
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

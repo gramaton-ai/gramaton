@@ -20,6 +20,24 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Test suites no longer pay for durability they cannot use.** A new
+  test-only engine option, `core.WithVolatileStorage()`, disables
+  every fsync in the engine's write path (content-addressed blob
+  sync, bbolt per-commit sync for `indexes.db` and `jobs.db`,
+  `HEAD`/branch-ref sync, mmap index flush) for throwaway test
+  stores. Writes stay atomic (temp file + rename) and all logic is
+  unchanged; only the wait-for-stable-storage guarantee is skipped,
+  which exists to survive power loss -- something no test outcome
+  does. With test fixtures adopting the option, the api suite runs
+  ~5x faster locally (119s -> 22s on one macOS machine; engine
+  bootstrap and api-layer housekeeping writes stay synced). The
+  option has no config surface; a guard test
+  (`TestVolatileStorageStaysOutOfProduction`) fails on any
+  production reference, and `TestDurableSaveSmoke` keeps the synced
+  engine path exercised. `core`'s scale-measurement test
+  deliberately keeps full durability so its numbers reflect
+  production behavior.
+
 - **Benchmark-shaped tests moved out of the test budget (#54).**
   `TestCollectionPerformance` (100-item bulk loop, ~15s/run) is now
   `BenchmarkCollectionBulk`, with a small `TestCollectionBulkCounts`
