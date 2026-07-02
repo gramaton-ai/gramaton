@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,7 +67,7 @@ func (f *stubFaultInjector) Inject(phase string) error { return f.errs[phase] }
 // setupBatchAPI constructs an API + engine using the stub embedder so
 // tests can exercise the embed path without depending on Ollama or
 // BERT. Uses setupReembedAPI for the engine wiring.
-func setupBatchAPI(t *testing.T) (*API, *core.Engine, *stubBatchEmbedder) {
+func setupBatchAPI(t testing.TB) (*API, *core.Engine, *stubBatchEmbedder) {
 	t.Helper()
 	emb := &stubBatchEmbedder{dim: 4}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
@@ -810,56 +809,45 @@ func TestSaveBatchLockHoldTime(t *testing.T) {
 	t.Logf("batch=%v vs serial=10*%v = %v", tBatch, t1, 10*t1)
 }
 
-// TestSaveBatchWallClockSpeedup: ratio gate. Skipped on small CPU
-// machines where parallel embed has no headroom.
-func TestSaveBatchWallClockSpeedup(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping wall-clock gate in -short mode")
-	}
-	if runtime.NumCPU() < 4 {
-		t.Skip("skipping wall-clock gate: requires >=4 CPUs")
-	}
-	if runtime.GOOS == "windows" {
-		// Perf-shape test softened to t.Logf in PR #41 (#36) -- the
-		// wall-clock comparison is informational only on Windows under
-		// race + parallel-suite load, where ~10s of test time pushes
-		// the api package over its 10-min budget. Linux/macOS still
-		// runs full and exercises the par/seq path.
-		t.Skip("perf-shape, informational only since #36 softening; saves Windows CI budget")
-	}
-	const N = 50
-	a1, _, _ := setupBatchAPI(t)
-	tSeqStart := time.Now()
-	for i := 0; i < N; i++ {
-		if _, apiErr := a1.Save(context.Background(), SaveRequest{Content: fmt.Sprintf("seq %d", i)}); apiErr != nil {
-			t.Fatalf("seq[%d]: %v", i, apiErr)
+// BenchmarkSaveSequential / BenchmarkSaveBatch: the former
+// TestSaveBatchWallClockSpeedup par-vs-seq comparison, moved out of
+// the test budget (#54). Its assertion had been informational-only
+// (t.Logf) since the #36 softening, so no regression protection is
+// lost; batch-path correctness is covered by the TestSaveBatch*
+// suite above. Compare per-item cost with:
+//
+//	go test -run '^$' -bench 'SaveSequential|SaveBatch' ./api/
+//
+// Contents are unique per iteration so dedup never enters the path.
+func BenchmarkSaveSequential(b *testing.B) {
+	a, _, _ := setupBatchAPI(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, apiErr := a.Save(ctx, SaveRequest{Content: fmt.Sprintf("seq %d", i)}); apiErr != nil {
+			b.Fatalf("save[%d]: %v", i, apiErr)
 		}
 	}
-	tSeq := time.Since(tSeqStart)
+}
 
-	a2, _, _ := setupBatchAPI(t)
-	items := make([]SaveBatchItem, N)
-	for i := range items {
-		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("par %d", i)}}
+// BenchmarkSaveBatch commits one 50-item batch per iteration; the
+// extra ns/item metric is the number to hold against
+// BenchmarkSaveSequential's ns/op.
+func BenchmarkSaveBatch(b *testing.B) {
+	a, _, _ := setupBatchAPI(b)
+	ctx := context.Background()
+	const batchSize = 50
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		items := make([]SaveBatchItem, batchSize)
+		for j := range items {
+			items[j] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("par %d-%d", i, j)}}
+		}
+		if _, apiErr := a.SaveBatch(ctx, SaveBatchRequest{Items: items}); apiErr != nil {
+			b.Fatalf("batch[%d]: %v", i, apiErr)
+		}
 	}
-	tParStart := time.Now()
-	if _, apiErr := a2.SaveBatch(context.Background(), SaveBatchRequest{Items: items}); apiErr != nil {
-		t.Fatalf("par: %v", apiErr)
-	}
-	tPar := time.Since(tParStart)
-
-	// Floor signal: par should not be SLOWER than seq. Soft signal
-	// (t.Logf) rather than a hard t.Errorf because wall-clock
-	// comparisons across two execution modes are scheduler-dependent
-	// and flake under loaded CI runners. A real regression that makes
-	// batch pathologically slow (e.g., O(N^2) dedup) would manifest
-	// as a much larger ratio than CI noise; the test still verifies
-	// that batch path runs to completion and produces correct results.
-	// Same shape as PR #14's softening of TestEmbedConcurrentScratchDistinct.
-	if tPar > tSeq {
-		t.Logf("batch slower than serial: par=%v seq=%v (scheduler-dependent; informational)", tPar, tSeq)
-	}
-	t.Logf("par=%v vs seq=%v ratio=%.2f", tPar, tSeq, float64(tSeq)/float64(tPar))
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*batchSize), "ns/item")
 }
 
 // TestSaveBatchIdempotentResponseShape: the cached response from a
