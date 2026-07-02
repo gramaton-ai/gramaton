@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -27,7 +28,10 @@ they all share the same server and engine instance.
 
 When the store is read-only (frozen via 'gramaton store freeze'),
 write tools are not registered: agents attached to a frozen store
-see only the read surface (search, inspect, explore, ...).`,
+see only the read surface (search, inspect, explore, ...).
+
+Each proxy registers itself in the store's config dir so that
+"gramaton stop" can stop it and "gramaton status" can list it.`,
 	RunE: runMCP,
 }
 
@@ -49,6 +53,22 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	// Ensure the HTTP server is running (auto-starts if needed).
 	if _, err := serverURL(); err != nil {
 		return fmt.Errorf("server: %w", err)
+	}
+
+	// Register this proxy so `gramaton stop` can reap it and
+	// `gramaton status` can list it. The proxy is spawned by the MCP
+	// client, not by the server, so this file is the only handle the
+	// rest of the CLI has on it. Registration is bookkeeping: if it
+	// fails, the proxy still runs (stderr is safe to write to --
+	// stdout is the MCP transport). The deferred remove covers every
+	// clean exit: stdin close and SIGINT/SIGTERM both surface as a
+	// return from Run below, since NotifyContext turns signals into
+	// context cancellation.
+	dir := configDir()
+	if err := server.RegisterMCPProxy(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: mcp proxy registration failed: %v\n", err)
+	} else {
+		defer server.RemoveMCPProxy(dir, os.Getpid())
 	}
 
 	mcpServer := newProxyMCPServer(mcpStoreReadOnly())
