@@ -80,6 +80,20 @@ func TestVolatileStorageStaysOutOfProduction(t *testing.T) {
 		t.Skipf("repo root not found from test dir: %v", err)
 	}
 
+	// The SetNoSync methods and bolt's NoSync field are reachable
+	// without ever naming the option, and the most plausible leak is
+	// config wiring inside core/engine.go itself -- so three
+	// tripwires, not one:
+	//   1. WithVolatileStorage() call sites outside core/engine.go.
+	//   2. .SetNoSync( call sites outside the engine's sanctioned
+	//      propagation files (core/engine.go, core/indexes.go).
+	//   3. Any assignment to the volatile field in core/engine.go
+	//      other than the literal `e.volatile = true` inside the
+	//      option (a `e.volatile = cfg.X` wiring would trip this).
+	sanctionedSetNoSync := map[string]bool{
+		filepath.Join("core", "engine.go"):  true,
+		filepath.Join("core", "indexes.go"): true,
+	}
 	var offenders []string
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -99,26 +113,34 @@ func TestVolatileStorageStaysOutOfProduction(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// The tripwire is a CALL, not a mention: doc comments on the
-		// SetNoSync implementations legitimately point readers at
-		// the option by name.
-		if !strings.Contains(string(data), "WithVolatileStorage()") {
-			return nil
-		}
+		src := string(data)
 		rel, _ := filepath.Rel(root, path)
-		// The definition site lives in core; SetNoSync
-		// implementations are inert without the option.
-		if rel == filepath.Join("core", "engine.go") {
-			return nil
+
+		// Tripwire 1: option call (a mention without parens in a doc
+		// comment is fine; a call is not).
+		if strings.Contains(src, "WithVolatileStorage()") && rel != filepath.Join("core", "engine.go") {
+			offenders = append(offenders, rel+" (WithVolatileStorage call)")
 		}
-		offenders = append(offenders, rel)
+		// Tripwire 2: direct SetNoSync calls bypassing the option.
+		// Method DEFINITIONS are `) SetNoSync(`; calls are `.SetNoSync(`.
+		if strings.Contains(src, ".SetNoSync(") && !sanctionedSetNoSync[rel] {
+			offenders = append(offenders, rel+" (SetNoSync call)")
+		}
+		// Tripwire 3: the volatile field must be assigned exactly
+		// once, as a literal, inside the option.
+		if rel == filepath.Join("core", "engine.go") {
+			n := strings.Count(src, ".volatile = ")
+			if n != 1 || !strings.Contains(src, "e.volatile = true") {
+				offenders = append(offenders, rel+" (volatile field assignment drifted from the single literal in WithVolatileStorage)")
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
 	if len(offenders) > 0 {
-		t.Errorf("WithVolatileStorage referenced in production files: %v\n"+
-			"The durability switch is test-only. Fixtures (in _test.go files or testutil/) may use it; nothing else may.", offenders)
+		t.Errorf("volatile-storage tripwires hit: %v\n"+
+			"The durability switch is test-only. Fixtures (in _test.go files or testutil/) may use the option; production code must not reference the option, call SetNoSync outside the engine's propagation sites, or wire the volatile field to anything but the option's literal.", offenders)
 	}
 }

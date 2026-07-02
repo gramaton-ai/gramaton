@@ -182,8 +182,6 @@ type RetentionPolicy struct {
 type Store struct {
 	db *bolt.DB
 
-	// noSync mirrors bbolt's NoSync; see SetNoSync.
-
 	// closeMu protects close() against double-close and against
 	// post-close method calls. The bbolt db's own concurrency
 	// covers in-flight transactions.
@@ -191,13 +189,13 @@ type Store struct {
 	closed  bool
 }
 
-// New opens or creates jobs.db at the given path's directory.
-// The bucket is initialized lazily on first write — but we ensure
-// it exists on open so reads see a consistent shape.
 // SetNoSync disables bbolt's per-commit fsync for this store.
 // Test-only; set by the engine under core.WithVolatileStorage.
 func (s *Store) SetNoSync(v bool) { s.db.NoSync = v }
 
+// New opens or creates jobs.db at the given path's directory.
+// The bucket is initialized lazily on first write — but we ensure
+// it exists on open so reads see a consistent shape.
 func New(path string) (*Store, error) {
 	db, err := bolt.Open(path, 0600, nil)
 	if err != nil {
