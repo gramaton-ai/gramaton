@@ -50,7 +50,7 @@ func (e *configurableEmbedder) ContextWindow() int { return 512 }
 // mirroring setupTestAPI. The customize callback runs against a fresh
 // config.Defaults() so individual tests can tweak knobs (e.g.
 // MaxEmbedAttempts) before the YAML is saved and the engine loaded.
-func setupReembedAPI(t *testing.T, emb core.EngineOption, customize func(*config.Config)) (*API, *core.Engine) {
+func setupReembedAPI(t testing.TB, emb core.EngineOption, customize func(*config.Config)) (*API, *core.Engine) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Defaults()
@@ -68,6 +68,7 @@ func setupReembedAPI(t *testing.T, emb core.EngineOption, customize func(*config
 	opts := []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	}
 	if emb != nil {
 		opts = append(opts, emb)

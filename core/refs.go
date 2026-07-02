@@ -14,6 +14,14 @@ import (
 // the directory entry change. POSIX requires this -- a fsync on the
 // regular file does NOT make the rename durable.
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	return atomicWriteFile(path, data, perm, true)
+}
+
+// atomicWriteFile is AtomicWriteFile with a durability switch. sync
+// is false only on engine hot paths under core.WithVolatileStorage
+// (test-only); the write stays atomic (temp + rename) either way --
+// only the flush-to-stable-storage guarantees are skipped.
+func atomicWriteFile(path string, data []byte, perm os.FileMode, sync bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create directory %s: %w", dir, err)
@@ -45,14 +53,20 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temp file: %w", err)
+	if sync {
+		if err := tmp.Sync(); err != nil {
+			return fmt.Errorf("sync temp file: %w", err)
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)
+	}
+	if !sync {
+		success = true
+		return nil
 	}
 	if err := fsyncDir(dir); err != nil {
 		// Data is written and renamed; missing dir-fsync risks losing
@@ -115,9 +129,15 @@ func ReadRef(dataDir, name string) (string, error) {
 
 // WriteRef writes a commit hash for a named branch ref.
 func WriteRef(dataDir, name, hash string) error {
+	return writeRef(dataDir, name, hash, true)
+}
+
+// writeRef is WriteRef with a durability switch; sync=false only on
+// the per-save engine path under core.WithVolatileStorage (test-only).
+func writeRef(dataDir, name, hash string, sync bool) error {
 	dir := RefsDir(dataDir)
 	os.MkdirAll(dir, 0o700)
-	return AtomicWriteFile(filepath.Join(dir, name), []byte(hash), 0o600)
+	return atomicWriteFile(filepath.Join(dir, name), []byte(hash), 0o600, sync)
 }
 
 // DeleteRef removes a branch ref.

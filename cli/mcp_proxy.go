@@ -29,6 +29,14 @@ func registerProxyTools(mcpServer *mcp.Server) {
 	// should not be available to agents via MCP. Use the CLI or HTTP API.
 	registerCollectionProxyTools(mcpServer)
 	registerSessionProxyTools(mcpServer)
+	// gramaton_intake intentionally excluded -- it is the HTTP-only
+	// write path (POST /v1/intake) for external integrations that
+	// don't know the metadata taxonomy. Agents write through the
+	// three storage paths the installed guidance teaches (save /
+	// sessions / collections); exposing a second Memory-write tool
+	// here would compete with that guidance. See api/intake.go.
+	// Guide: api-typed binding in mcp_proxy_guide.go.
+	registerGuideProxyTools(mcpServer)
 }
 
 // --- helpers ---

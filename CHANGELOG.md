@@ -7,7 +7,97 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Collection add responses echo the target collection's name and
+  description** (#98). `collection_add` and `collection_add_batch`
+  now return `collection_name` and `collection_description`
+  (omitted when empty, so existing consumers are unaffected),
+  putting what the collection is for in front of the agent at
+  filing time. The `collection_list` and `collection_add` tool
+  descriptions and the collections guide now say that descriptions
+  should drive the filing choice.
+
+### Changed
+
+- **Test suites no longer pay for durability they cannot use.** A new
+  test-only engine option, `core.WithVolatileStorage()`, disables
+  every fsync in the engine's write path (content-addressed blob
+  sync, bbolt per-commit sync for `indexes.db` and `jobs.db`,
+  `HEAD`/branch-ref sync, mmap index flush) for throwaway test
+  stores. Writes stay atomic (temp file + rename) and all logic is
+  unchanged; only the wait-for-stable-storage guarantee is skipped,
+  which exists to survive power loss -- something no test outcome
+  does. With test fixtures adopting the option, the api suite runs
+  ~5x faster locally (119s -> 22s on one macOS machine; engine
+  bootstrap and api-layer housekeeping writes stay synced). The
+  option has no config surface; a guard test
+  (`TestVolatileStorageStaysOutOfProduction`) fails on any
+  production reference, and `TestDurableSaveSmoke` keeps the synced
+  engine path exercised. `core`'s scale-measurement test
+  deliberately keeps full durability so its numbers reflect
+  production behavior.
+
+- **Benchmark-shaped tests moved out of the test budget (#54).**
+  `TestCollectionPerformance` (100-item bulk loop, ~15s/run) is now
+  `BenchmarkCollectionBulk`, with a small `TestCollectionBulkCounts`
+  sibling that restores the bulk-count and `ItemCount` assertions on
+  every platform — including Windows CI, where the old test was
+  skipped outright. `TestSaveBatchWallClockSpeedup` (informational-
+  only since the #36 softening) is now the
+  `BenchmarkSaveSequential`/`BenchmarkSaveBatch` pair. Hard
+  regression gates (`TestSaveBatchLockHoldTime`, the embed speedup
+  gates) deliberately stay tests. The api test fixtures
+  (`setupTestAPI`, `setupReembedAPI`, `setupBatchAPI`) now take
+  `testing.TB` so tests and benchmarks share them. Run benchmarks
+  with `go test -run '^$' -bench . ./api/`.
+
+### Removed
+
+- **`concepts.min_content_length_direct` config key retired** (#100)
+  -- declared, defaulted (50), and documented as an anti-spam gate
+  for direct concept creation, but never read anywhere: the feature
+  it was designed for never shipped, and concept emergence uses only
+  `emergence_threshold`, `max_keyword_pct`, and
+  `member_overlap_threshold`. Because the key was rendered into
+  every generated config while it had a default, it stays
+  load-tolerated as an inert tombstone (the dedup `action: flag`
+  precedent) rather than tripping strict decoding -- existing
+  configs keep loading, nothing reads the value, the default and
+  docs are gone, and render omits the key going forward. Safe to
+  delete from any `config.yaml`.
+
 ### Fixed
+
+- **`gramaton_guide` is now reachable through the `gramaton mcp`
+  stdio proxy** (#95). The tool was registered only on the in-process
+  MCP server surface, so agents connected the way `gramaton init`
+  configures them couldn't call it — even though the installed
+  guidance and the README instruct them to call
+  `gramaton_guide(topic=...)`. Guide migrated to the canonical api
+  surface: `api.Guide` with typed request/response, a new
+  `GET /v1/guide?topic=...` endpoint, and the guide markdown moved to
+  `api/guide/` (the invalid-topic error code changed from
+  `topic_not_found` to the standard `not_found`). The guide tool
+  description's topic list is now generated from the server's
+  valid-topic list — it had drifted (advertised the removed `capture`
+  topic and omitted `save` and `temporal-queries`). A proxy-side
+  tool-registry test now pins the proxy tool set the way
+  `server/mcp_harness_test.go` pins the server's, so a server-only
+  registration fails tests instead of shipping.
+- **`gramaton_intake` is deliberately proxy-excluded, and its purpose
+  is now documented** (#95). Intake began as the intended unified
+  write endpoint before the three storage paths (save / sessions /
+  collections) superseded it for agent use; it remains the
+  taxonomy-free `POST /v1/intake` HTTP path for external integrations
+  that describe a source in plain-language context signals and let
+  the server classify. Exposing it as a second agent-facing
+  Memory-write tool would compete with the installed guidance, so the
+  proxy registry test encodes the exclusion as policy (alongside
+  `gramaton_delete`). Its MCP input struct and tool description moved
+  to shared `api.IntakeRequest`/`api.IntakeDescription` definitions,
+  with the history documented in `api/intake.go` and the write-path
+  roles clarified in `docs/integrator-guide.md`.
 
 - **`gramaton_collection_migrate` accepts non-scalar `value` defaults
   over MCP.** The `value` argument is polymorphic (`any` in Go), which
@@ -21,6 +111,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit `string|number|boolean|array|object|null` type list. Scalar
   defaults behave as before; the HTTP endpoint was never affected
   (#91).
+
 
 ## [0.3.0-alpha.4] - 2026-06-27
 
