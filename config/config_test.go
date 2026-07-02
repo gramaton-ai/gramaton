@@ -876,6 +876,23 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestLoadToleratesRemovedConceptsKey(t *testing.T) {
+	// concepts.min_content_length_direct was declared but never read
+	// (#100). Unlike a typo, this key was RENDERED into every config
+	// generated while it had a default, so strict rejection would
+	// break existing installs on upgrade. It is kept as an inert
+	// load-tolerated tombstone (matching dedup's legacy `action:
+	// flag` precedent): loading succeeds, nothing reads the value,
+	// and render omits it once absent.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("concepts:\n  min_content_length_direct: 50\n"), 0o600)
+
+	if _, err := Load(path); err != nil {
+		t.Fatalf("config with retired concepts key must keep loading, got %v", err)
+	}
+}
+
 func TestLoadRejectsInvariantViolation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
