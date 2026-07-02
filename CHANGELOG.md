@@ -89,6 +89,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The `claude-cli` provider shim no longer passes a removed CLI
+  flag.** Every completion invoked `claude` with the boolean
+  `--no-allowedTools`, which the current CLI rejects as an unknown
+  option, so all calls failed for configs with
+  `provider: claude-cli`. The invocation now disables tool access
+  via the CLI's current form, `--tools ""`, and a test pins the
+  argv shape so future flag drift fails tests instead of shipping.
+  The CLI shim providers remain unsupported (see
+  `docs/providers.md`).
 - **`gramaton_guide` is now reachable through the `gramaton mcp`
   stdio proxy** (#95). The tool was registered only on the in-process
   MCP server surface, so agents connected the way `gramaton init`
