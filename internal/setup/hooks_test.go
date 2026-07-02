@@ -428,6 +428,11 @@ func TestDefaultHookBackendMaterializeRoundtrip(t *testing.T) {
 	if len(paths) == 0 {
 		t.Fatal("no scripts materialized")
 	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	wantExe := strings.ReplaceAll(exe, `\`, "/")
 
 	for _, p := range paths {
 		info, err := os.Stat(p)
@@ -451,6 +456,139 @@ func TestDefaultHookBackendMaterializeRoundtrip(t *testing.T) {
 		}
 		if !strings.HasPrefix(string(content), "#!/bin/bash") {
 			t.Errorf("%s missing shebang; first 40 bytes: %q", p, string(content[:min(40, len(content))]))
+		}
+		// Materialize must thread the running binary's absolute path
+		// (here: the test binary) into the rendered proxy, quoted and
+		// forward-slashed, with the bare-PATH exec as fallback.
+		if !strings.Contains(string(content), "\""+wantExe+"\" hook ") {
+			t.Errorf("%s does not invoke the resolved binary %q:\n%s", p, wantExe, content)
+		}
+		if !strings.Contains(string(content), "\nexec gramaton hook ") {
+			t.Errorf("%s missing bare-PATH fallback line:\n%s", p, content)
+		}
+	}
+}
+
+// TestProxyBodyAbsolutePath pins the rendered proxy shapes when the
+// gramaton binary's absolute path is known. The .sh proxy execs the
+// quoted absolute path when it is still executable and falls back to
+// a bare PATH lookup otherwise (the binary may have moved since
+// init); the .cmd proxy carries the same two branches in batch form.
+func TestProxyBodyAbsolutePath(t *testing.T) {
+	exe := "/usr/local/bin/gramaton"
+
+	gotSh := shProxyBody("stop", exe)
+	wantSh := "#!/bin/bash\n" +
+		"if [ -x \"/usr/local/bin/gramaton\" ]; then\n" +
+		"  exec \"/usr/local/bin/gramaton\" hook stop\n" +
+		"fi\n" +
+		"exec gramaton hook stop\n"
+	if gotSh != wantSh {
+		t.Errorf("shProxyBody:\ngot  %q\nwant %q", gotSh, wantSh)
+	}
+	if strings.Contains(gotSh, "\r") {
+		t.Errorf(".sh proxy must be LF-only (CRLF breaks the shebang): %q", gotSh)
+	}
+
+	gotCmd := cmdProxyBody("kiro-stop", exe)
+	wantCmd := "@if exist \"/usr/local/bin/gramaton\" (\"/usr/local/bin/gramaton\" hook kiro-stop) else (gramaton hook kiro-stop)\r\n"
+	if gotCmd != wantCmd {
+		t.Errorf("cmdProxyBody:\ngot  %q\nwant %q", gotCmd, wantCmd)
+	}
+}
+
+// TestProxyBodyWindowsPath pins the per-interpreter path treatment
+// for a Windows-shaped executable path with a space in it. The .sh
+// variant is forward-slash normalized (Claude Code runs .sh hooks
+// through Git Bash on Windows, where backslashes are escape
+// characters -- same reasoning as registerClaudeHooks) and quoted;
+// the .cmd variant keeps the native backslashed path cmd.exe wants.
+func TestProxyBodyWindowsPath(t *testing.T) {
+	exe := `C:\Users\o p\go\bin\gramaton.exe`
+
+	sh := shProxyBody("stop", exe)
+	if !strings.Contains(sh, "exec \"C:/Users/o p/go/bin/gramaton.exe\" hook stop") {
+		t.Errorf(".sh proxy must quote and forward-slash the Windows path:\n%s", sh)
+	}
+	if strings.Contains(sh, `\`) {
+		t.Errorf(".sh proxy must not contain backslashes (Git Bash eats them):\n%s", sh)
+	}
+
+	cmd := cmdProxyBody("stop", exe)
+	if !strings.Contains(cmd, `("C:\Users\o p\go\bin\gramaton.exe" hook stop)`) {
+		t.Errorf(".cmd proxy must keep the quoted native path:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "C:/Users") {
+		t.Errorf(".cmd proxy must not forward-slash the native path:\n%s", cmd)
+	}
+}
+
+// TestProxyBodyFallbackWhenExecutableUnknown pins the failure mode:
+// when the running binary's path can't be resolved, the proxies
+// degrade to the original bare-PATH form instead of failing init.
+func TestProxyBodyFallbackWhenExecutableUnknown(t *testing.T) {
+	if got, want := shProxyBody("stop", ""), "#!/bin/bash\nexec gramaton hook stop\n"; got != want {
+		t.Errorf("shProxyBody fallback:\ngot  %q\nwant %q", got, want)
+	}
+	if got, want := cmdProxyBody("kiro-stop", ""), "@gramaton hook kiro-stop\r\n"; got != want {
+		t.Errorf("cmdProxyBody fallback:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// Paths containing characters that bash expands inside double quotes
+// ($, backtick, ") must not be embedded: the rendered script would
+// probe an expanded (wrong) location and silently take the bare-PATH
+// branch anyway -- or interpolate into the script. Such paths take
+// the bare fallback body directly.
+func TestProxyBodyRejectsUnquotablePaths(t *testing.T) {
+	want := "#!/bin/bash\nexec gramaton hook stop\n"
+	for _, p := range []string{
+		"/opt/foo$bar/gramaton",
+		"/opt/`whoami`/gramaton",
+		`/opt/we"ird/gramaton`,
+	} {
+		if got := shProxyBody("stop", p); got != want {
+			t.Errorf("shProxyBody(%q):\ngot  %q\nwant bare fallback %q", p, got, want)
+		}
+	}
+	// A merely space-containing path stays embedded.
+	if got := shProxyBody("stop", "/Applications/My Tools/gramaton"); !strings.Contains(got, `"/Applications/My Tools/gramaton" hook stop`) {
+		t.Errorf("space-containing path should embed, got %q", got)
+	}
+}
+
+// TestMaterializeKiroAbsolutePath covers the Kiro proxies (the same
+// template family as Claude Code's): one native variant per event
+// (proxyNativePerOS), each invoking the resolved binary by absolute
+// path with the bare-PATH fallback branch.
+func TestMaterializeKiroAbsolutePath(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := DefaultHookBackend{}.Materialize("kiro", tmp)
+	if err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	if len(paths) != len(kiroEvents) {
+		t.Fatalf("got %d scripts, want %d (one variant per event):\n%v", len(paths), len(kiroEvents), paths)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	for _, p := range paths {
+		content, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		body := string(content)
+		wantExe := exe
+		if strings.HasSuffix(p, ".sh") {
+			wantExe = strings.ReplaceAll(exe, `\`, "/")
+		}
+		if !strings.Contains(body, "\""+wantExe+"\" hook kiro-") {
+			t.Errorf("%s does not invoke the resolved binary %q:\n%s", p, wantExe, body)
+		}
+		if !strings.Contains(body, "gramaton hook kiro-") {
+			t.Errorf("%s missing bare-PATH fallback:\n%s", p, body)
 		}
 	}
 }
@@ -510,8 +648,11 @@ func TestMaterializeCodexDualVariant(t *testing.T) {
 				t.Errorf("%s: .sh proxy must be LF-only (CRLF breaks the shebang): %q", p, body)
 			}
 		case strings.HasSuffix(p, ".cmd"):
-			if !strings.HasPrefix(body, "@gramaton hook ") {
+			if !strings.HasPrefix(body, "@if exist \"") {
 				t.Errorf("%s: bad .cmd body: %q", p, body)
+			}
+			if !strings.Contains(body, ") else (gramaton hook ") {
+				t.Errorf("%s: missing bare-PATH fallback branch: %q", p, body)
 			}
 			if !strings.HasSuffix(body, "\r\n") {
 				t.Errorf("%s: .cmd proxy must use CRLF line endings: %q", p, body)

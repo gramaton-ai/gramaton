@@ -83,10 +83,14 @@ itself as a Windows Service — that's a post-v1 feature.
   from Go templates at install time. There's nothing to clone, and
   git's `core.autocrlf=true` can't corrupt shebangs.
 - **Hooks forward to a Go subcommand.** The proxy scripts are thin —
-  a single `exec gramaton hook <event>` line. All logic lives in the
-  `gramaton hook` internal subcommand. Edit the proxy for temporary
-  debugging (add `set -x`, etc.) but the real behavior to change
-  lives in the Go code.
+  they exec `<absolute path to gramaton> hook <event>`, falling back
+  to a bare `gramaton` PATH lookup if the binary has moved since
+  init. The absolute path in `.sh` proxies is forward-slash
+  normalized so Git Bash doesn't eat backslashes; `.cmd` proxies
+  keep the native path. All logic lives in the `gramaton hook`
+  internal subcommand. Edit the proxy for temporary debugging (add
+  `set -x`, etc.) but the real behavior to change lives in the Go
+  code.
 - **Python 3 is not required.** Earlier shell hooks used `python3`
   for JSON parsing; the Go subcommand uses `encoding/json` natively.
   This was a hidden dependency on Unix too — it's just most visible

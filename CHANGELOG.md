@@ -151,6 +151,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   everything else. Concept nodes also no longer count as evidence
   for their own keyword in candidate detection.
 
+- **Hook proxy scripts invoke the gramaton binary by absolute path.**
+  Agent harnesses run hook scripts in a non-interactive shell that
+  reads no rc files, so a `gramaton` reachable only through a PATH
+  entry in `~/.zshrc` (the common `go install` setup on macOS) was
+  unresolvable inside the hook: Claude Code reported "Stop hook
+  error: Failed with non-blocking status code" and conversation
+  capture silently degraded. `gramaton init` now writes the running
+  binary's absolute path into every generated proxy (Claude Code,
+  Codex, Cursor, and Kiro; `.sh` and `.cmd` variants), quoted for
+  paths with spaces and forward-slash normalized in `.sh` scripts so
+  Git Bash on Windows reads the path intact. If the binary later
+  moves, the proxy falls back to a bare `gramaton` PATH lookup;
+  re-running `gramaton init` refreshes existing installs with the
+  current path.
+
 
 ## [0.3.0-alpha.4] - 2026-06-27
 
