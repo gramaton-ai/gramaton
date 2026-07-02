@@ -23,6 +23,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `testing.TB` so tests and benchmarks share them. Run benchmarks
   with `go test -run '^$' -bench . ./api/`.
 
+### Removed
+
+- **`concepts.min_content_length_direct` config key retired** (#100)
+  -- declared, defaulted (50), and documented as an anti-spam gate
+  for direct concept creation, but never read anywhere: the feature
+  it was designed for never shipped, and concept emergence uses only
+  `emergence_threshold`, `max_keyword_pct`, and
+  `member_overlap_threshold`. Because the key was rendered into
+  every generated config while it had a default, it stays
+  load-tolerated as an inert tombstone (the dedup `action: flag`
+  precedent) rather than tripping strict decoding -- existing
+  configs keep loading, nothing reads the value, the default and
+  docs are gone, and render omits the key going forward. Safe to
+  delete from any `config.yaml`.
+
 ## [0.3.0-alpha.4] - 2026-06-27
 
 ### Added
