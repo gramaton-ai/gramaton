@@ -49,6 +49,7 @@ func TestServerNewAcceptsNilLLM(t *testing.T) {
 	// Construct an engine WITHOUT WithLLM. engine.LLM() returns nil.
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
@@ -95,6 +96,7 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
@@ -626,6 +628,7 @@ func TestServerShutdownDrainsCuration(t *testing.T) {
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

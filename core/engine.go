@@ -43,6 +43,12 @@ type Engine struct {
 	searcher *searcherSubsystem
 	headHash string
 
+	// volatile disables durability syncs on every write surface
+	// (blob store, bbolt commits, HEAD/ref updates, jobs store,
+	// mmap index). Settable ONLY via WithVolatileStorage; never
+	// from config. Test fixtures use it -- see the option's doc.
+	volatile bool
+
 	// jobStore is the F1 async-operation tracking store. Owns its own
 	// jobs.db file (separate from indexes.db). nil if engine init
 	// failed before jobStore opened. Close in Engine.Close before
@@ -107,6 +113,23 @@ func WithLLM(p llm.Provider) EngineOption {
 // When set, the engine skips creating/opening the mmap vector file.
 func WithVectorIndex(v index.VectorIndex) EngineOption {
 	return func(e *Engine) { e.indexes.vecIdx = v }
+}
+
+// WithVolatileStorage disables every durability sync in the engine's
+// write path: per-blob fsync in content-addressed storage, bbolt's
+// per-commit sync (indexes.db and jobs.db), HEAD/branch-ref fsyncs,
+// and mmap index flushes. Writes remain atomic (temp file + rename)
+// and all logic is unchanged -- only the wait-for-stable-storage
+// guarantee is skipped, which matters solely for surviving power
+// loss or kernel panic.
+//
+// TEST-ONLY. Intended exclusively for test fixtures running against
+// throwaway temp-dir stores, where fsync latency dominates suite
+// runtime (measured ~15x on the api package). There is deliberately
+// no config surface for this option, and a guard test asserts no
+// production code path references it. Do not wire it into config.
+func WithVolatileStorage() EngineOption {
+	return func(e *Engine) { e.volatile = true }
 }
 
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
@@ -280,9 +303,18 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 		}
 	}
 
+	// Volatile-storage propagation (test-only): options are settled
+	// above, so flip the sync switches on the surfaces opened before
+	// this point. Later surfaces (vector index, jobs store) receive
+	// the flag at their construction below.
+	if e.volatile {
+		boltDB.NoSync = true
+		e.store.SetNoSync(true)
+	}
+
 	// If no option provided a vector index, open the mmap'd flat
 	// vector index.
-	vecCleanup, err := idx.openDefaultVecIdx(e.cfg)
+	vecCleanup, err := idx.openDefaultVecIdx(e.cfg, e.volatile)
 	if err != nil {
 		return err
 	}
@@ -309,6 +341,9 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 		return fmt.Errorf("open jobs store: %w", err)
 	}
 	cleanups = append(cleanups, func() { _ = jobStore.Close() })
+	if e.volatile {
+		jobStore.SetNoSync(true)
+	}
 	if err := recoverInFlightJobs(jobStore); err != nil {
 		return fmt.Errorf("jobs restart recovery: %w", err)
 	}
@@ -635,12 +670,12 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	}
 
 	headPath := filepath.Join(e.cfg.DataDir, "HEAD")
-	if err := AtomicWriteFile(headPath, []byte(commit.Hash), 0o600); err != nil {
+	if err := atomicWriteFile(headPath, []byte(commit.Hash), 0o600, !e.volatile); err != nil {
 		return nil, fmt.Errorf("write HEAD: %w", err)
 	}
 
 	branch := ActiveBranch(e.cfg.DataDir)
-	if err := WriteRef(e.cfg.DataDir, branch, commit.Hash); err != nil {
+	if err := writeRef(e.cfg.DataDir, branch, commit.Hash, !e.volatile); err != nil {
 		return nil, fmt.Errorf("write ref %s: %w", branch, err)
 	}
 

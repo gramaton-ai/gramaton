@@ -8,6 +8,10 @@ Use for tasks, TODOs, action items, backlogs, checklists -- anything where missi
 
 **Decision rule:** Will missing one item be a failure? Yes = collection. No = Memory (gramaton_save).
 
+## Routing: which collection?
+
+Each collection carries a `description` saying what it is for. Before filing an item, check the descriptions returned by `gramaton_collection_list` and pick the collection whose description matches the item -- don't route on name alone, and don't create a new collection when an existing description already covers the item. `gramaton_collection_add` (and the batch variant) echoes the target's name and description in its response, so a mis-filed item is visible immediately; use `gramaton_collection_move` to correct it.
+
 ## Operations
 
 - `gramaton_collection_create`: Create with optional schema, `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`, `journal`, `references`), and behaviour fields (`curation`, `supersession`, `contradictions`, `clear_mode`).

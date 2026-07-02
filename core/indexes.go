@@ -89,7 +89,7 @@ func newIndexSet(boltDB *bolt.DB, cfg config.Config) (*indexSet, error) {
 // openDefaultVecIdx opens the on-disk mmap'd flat vector index using
 // the embedding dimension from cfg. Skipped when WithVectorIndex
 // already injected one. The returned cleanup closes the mmap file.
-func (s *indexSet) openDefaultVecIdx(cfg config.Config) (func(), error) {
+func (s *indexSet) openDefaultVecIdx(cfg config.Config, noSync bool) (func(), error) {
 	if s.vecIdx != nil {
 		return nil, nil
 	}
@@ -102,6 +102,7 @@ func (s *indexSet) openDefaultVecIdx(cfg config.Config) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open vector index: %w", err)
 	}
+	mmapVec.SetNoSync(noSync)
 	s.vecIdx = mmapVec
 	return func() { mmapVec.Close() }, nil
 }

@@ -189,6 +189,10 @@ type Store struct {
 	closed  bool
 }
 
+// SetNoSync disables bbolt's per-commit fsync for this store.
+// Test-only; set by the engine under core.WithVolatileStorage.
+func (s *Store) SetNoSync(v bool) { s.db.NoSync = v }
+
 // New opens or creates jobs.db at the given path's directory.
 // The bucket is initialized lazily on first write — but we ensure
 // it exists on open so reads see a consistent shape.

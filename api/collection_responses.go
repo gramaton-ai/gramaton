@@ -83,11 +83,16 @@ type CollectionItemsResponse struct {
 // minimal-curation idempotent-dedup branches. Deduplicated is true
 // when the item's title already existed on a curation=minimal
 // collection; the ID points at the pre-existing item (no new node
-// created).
+// created). CollectionName / CollectionDescription echo the target
+// collection's identity so the filing agent sees what the
+// collection is for at the moment of adding (#98); both are
+// omitempty so the wire shape stays backward compatible.
 type CollectionAddResponse struct {
-	ID           string `json:"id"`
-	CollectionID string `json:"collection_id"`
-	Deduplicated bool   `json:"deduplicated,omitempty"`
+	ID                    string `json:"id"`
+	CollectionID          string `json:"collection_id"`
+	CollectionName        string `json:"collection_name,omitempty"`
+	CollectionDescription string `json:"collection_description,omitempty"`
+	Deduplicated          bool   `json:"deduplicated,omitempty"`
 }
 
 // CollectionRemoveResponse: {removed, item_id, collection_id}.
