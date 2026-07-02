@@ -71,6 +71,7 @@ func TestMain(m *testing.M) {
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopTestLLM{}),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "LoadEngine: %v\n", err)

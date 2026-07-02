@@ -33,6 +33,7 @@ func loadTestEngineWithConfig(t *testing.T, cfg config.Config) (*Engine, error) 
 	}
 	return LoadEngineWithOptions(cfg.DataDir, nil, []EngineOption{
 		WithVectorIndex(index.NewFlatIndex()),
+		WithVolatileStorage(),
 	})
 }
 

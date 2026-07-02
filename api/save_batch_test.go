@@ -819,6 +819,11 @@ func TestSaveBatchLockHoldTime(t *testing.T) {
 //	go test -run '^$' -bench 'SaveSequential|SaveBatch' ./api/
 //
 // Contents are unique per iteration so dedup never enters the path.
+//
+// The fixture runs under core.WithVolatileStorage, so these numbers
+// measure the CPU-side cost only: production sequential saves also
+// pay per-record fsyncs that batching amortizes, so the batch
+// advantage here UNDERSTATES the production one.
 func BenchmarkSaveSequential(b *testing.B) {
 	a, _, _ := setupBatchAPI(b)
 	ctx := context.Background()
