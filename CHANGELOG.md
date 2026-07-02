@@ -89,6 +89,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`gramaton init` now writes working Bedrock model IDs.** The
+  wizard's Bedrock defaults were base foundation-model IDs with
+  incorrect date suffixes (e.g.
+  `anthropic.claude-sonnet-4-6-20250514-v1:0`), which Bedrock
+  rejects with `ResourceNotFoundException` on the first LLM call —
+  newer Claude models are invocable in most regions only through
+  cross-region inference profiles. The wizard now derives the
+  profile's geography prefix from the configured region (`us-*` and
+  `ca-central-1` → `us.`, `eu-*` → `eu.`, Tokyo/Osaka → `jp.`,
+  Sydney/Melbourne → `au.`, everything else → the `global.` profile;
+  a region is only mapped to a geography when it is a documented
+  source for all three default models) and combines it with model IDs
+  verified against
+  the AWS Bedrock model catalog: Claude Haiku 4.5
+  (`anthropic.claude-haiku-4-5-20251001-v1:0`, Low), Claude
+  Sonnet 4.6 (`anthropic.claude-sonnet-4-6`, Medium), and Claude
+  Opus 4.8 (`anthropic.claude-opus-4-8`, High). Hand-entered model
+  IDs are stored verbatim, as before. The bedrock client's
+  `ResourceNotFoundException` hint and the Bedrock examples in
+  `docs/providers.md` now show inference-profile IDs.
 - **`gramaton_guide` is now reachable through the `gramaton mcp`
   stdio proxy** (#95). The tool was registered only on the in-process
   MCP server surface, so agents connected the way `gramaton init`
