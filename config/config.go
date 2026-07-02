@@ -29,6 +29,7 @@ type Config struct {
 
 	// --- User-facing configuration ---
 
+	Author    AuthorConfig    `yaml:"author,omitempty"`
 	Server    ServerConfig    `yaml:"server"`
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	Logging   LoggingConfig   `yaml:"logging"`
@@ -62,6 +63,36 @@ type Config struct {
 //
 // Everything in this section is intended to be changed by operators to fit
 // their environment, cost envelope, or quality expectations.
+
+// AuthorConfig is the identity records created in the store are
+// attributed to. Git-style: two fields composed into one string at
+// use time (see String). Both fields are optional; a fully blank
+// AuthorConfig is a meaningful state (records carry no author) and
+// is why there is no Defaults() entry for this block.
+type AuthorConfig struct {
+	// Name is the human-readable author name, e.g. "Ada Lovelace".
+	Name string `yaml:"name,omitempty"`
+
+	// Email is the author email address, e.g. "ada@example.com".
+	Email string `yaml:"email,omitempty"`
+}
+
+// String composes the two fields into a single git-style identity.
+// Both fields are whitespace-trimmed first. Both set -> "Name
+// <email>"; name only -> "Name"; email only -> the bare email (no
+// angle brackets); neither -> "".
+func (a AuthorConfig) String() string {
+	name := strings.TrimSpace(a.Name)
+	email := strings.TrimSpace(a.Email)
+	switch {
+	case name != "" && email != "":
+		return name + " <" + email + ">"
+	case name != "":
+		return name
+	default:
+		return email
+	}
+}
 
 // ServerConfig controls the gramaton server process.
 type ServerConfig struct {
@@ -1476,6 +1507,9 @@ func trimConfigStrings(cfg *Config) {
 	trim := func(s *string) { *s = strings.TrimSpace(*s) }
 
 	trim(&cfg.DataDir)
+
+	trim(&cfg.Author.Name)
+	trim(&cfg.Author.Email)
 
 	trim(&cfg.Embedding.Provider)
 	trim(&cfg.Embedding.Endpoint)

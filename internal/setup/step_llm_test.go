@@ -90,16 +90,16 @@ func TestParseIntAtLeast(t *testing.T) {
 
 // Step 2 menu-branch tests.
 
-// newWizardForLLMTest builds a wizard that reaches Step 2 with "1"
-// (fresh) and "5" (skip embedding) pre-scripted, then feeds the
-// caller's Step 2 answers. Steps 3/4 are short-circuited via a
-// fakeMCPBackend with no detected clients. Keeps tests fast and
-// deterministic — no network, no real filesystem mutation beyond
-// the tmpdir.
+// newWizardForLLMTest builds a wizard that reaches Step 2 with the
+// identity enter-throughs ("", ""), "1" (fresh), and "5" (skip
+// embedding) pre-scripted, then feeds the caller's Step 2 answers.
+// Steps 3/4 are short-circuited via a fakeMCPBackend with no
+// detected clients. Keeps tests fast and deterministic — no network,
+// no real filesystem mutation beyond the tmpdir.
 func newWizardForLLMTest(t *testing.T, llmAnswers ...string) (*Wizard, *bytes.Buffer, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	answers := append([]string{"1", "5"}, llmAnswers...)
+	answers := append([]string{"", "", "1", "5"}, llmAnswers...)
 
 	var buf bytes.Buffer
 	prompter := NewScriptedPrompter(answers...)

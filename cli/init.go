@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/embed"
@@ -25,6 +26,12 @@ var (
 	// MCP registration logic, or other wizard-touched state without
 	// manually deleting config.yaml.
 	force bool
+
+	// author is the git-style identity records created in the store
+	// are attributed to ("Ada Lovelace <ada@example.com>", or a bare
+	// name). When set, the wizard skips its identity prompts and the
+	// non-interactive path skips its OS-account fallback.
+	author string
 )
 
 var initCmd = &cobra.Command{
@@ -45,6 +52,8 @@ func init() {
 		"skip the interactive wizard and bootstrap with defaults only")
 	initCmd.Flags().BoolVar(&force, "force", false,
 		"re-run the wizard even when config.yaml already exists (re-materializes hooks, re-registers MCP)")
+	initCmd.Flags().StringVar(&author, "author", "",
+		"author identity for records created in the store, git-style: \"Ada Lovelace <ada@example.com>\"")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -88,6 +97,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 	cfg := config.Defaults()
 	cfg.DataDir = filepath.Join(dir, "data")
 
+	// --author applies to both paths: the wizard sees a populated
+	// cfg.Author and skips its identity prompts; the non-interactive
+	// path uses it instead of the OS-account fallback.
+	if author != "" {
+		parsed, err := parseAuthor(author)
+		if err != nil {
+			return err
+		}
+		cfg.Author = parsed
+	}
+
 	if interactive {
 		return runInitInteractive(cmd.Context(), &cfg, cfgPath, dir)
 	}
@@ -128,6 +148,12 @@ func runInitNonInteractive(ctx context.Context, cfg config.Config, cfgPath, dir 
 
 	configured := setupEmbeddingNonInteractive(ctx, &cfg, cfgPath)
 
+	// Author fallback: --author (parsed into cfg.Author by runInit)
+	// wins; otherwise default the name from the OS account so records
+	// carry a usable identity even in scripted setups. Email has no
+	// safe guess, so it stays blank.
+	defaultAuthor(&cfg)
+
 	if err := config.Save(cfg, cfgPath); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -141,6 +167,44 @@ func runInitNonInteractive(ctx context.Context, cfg config.Config, cfgPath, dir 
 	}
 
 	return nil
+}
+
+// parseAuthor parses the --author flag's git-style identity string
+// into its config fields. Accepted forms:
+//
+//	"Ada Lovelace <ada@example.com>"  ->  Name + Email
+//	"Ada Lovelace"                    ->  Name only
+//	"<ada@example.com>"               ->  Email only
+//
+// The split is at the LAST '<' so a name containing '<' still
+// parses; the remainder must end with '>' or the value is rejected
+// as malformed (a stray '<' is far more likely a quoting mistake
+// than an intentional name character).
+func parseAuthor(s string) (config.AuthorConfig, error) {
+	s = strings.TrimSpace(s)
+	i := strings.LastIndex(s, "<")
+	if i < 0 {
+		return config.AuthorConfig{Name: s}, nil
+	}
+	rest := strings.TrimSpace(s[i+1:])
+	if !strings.HasSuffix(rest, ">") {
+		return config.AuthorConfig{}, fmt.Errorf("invalid --author %q: '<' without a closing '>'; expected \"Name <email>\"", s)
+	}
+	return config.AuthorConfig{
+		Name:  strings.TrimSpace(s[:i]),
+		Email: strings.TrimSpace(strings.TrimSuffix(rest, ">")),
+	}, nil
+}
+
+// defaultAuthor fills a blank cfg.Author with the OS account name.
+// Non-interactive path only: the wizard covers the interactive
+// equivalent with a prompt (same preference order -- full name,
+// then username, then empty). A cfg.Author populated from --author
+// is left untouched.
+func defaultAuthor(cfg *config.Config) {
+	if cfg.Author == (config.AuthorConfig{}) {
+		cfg.Author.Name = setup.OSAccountName()
+	}
 }
 
 // setupEmbeddingNonInteractive is the same flow the old gramaton init

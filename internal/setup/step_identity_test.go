@@ -1,0 +1,115 @@
+package setup
+
+import (
+	"bytes"
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/gramaton-ai/gramaton/config"
+)
+
+// newWizardForIdentityTest builds a wizard whose identity answers the
+// caller controls, with the rest of the flow scripted to skip ("1"
+// fresh, "5" skip embedding, "5" skip LLM; Steps 3-5 short-circuit
+// via a fakeMCPBackend with no clients).
+func newWizardForIdentityTest(t *testing.T, name, email string) (*Wizard, *bytes.Buffer) {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	var buf bytes.Buffer
+	prompter := NewScriptedPrompter(name, email, "1", "5", "5")
+	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey
+	// bypasses the injected backend and probes the real PATH + home
+	// (same sandboxing as newWizardForMCPTest).
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+	cfg := config.Defaults()
+	cfg.DataDir = filepath.Join(tmpDir, "data")
+
+	wiz := New(prompter, NewWriter(&buf), &cfg, filepath.Join(tmpDir, "config.yaml"), tmpDir)
+	wiz.mcpBackend = &fakeMCPBackend{}
+	return wiz, &buf
+}
+
+// TestStepIdentityValuesLandInConfig covers the plain typed-in path:
+// both answers end up on cfg.Author, and the saved config round-trips
+// them (persistence rides stepVerify's config.Save).
+func TestStepIdentityValuesLandInConfig(t *testing.T) {
+	wiz, _ := newWizardForIdentityTest(t, "Ada Lovelace", "ada@example.com")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if wiz.cfg.Author.Name != "Ada Lovelace" {
+		t.Errorf("Author.Name = %q, want %q", wiz.cfg.Author.Name, "Ada Lovelace")
+	}
+	if wiz.cfg.Author.Email != "ada@example.com" {
+		t.Errorf("Author.Email = %q, want %q", wiz.cfg.Author.Email, "ada@example.com")
+	}
+
+	// The wizard persisted via stepVerify; the on-disk config must
+	// carry the identity too (dirty-input-to-stored-clean seam).
+	loaded, err := config.Load(wiz.cfgPath)
+	if err != nil {
+		t.Fatalf("Load saved config: %v", err)
+	}
+	if loaded.Author.Name != "Ada Lovelace" || loaded.Author.Email != "ada@example.com" {
+		t.Errorf("saved config Author = %+v, want Ada Lovelace / ada@example.com", loaded.Author)
+	}
+}
+
+// TestStepIdentityEnterThroughUsesOSDefault covers the lazy path: a
+// bare Enter at the name prompt accepts the OS-account default (full
+// name preferred, username fallback, possibly "" on exotic CI), and
+// a bare Enter at the email prompt leaves it blank.
+func TestStepIdentityEnterThroughUsesOSDefault(t *testing.T) {
+	wiz, _ := newWizardForIdentityTest(t, "", "")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if want := OSAccountName(); wiz.cfg.Author.Name != want {
+		t.Errorf("Author.Name = %q, want OS default %q", wiz.cfg.Author.Name, want)
+	}
+	if wiz.cfg.Author.Email != "" {
+		t.Errorf("Author.Email = %q, want empty", wiz.cfg.Author.Email)
+	}
+}
+
+// TestStepIdentityPresetSkipsPrompts covers the --author path:
+// cli/init.go parses the flag into cfg.Author before the wizard is
+// constructed, so the section must consume NO prompter answers and
+// report the preset identity instead. The scripted answers here
+// start at Step 0 -- if the identity section prompted anyway, "1"
+// would be eaten as the name and the fresh-vs-import Choice would
+// abort the run.
+func TestStepIdentityPresetSkipsPrompts(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	var buf bytes.Buffer
+	prompter := NewScriptedPrompter("1", "5", "5")
+	t.Setenv("PATH", "")
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+	cfg := config.Defaults()
+	cfg.DataDir = filepath.Join(tmpDir, "data")
+	cfg.Author = config.AuthorConfig{Name: "Ada Lovelace", Email: "ada@example.com"}
+
+	wiz := New(prompter, NewWriter(&buf), &cfg, filepath.Join(tmpDir, "config.yaml"), tmpDir)
+	wiz.mcpBackend = &fakeMCPBackend{}
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Author identity: Ada Lovelace <ada@example.com>") {
+		t.Errorf("preset identity not reported:\n%s", out)
+	}
+	if cfg.Author.Name != "Ada Lovelace" || cfg.Author.Email != "ada@example.com" {
+		t.Errorf("preset Author mutated: %+v", cfg.Author)
+	}
+}

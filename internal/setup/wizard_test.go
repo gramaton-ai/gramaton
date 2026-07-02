@@ -22,9 +22,10 @@ import (
 func TestWizardImportBranchEmptyPath(t *testing.T) {
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	// Answers: Step 0 "2" (import), path "" (abort import cleanly),
-	// Step 2 LLM "5" (skip), Step 3 MCP "n", Step 4 hooks "n".
-	prompter := NewScriptedPrompter("2", "", "5", "n", "n")
+	// Answers: identity name/email "" (enter through), Step 0 "2"
+	// (import), path "" (abort import cleanly), Step 2 LLM "5"
+	// (skip), Step 3 MCP "n", Step 4 hooks "n".
+	prompter := NewScriptedPrompter("", "", "2", "", "5", "n", "n")
 
 	cfg := config.Defaults()
 	cfg.DataDir = t.TempDir() + "/data"
@@ -68,6 +69,7 @@ func TestWizardImportBranchMissingFile(t *testing.T) {
 	// os.IsNotExist for the missing-file check, which is portable.
 	missing := filepath.Join(t.TempDir(), "definitely-not-a-real-archive.tar.gz")
 	prompter := NewScriptedPrompter(
+		"", "", // identity name/email enter-throughs
 		"2",
 		missing,
 		"5", "n", "n",
@@ -96,7 +98,7 @@ func TestWizardImportBranchDirectoryPath(t *testing.T) {
 	writer := NewWriter(&buf)
 
 	dir := t.TempDir()
-	prompter := NewScriptedPrompter("2", dir, "5", "n", "n")
+	prompter := NewScriptedPrompter("", "", "2", dir, "5", "n", "n")
 
 	cfg := config.Defaults()
 	cfg.DataDir = t.TempDir() + "/data"
@@ -123,11 +125,12 @@ func TestWizardFreshPathSkipEverything(t *testing.T) {
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
 	// Answers, in order:
+	//   Identity: name "" (OS default), email "" (skip)
 	//   Step 0: [1] fresh
 	//   Step 1: [5] skip embedding
 	//   Step 2: [5] skip LLM
 	// Steps 3-5 are non-prompting stubs.
-	prompter := NewScriptedPrompter("1", "5", "5")
+	prompter := NewScriptedPrompter("", "", "1", "5", "5")
 
 	tmpDir := t.TempDir()
 	cfg := config.Defaults()

@@ -57,15 +57,17 @@ func (f *fakeHookBackend) RegisterHooks(_ context.Context, client string, paths 
 //
 // Script answers in order (prompter):
 //
-//	[0] Step 0 fresh-vs-import:      "1" (fresh)
-//	[1] Step 1 embedding menu:       "5" (skip)
-//	[2] Step 2 LLM menu:             "5" (skip)
-//	[3] Step 3 MCP confirm:          "y" or "n" (caller picks)
-//	[4] Step 4 instructions confirm: always "n" (skip install; tests
+//	[0] identity name:               "" (accept OS-account default)
+//	[1] identity email:              "" (skip)
+//	[2] Step 0 fresh-vs-import:      "1" (fresh)
+//	[3] Step 1 embedding menu:       "5" (skip)
+//	[4] Step 2 LLM menu:             "5" (skip)
+//	[5] Step 3 MCP confirm:          "y" or "n" (caller picks)
+//	[6] Step 4 instructions confirm: always "n" (skip install; tests
 //	                                 for step 4 are in
 //	                                 step_instructions_test.go and
 //	                                 don't need full-wizard driving)
-//	[5] Step 5 hooks confirm:        "y" or "n" (caller picks)
+//	[7] Step 5 hooks confirm:        "y" or "n" (caller picks)
 //
 // HOME is pointed at the tmpDir so the skipped instructions step
 // (and any other step that might touch $HOME) doesn't scribble on
@@ -75,7 +77,7 @@ func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend Hook
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("1", "5", "5", mcpConfirm, "n", hookConfirm)
+	prompter := NewScriptedPrompter("", "", "1", "5", "5", mcpConfirm, "n", hookConfirm)
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
