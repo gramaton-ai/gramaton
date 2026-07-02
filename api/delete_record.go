@@ -28,6 +28,9 @@ const DeleteRecordDescription = "Soft-delete a record. Sets processing_status=de
 // delete. Caller can still inspect the record; search deprioritizes
 // deleted records by default.
 func (a *API) DeleteRecord(ctx context.Context, req DeleteRecordRequest) (DeleteRecordResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("delete"); apiErr != nil {
+		return DeleteRecordResponse{}, apiErr
+	}
 	if req.ID == "" {
 		return DeleteRecordResponse{}, ErrMissing("id is required")
 	}

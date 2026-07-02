@@ -212,6 +212,35 @@ func TestWithReadOnlyOptionOnFrozenManifest(t *testing.T) {
 	}
 }
 
+// TestJobSweeperNotStartedOnReadOnlyEngine pins the background-writer
+// gate in openFiles: a read-only engine spawns no jobs GC sweeper.
+// jobs.db is a derived cache (open-time recovery still writes it),
+// but a frozen store must run no PERIODIC background writer of any
+// kind -- and no new write jobs can be created on it anyway. The
+// writable control keeps the assertion from passing vacuously.
+func TestJobSweeperNotStartedOnReadOnlyEngine(t *testing.T) {
+	frozenDir := newReadOnlyTestDir(t)
+	if err := FreezeStore(frozenDir, ""); err != nil {
+		t.Fatalf("FreezeStore: %v", err)
+	}
+	frozen := openReadOnlyTestEngine(t, frozenDir)
+	if !frozen.ReadOnly() {
+		t.Fatal("test precondition: engine should be read-only")
+	}
+	if frozen.cfg.Jobs.SweepInterval <= 0 {
+		t.Fatalf("test precondition: default SweepInterval must be > 0, got %v", frozen.cfg.Jobs.SweepInterval)
+	}
+	if frozen.jobSweepCancel != nil || frozen.jobSweepDone != nil {
+		t.Error("jobs GC sweeper started on a read-only engine")
+	}
+
+	writableDir := newReadOnlyTestDir(t)
+	writable := openReadOnlyTestEngine(t, writableDir)
+	if writable.jobSweepCancel == nil || writable.jobSweepDone == nil {
+		t.Error("writable engine with SweepInterval > 0 should start the jobs GC sweeper")
+	}
+}
+
 // TestEngineOpenFailsOnCorruptManifest verifies openFiles aborts on a
 // manifest read error, consistent with format-check failure handling:
 // a corrupted manifest on a store that might be frozen must not

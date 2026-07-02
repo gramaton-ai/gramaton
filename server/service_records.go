@@ -72,6 +72,13 @@ func metaBM25Text(meta map[string]any) string {
 // serviceSave creates a new knowledge record. Handles pre-embedding,
 // deduplication, supersession, and chunking.
 func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]any, *serviceError) {
+	// Store-level read-only guard, mirroring api.rejectIfReadOnly:
+	// this legacy service path (intake) mutates the in-memory graph
+	// before Engine.Save, so it must reject up front rather than rely
+	// on the engine backstop.
+	if s.engine.ReadOnly() {
+		return nil, errForbidden("store is read-only: save is not permitted")
+	}
 	saveStart := time.Now()
 
 	if req.Content == "" {

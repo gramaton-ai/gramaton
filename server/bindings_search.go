@@ -191,6 +191,12 @@ func (s *Server) registerSearchMCPTools(mcpServer *mcp.Server) {
 			"embedding": resp.Embedding,
 			"curation":  computeCuration(s.engine, s.runner, s.usageTracker),
 		}
+		// Same only-when-frozen contract as the HTTP envelope's
+		// store_readonly field; status is the one direct-MCP tool
+		// that inlines envelope-style state.
+		if s.engine.ReadOnly() {
+			out["store_readonly"] = true
+		}
 		return mcpJSONResult(out)
 	})
 

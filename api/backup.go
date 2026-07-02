@@ -187,6 +187,13 @@ func (a *API) BackupCreate(ctx context.Context) (BackupCreateResponse, *APIError
 // archive could exploit tar-extraction edge cases or simply
 // replace the live store with attacker-controlled state.
 func (a *API) BackupRestore(ctx context.Context, req RestoreRequest) (RestoreResponse, *APIError) {
+	// Restore replaces the data dir wholesale; a frozen store must
+	// not be clobbered. (BackupCreate and BackupExport stay ungated:
+	// they only read the store and write OUTSIDE the data dir --
+	// export is how a frozen store is shared.)
+	if apiErr := a.rejectIfReadOnly("restore"); apiErr != nil {
+		return RestoreResponse{}, apiErr
+	}
 	start := time.Now()
 	if req.Path == "" {
 		return RestoreResponse{}, ErrMissing("path is required")
@@ -414,6 +421,9 @@ func exportHasFilters(req ExportRequest) bool {
 // them. Current behavior matches pre-migration -- backup.ImportJSON
 // handles its own concurrency, and we rebuild indexes after.
 func (a *API) BackupImport(ctx context.Context, req ImportRequest) (ImportResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("import"); apiErr != nil {
+		return ImportResponse{}, apiErr
+	}
 	start := time.Now()
 	if len(req.Records) == 0 {
 		return ImportResponse{}, ErrMissing("records array is required")

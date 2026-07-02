@@ -28,6 +28,15 @@ type ingestFile struct {
 }
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
+	// Store-level read-only guard (this handler predates the api/
+	// migration, so it carries its own): revert loads an old commit
+	// into the live graph and re-commits -- a write.
+	if s.engine.ReadOnly() {
+		s.writeError(w, http.StatusForbidden, "forbidden",
+			"store is read-only: revert is not permitted", false)
+		return
+	}
+
 	var req revertRequest
 	if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
@@ -75,6 +84,15 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	// Store-level read-only guard, before any parse or pre-embed
+	// work (this handler predates the api/ migration, so it carries
+	// its own).
+	if s.engine.ReadOnly() {
+		s.writeError(w, http.StatusForbidden, "forbidden",
+			"store is read-only: ingest is not permitted", false)
+		return
+	}
+
 	var req ingestRequest
 	if err := parseJSON(r, &req, maxIngestBodySize); err != nil {
 		s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)

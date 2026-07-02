@@ -393,7 +393,15 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	// disables the sweeper; jobs then accumulate until manually
 	// pruned. We use a dedicated context so Engine.Close can cancel
 	// it cleanly; jobSweepDone closes when the goroutine exits.
-	if e.cfg.Jobs.SweepInterval > 0 {
+	//
+	// A read-only engine gets no sweeper: jobs.db is a derived cache
+	// (still writable for open-time recovery above), but a frozen
+	// store should be inert -- no periodic background writer of any
+	// kind. New write jobs can't be created on it anyway. The options
+	// loop has already run, so ReadOnly() reflects both the manifest
+	// and WithReadOnly. Engine.Close handles the nil cancel/done pair
+	// the same as the SweepInterval=0 case.
+	if e.cfg.Jobs.SweepInterval > 0 && !e.ReadOnly() {
 		sweepCtx, cancel := context.WithCancel(context.Background())
 		e.jobSweepCancel = cancel
 		e.jobSweepDone = make(chan struct{})

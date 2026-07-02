@@ -150,6 +150,12 @@ Per-item failures land in the response's failed[] array (the batch keeps going);
 // in the runner goroutine (same shape as sync, just off the request
 // path). L6 introduces multi-chunk + cross-chunk edge fixup.
 func (a *API) SaveBatch(ctx context.Context, req SaveBatchRequest) (SaveBatchResponse, *APIError) {
+	// Guarding the shared entry covers both the sync path and the
+	// async runner spawn (L5 single-chunk and L6 chunked): no job is
+	// created and no runner goroutine starts on a frozen store.
+	if apiErr := a.rejectIfReadOnly("save_batch"); apiErr != nil {
+		return SaveBatchResponse{}, apiErr
+	}
 	asyncMode := req.Wait != nil && !*req.Wait
 	cfg := a.engine.Config()
 	itemCap := cfg.Jobs.MaxSyncBatchSize

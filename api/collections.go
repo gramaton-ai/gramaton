@@ -362,6 +362,9 @@ type CollectionCreateRequest struct {
 }
 
 func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (CollectionCreateResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("collection_create"); apiErr != nil {
+		return CollectionCreateResponse{}, apiErr
+	}
 	if err := validateCollectionName(req.Name); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
@@ -1133,6 +1136,9 @@ type CollectionAddRequest struct {
 }
 
 func (a *API) CollectionAdd(ctx context.Context, collectionID string, req CollectionAddRequest) (CollectionAddResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("collection_add"); apiErr != nil {
+		return CollectionAddResponse{}, apiErr
+	}
 	if len(req.Fields) == 0 {
 		return CollectionAddResponse{}, ErrMissing("fields are required")
 	}
@@ -1368,6 +1374,9 @@ type CollectionAddBatchResponse struct {
 // A Save-phase failure aborts the whole batch with a top-level
 // APIError; it does not produce partial per-item results.
 func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req CollectionAddBatchRequest) (CollectionAddBatchResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("collection_add_batch"); apiErr != nil {
+		return CollectionAddBatchResponse{}, apiErr
+	}
 	if len(req.Items) == 0 {
 		return CollectionAddBatchResponse{}, ErrMissing("items is required")
 	}
@@ -1669,6 +1678,9 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 
 func (a *API) CollectionRemove(ctx context.Context, collectionID, itemID string) (CollectionRemoveResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("collection_remove"); apiErr != nil {
+		return CollectionRemoveResponse{}, apiErr
+	}
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -1701,6 +1713,9 @@ type CollectionUpdateRequest struct {
 }
 
 func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string, req CollectionUpdateRequest) (CollectionUpdateResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("collection_update"); apiErr != nil {
+		return CollectionUpdateResponse{}, apiErr
+	}
 	if len(req.Fields) == 0 {
 		return CollectionUpdateResponse{}, ErrMissing("fields are required")
 	}
@@ -1839,6 +1854,9 @@ type CollectionMoveRequest struct {
 
 func (a *API) CollectionMove(ctx context.Context, collectionID, itemID string, req CollectionMoveRequest) (CollectionMoveResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("collection_move"); apiErr != nil {
+		return CollectionMoveResponse{}, apiErr
+	}
 	if req.TargetCollectionID == "" {
 		return CollectionMoveResponse{}, ErrMissing("target_collection_id is required")
 	}
@@ -1928,6 +1946,9 @@ type CollectionRenameRequest struct {
 
 func (a *API) CollectionRename(ctx context.Context, collectionID string, req CollectionRenameRequest) (CollectionRenameResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("collection_rename"); apiErr != nil {
+		return CollectionRenameResponse{}, apiErr
+	}
 	if err := validateCollectionName(req.Name); err != nil {
 		return CollectionRenameResponse{}, ErrInvalid(err.Error())
 	}
@@ -1958,6 +1979,11 @@ func (a *API) CollectionRename(ctx context.Context, collectionID string, req Col
 
 func (a *API) CollectionDelete(ctx context.Context, collectionID string) (CollectionDeleteResponse, *APIError) {
 	_ = ctx
+	// Covers both branches (retire and unretire) -- each writes a
+	// valid_until flip plus a commit.
+	if apiErr := a.rejectIfReadOnly("collection_delete"); apiErr != nil {
+		return CollectionDeleteResponse{}, apiErr
+	}
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -2031,6 +2057,9 @@ type CollectionSchemaUpdateRequest struct {
 
 func (a *API) CollectionSchemaUpdate(ctx context.Context, collectionID string, req CollectionSchemaUpdateRequest) (CollectionSchemaUpdateResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("collection_schema_update"); apiErr != nil {
+		return CollectionSchemaUpdateResponse{}, apiErr
+	}
 	if err := validateSchema(&req.Schema); err != nil {
 		return CollectionSchemaUpdateResponse{}, ErrInvalid(err.Error())
 	}
@@ -2111,6 +2140,9 @@ type CollectionMigrateRequest struct {
 
 func (a *API) CollectionMigrate(ctx context.Context, collectionID string, req CollectionMigrateRequest) (CollectionMigrateResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("collection_migrate"); apiErr != nil {
+		return CollectionMigrateResponse{}, apiErr
+	}
 	if req.Field == "" {
 		return CollectionMigrateResponse{}, ErrMissing("field is required")
 	}

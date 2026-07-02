@@ -85,6 +85,9 @@ func (a *API) CurationStatus(ctx context.Context) (CurationStatusResponse, *APIE
 // CurationTrigger asks the runner to start a cycle. Returns
 // triggered=false (not an error) when a cycle is already in flight.
 func (a *API) CurationTrigger(ctx context.Context) (CurationTriggerResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("curation_trigger"); apiErr != nil {
+		return CurationTriggerResponse{}, apiErr
+	}
 	if a.runner == nil {
 		return CurationTriggerResponse{}, ErrUnavailable("curation is not enabled")
 	}
@@ -105,6 +108,12 @@ func (a *API) CurationTrigger(ctx context.Context) (CurationTriggerResponse, *AP
 // applying changes. The LLM is still called so callers see what
 // would have happened. Deterministic curation runs normally.
 func (a *API) CurationDryRun(ctx context.Context) (CurationDryRunResponse, *APIError) {
+	// Despite the name, dry-run is a writer: only the AUTONOMOUS
+	// phase is previewed -- the deterministic phase still applies its
+	// changes ("it is always safe" on a writable store, not here).
+	if apiErr := a.rejectIfReadOnly("curation_dry_run"); apiErr != nil {
+		return CurationDryRunResponse{}, apiErr
+	}
 	if a.runner == nil {
 		return CurationDryRunResponse{}, ErrUnavailable("curation is not enabled")
 	}
@@ -128,6 +137,9 @@ func (a *API) CurationDryRun(ctx context.Context) (CurationDryRunResponse, *APIE
 // an artificial: true property so future re-check logic can
 // distinguish them from LLM-verified marks.
 func (a *API) CurationDrainContradictions(ctx context.Context) (CurationDrainResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("curation_drain_contradictions"); apiErr != nil {
+		return CurationDrainResponse{}, apiErr
+	}
 	if a.engine == nil {
 		return CurationDrainResponse{}, ErrInternal("engine not configured")
 	}
@@ -144,6 +156,9 @@ func (a *API) CurationDrainContradictions(ctx context.Context) (CurationDrainRes
 // an LLM provider on the engine. Long-running; the caller should
 // expect this to block for the duration.
 func (a *API) CurationBatch(ctx context.Context) (CurationBatchResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("curation_batch"); apiErr != nil {
+		return CurationBatchResponse{}, apiErr
+	}
 	if a.runner == nil {
 		return CurationBatchResponse{}, ErrUnavailable("curation is not enabled")
 	}
@@ -279,6 +294,9 @@ func (a *API) CurationListStuck(ctx context.Context) (CurationListStuckResponse,
 // since changed).
 func (a *API) CurationResetStuck(ctx context.Context, req CurationResetStuckRequest) (CurationResetStuckResponse, *APIError) {
 	_ = ctx
+	if apiErr := a.rejectIfReadOnly("curation_reset_stuck"); apiErr != nil {
+		return CurationResetStuckResponse{}, apiErr
+	}
 	if len(req.IDs) > MaxResetStuckIDs {
 		return CurationResetStuckResponse{}, ErrInvalid(fmt.Sprintf("ids: too many (%d > max %d)", len(req.IDs), MaxResetStuckIDs))
 	}

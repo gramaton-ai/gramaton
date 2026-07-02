@@ -32,6 +32,9 @@ const LinkDescription = "Create a typed edge from one record to another."
 // Link adds an edge between two records. Returns ErrNotFound if either
 // endpoint doesn't exist; ErrInvalid for bad weight or overlong type.
 func (a *API) Link(ctx context.Context, req LinkRequest) (LinkResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("link"); apiErr != nil {
+		return LinkResponse{}, apiErr
+	}
 	if req.SourceID == "" {
 		return LinkResponse{}, ErrMissing("source id is required")
 	}
@@ -100,6 +103,9 @@ const UnlinkDescription = "Delete an edge by its edge_id."
 // Unlink removes an edge. Returns ErrNotFound if the edge doesn't
 // exist.
 func (a *API) Unlink(ctx context.Context, req UnlinkRequest) (UnlinkResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("unlink"); apiErr != nil {
+		return UnlinkResponse{}, apiErr
+	}
 	if req.EdgeID == "" {
 		return UnlinkResponse{}, ErrMissing("edge_id is required")
 	}

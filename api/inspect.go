@@ -54,26 +54,39 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	}
 	includeContent := req.IncludeContent == nil || *req.IncludeContent
 
-	a.engine.Lock()
-	defer a.engine.Unlock()
+	// The write lock exists solely for the access bump below. On a
+	// read-only store the bump is skipped (access metadata is
+	// knowledge-graph state a frozen store must not mutate), so the
+	// read work runs under the READ lock instead and Inspect never
+	// contends with the write lock.
+	readOnly := a.engine.ReadOnly()
+	if readOnly {
+		a.engine.RLock()
+		defer a.engine.RUnlock()
+	} else {
+		a.engine.Lock()
+		defer a.engine.Unlock()
+	}
 
 	n, ok := a.engine.Graph().GetNode(req.ID)
 	if !ok {
 		return InspectResponse{}, ErrNotFound("record not found")
 	}
 
-	// Spread activation; in-memory updates only. Disk persistence is
-	// deferred to the periodic access-flush goroutine.
-	now := time.Now().UTC()
-	cfg := a.engine.Config()
-	a.engine.Graph().RecordAccess(req.ID, now, graph.ActivationConfig{
-		BaseAmount:        cfg.Activation.BaseAmount,
-		AttenuationFactor: cfg.Activation.AttenuationFactor,
-	})
-	a.engine.MarkAccessDirty()
-	n, ok = a.engine.Graph().GetNode(req.ID)
-	if !ok {
-		return InspectResponse{}, ErrInternal("node disappeared after access update")
+	if !readOnly {
+		// Spread activation; in-memory updates only. Disk persistence is
+		// deferred to the periodic access-flush goroutine.
+		now := time.Now().UTC()
+		cfg := a.engine.Config()
+		a.engine.Graph().RecordAccess(req.ID, now, graph.ActivationConfig{
+			BaseAmount:        cfg.Activation.BaseAmount,
+			AttenuationFactor: cfg.Activation.AttenuationFactor,
+		})
+		a.engine.MarkAccessDirty()
+		n, ok = a.engine.Graph().GetNode(req.ID)
+		if !ok {
+			return InspectResponse{}, ErrInternal("node disappeared after access update")
+		}
 	}
 
 	props := make(map[string]any, len(n.Properties))
