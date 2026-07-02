@@ -40,7 +40,7 @@ func init() {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	if serveStop {
-		return stopServer()
+		return stopServer(configDir())
 	}
 
 	if !serveFg {
@@ -165,10 +165,10 @@ func startBackground() error {
 	return nil
 }
 
-// stopServer sends a shutdown request to a running server.
-func stopServer() error {
-	dir := configDir()
-
+// stopServer sends a shutdown request to the server registered in
+// the given config dir. It only touches the server; MCP proxy
+// cleanup lives in runStop (cli/stop.go), which layers on top.
+func stopServer(dir string) error {
 	info, err := server.ReadServerInfo(dir)
 	if err != nil {
 		return fmt.Errorf("no running server found")

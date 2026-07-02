@@ -161,6 +161,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`gramaton stop` now also stops registered MCP proxy processes**
+  (#117). Proxies started by MCP clients via `gramaton mcp`
+  previously lingered after harness sessions ended, and because a
+  proxy auto-starts a server when none is running, a surviving proxy
+  could silently resurrect a freshly stopped server on its next tool
+  call — during upgrades that meant a stale binary serving old tool
+  schemas. Each proxy now registers itself in the store's config dir
+  (`mcp/<pid>.json`); `gramaton stop` terminates registered proxies
+  first (with a PID-reuse guard that refuses to signal processes
+  that don't look like gramaton), then shuts down the server.
+  `--keep-mcp` preserves the old server-only behavior, and
+  `gramaton status` lists connected proxies with their PID, start
+  time, and binary path.
 - **CSV import no longer drops summaries** (#111). The CSV exporter
   writes `content_short` under the header `summary_short`, but the
   importer only recognized `summary`/`title`/`name`, so a CSV

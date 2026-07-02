@@ -12,11 +12,22 @@ import (
 // the data fields merged with the curation field at the top level.
 // This preserves backward compatibility with existing agent prompts.
 func printEnvelope(resp *server.ResponseEnvelope) error {
+	return printEnvelopeExtra(resp, nil)
+}
+
+// printEnvelopeExtra is printEnvelope with additional top-level
+// fields merged in. Used when the CLI has client-side state the
+// server cannot know about (e.g. status's mcp_proxies field --
+// proxies register in the store's config dir, not with the server).
+func printEnvelopeExtra(resp *server.ResponseEnvelope, extra map[string]any) error {
 	data, ok := resp.Data.(map[string]any)
 	if !ok {
 		data = map[string]any{"data": resp.Data}
 	}
 	data["curation"] = resp.Curation
+	for k, v := range extra {
+		data[k] = v
+	}
 	return printJSON(data)
 }
 
