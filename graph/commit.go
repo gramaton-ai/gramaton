@@ -79,7 +79,7 @@ const (
 	ActionCurationSupersede          = "curation:supersede"
 	ActionCurationContradictionCheck = "curation:contradiction_check" // covers contradict + no_contradict outcomes
 	ActionCurationConceptEmerge      = "curation:concept_emerge"      // new concept + instance_of edges
-	ActionCurationConceptEnrich      = "curation:concept_enrich"      // concept node enrichment (LLM synthesis or deterministic alias-merge / evidence-count update)
+	ActionCurationConceptEnrich      = "curation:concept_enrich"      // concept node enrichment (LLM synthesis or deterministic alias-merge / member attachment / evidence-count update)
 	ActionCurationSectionLink        = "curation:section_link"
 	ActionCurationObservationExtract = "curation:observation_extract"
 	ActionCurationLifecycle          = "curation:lifecycle"      // valid_until set on stale ephemeral/temporal records

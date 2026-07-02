@@ -28,19 +28,20 @@ func ensureLogger(logger *slog.Logger) *slog.Logger {
 
 // DeterministicResult summarizes what a deterministic curation cycle did.
 type DeterministicResult struct {
-	LifecycleTransitions int
-	OrphansLinked        int
-	DuplicatesSuperseded int
-	SectionsLinked       int
-	ObservationsCreated  int // observation child nodes extracted (D18, D23)
-	ConceptsCreated      int // new concept nodes created (template content)
-	ConceptsAliased      int // candidate keywords merged into existing concepts as aliases (Phase F)
-	GCCollected          int
-	GCDryRun             bool
-	QualityRepairs       int // deterministic quality fixes applied
-	QualityFlags         int // records flagged for autonomous repair
-	ConceptCandidates    []ConceptCandidate
-	Manifest             *StoreManifest
+	LifecycleTransitions   int
+	OrphansLinked          int
+	DuplicatesSuperseded   int
+	SectionsLinked         int
+	ObservationsCreated    int // observation child nodes extracted (D18, D23)
+	ConceptsCreated        int // new concept nodes created (template content)
+	ConceptsAliased        int // candidate keywords merged into existing concepts as aliases (Phase F)
+	ConceptMembersAttached int // instance_of edges added to existing concepts for new evidence (#99)
+	GCCollected            int
+	GCDryRun               bool
+	QualityRepairs         int // deterministic quality fixes applied
+	QualityFlags           int // records flagged for autonomous repair
+	ConceptCandidates      []ConceptCandidate
+	Manifest               *StoreManifest
 }
 
 // ConceptCandidate is a keyword that appears on enough records to
@@ -64,6 +65,16 @@ type StoreManifest struct {
 	LatestRecord       time.Time      `json:"latest_record,omitempty"`
 	QualitativeSummary string         `json:"qualitative_summary,omitempty"`
 }
+
+// maxConceptAttachPerRun caps how many instance_of attachment edges
+// one deterministic cycle adds to existing concepts (#99). The first
+// cycle against an old store can find a large backlog of members that
+// were never linked; the cap keeps the write batch bounded and the
+// remainder drains on subsequent cycles. There is no per-phase config
+// knob for attachments (unlike MaxOrphansPerRun / MaxDedupPerRun), so
+// this is a constant set to the 200 ceiling config validation clamps
+// those knobs to.
+const maxConceptAttachPerRun = 200
 
 // RunDeterministic performs all deterministic curation tasks.
 // It acquires and releases locks as needed -- caller must NOT hold
@@ -108,11 +119,28 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	}
 	var qualityIssues []qualityIssue
 	existingConcepts := make(map[string]struct{})
+	// conceptIDByKeyword resolves a keyword back to the concept node
+	// that owns it. A claim records HOW the keyword resolved: via the
+	// concept's primary concept_keyword, or via content_keywords --
+	// which mixes Phase F aliases with the co-occurring "related
+	// terms" stamped at emergence and cannot tell them apart. The
+	// candidate loop below uses claims to attach new members to an
+	// existing concept instead of skipping the keyword outright
+	// (#99); non-primary claims must additionally pass the Phase F
+	// member-overlap gate before attaching, because attaching on
+	// co-occurrence alone would link unrelated records as false
+	// evidence.
+	type keywordClaim struct {
+		conceptID string
+		primary   bool
+	}
+	conceptIDByKeyword := make(map[string]keywordClaim)
 	// existingConceptMembers maps each concept's node ID to the set of
 	// member record IDs (collected via inbound instance_of edges). Used
 	// by Phase F's member-set overlap gate to suppress emergence of
 	// near-duplicate concepts whose evidence sets substantially overlap
-	// existing concepts.
+	// existing concepts, and by the attachment path (#99) to diff a
+	// candidate's members against those already linked.
 	existingConceptMembers := make(map[string][]string)
 
 	it := g.NodeIterator()
@@ -146,6 +174,10 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		if isConcept {
 			if kw, ok := n.Properties.GetString("concept_keyword"); ok {
 				existingConcepts[kw] = struct{}{}
+				// Primary keywords always win keyword->concept
+				// resolution (unconditional write; the alias loop
+				// below only fills unclaimed slots).
+				conceptIDByKeyword[kw] = keywordClaim{conceptID: id, primary: true}
 				if contentShort == kw && hasFullContent {
 					qualityIssues = append(qualityIssues, qualityIssue{
 						nodeID: id,
@@ -160,9 +192,33 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			// by the member-set overlap gate live here, and we want
 			// future cycles to short-circuit on them just like primary
 			// keywords.
+			// cooccurring_keywords (stamped at emergence) marks which
+			// content_keywords entries are correlated terms rather than
+			// the primary or Phase F aliases. Those still suppress
+			// emergence (a "messaging" concept shouldn't fragment off a
+			// "kafka" one) but never become attachment claims: records
+			// sharing only a co-occurring term are not instances of the
+			// concept. Concepts created before this property existed
+			// have no marker; their content_keywords claims fall back
+			// to the live-population Jaccard gate at attach time.
+			cooccurring := make(map[string]struct{})
+			if coKws, ok := n.Properties.GetStringList("cooccurring_keywords"); ok {
+				for _, kw := range coKws {
+					cooccurring[kw] = struct{}{}
+				}
+			}
 			if kws, ok := n.Properties.GetStringList("content_keywords"); ok {
 				for _, kw := range kws {
 					existingConcepts[kw] = struct{}{}
+					if _, isCo := cooccurring[kw]; isCo {
+						continue
+					}
+					// content_keywords also carries co-occurring
+					// keywords, a weaker ownership signal than the
+					// primary -- never displace an existing claim.
+					if _, claimed := conceptIDByKeyword[kw]; !claimed {
+						conceptIDByKeyword[kw] = keywordClaim{conceptID: id}
+					}
 				}
 			}
 			// Phase F: collect member IDs for this concept (inbound
@@ -320,11 +376,18 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		// concept's evidence_count and add redundant instance_of edges
 		// from sub-records. Observations are projections of their
 		// parent; the parent is the canonical instance.
+		//
+		// Filter out concept nodes too: a concept carries its own
+		// keyword (plus aliases and co-occurring terms) in
+		// content_keywords, so LookupKeyword returns the concept
+		// itself. Concepts are derived hubs, not evidence -- counting
+		// them inflates Count, and the attachment path (#99) would
+		// otherwise add concept-to-concept (or self) instance_of edges.
 		rawIDs := e.PropIdx().LookupKeyword("content_keywords", kw)
 		ids := rawIDs[:0]
 		for _, id := range rawIDs {
 			if n, ok := g.GetNode(id); ok {
-				if nt, _ := n.Properties.GetString("node_type"); nt == "observation" {
+				if nt, _ := n.Properties.GetString("node_type"); nt == "observation" || nt == "concept" {
 					continue
 				}
 			}
@@ -425,6 +488,12 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		keyword   string
 	}
 	var aliasMerges []aliasMerge
+	// pendingAttach collects, per existing concept, the member records
+	// to link via new instance_of edges (#99). Keyed by concept ID and
+	// deduped per member because multiple alias keywords can resolve to
+	// the same concept. attachTotal bounds the write batch.
+	pendingAttach := make(map[string]map[string]struct{})
+	attachTotal := 0
 
 	maxNewConcepts := cfg.LLM.Curation.Concept.MaxPerRun // reuse as deterministic budget
 	if maxNewConcepts <= 0 {
@@ -433,6 +502,67 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	overlapThreshold := cfg.Concepts.MemberOverlapThreshold
 	for _, c := range candidates {
 		if _, exists := existingConcepts[c.Keyword]; exists {
+			// The keyword already has a concept. Pre-#99 this was an
+			// unconditional skip, so a record captured after its
+			// keyword's concept emerged never got an instance_of edge
+			// -- evidence_count could only hold or shrink. Resolve the
+			// concept (by primary keyword or alias) and queue any
+			// members that aren't linked yet; the write phase adds the
+			// missing edges and enrichConcepts recomputes
+			// evidence_count from them in the same cycle. c.NodeIDs is
+			// already observation- and concept-filtered above.
+			claim, ok := conceptIDByKeyword[c.Keyword]
+			if !ok {
+				// Keyword claimed earlier in this loop by a pending
+				// emission or alias merge; no stored concept to
+				// attach to yet. The next cycle resolves it.
+				continue
+			}
+			if !claim.primary {
+				// The keyword resolved through content_keywords. On
+				// concepts stamped with cooccurring_keywords, co-terms
+				// never produce claims, so a non-primary claim is a
+				// Phase F alias; on older concepts the marker doesn't
+				// exist and aliases are indistinguishable from
+				// co-occurring "related terms". Either way, gate on
+				// live-population overlap -- a genuine alias's records
+				// substantially overlap the concept's members; records
+				// sharing only a correlated keyword (e.g. tagged
+				// "messaging" against a "kafka" concept) must not be
+				// attached as false evidence. The gate is best-effort
+				// for legacy full-coverage co-terms (trickle arrivals
+				// can ratchet past it), which is why new emergences
+				// persist provenance instead. A disabled threshold
+				// (<= 0) turns non-primary attachment off entirely
+				// rather than open.
+				if overlapThreshold <= 0 ||
+					index.JaccardSimilarity(c.NodeIDs, existingConceptMembers[claim.conceptID]) <= overlapThreshold {
+					continue
+				}
+			}
+			conceptID := claim.conceptID
+			linked := make(map[string]struct{}, len(existingConceptMembers[conceptID]))
+			for _, mid := range existingConceptMembers[conceptID] {
+				linked[mid] = struct{}{}
+			}
+			for _, mid := range c.NodeIDs {
+				if attachTotal >= maxConceptAttachPerRun {
+					break
+				}
+				if _, dup := linked[mid]; dup {
+					continue
+				}
+				pending := pendingAttach[conceptID]
+				if pending == nil {
+					pending = make(map[string]struct{})
+					pendingAttach[conceptID] = pending
+				}
+				if _, dup := pending[mid]; dup {
+					continue
+				}
+				pending[mid] = struct{}{}
+				attachTotal++
+			}
 			continue
 		}
 
@@ -484,6 +614,22 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		}
 	}
 
+	// Materialize pendingAttach with sorted member lists so the write
+	// phase adds edges in a deterministic order.
+	type attachment struct {
+		conceptID string
+		memberIDs []string
+	}
+	var attachments []attachment
+	for conceptID, memberSet := range pendingAttach {
+		members := make([]string, 0, len(memberSet))
+		for mid := range memberSet {
+			members = append(members, mid)
+		}
+		sort.Strings(members)
+		attachments = append(attachments, attachment{conceptID: conceptID, memberIDs: members})
+	}
+
 	e.RUnlock()
 
 	// --- Write phase ---
@@ -493,7 +639,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// mutations serialised hundreds of disk syncs under the write
 	// lock). The helper also handles the "only Save if something
 	// actually changed" gate and wraps errors with the phase label.
-	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts) + len(aliasMerges)
+	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts) + len(aliasMerges) + len(attachments)
 	if mutations > 0 {
 		err := e.WithWriteBatch("curation: deterministic", func(ws *core.WriteSession) (bool, error) {
 
@@ -713,6 +859,28 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 				allKeywords = deduped
 
+				// Record which content_keywords entries are merely
+				// co-occurring stamps (not the primary, not Phase F
+				// aliases). The attachment path (#99) reads this to
+				// skip them structurally: a co-occurring term's records
+				// are correlated with, not instances of, the concept,
+				// and the live-population Jaccard gate alone cannot
+				// separate a full-coverage co-term from a genuine alias
+				// (trickle arrivals ratchet past it one record per
+				// cycle). Provenance is known here at write time -- keep
+				// it instead of discarding it into the mixed list.
+				aliasSet := make(map[string]struct{}, len(aliases)+1)
+				aliasSet[c.Keyword] = struct{}{}
+				for _, kw := range aliases {
+					aliasSet[kw] = struct{}{}
+				}
+				var cooccurringOnly []string
+				for _, kw := range coKeywords {
+					if _, isAlias := aliasSet[kw]; !isAlias {
+						cooccurringOnly = append(cooccurringOnly, kw)
+					}
+				}
+
 				props := graph.Properties{
 					"content_full":      graph.StringProperty(templateFull),
 					"content_short":     graph.StringProperty(templateShort),
@@ -728,6 +896,9 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					"evidence_count":    graph.Int64Property(int64(c.Count)),
 					"created_at":        graph.TimestampProperty(now),
 					"access_count":      graph.Int64Property(0),
+				}
+				if len(cooccurringOnly) > 0 {
+					props["cooccurring_keywords"] = graph.StringListProperty(cooccurringOnly)
 				}
 
 				cn := ws.AddNode(props)
@@ -792,7 +963,51 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 			}
 
-			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated + result.ConceptsAliased
+			// Attach new members to existing concepts (#99). Each
+			// attachment carries records that share a concept's keyword
+			// (primary or alias) but had no instance_of edge yet --
+			// records captured after the concept emerged. Weight
+			// matches the emergence path above; enrichConcepts (after
+			// this batch) recomputes evidence_count from the new edges
+			// in this same cycle.
+			for _, att := range attachments {
+				if _, ok := ws.Graph().GetNode(att.conceptID); !ok {
+					continue
+				}
+				// Re-diff against inbound edges under the write lock: a
+				// caller may have linked a queued member (gramaton_link)
+				// between the read phase and this batch. AddEdge does
+				// not dedupe and enrichConcepts counts inbound edges,
+				// so a duplicate would double-count evidence forever.
+				linked := make(map[string]struct{})
+				for _, edge := range ws.Graph().EdgesTo(att.conceptID) {
+					if edge.Type == "instance_of" {
+						linked[edge.SourceID] = struct{}{}
+					}
+				}
+				attached := false
+				for _, memberID := range att.memberIDs {
+					if _, ok := ws.Graph().GetNode(memberID); !ok {
+						continue
+					}
+					if _, dup := linked[memberID]; dup {
+						continue
+					}
+					if _, err := ws.AddEdge(memberID, att.conceptID, "instance_of", 0.8, nil); err != nil {
+						logger.Error("failed to add instance_of edge",
+							"component", "curation", "member", memberID, "concept", att.conceptID, "err", err)
+						continue
+					}
+					result.ConceptMembersAttached++
+					attached = true
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationConceptEnrich, RecordID: memberID})
+				}
+				if attached {
+					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationConceptEnrich, RecordID: att.conceptID})
+				}
+			}
+
+			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated + result.ConceptsAliased + result.ConceptMembersAttached
 			return changed > 0, nil
 		})
 		if err != nil {
@@ -838,6 +1053,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"gc_collected", result.GCCollected,
 			"concepts_created", result.ConceptsCreated,
 			"concepts_aliased", result.ConceptsAliased,
+			"concept_members_attached", result.ConceptMembersAttached,
 			"concept_candidates", len(candidates),
 			"duration_ms", time.Since(start).Milliseconds())
 	}
