@@ -307,7 +307,11 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		return SearchResponse{}, ErrInternal("search failed")
 	}
 
-	if len(results) > 0 {
+	// Access bookkeeping (access_count, last_accessed, activation
+	// spread) is knowledge-graph state, so a read-only store skips the
+	// whole block -- the read path then never touches the write lock
+	// and the frozen records' access metadata stays byte-identical.
+	if len(results) > 0 && !a.engine.ReadOnly() {
 		a.engine.Lock()
 		now := time.Now().UTC()
 		cfg := a.engine.Config()

@@ -49,7 +49,8 @@
 //	if err := wiz.Run(ctx); err != nil { ... }
 //
 // Steps (see wizard.go Run):
-//  0. Welcome + branch fresh-vs-import
+//  0. Welcome + route branch: fresh install, import, or attach a
+//     shared read-only store
 //  1. Knowledge-store bootstrap (config, data dir, embedding provider, model download)
 //  2. LLM provider (optional but strongly recommended) + API key + test call + cost caps
 //  3. MCP client auto-detect (harness registry: Claude Code, kiro-cli, Codex, Cursor) + config injection
@@ -57,6 +58,13 @@
 //  5. Hooks installer (auto-capture) for detected clients
 //
 // followed by an unnumbered verification + next-steps wrap-up.
+//
+// The read-only route (Step 0 [3], step_readonly.go) replaces Steps
+// 1-5 entirely: it attaches a shared store as a frozen named store
+// via store.Attach (shared with `gramaton store attach`), registers
+// per-store MCP entries, and installs the read-only guidance
+// variant. It skips identity, LLM, and hooks -- a read-only consumer
+// never writes.
 //
 // Each step is idempotent and safe to re-run: re-running the wizard
 // against an existing install offers a menu to reconfigure individual

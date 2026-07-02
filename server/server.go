@@ -579,8 +579,14 @@ func (s *Server) Shutdown() {
 // `gramaton repair --content-quality`.
 //
 // Caller invokes in a goroutine; the function returns when the sweep
-// completes.
-func (s *Server) runStartupSelfHeal() {
+// completes. Skipped on a read-only store (self-heal rewrites record
+// content); the boolean return reports whether the sweep actually ran
+// so tests can pin the gate without racing a goroutine.
+func (s *Server) runStartupSelfHeal() bool {
+	if s.engine.ReadOnly() {
+		s.log.Debug("startup self-heal skipped: store is read-only")
+		return false
+	}
 	result := curation.RunSelfHeal(s.engine, s.log)
 	if result.Repaired+result.FlaggedForLLM > 0 {
 		s.log.Info("startup self-heal: repairs applied",
@@ -589,6 +595,7 @@ func (s *Server) runStartupSelfHeal() {
 			"repaired", result.Repaired,
 			"flagged_for_llm", result.FlaggedForLLM)
 	}
+	return true
 }
 
 // startCurationRunner constructs and starts the curation runner if
@@ -600,6 +607,15 @@ func (s *Server) runStartupSelfHeal() {
 func (s *Server) startCurationRunner() {
 	engineCfg := s.engine.Config()
 	if !engineCfg.Curation.Enabled {
+		return
+	}
+	// A read-only store gets no curation runner at all: every cycle
+	// is a writer (classification, linking, concept synthesis), and
+	// with no runner the post-cycle auto-backup hook never fires
+	// either. s.runner stays nil, so gramaton_curation reports
+	// "curation is not enabled".
+	if s.engine.ReadOnly() {
+		s.log.Info("curation not started: store is read-only")
 		return
 	}
 	s.runner = curation.NewRunner(s.engine, s.engine.LLM(), engineCfg, s.log)
@@ -652,7 +668,8 @@ func (s *Server) recordActivity() {
 
 // accessFlusher periodically persists deferred access metadata
 // (access_count, last_accessed, activation_boost). Runs as a
-// background goroutine. Exits when ctx is cancelled.
+// background goroutine. Exits when ctx is cancelled or when the
+// store becomes read-only (see accessFlushTick).
 func (s *Server) accessFlusher(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -663,14 +680,43 @@ func (s *Server) accessFlusher(ctx context.Context) {
 			s.engine.FlushAccess()
 			return
 		case <-ticker.C:
-			s.engine.FlushAccess()
+			if !s.accessFlushTick() {
+				return
+			}
 		}
 	}
 }
 
+// accessFlushTick runs one flusher tick. Returns false -- stopping
+// the flusher goroutine -- when the store has become read-only since
+// the flusher started. startAccessFlusher gates on ReadOnly at boot,
+// but a BackupRestore of a frozen archive flips the live engine
+// read-only mid-process (Engine.OpenFiles re-reads the restored STORE
+// manifest); after that flip there is never anything to flush (the
+// read paths skip access bookkeeping and engine.FlushAccess
+// short-circuits), so the goroutine quiesces at the next tick instead
+// of ticking until process restart. The leftover s.accessCancel is
+// harmless: cancelling a context whose goroutine already exited is a
+// no-op.
+func (s *Server) accessFlushTick() bool {
+	if s.engine.ReadOnly() {
+		s.log.Debug("access flusher stopping: store became read-only")
+		return false
+	}
+	s.engine.FlushAccess()
+	return true
+}
+
 // startAccessFlusher starts the background access flusher and
-// stores its cancel function for shutdown.
+// stores its cancel function for shutdown. No-op on a read-only
+// store: the read paths skip access bookkeeping entirely, so there
+// is never anything to flush (engine.FlushAccess would short-circuit
+// anyway; not starting the goroutine keeps the frozen store inert).
 func (s *Server) startAccessFlusher() {
+	if s.engine.ReadOnly() {
+		s.log.Debug("access flusher not started: store is read-only")
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.accessCancel = cancel
@@ -983,6 +1029,9 @@ func (s *Server) writeJSONRaw(w http.ResponseWriter, status int, data any, curat
 	envelope := ResponseEnvelope{
 		Data:     data,
 		Curation: curation,
+		// Present only when the store is frozen (omitempty) so
+		// existing consumers see no new field on writable stores.
+		StoreReadonly: s.engine.ReadOnly(),
 		Meta: ResponseMeta{
 			Version: version.Version,
 		},
@@ -1016,7 +1065,8 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 			Message:   message,
 			Retryable: retryable,
 		},
-		Curation: s.curationStatus(),
+		Curation:      s.curationStatus(),
+		StoreReadonly: s.engine.ReadOnly(),
 	})
 }
 
@@ -1024,7 +1074,12 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 type ResponseEnvelope struct {
 	Data     any            `json:"data"`
 	Curation CurationStatus `json:"curation"`
-	Meta     ResponseMeta   `json:"meta"`
+	// StoreReadonly is emitted (true) only when the store is in
+	// store-level read-only mode, on every response -- reads included
+	// -- so agents learn the store is frozen from any call. Omitted
+	// on writable stores.
+	StoreReadonly bool         `json:"store_readonly,omitempty"`
+	Meta          ResponseMeta `json:"meta"`
 }
 
 // ResponseMeta contains response metadata.
@@ -1055,6 +1110,10 @@ type CurationStatus struct {
 type ErrorResponse struct {
 	Error    ErrorDetail    `json:"error"`
 	Curation CurationStatus `json:"curation,omitzero"`
+	// StoreReadonly mirrors ResponseEnvelope.StoreReadonly: emitted
+	// (true) only when the store is read-only, so a rejected write
+	// carries the reason on the envelope as well as in the error.
+	StoreReadonly bool `json:"store_readonly,omitempty"`
 }
 
 // ErrorDetail contains error information.

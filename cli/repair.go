@@ -56,6 +56,24 @@ func runRepair(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load engine: %w", err)
 	}
+	// Release the engine's file handles (and the bbolt flock) on
+	// every exit path -- the read-only refusal below returns early,
+	// and in-process callers (tests) reopen the same store right
+	// after.
+	defer func() { _ = eng.Close() }()
+
+	// Read-only gate for every mutating path of this command: Repair
+	// and the --content-quality self-heal both write DURABLY before
+	// Save (Repair's DeleteEdge persists straight to the bbolt edge
+	// store; self-heal's SetProp to the property index), so the
+	// engine's Save backstop alone would reject the commit AFTER the
+	// mutation already stuck -- the worst of both worlds on a frozen
+	// artifact. Refuse up front instead, same message shape as the
+	// api guards. The --dry-run path stays allowed: it only runs
+	// Validate, like `gramaton validate`.
+	if !repairDryRun && eng.ReadOnly() {
+		return fmt.Errorf("store is read-only: repair is not permitted (make it writable first: gramaton store thaw)")
+	}
 
 	if repairDryRun {
 		// Validate only -- show what would be repaired.

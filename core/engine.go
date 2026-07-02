@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -48,6 +49,18 @@ type Engine struct {
 	// mmap index). Settable ONLY via WithVolatileStorage; never
 	// from config. Test fixtures use it -- see the option's doc.
 	volatile bool
+
+	// readOnly marks the store as logically frozen: Save and
+	// WithWriteBatch reject with ErrStoreReadOnly, SaveOrLog and
+	// FlushAccess short-circuit quietly -- all before any work.
+	// Set by openFiles from the STORE manifest, or forced via
+	// WithReadOnly. Derived local caches (indexes.db, vec.flat,
+	// jobs.db) stay writable: they are rebuilt from the graph at
+	// startup by design, so no index-rebuild or file-open path is
+	// gated on this flag. Atomic because WithWriteBatch checks it
+	// before taking the engine lock while Restore's OpenFiles may
+	// rewrite it under the write lock.
+	readOnly atomic.Bool
 
 	// jobStore is the F1 async-operation tracking store. Owns its own
 	// jobs.db file (separate from indexes.db). nil if engine init
@@ -130,6 +143,19 @@ func WithVectorIndex(v index.VectorIndex) EngineOption {
 // production code path references it. Do not wire it into config.
 func WithVolatileStorage() EngineOption {
 	return func(e *Engine) { e.volatile = true }
+}
+
+// WithReadOnly forces the engine into store-level read-only mode
+// regardless of the STORE manifest. Intended for callers that attach
+// to a store they must not mutate (e.g. a future attach flow reading
+// someone else's published store).
+//
+// The option can only FORCE read-only, never unfreeze: openFiles
+// seeds the flag from the manifest before options are applied, and
+// this option only ever sets it to true. A manifest-frozen store
+// therefore stays read-only whether or not the option is present.
+func WithReadOnly() EngineOption {
+	return func(e *Engine) { e.readOnly.Store(true) }
 }
 
 // LoadEngine loads config, storage, graph state, and rebuilds indexes.
@@ -229,6 +255,20 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 			return fmt.Errorf("store format: %w", err)
 		}
 	}
+
+	// Read the store manifest and seed the read-only flag before any
+	// file is opened. A read error aborts the open, consistent with
+	// the format-check handling above: a corrupted manifest on a
+	// store that might be frozen must not silently open writable.
+	// Read even under skipFormatCheck (migrate path) -- the frozen
+	// flag is orthogonal to the format-version gate. WithReadOnly is
+	// applied in the options loop below and can only force true, so
+	// a manifest-frozen store can never be unfrozen by an option.
+	manifest, err := ReadStoreManifest(e.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("store manifest: %w", err)
+	}
+	e.readOnly.Store(manifest.ReadOnly)
 
 	// Open the shared bbolt database for property index and edge store.
 	boltPath := filepath.Join(e.cfg.DataDir, "indexes.db")
@@ -353,7 +393,15 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	// disables the sweeper; jobs then accumulate until manually
 	// pruned. We use a dedicated context so Engine.Close can cancel
 	// it cleanly; jobSweepDone closes when the goroutine exits.
-	if e.cfg.Jobs.SweepInterval > 0 {
+	//
+	// A read-only engine gets no sweeper: jobs.db is a derived cache
+	// (still writable for open-time recovery above), but a frozen
+	// store should be inert -- no periodic background writer of any
+	// kind. New write jobs can't be created on it anyway. The options
+	// loop has already run, so ReadOnly() reflects both the manifest
+	// and WithReadOnly. Engine.Close handles the nil cancel/done pair
+	// the same as the SweepInterval=0 case.
+	if e.cfg.Jobs.SweepInterval > 0 && !e.ReadOnly() {
 		sweepCtx, cancel := context.WithCancel(context.Background())
 		e.jobSweepCancel = cancel
 		e.jobSweepDone = make(chan struct{})
@@ -445,6 +493,13 @@ func runJobSweeper(ctx context.Context, done chan struct{}, s *jobs.Store, cfg c
 // Config returns the engine's config. Safe for concurrent read.
 func (e *Engine) Config() config.Config {
 	return e.cfg
+}
+
+// ReadOnly reports whether the engine is in store-level read-only
+// mode -- frozen via the STORE manifest or forced via WithReadOnly.
+// Safe for concurrent use without holding the engine lock.
+func (e *Engine) ReadOnly() bool {
+	return e.readOnly.Load()
 }
 
 // HeadHash returns the current HEAD commit hash.
@@ -573,6 +628,13 @@ func (e *Engine) Unlock() { e.mu.Unlock() }
 // migration to explicit action emission lands incrementally per
 // the Phase 3 build plan.
 func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Commit, error) {
+	// Read-only backstop: reject before any work (vector flush,
+	// index marshal, CAS writes). The api layer gates logical writes
+	// up front; this catches anything that slips through.
+	if e.ReadOnly() {
+		return nil, ErrStoreReadOnly
+	}
+
 	// Flush buffered vector writes to disk before committing.
 	if f, ok := e.indexes.vecIdx.(interface{ Flush() error }); ok {
 		if err := f.Flush(); err != nil {
@@ -703,6 +765,17 @@ func (e *Engine) MarkAccessDirty() {
 // values matching Save's signature so curation passes can emit
 // per-record action descriptors alongside the cycle's batch save.
 func (e *Engine) SaveOrLog(message string, actions ...graph.CommitAction) {
+	// Read-only short-circuit WITHOUT log spam: this is the
+	// fire-and-forget background path, and a read-only store with a
+	// still-running background caller should be quiet. Debug only --
+	// falling through to Save's ErrStoreReadOnly would emit an Error
+	// line on every tick.
+	if e.ReadOnly() {
+		slog.Debug("save skipped: store is read-only",
+			"component", "engine",
+			"message", message)
+		return
+	}
 	if _, err := e.Save(message, actions...); err != nil {
 		slog.Error("save failed",
 			"component", "engine",
@@ -721,6 +794,14 @@ func (e *Engine) SaveOrLog(message string, actions ...graph.CommitAction) {
 // flusher would otherwise emit one Error log + full err every 30s
 // indefinitely. Counter resets on the next success.
 func (e *Engine) FlushAccess() {
+	// Read-only short-circuit: access metadata is knowledge-graph
+	// state and a frozen store must not commit it. Quiet (Debug) --
+	// the periodic flusher keeps running against a read-only store
+	// and must not spam the log every 30s.
+	if e.ReadOnly() {
+		slog.Debug("access flush: skipped, store is read-only", "component", "engine")
+		return
+	}
 	// Lifecycle steps stay at DEBUG -- this fires every 30s under
 	// normal operation. The end-of-flush INFO captures the only
 	// state change a user cares about: a save actually happened.
@@ -838,6 +919,13 @@ func (e *Engine) BatchIndexWrites(fn func(*WriteSession)) error {
 // ws.IndexNode etc. inside to thread tx through the bbolt-backed
 // indexes.
 func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated bool, err error)) error {
+	// Read-only backstop: reject at entry, before taking the write
+	// lock or opening the bbolt transaction. No work should start on
+	// a frozen store.
+	if e.ReadOnly() {
+		return fmt.Errorf("withwritebatch %q: %w", message, ErrStoreReadOnly)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

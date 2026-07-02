@@ -39,9 +39,26 @@ import (
 //
 // # What we register
 //
-// Entry name:  gramaton
-// Command:     gramaton
-// Args:        [mcp]
+// Default-store entry (Register):
+//
+//	Entry name:  gramaton
+//	Command:     gramaton
+//	Args:        [mcp]
+//
+// Attached read-only store entry (RegisterStore, the wizard's
+// read-only route):
+//
+//	Entry name:  gramaton-<store>
+//	Command:     gramaton
+//	Args:        [--store <store> mcp]
+//
+// The per-store entry rides the CLI's global --store flag
+// (cli/root.go), so the MCP process resolves the named store's
+// config dir, server, and STORE manifest; the frozen manifest then
+// makes `gramaton mcp` register only the read-only tool surface
+// (cli/mcp_cmd.go resolveMCPReadOnly). The distinct entry name keeps
+// an attached store from clobbering a default "gramaton"
+// registration on machines that also run their own writable store.
 //
 // Command is "gramaton" unquoted -- relies on gramaton being on PATH
 // wherever the MCP client runs. For `go install`-based installs this
@@ -51,6 +68,20 @@ import (
 // surveys registration PRESENCE per harness (the VerifyMCPRegistered
 // strategies below); actual connection testing is `gramaton
 // preflight` / future-doctor territory.
+
+// storeMCPEntryName is the MCP server-entry name registered for an
+// attached named store: "gramaton-<store>". Store names are already
+// validated against store.ValidateName's [a-zA-Z0-9_-] alphabet, so
+// the composed name is safe as a CLI argument and a JSON key.
+func storeMCPEntryName(storeName string) string {
+	return "gramaton-" + storeName
+}
+
+// storeMCPArgs is the gramaton argv (after the binary name) a
+// per-store MCP entry runs: `--store <name> mcp`.
+func storeMCPArgs(storeName string) []string {
+	return []string{"--store", storeName, "mcp"}
+}
 
 // DetectedClient describes one MCP client installed on this system
 // that Step 3 can register Gramaton against. Name is a human-
@@ -76,6 +107,12 @@ type MCPBackend interface {
 	// the wizard can report differently), (false, nil) on a new
 	// registration, or (false, err) on failure.
 	Register(ctx context.Context, client DetectedClient) (alreadyRegistered bool, err error)
+
+	// RegisterStore adds an attached named store's MCP entry to the
+	// client's config: entry storeMCPEntryName(storeName) running
+	// `gramaton --store <storeName> mcp`. Same result semantics as
+	// Register. Used by the wizard's read-only attach route.
+	RegisterStore(ctx context.Context, client DetectedClient, storeName string) (alreadyRegistered bool, err error)
 }
 
 // DefaultMCPBackend is the production implementation. Uses exec to
@@ -107,6 +144,16 @@ func (DefaultMCPBackend) Register(ctx context.Context, client DetectedClient) (b
 	return h.RegisterMCP(ctx, client.Binary)
 }
 
+// RegisterStore dispatches to the harness's per-store registration
+// strategy, mirroring Register.
+func (DefaultMCPBackend) RegisterStore(ctx context.Context, client DetectedClient, storeName string) (bool, error) {
+	h := harnessByName(client.Name)
+	if h == nil || h.RegisterMCPStore == nil {
+		return false, fmt.Errorf("unknown MCP client: %s", client.Name)
+	}
+	return h.RegisterMCPStore(ctx, client.Binary, storeName)
+}
+
 // registerWithClaudeCode invokes `claude mcp add` to register Gramaton
 // at user scope. First checks `claude mcp list` for existing gramaton
 // entry so re-running the wizard is idempotent: if gramaton is
@@ -118,7 +165,14 @@ func (DefaultMCPBackend) Register(ctx context.Context, client DetectedClient) (b
 // current directory and confuse users who expect Gramaton to be
 // available everywhere.
 func registerWithClaudeCode(ctx context.Context, claudeBin string) (bool, error) {
-	// Idempotency check: is gramaton already in `claude mcp list`?
+	return registerClaudeCodeEntry(ctx, claudeBin, "gramaton", []string{"mcp"})
+}
+
+// registerClaudeCodeEntry is registerWithClaudeCode generalized over
+// the entry name and gramaton argv, shared with the read-only attach
+// route's per-store registration.
+func registerClaudeCodeEntry(ctx context.Context, claudeBin, entry string, args []string) (bool, error) {
+	// Idempotency check: is the entry already in `claude mcp list`?
 	// If claude's output format changes in a future version we might
 	// false-negative here and re-add, which claude's own add command
 	// will then reject -- surfaced cleanly to the user.
@@ -127,16 +181,13 @@ func registerWithClaudeCode(ctx context.Context, claudeBin string) (bool, error)
 	// error -- we just proceed to add. If the real failure mode was
 	// something else (permissions, corrupted config), the add below
 	// will surface it.
-	if registered, err := verifyClaudeMCPRegistered(ctx, claudeBin); err == nil && registered {
+	if registered, err := verifyClaudeMCPEntry(ctx, claudeBin, entry); err == nil && registered {
 		return true, nil
 	}
 
-	// claude mcp add --scope user gramaton gramaton -- mcp
-	addCmd := exec.CommandContext(ctx, claudeBin,
-		"mcp", "add",
-		"--scope", "user",
-		"gramaton", "gramaton",
-		"--", "mcp")
+	// claude mcp add --scope user <entry> gramaton -- <args...>
+	addArgs := append([]string{"mcp", "add", "--scope", "user", entry, "gramaton", "--"}, args...)
+	addCmd := exec.CommandContext(ctx, claudeBin, addArgs...)
 	var stderr bytes.Buffer
 	addCmd.Stderr = &stderr
 	if out, err := addCmd.Output(); err != nil {
@@ -166,10 +217,14 @@ func registerWithClaudeCode(ctx context.Context, claudeBin string) (bool, error)
 // environment and writes wherever its own config-root resolution
 // points.
 func registerWithCodex(ctx context.Context, codexBin string) (bool, error) {
-	addCmd := exec.CommandContext(ctx, codexBin,
-		"mcp", "add",
-		"gramaton",
-		"--", "gramaton", "mcp")
+	return registerCodexEntry(ctx, codexBin, "gramaton", []string{"mcp"})
+}
+
+// registerCodexEntry is registerWithCodex generalized over the entry
+// name and gramaton argv, shared with the read-only attach route.
+func registerCodexEntry(ctx context.Context, codexBin, entry string, args []string) (bool, error) {
+	addArgs := append([]string{"mcp", "add", entry, "--", "gramaton"}, args...)
+	addCmd := exec.CommandContext(ctx, codexBin, addArgs...)
 	out, err := addCmd.CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("codex mcp add failed: %w: %s",
@@ -195,23 +250,26 @@ func registerWithCodex(ctx context.Context, codexBin string) (bool, error) {
 // its help output, replace this best-effort shell-out with the
 // correct syntax.
 func registerWithKiroCli(ctx context.Context, kiroBin string) (bool, error) {
+	return registerKiroEntry(ctx, kiroBin, "gramaton", []string{"mcp"})
+}
+
+// registerKiroEntry is registerWithKiroCli generalized over the
+// entry name and gramaton argv; same best-effort caveats.
+func registerKiroEntry(ctx context.Context, kiroBin, entry string, args []string) (bool, error) {
 	// Idempotency probe: try `kiro mcp list`. If it succeeds AND
-	// mentions "gramaton", assume already registered. If the
+	// mentions the entry name, assume already registered. If the
 	// subcommand doesn't exist we'll fall through.
 	listCmd := exec.CommandContext(ctx, kiroBin, "mcp", "list")
 	if listOut, err := listCmd.CombinedOutput(); err == nil {
 		for _, line := range strings.Split(string(listOut), "\n") {
-			if strings.Contains(strings.TrimSpace(line), "gramaton") {
+			if strings.Contains(strings.TrimSpace(line), entry) {
 				return true, nil
 			}
 		}
 	}
 
-	addCmd := exec.CommandContext(ctx, kiroBin,
-		"mcp", "add",
-		"--scope", "user",
-		"gramaton", "gramaton",
-		"--", "mcp")
+	addArgs := append([]string{"mcp", "add", "--scope", "user", entry, "gramaton", "--"}, args...)
+	addCmd := exec.CommandContext(ctx, kiroBin, addArgs...)
 	out, err := addCmd.CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("kiro mcp add failed (kiro-cli may use different MCP-registration syntax): %w: %s",
@@ -226,12 +284,19 @@ func registerWithKiroCli(ctx context.Context, kiroBin string) (bool, error) {
 // registerWithClaudeCode's idempotency probe and as Step 5's
 // registration survey.
 func verifyClaudeMCPRegistered(ctx context.Context, bin string) (bool, error) {
+	return verifyClaudeMCPEntry(ctx, bin, "gramaton")
+}
+
+// verifyClaudeMCPEntry is verifyClaudeMCPRegistered generalized over
+// the entry name. Prefix-matching "<entry>:" keeps "gramaton" from
+// false-positively matching a per-store "gramaton-<name>:" line.
+func verifyClaudeMCPEntry(ctx context.Context, bin, entry string) (bool, error) {
 	out, err := exec.CommandContext(ctx, bin, "mcp", "list").CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("couldn't run `claude mcp list` to verify registration: %w", err)
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "gramaton:") {
+		if strings.HasPrefix(strings.TrimSpace(line), entry+":") {
 			return true, nil
 		}
 	}
@@ -293,6 +358,13 @@ func verifyCursorMCPRegistered(_ context.Context, _ string) (bool, error) {
 // replaced, matching the replace-on-add semantics of the CLI-based
 // registrations.
 func registerWithCursor(_ context.Context, _ string) (bool, error) {
+	return registerCursorEntry("gramaton", []string{"mcp"})
+}
+
+// registerCursorEntry is registerWithCursor generalized over the
+// entry name and gramaton argv, shared with the read-only attach
+// route's per-store registration.
+func registerCursorEntry(entry string, args []string) (bool, error) {
 	dir, err := cursorConfigDir()
 	if err != nil {
 		return false, err
@@ -324,13 +396,17 @@ func registerWithCursor(_ context.Context, _ string) (bool, error) {
 	// 2026-05-24): standard mcpServers envelope, stdio transport.
 	// "gramaton" unqualified relies on PATH, same trade-off as the
 	// CLI-based registrations (documented at the top of this file).
+	argsAny := make([]any, len(args))
+	for i, a := range args {
+		argsAny[i] = a
+	}
 	desired := map[string]any{
 		"type":    "stdio",
 		"command": "gramaton",
-		"args":    []any{"mcp"},
+		"args":    argsAny,
 	}
 
-	if current, ok := servers["gramaton"]; ok {
+	if current, ok := servers[entry]; ok {
 		curJSON, _ := json.Marshal(current)
 		wantJSON, _ := json.Marshal(desired)
 		if string(curJSON) == string(wantJSON) {
@@ -338,7 +414,7 @@ func registerWithCursor(_ context.Context, _ string) (bool, error) {
 		}
 	}
 
-	servers["gramaton"] = desired
+	servers[entry] = desired
 	existing["mcpServers"] = servers
 
 	// Back up before rewriting, then atomic write. 0600 perms:

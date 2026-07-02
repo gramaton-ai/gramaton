@@ -9,6 +9,43 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Stores can be frozen into shareable read-only artifacts** (#97).
+  `gramaton store freeze`/`thaw` (and `store create --read-only`)
+  write a `STORE` manifest into the data directory recording
+  `readonly`, `owner` (the configured author identity), and
+  `published_at` -- the manifest travels with every copy, tar, and
+  backup, so a shared store self-describes as frozen wherever it
+  lands. On a frozen store every logical write is rejected with a
+  `forbidden` error (saves, updates, collections, session capture,
+  curation, branches, restore/import), background writers never
+  start (curation runner, self-heal, access flusher, jobs sweeper)
+  -- and if restoring a frozen backup flips a live store read-only,
+  the curation runner and access flusher quiesce at their next cycle
+  -- and search/inspect stop updating access metadata: reads never
+  touch the write lock. Reads, search, and export work in full;
+  derived local caches (search indexes) stay maintainable. Every
+  HTTP response from a frozen store carries `store_readonly: true`
+  in its envelope; MCP clients learn the frozen state from a
+  read-only notice in the server instructions, a tool list with no
+  write tools registered, and a `store_readonly` field in
+  `gramaton_status`. `store list`/`status` badge the state live
+  from the manifest.
+  Thawing preserves the original publication provenance.
+- **Shared stores can be attached** (#86, first increment).
+  `gramaton store attach <path> [--name <name>]` copies a received
+  store in as a named store and freezes the local copy regardless
+  of the artifact's own state, then prints how to reach it
+  (`--store`, `GRAMATON_STORE`, and the MCP entry form). For a
+  machine that should have no writable Gramaton at all, the setup
+  wizard's first question now offers an "attach a shared read-only
+  store" route: it skips the identity, LLM, and hooks steps
+  entirely, registers MCP entries pointed at the attached store,
+  and installs a read-only variant of the agent guidance. The
+  wizard states plainly that this route is read-only-only and that
+  `gramaton store attach` is the way to add shared stores alongside
+  a writable install. Sharing and consuming are documented in
+  `docs/sharing.md`.
+
 - **Records now carry a set-once `author` property** (#97). A new
   `author` config block (`name`, `email`) composes a git-style
   identity (`Ada Lovelace <ada@example.com>`) that is stamped on

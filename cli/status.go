@@ -64,5 +64,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if name := activeStoreName(); name != "" {
 		status["store"] = name
 	}
+	// Same only-when-frozen contract as the server envelope's
+	// store_readonly field, read straight from the STORE manifest so
+	// status is truthful with no server running. An unreadable
+	// manifest is reported rather than guessed writable.
+	if readOnly, note := storeReadOnlyBadge(dir); readOnly {
+		status["store_readonly"] = true
+	} else if note != "" {
+		status["manifest"] = note
+	}
 	return printJSON(status)
 }

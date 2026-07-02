@@ -47,6 +47,9 @@ const ReembedDescription = "Regenerate stale embeddings (model changed or missin
 //     each text individually with halving truncation.
 //  3. Lock: apply vectors and persist.
 func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("reembed"); apiErr != nil {
+		return ReembedResponse{}, apiErr
+	}
 	start := time.Now()
 	batch := req.Batch
 	if batch <= 0 {

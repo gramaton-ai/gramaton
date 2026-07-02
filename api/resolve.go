@@ -108,6 +108,9 @@ func inferClosedStatus(schema *CollectionSchema, resolution string) string {
 // `status` enum field (when present) to a closed-equivalent value.
 // See inferClosedStatus for the heuristic.
 func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("resolve"); apiErr != nil {
+		return ResolveResponse{}, apiErr
+	}
 	if req.ID == "" {
 		return ResolveResponse{}, ErrMissing("id is required")
 	}

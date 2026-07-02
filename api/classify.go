@@ -34,6 +34,9 @@ const ClassifyDescription = "Classify a pending record with metadata. Sets proce
 // Unlike Update, Classify is idempotent -- calling it twice with the
 // same args is safe.
 func (a *API) Classify(ctx context.Context, req ClassifyRequest) (ClassifyResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("classify"); apiErr != nil {
+		return ClassifyResponse{}, apiErr
+	}
 	if req.ID == "" {
 		return ClassifyResponse{}, ErrMissing("id is required")
 	}

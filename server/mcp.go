@@ -55,6 +55,17 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerSessionsMCPTools(mcpServer)
 	// Guide cluster: bindings_guide.go (api-typed).
 	s.registerGuideMCPTools(mcpServer)
+
+	// Store-level read-only: strip every write-classified tool (see
+	// mcp_readonly.go) so an agent attached to a frozen store never
+	// sees a tool it cannot use. Registration-time state is stable
+	// because freeze/thaw refuse to run while a server is up; the one
+	// runtime flip (restoring a frozen backup into a live writable
+	// server) leaves stale write tools registered, which the
+	// api-layer guards still reject with code "forbidden".
+	if s.engine.ReadOnly() {
+		mcpServer.RemoveTools(MCPWriteToolNames()...)
+	}
 }
 
 // mcpAlwaysLoadMeta returns the `_meta` payload that pins an MCP

@@ -251,6 +251,20 @@ func (r *Runner) runIfIdle(ctx context.Context) {
 }
 
 func (r *Runner) cycle(ctx context.Context) {
+	// Store-level read-only is re-checked per cycle, not only at
+	// server startup: a restore of a frozen backup archive flips the
+	// live engine read-only mid-process (Engine.OpenFiles re-reads the
+	// restored STORE manifest), and a runner started against the
+	// then-writable store must quiesce at its next cycle. Without this
+	// check every interval logs a write-rejection error from the
+	// deterministic phase and the autonomous passes burn LLM calls
+	// whose results can never be persisted. Pinned by
+	// TestCurationCycleSkipsWhenReadOnly in server/.
+	if r.engine.ReadOnly() {
+		r.logger.Info("curation cycle skipped: store is read-only", "component", "curation")
+		return
+	}
+
 	// Per-cycle timeout to prevent hangs.
 	cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()

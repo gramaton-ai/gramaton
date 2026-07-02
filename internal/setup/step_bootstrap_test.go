@@ -13,17 +13,18 @@ import (
 )
 
 // newWizardForBootstrapTest builds a wizard reaching Step 1 with the
-// given scripted answers. The identity section enters through with
-// defaults ("", "") and Step 0 is always "1" (fresh). After the
-// bootstrap menu, we pad "5" (skip LLM) and a fakeMCPBackend with
-// no clients so Steps 2-4 short-circuit without prompting.
+// given scripted answers. Step 0 (the route question, the wizard's
+// first prompt) is always "1" (fresh) and the identity section
+// enters through with defaults ("", ""). After the bootstrap menu,
+// we pad "5" (skip LLM) and a fakeMCPBackend with no clients so
+// Steps 2-4 short-circuit without prompting.
 //
-// Callers pass only the bootstrap-relevant answers; we prepend the
-// identity enter-throughs + Step 0 "1" and append the Step 2 "5".
+// Callers pass only the bootstrap-relevant answers; we prepend
+// Step 0 "1" + the identity enter-throughs and append the Step 2 "5".
 func newWizardForBootstrapTest(t *testing.T, bootstrapAnswers ...string) (*Wizard, *bytes.Buffer, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	answers := append([]string{"", "", "1"}, bootstrapAnswers...)
+	answers := append([]string{"1", "", ""}, bootstrapAnswers...)
 	// Step 2 LLM skip appended; Steps 3-4 use fakeMCPBackend (no clients)
 	// so no prompts fire there.
 	answers = append(answers, "5")

@@ -45,6 +45,9 @@ const UpdateDescription = "Update metadata on a Memory record. For collection it
 // any unknown enum value or out-of-range numeric. Refuses to update
 // Session segments (append-only per D19).
 func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("update"); apiErr != nil {
+		return UpdateResponse{}, apiErr
+	}
 	if req.ID == "" {
 		return UpdateResponse{}, ErrMissing("id is required")
 	}

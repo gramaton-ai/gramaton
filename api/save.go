@@ -82,6 +82,9 @@ IMPORTANT: confidence must be a number (not a string). keywords must be an array
 // the new record to it. Returns ErrConflict only when dedup.action =
 // "reject" AND a duplicate is found.
 func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("save"); apiErr != nil {
+		return SaveResponse{}, apiErr
+	}
 	saveStart := time.Now()
 
 	if req.Content == "" {

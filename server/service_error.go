@@ -30,6 +30,10 @@ func errNotFound(msg string) *serviceError {
 	return &serviceError{Status: http.StatusNotFound, Code: "not_found", Message: msg}
 }
 
+func errForbidden(msg string) *serviceError {
+	return &serviceError{Status: http.StatusForbidden, Code: "forbidden", Message: msg}
+}
+
 func errConflict(msg string) *serviceError {
 	return &serviceError{Status: http.StatusConflict, Code: "duplicate", Message: msg}
 }

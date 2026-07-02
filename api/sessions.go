@@ -277,6 +277,9 @@ func saveBoundaryMarker(t time.Time) string {
 // source="" (agent call): return existing if found, create fresh otherwise
 func (a *API) SessionStart(ctx context.Context, clientSessionID string, source string) (map[string]any, *APIError) {
 	_ = ctx // reserved for future engine calls that accept cancellation
+	if apiErr := a.rejectIfReadOnly("session_start"); apiErr != nil {
+		return nil, apiErr
+	}
 	if err := validateClientSessionID(clientSessionID); err != nil {
 		return nil, ErrInvalid(err.Error())
 	}
@@ -602,6 +605,13 @@ func (a *API) consumePrecompactUncapturedFlag(clientSessionID string) *precompac
 // Sets an in-memory prepared flag so commit can validate the two-phase flow.
 func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]any, *APIError) {
 	_ = ctx
+	// Prepare is the entry to the two-phase write flow (it arms the
+	// prepared flag that session_save requires). Rejecting here tells
+	// the agent the store is frozen BEFORE it spends effort extracting
+	// segments that save would then refuse.
+	if apiErr := a.rejectIfReadOnly("session_prepare"); apiErr != nil {
+		return nil, apiErr
+	}
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}
@@ -732,6 +742,9 @@ func (c SaveSegment) shouldPromote() bool {
 // Validates that prepare was called first. Creates new topics as needed.
 // Phase 2: stores in Session only (no Memory records, no embedding).
 func (a *API) SessionSave(ctx context.Context, sessionID string, segments []SaveSegment) (SessionSaveResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("session_save"); apiErr != nil {
+		return SessionSaveResponse{}, apiErr
+	}
 	if sessionID == "" {
 		return SessionSaveResponse{}, ErrMissing("session_id is required")
 	}
@@ -1100,6 +1113,11 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 // or searchable -- it's a break-glass backup of the raw conversation.
 func (a *API) SessionArchive(ctx context.Context, sessionID string, sourcePath string) (map[string]any, *APIError) {
 	_ = ctx
+	// Read-shaped name, genuine writer: archive stamps archive_path /
+	// archived_at props on the session node and commits.
+	if apiErr := a.rejectIfReadOnly("session_archive"); apiErr != nil {
+		return nil, apiErr
+	}
 	if sessionID == "" {
 		return nil, ErrMissing("session_id is required")
 	}

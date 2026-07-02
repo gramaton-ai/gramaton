@@ -55,6 +55,13 @@ type Harness struct {
 	// harness programmatically.
 	RegisterMCP func(ctx context.Context, bin string) (alreadyRegistered bool, err error)
 
+	// RegisterMCPStore registers an attached named store's MCP entry
+	// with this harness: entry storeMCPEntryName(store), running
+	// `gramaton --store <store> mcp`. Used by the wizard's read-only
+	// attach route. Nil means that route cannot register this
+	// harness programmatically.
+	RegisterMCPStore func(ctx context.Context, bin, storeName string) (alreadyRegistered bool, err error)
+
 	// ManualMCPHint is the one-line manual-registration hint shown
 	// when no clients are detected or the user skips Step 3.
 	ManualMCPHint string
@@ -150,9 +157,12 @@ type Harness struct {
 // checkbox display and for test assertions.
 var harnesses = []Harness{
 	{
-		Name:                harnessClaudeCode,
-		DetectBinary:        "claude",
-		RegisterMCP:         registerWithClaudeCode,
+		Name:         harnessClaudeCode,
+		DetectBinary: "claude",
+		RegisterMCP:  registerWithClaudeCode,
+		RegisterMCPStore: func(ctx context.Context, bin, storeName string) (bool, error) {
+			return registerClaudeCodeEntry(ctx, bin, storeMCPEntryName(storeName), storeMCPArgs(storeName))
+		},
 		ManualMCPHint:       "claude mcp add --scope user gramaton gramaton -- mcp",
 		VerifyMCPRegistered: verifyClaudeMCPRegistered,
 		// Claude Code loads ~/.claude/CLAUDE.md as one merged
@@ -179,8 +189,11 @@ var harnesses = []Harness{
 		// integration work is deferred until later; this entry
 		// migrates the old behavior bug-for-bug rather than
 		// half-fixing a parked integration.
-		DetectBinary:  "kiro",
-		RegisterMCP:   registerWithKiroCli,
+		DetectBinary: "kiro",
+		RegisterMCP:  registerWithKiroCli,
+		RegisterMCPStore: func(ctx context.Context, bin, storeName string) (bool, error) {
+			return registerKiroEntry(ctx, bin, storeMCPEntryName(storeName), storeMCPArgs(storeName))
+		},
 		ManualMCPHint: "(kiro-cli's equivalent -- check `kiro mcp --help`)",
 		// Kiro loads every .md in ~/.kiro/steering/ on session
 		// start, so single-purpose files are the idiomatic shape.
@@ -202,6 +215,9 @@ var harnesses = []Harness{
 		Name:         harnessCodex,
 		DetectBinary: "codex",
 		RegisterMCP:  registerWithCodex,
+		RegisterMCPStore: func(ctx context.Context, bin, storeName string) (bool, error) {
+			return registerCodexEntry(ctx, bin, storeMCPEntryName(storeName), storeMCPArgs(storeName))
+		},
 		// Verified syntax (codex-cli 0.133.0): positional name, then
 		// `--` separating the server command. No --scope flag; the
 		// config.toml entry is user-global by nature.
@@ -233,8 +249,11 @@ var harnesses = []Harness{
 		// Cursor IDE ships no PATH binary (the standalone `agent`
 		// CLI is a separate product); the IDE's reliable footprint
 		// is its config dir, auto-created on first launch.
-		DetectDir:           ".cursor",
-		RegisterMCP:         registerWithCursor,
+		DetectDir:   ".cursor",
+		RegisterMCP: registerWithCursor,
+		RegisterMCPStore: func(_ context.Context, _, storeName string) (bool, error) {
+			return registerCursorEntry(storeMCPEntryName(storeName), storeMCPArgs(storeName))
+		},
 		ManualMCPHint:       `(Cursor has no CLI -- add to ~/.cursor/mcp.json under mcpServers: "gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]})`,
 		VerifyMCPRegistered: verifyCursorMCPRegistered,
 		// Personal skills live at ~/.cursor/skills/<name>/SKILL.md

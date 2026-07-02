@@ -88,6 +88,9 @@ func (a *API) BranchList(ctx context.Context) (BranchListResponse, *APIError) {
 // BranchCreate writes a new ref at the current HEAD. Short lock
 // hold -- one ReadRef + one WriteRef -- so no off-lock split.
 func (a *API) BranchCreate(ctx context.Context, req BranchCreateRequest) (BranchCreateResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("branch_create"); apiErr != nil {
+		return BranchCreateResponse{}, apiErr
+	}
 	if err := core.ValidBranchName(req.Name); err != nil {
 		return BranchCreateResponse{}, ErrInvalid(err.Error())
 	}
@@ -122,6 +125,12 @@ func (a *API) BranchCreate(ctx context.Context, req BranchCreateRequest) (Branch
 //     leaves no in-memory/on-disk divergence), then SwapGraph,
 //     then rebuild indexes.
 func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutResponse, *APIError) {
+	// Checkout doesn't change knowledge content but rewrites HEAD and
+	// BRANCH in the data dir and swaps the live graph -- mutations of
+	// the frozen artifact all the same.
+	if apiErr := a.rejectIfReadOnly("branch_checkout"); apiErr != nil {
+		return BranchCheckoutResponse{}, apiErr
+	}
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchCheckoutResponse{}, ErrInvalid(err.Error())
 	}
@@ -184,6 +193,9 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 // points at it (recoverable: re-running merge will pick up where
 // we left off, since the graph is still in main's state).
 func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("branch_merge"); apiErr != nil {
+		return BranchMergeResponse{}, apiErr
+	}
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchMergeResponse{}, ErrInvalid(err.Error())
 	}
@@ -248,6 +260,9 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 // to main BEFORE deleting -- otherwise we'd leave HEAD pointing at
 // a missing ref. Short lock hold -- only on-disk writes.
 func (a *API) BranchDiscard(ctx context.Context, name string) (BranchDiscardResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("branch_discard"); apiErr != nil {
+		return BranchDiscardResponse{}, apiErr
+	}
 	if err := core.ValidBranchName(name); err != nil {
 		return BranchDiscardResponse{}, ErrInvalid(err.Error())
 	}
