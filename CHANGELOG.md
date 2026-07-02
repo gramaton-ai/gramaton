@@ -40,6 +40,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The race-detector CI lane no longer enforces the embedding
+  throughput gates.** The four bert speedup-gate tests skip under
+  `-race`: the detector's instrumentation reliably drops the measured
+  parallel/sequential ratio below gates that pass comfortably without
+  it (2.19x-2.46x vs 5.48x on the same machine). The gates still run
+  and assert in every non-race invocation, and the package's
+  correctness-focused concurrency tests still run under the race
+  detector.
 - **Test suites no longer pay for durability they cannot use.** A new
   test-only engine option, `core.WithVolatileStorage()`, disables
   every fsync in the engine's write path (content-addressed blob
