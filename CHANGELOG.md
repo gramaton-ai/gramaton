@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Records now carry a set-once `author` property** (#97). A new
+  `author` config block (`name`, `email`) composes a git-style
+  identity (`Ada Lovelace <ada@example.com>`) that is stamped on
+  every node created through save, batch save, sessions,
+  collections, ingest, intake, and Obsidian import. Curation-created
+  concept and observation nodes carry the system author `curation`;
+  chunk sub-nodes inherit their parent record's author; backup
+  export and import preserve existing values. A blank identity
+  stamps nothing, and no update path can modify the property once
+  set. The setup wizard now opens with an identity prompt (name
+  prefilled from the OS account, email optional), and
+  `gramaton init --author "Name <email>"` sets the identity
+  non-interactively.
+- **`gramaton backfill author` brings existing stores up to date**
+  (#97). One-time, idempotent backfill that stamps the author
+  property onto existing nodes that lack it: `--dry-run` previews
+  counts without writing, `--author` overrides the configured
+  identity, and curation-created nodes receive `curation`. Refuses
+  to run while the server is up.
+
 - **Collection add responses echo the target collection's name and
   description** (#98). `collection_add` and `collection_add_batch`
   now return `collection_name` and `collection_description`

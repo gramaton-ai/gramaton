@@ -331,6 +331,10 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 	addedFlag := make([]bool, len(req.Items))
 	supersededTotal := 0
 
+	// Author attribution: composed once for the whole batch (see
+	// api/save.go for the stamping contract).
+	author := a.engine.Config().Author.String()
+
 	a.engine.Lock()
 	unlocked := false
 	unlock := func() {
@@ -349,6 +353,9 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			"content_full": graph.StringProperty(item.Content),
 			"created_at":   graph.TimestampProperty(time.Now().UTC()),
 			"access_count": graph.Int64Property(0),
+		}
+		if author != "" {
+			props["author"] = graph.StringProperty(author)
 		}
 		hasClassification := item.Temporality != "" || item.Confidence != nil
 		if hasClassification {

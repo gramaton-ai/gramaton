@@ -43,10 +43,12 @@ const shortContentThreshold = 200
 // inheritedMetadataKeys lists the property keys a section inherits
 // from its parent. These are metadata classifications and source
 // pointers; body fields (content_full, content_short, embeddings)
-// are set per-section.
+// are set per-section. author is inherited (not re-composed from
+// config) so sub-nodes carry the attribution of the record they were
+// split from.
 var inheritedMetadataKeys = []string{
 	"temporality", "confidence", "knowledge_type", "epistemic_status",
-	"content_keywords", "source_ref", "processing_status",
+	"content_keywords", "source_ref", "processing_status", "author",
 }
 
 // Result holds section/chunk data and their pre-computed embeddings,

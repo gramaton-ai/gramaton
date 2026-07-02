@@ -247,6 +247,10 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	newRefs := map[string]string{}
 	supersededTotal := 0
 
+	// Author attribution: composed once for the whole chunk (see
+	// api/save.go for the stamping contract).
+	author := a.engine.Config().Author.String()
+
 	a.engine.Lock()
 	unlocked := false
 	unlock := func() {
@@ -266,6 +270,9 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 			"content_full": graph.StringProperty(item.Content),
 			"created_at":   graph.TimestampProperty(time.Now().UTC()),
 			"access_count": graph.Int64Property(0),
+		}
+		if author != "" {
+			props["author"] = graph.StringProperty(author)
 		}
 		hasClassification := item.Temporality != "" || item.Confidence != nil
 		if hasClassification {

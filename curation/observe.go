@@ -256,12 +256,15 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 			}
 
 			// Build observation node properties, inheriting from parent.
+			// System-created node: author is the curation constant, not
+			// the parent's author and not the configured identity.
 			props := graph.Properties{
 				"content_full":      graph.StringProperty(o.text),
 				"processing_status": graph.StringProperty("processed"),
 				"created_at":        graph.TimestampProperty(time.Now().UTC()),
 				"access_count":      graph.Int64Property(0),
 				"node_type":         graph.StringProperty("observation"),
+				"author":            graph.StringProperty(nodeAuthorCuration),
 			}
 
 			for _, key := range []string{

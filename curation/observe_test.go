@@ -235,4 +235,26 @@ func TestObserveSuccessClearsAttempts(t *testing.T) {
 	if attempts != 0 {
 		t.Errorf("observation_extract_attempts after success: got %d, want 0", attempts)
 	}
+
+	// The created observation nodes are system-created: they carry the
+	// curation author constant, never the operator's configured
+	// identity (and not the parent's author -- that one is inherited
+	// only by chunking sub-nodes).
+	observations := 0
+	for _, e := range eng.Graph().EdgesTo(id) {
+		if e.Type != "observation_of" {
+			continue
+		}
+		observations++
+		obs, ok := eng.Graph().GetNode(e.SourceID)
+		if !ok {
+			t.Fatalf("observation node %s missing", e.SourceID)
+		}
+		if author, ok := obs.Properties.GetString("author"); !ok || author != nodeAuthorCuration {
+			t.Errorf("observation %s author = %q (present=%v), want %q", e.SourceID, author, ok, nodeAuthorCuration)
+		}
+	}
+	if observations == 0 {
+		t.Fatal("expected at least one observation_of edge after successful extraction")
+	}
 }

@@ -101,6 +101,14 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 		"created_at":   graph.TimestampProperty(time.Now().UTC()),
 		"access_count": graph.Int64Property(0),
 	}
+	// Set-once author attribution (bare `author` key), composed from
+	// the effective engine config. Stamped before AddNode so it lands
+	// in the property index with the rest of the base props. An empty
+	// composed identity stamps nothing: the property is absent, not
+	// empty-string.
+	if author := s.engine.Config().Author.String(); author != "" {
+		props["author"] = graph.StringProperty(author)
+	}
 
 	hasClassification := req.Temporality != "" || req.Confidence != nil
 	if hasClassification {

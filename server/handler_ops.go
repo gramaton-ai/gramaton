@@ -144,6 +144,9 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 
 	now := time.Now().UTC()
 	ingested := 0
+	// Author attribution: composed once for the whole ingest (see
+	// server/service_records.go for the stamping contract).
+	author := s.engine.Config().Author.String()
 	var ingestActions []graph.CommitAction
 	for _, p := range prepared {
 		props := graph.Properties{
@@ -152,6 +155,9 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 			"created_at":        graph.TimestampProperty(now),
 			"processing_status": graph.StringProperty("captured"),
 			"access_count":      graph.Int64Property(0),
+		}
+		if author != "" {
+			props["author"] = graph.StringProperty(author)
 		}
 
 		n := s.engine.Graph().AddNode(props)
