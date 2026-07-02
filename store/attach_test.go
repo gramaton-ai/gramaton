@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -199,6 +200,50 @@ func TestAttachWritableSourceFreezesCopyOnly(t *testing.T) {
 	}
 }
 
+// TestAttachThawedSourcePreservesProvenance pins the thawed-source
+// contract: thaw keeps owner/published_at as provenance of the
+// original publication, and the attached copy must carry them
+// VERBATIM -- re-stamping a fresh published_at would assert the
+// original publisher published the store at attach time, over content
+// they may have modified after thawing.
+func TestAttachThawedSourcePreservesProvenance(t *testing.T) {
+	base := t.TempDir()
+	_, srcData := newAttachSource(t, true)
+	if err := core.ThawStore(srcData); err != nil {
+		t.Fatalf("thaw source: %v", err)
+	}
+	orig, err := core.ReadStoreManifest(srcData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orig.ReadOnly || orig.Owner == "" || orig.PublishedAt.IsZero() {
+		t.Fatalf("fixture manifest = %+v, want thawed with provenance", orig)
+	}
+
+	res, err := Attach(base, "shared", srcData)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if res.SourceFrozen {
+		t.Error("SourceFrozen = true for a thawed source")
+	}
+
+	m, err := core.ReadStoreManifest(res.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.ReadOnly {
+		t.Error("local copy must be frozen")
+	}
+	if m.Owner != orig.Owner {
+		t.Errorf("copied owner = %q, want the source's %q verbatim", m.Owner, orig.Owner)
+	}
+	if !m.PublishedAt.Equal(orig.PublishedAt) {
+		t.Errorf("copied published_at = %v, want the source's %v verbatim (no fresh stamp)",
+			m.PublishedAt, orig.PublishedAt)
+	}
+}
+
 func TestAttachNameCollision(t *testing.T) {
 	base := t.TempDir()
 	_, srcData := newAttachSource(t, true)
@@ -209,6 +254,72 @@ func TestAttachNameCollision(t *testing.T) {
 	_, err := Attach(base, "shared", srcData)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second Attach err = %v, want the already-exists rejection", err)
+	}
+}
+
+// TestAttachRefusesPreexistingStoreHome pins the HOME-level collision
+// check: a store home holding only a config.yaml (no data/) passes
+// store.Create's data-dir probe, but Attach must refuse rather than
+// copy into it -- its failure cleanup removes the home wholesale, so
+// proceeding could delete files this attach never created.
+func TestAttachRefusesPreexistingStoreHome(t *testing.T) {
+	base := t.TempDir()
+	_, srcData := newAttachSource(t, true)
+
+	home := filepath.Join(base, "stores", "shared")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	preexisting := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(preexisting, []byte("# hand-placed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Attach(base, "shared", srcData)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Attach err = %v, want the already-exists rejection", err)
+	}
+
+	// Nothing was deleted or overwritten.
+	raw, rerr := os.ReadFile(preexisting)
+	if rerr != nil {
+		t.Fatalf("pre-existing config gone after refused attach: %v", rerr)
+	}
+	if string(raw) != "# hand-placed\n" {
+		t.Errorf("pre-existing config rewritten:\n%s", raw)
+	}
+}
+
+// TestAttachRefusesLiveSourceServer pins the live-source guard: a
+// server.json beside the source data dir naming a live PID (this test
+// process's own, the freeze/thaw guard pattern) refuses the attach
+// before anything is copied; a stale one naming a dead PID does not.
+func TestAttachRefusesLiveSourceServer(t *testing.T) {
+	base := t.TempDir()
+	srcStoreDir, srcData := newAttachSource(t, true)
+
+	serverJSON := filepath.Join(srcStoreDir, "server.json")
+	writeInfo := func(pid int) {
+		t.Helper()
+		body := fmt.Sprintf(`{"pid": %d, "port": 1, "started_at": "2026-01-01T00:00:00Z"}`, pid)
+		if err := os.WriteFile(serverJSON, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeInfo(os.Getpid())
+	_, err := Attach(base, "shared", srcData)
+	if err == nil || !strings.Contains(err.Error(), "Stop the server serving this store first") {
+		t.Fatalf("Attach err = %v, want the stop-the-server refusal", err)
+	}
+	if _, serr := os.Stat(filepath.Join(base, "stores", "shared")); !os.IsNotExist(serr) {
+		t.Errorf("refused attach left a store home behind, stat err = %v", serr)
+	}
+
+	// A stale server.json (dead PID) must not block the attach.
+	writeInfo(1 << 30)
+	if _, err := Attach(base, "shared", srcData); err != nil {
+		t.Fatalf("Attach with stale server.json: %v", err)
 	}
 }
 

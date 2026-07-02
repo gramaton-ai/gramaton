@@ -256,6 +256,99 @@ func TestWizardReadOnlyAttachWritableArtifact(t *testing.T) {
 	}
 }
 
+// TestWizardReadOnlyAttachFreezeOriginalAccepted drives the
+// freeze-the-original offer's ACCEPT path -- the only place the
+// read-only route writes to a directory the user did not create. The
+// original must end up frozen with an EMPTY owner (this route
+// configures no author identity, and stamping a guessed one onto
+// someone else's artifact would be wrong), and the local copy is
+// frozen as on every attach.
+func TestWizardReadOnlyAttachFreezeOriginalAccepted(t *testing.T) {
+	srcStoreDir, srcDataDir := buildSharedFixtureStore(t, false)
+
+	backend := &fakeMCPBackend{} // no clients: no MCP/guidance prompts
+	// Answers: route "3", path, freeze-original "y", name
+	// enter-through (accept the derived default).
+	wiz, buf, base := newWizardForReadOnlyTest(t, backend,
+		"3", srcStoreDir, "y", "")
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Original frozen: "+srcDataDir) {
+		t.Errorf("accept path should confirm the original was frozen:\n%s", out)
+	}
+
+	// The original directory is now frozen, with no owner stamped.
+	src, err := core.ReadStoreManifest(srcDataDir)
+	if err != nil {
+		t.Fatalf("read original manifest: %v", err)
+	}
+	if !src.ReadOnly {
+		t.Error("accepting the freeze offer must freeze the original")
+	}
+	if src.Owner != "" {
+		t.Errorf("frozen original owner = %q, want empty (no identity on this route)", src.Owner)
+	}
+	if src.PublishedAt.IsZero() {
+		t.Error("frozen original should carry a published_at timestamp")
+	}
+
+	// The local copy is frozen too.
+	stores, err := os.ReadDir(filepath.Join(base, "stores"))
+	if err != nil || len(stores) != 1 {
+		t.Fatalf("want exactly one attached store, got %v (err %v)", stores, err)
+	}
+	m, err := core.ReadStoreManifest(filepath.Join(base, "stores", stores[0].Name(), "data"))
+	if err != nil {
+		t.Fatalf("read copied manifest: %v", err)
+	}
+	if !m.ReadOnly {
+		t.Error("local copy must be frozen")
+	}
+}
+
+// TestWizardReadOnlyAttachFreezeOriginalDefaultNo pins the offer's
+// contract default: pressing Enter at "Freeze the original too?
+// [y/N]" behaves as "no" -- the original stays exactly as it arrived
+// (no STORE manifest appears) while the local copy is frozen
+// regardless. A refactor that flips the YesNo default to true would
+// silently freeze users' received artifacts on every enter-through
+// run; this test fails on that.
+func TestWizardReadOnlyAttachFreezeOriginalDefaultNo(t *testing.T) {
+	srcStoreDir, srcDataDir := buildSharedFixtureStore(t, false)
+
+	backend := &fakeMCPBackend{}
+	// Answers: route "3", path, freeze-original ENTER (empty answer
+	// takes the YesNo default), name enter-through.
+	wiz, _, base := newWizardForReadOnlyTest(t, backend,
+		"3", srcStoreDir, "", "")
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Enter-through leaves the original manifest-less.
+	if _, err := os.Stat(filepath.Join(srcDataDir, "STORE")); !os.IsNotExist(err) {
+		t.Errorf("enter-through must default to NOT freezing the original, stat err = %v", err)
+	}
+
+	// The local copy is still frozen.
+	stores, err := os.ReadDir(filepath.Join(base, "stores"))
+	if err != nil || len(stores) != 1 {
+		t.Fatalf("want exactly one attached store, got %v (err %v)", stores, err)
+	}
+	m, err := core.ReadStoreManifest(filepath.Join(base, "stores", stores[0].Name(), "data"))
+	if err != nil {
+		t.Fatalf("read copied manifest: %v", err)
+	}
+	if !m.ReadOnly {
+		t.Error("local copy of a writable artifact must be frozen")
+	}
+}
+
 // TestWizardReadOnlyAttachFormatMismatch rejects an artifact whose
 // FORMAT version this binary doesn't support, before anything is
 // created.
@@ -318,11 +411,13 @@ func TestWizardReadOnlyAttachMissingFormat(t *testing.T) {
 }
 
 // TestSetupRoutePromptPinsReadOnlyClarity pins the route-choice
-// screen's two user-demanded properties: the [3] option itself says
-// read-only ONLY / no write tools / nothing ever saved, and the
-// screen advertises `gramaton store attach` for users who want a
-// shared store alongside their own writable one. A future rewording
-// that drops either fails here, deliberately.
+// screen's two user-demanded properties: the [3] option text ITSELF
+// carries the consequence (read-only ONLY / no write tools / nothing
+// is ever saved), and the screen advertises `gramaton store attach`
+// for users who want a shared store alongside their own writable
+// one. The consequence pins are scoped to the option block, not the
+// whole screen: a rewording that moves the consequence into a
+// footnote (leaving the option bare) must fail here, deliberately.
 func TestSetupRoutePromptPinsReadOnlyClarity(t *testing.T) {
 	var buf bytes.Buffer
 	cfg := config.Defaults()
@@ -338,12 +433,56 @@ func TestSetupRoutePromptPinsReadOnlyClarity(t *testing.T) {
 	}
 
 	out := buf.String()
+
+	// Extract the [3] option block: the line carrying "[3]" plus its
+	// indented continuation lines, up to the next blank line. Joining
+	// the trimmed lines with single spaces reassembles phrases that
+	// wrap across lines ("nothing is ever / saved") so the pins match
+	// the full phrase, not stray fragments.
+	lines := strings.Split(out, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.Contains(l, "[3]") {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		t.Fatalf("route-choice prompt has no [3] option:\n%s", out)
+	}
+	var optionParts []string
+	for _, l := range lines[start:] {
+		if strings.TrimSpace(l) == "" {
+			break
+		}
+		optionParts = append(optionParts, strings.TrimSpace(l))
+	}
+	option := strings.Join(optionParts, " ")
+
+	// Primary pins: the consequence lives within the option the user
+	// reads while choosing.
+	for _, want := range []string{
+		"read-only ONLY",
+		"no write tools",
+		"nothing is ever saved",
+	} {
+		if !strings.Contains(option, want) {
+			t.Errorf("[3] option text missing %q; option text:\n%s", want, option)
+		}
+	}
+
+	// The route screen advertises the alongside-a-writable-install
+	// alternative.
+	if !strings.Contains(out, "gramaton store attach") {
+		t.Errorf("route-choice prompt missing the `gramaton store attach` alternative:\n%s", out)
+	}
+
+	// Secondary (screen-wide) pins retained from the original test.
 	for _, want := range []string{
 		"read-only ONLY",
 		"no write",
 		"nothing is ever",
 		"saved",
-		"gramaton store attach",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("route-choice prompt missing %q:\n%s", want, out)

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -47,13 +48,17 @@ type AttachResult struct {
 
 	// Manifest is the STORE manifest on the local copy AFTER the
 	// unconditional freeze; ReadOnly is always true. Owner and
-	// PublishedAt carry the source's publication provenance when the
-	// source was frozen.
+	// PublishedAt carry the source's publication provenance whenever
+	// the source manifest had any -- frozen OR thawed (thaw preserves
+	// provenance) -- verbatim.
 	Manifest core.StoreManifest
 
 	// SourceFrozen reports whether the source artifact itself was
-	// frozen. When false, the local copy was frozen here (owner
-	// empty) and the source was left writable and untouched.
+	// frozen. When false, the local copy was frozen here -- keeping
+	// the source's owner/published_at verbatim if its manifest
+	// carried any (a thawed source), stamping owner-less fresh
+	// provenance otherwise -- and the source was left writable and
+	// untouched.
 	SourceFrozen bool
 }
 
@@ -110,18 +115,19 @@ func ResolveAttachSource(path string) (string, error) {
 // Attach registers the store at srcDataDir (a validated data dir --
 // see ResolveAttachSource) as the named store `name` under baseDir:
 // creates the store home, copies the data dir into it, freezes the
-// LOCAL COPY's manifest, and writes the minimal per-store config.
-// The source directory is never modified. On any failure after
-// creation the half-built store home is removed, so a failed attach
-// leaves no trace.
+// LOCAL COPY's manifest, and writes the minimal per-store config
+// (data_dir only -- see WriteDataDirConfig). The source directory is
+// never modified. On any failure after creation the half-built store
+// home is removed, so a failed attach leaves no trace; the removal is
+// safe because Attach refuses up front when the store HOME already
+// exists at all, so everything under it was created here.
 //
-// The per-store config carries data_dir and nothing else: without
-// it, the engine's global-then-store config merge would let a
-// global data_dir bleed through and open the WRONG store (see
-// cli/store.go storeEffectiveConfig); everything else -- and
-// deliberately no llm or author block -- inherits from the global
-// config and defaults, because a read-only consumer never writes,
-// runs no curation, and stamps no authorship.
+// Attach refuses when a live gramaton server is serving the SOURCE
+// store (best-effort, see sourceServerAlive): byte-copying live bbolt
+// files and the mmap'd vec.flat tears silently. A bare data dir with
+// no config-dir context carries no server.json to probe; the copy
+// proceeds on the assumption that a received artifact has no live
+// server.
 func Attach(baseDir, name, srcDataDir string) (AttachResult, error) {
 	src, err := core.ReadStoreManifest(srcDataDir)
 	if err != nil {
@@ -131,10 +137,30 @@ func Attach(baseDir, name, srcDataDir string) (AttachResult, error) {
 		return AttachResult{}, fmt.Errorf("read source STORE manifest: %w", err)
 	}
 
-	if err := Create(baseDir, name); err != nil {
+	if pid, alive := sourceServerAlive(srcDataDir); alive {
+		return AttachResult{}, fmt.Errorf(
+			"a gramaton server (pid %d) is serving the source store; copying live index files would corrupt the copy. Stop the server serving this store first, then re-run the attach", pid)
+	}
+
+	if err := ValidateName(name); err != nil {
 		return AttachResult{}, err
 	}
 	storeDir := Resolve(baseDir, name)
+	// Collision-check the store HOME, not just data/ (which is all
+	// Create's Exists probe looks at): a home holding only a
+	// config.yaml or other leftovers must refuse rather than be
+	// silently copied into. Passing this check is also what makes the
+	// wholesale RemoveAll in fail() safe -- the home verifiably did
+	// not exist before this attach created it, so cleanup can never
+	// delete a pre-existing store's files.
+	if _, err := os.Stat(storeDir); err == nil {
+		return AttachResult{}, fmt.Errorf("store %q already exists", name)
+	} else if !os.IsNotExist(err) {
+		return AttachResult{}, fmt.Errorf("check store home %s: %w", storeDir, err)
+	}
+	if err := Create(baseDir, name); err != nil {
+		return AttachResult{}, err
+	}
 	fail := func(err error) (AttachResult, error) {
 		_ = os.RemoveAll(storeDir)
 		return AttachResult{}, err
@@ -145,26 +171,32 @@ func Attach(baseDir, name, srcDataDir string) (AttachResult, error) {
 		return fail(fmt.Errorf("copy store data: %w", err))
 	}
 
-	// Freeze the copy unconditionally. For an already-frozen source
-	// this is a no-op that preserves the original owner/published_at
-	// provenance; for a writable artifact it stamps the copy frozen.
-	// Owner deliberately empty in that case: guessing an identity to
-	// stamp onto someone else's artifact would be wrong.
-	if err := core.FreezeStore(dataDir, src.Owner); err != nil {
+	// Freeze the copy unconditionally, preserving any publication
+	// provenance the source carries:
+	//   - frozen source: the copied manifest already records the
+	//     publisher's owner/published_at; rewritten verbatim.
+	//   - thawed source with provenance (thaw preserves owner and
+	//     published_at): kept VERBATIM too -- re-stamping a fresh
+	//     published_at would assert the original publisher published
+	//     the store at attach time, over content they may have
+	//     modified after thawing.
+	//   - no provenance at all (never frozen): stamp the copy frozen
+	//     with a fresh published_at and an EMPTY owner -- guessing an
+	//     identity to stamp onto someone else's artifact would be
+	//     wrong.
+	if src.Owner != "" || !src.PublishedAt.IsZero() {
+		frozen := src
+		frozen.ReadOnly = true
+		if err := core.WriteStoreManifest(dataDir, frozen); err != nil {
+			return fail(fmt.Errorf("freeze local copy: %w", err))
+		}
+	} else if err := core.FreezeStore(dataDir, ""); err != nil {
 		return fail(fmt.Errorf("freeze local copy: %w", err))
 	}
 
-	cfgPath := filepath.Join(storeDir, "config.yaml")
-	body := fmt.Sprintf(
-		"# Gramaton per-store config for attached read-only store %q.\n"+
-			"# Deliberately minimal: everything else inherits from the global\n"+
-			"# config (if any) and built-in defaults. No llm or author blocks --\n"+
-			"# a read-only consumer never writes, runs no curation, and stamps\n"+
-			"# no authorship.\n"+
-			"data_dir: %q\n",
-		name, dataDir)
-	if err := core.AtomicWriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		return fail(fmt.Errorf("write per-store config: %w", err))
+	cfgPath, err := WriteDataDirConfig(storeDir, name)
+	if err != nil {
+		return fail(err)
 	}
 
 	m, err := core.ReadStoreManifest(dataDir)
@@ -180,6 +212,71 @@ func Attach(baseDir, name, srcDataDir string) (AttachResult, error) {
 		Manifest:     m,
 		SourceFrozen: src.ReadOnly,
 	}, nil
+}
+
+// WriteDataDirConfig writes the minimal per-store config.yaml for the
+// named store home at storeDir, pinning the store's OWN data
+// directory (<storeDir>/data). Without it, the engine's
+// global-then-store config merge lets a GLOBAL data_dir bleed through
+// for a config-less named store, silently opening a DIFFERENT store's
+// data (typically the default store's) -- with that store's manifest,
+// so read-only badges and enforcement diverge. Shared by Attach and
+// `gramaton store create` so every named store is born with its
+// data_dir pinned. Everything else -- deliberately no llm or author
+// block -- inherits from the global config (if any) and built-in
+// defaults. Returns the config path.
+func WriteDataDirConfig(storeDir, name string) (string, error) {
+	dataDir := filepath.Join(storeDir, "data")
+	cfgPath := filepath.Join(storeDir, "config.yaml")
+	body := fmt.Sprintf(
+		"# Gramaton per-store config for store %q.\n"+
+			"# Deliberately minimal: data_dir pins this store's own data\n"+
+			"# directory so the engine's global-then-store config merge can\n"+
+			"# never let a global data_dir bleed through and open a different\n"+
+			"# store's data. Everything else inherits from the global config\n"+
+			"# (if any) and built-in defaults.\n"+
+			"data_dir: %q\n",
+		name, dataDir)
+	if err := core.AtomicWriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		return "", fmt.Errorf("write per-store config: %w", err)
+	}
+	return cfgPath, nil
+}
+
+// sourceServerAlive best-effort detects a gramaton server actively
+// serving the source store. Byte-copying a served store tears
+// silently: bbolt's file locks reject nothing on a plain read (its
+// Windows LockFileEx range sits outside the file content), so a live
+// indexes.db or mmap'd vec.flat copies mid-write without an error and
+// the attached copy fails to open or silently mis-ranks.
+//
+// Detection follows the server.json conventions (the server writes it
+// in the store's config dir, beside data/ -- see
+// server.ReadServerInfo): when the source data dir sits at the
+// conventional <store>/data location, its parent is the config dir
+// and server.json is probed there. A bare data dir with no config-dir
+// context (an unpacked artifact someone sent) yields no probe and the
+// attach proceeds -- received artifacts have no live server by
+// assumption. Unreadable or stale server.json files are treated as no
+// server, matching the CLI's server-alive guards.
+func sourceServerAlive(srcDataDir string) (pid int, alive bool) {
+	if filepath.Base(srcDataDir) != "data" {
+		return 0, false
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(srcDataDir), "server.json"))
+	if err != nil {
+		return 0, false
+	}
+	var info struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil || info.PID <= 0 {
+		return 0, false
+	}
+	if !processAlive(info.PID) {
+		return 0, false
+	}
+	return info.PID, true
 }
 
 // DefaultAttachName derives a store-name suggestion from the source

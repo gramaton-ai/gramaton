@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	storeDeleteForce    bool
-	storeCreateReadOnly bool
-	storeAttachName     string
+	storeDeleteForce          bool
+	storeCreateReadOnly       bool
+	storeAttachName           string
+	storeAttachFreezeOriginal bool
 )
 
 var storeCmd = &cobra.Command{
@@ -69,7 +70,10 @@ With no name, freezes the active store (--store / GRAMATON_STORE);
 use 'default' for the unnamed store. Refuses while the store's
 server is running -- a live server's engine reads the read-only flag
 at startup and would keep accepting writes. Stop it first:
-gramaton stop.
+gramaton stop. A server that starts in the instant between that
+check and the manifest write has still read the old state; freeze
+warns when it detects one, and that server must be restarted
+(gramaton stop) for the change to take effect.
 
 Reverse with: gramaton store thaw [name]`,
 	Args: cobra.MaximumNArgs(1),
@@ -93,6 +97,12 @@ it register only the read tools. Reads and search work in full.
 A minimal per-store config.yaml is written (data_dir only); all
 other settings inherit from your global config. Your own stores and
 their configuration are untouched.
+
+With --freeze-original, a source directory that is still writable on
+disk is ALSO frozen (owner: your configured author), so anything
+else that opens the original sees it as read-only too. The default
+leaves the directory you received exactly as it arrived; a source
+that is already frozen is never re-stamped either way.
 
 Reach the attached store with --store or GRAMATON_STORE:
 
@@ -125,6 +135,8 @@ func init() {
 	storeDeleteCmd.Flags().BoolVar(&storeDeleteForce, "force", false, "skip confirmation prompt")
 	storeAttachCmd.Flags().StringVar(&storeAttachName, "name", "",
 		"local name for the attached store (default: derived from the directory name)")
+	storeAttachCmd.Flags().BoolVar(&storeAttachFreezeOriginal, "freeze-original", false,
+		"also freeze the source directory when it is writable on disk (owner: the configured author)")
 	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
 	rootCmd.AddCommand(storeCmd)
 }
@@ -183,15 +195,29 @@ func runStoreCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	dir := store.Resolve(base, name)
+
+	// Pin the store's own data_dir in a per-store config.yaml
+	// immediately (same mechanics as store.Attach). Without it the
+	// engine's global-then-store config merge lets a global data_dir
+	// bleed through for a config-less named store, so `gramaton
+	// --store <name> ...` would open the DEFAULT store's data dir --
+	// and with --read-only, the freeze badge and the engine's actual
+	// enforcement would diverge onto two different stores.
+	cfgPath, err := store.WriteDataDirConfig(dir, name)
+	if err != nil {
+		return err
+	}
+
 	out := map[string]any{
 		"created": name,
 		"path":    dir,
+		"config":  cfgPath,
 	}
 
 	if storeCreateReadOnly {
-		// A fresh store has no per-store config, so
-		// storeEffectiveConfig resolves the data dir store.Create just
-		// made (<dir>/data), while the owner comes from the creating
+		// storeEffectiveConfig resolves the data dir the per-store
+		// config just pinned (<dir>/data) -- the same dir the engine
+		// will open -- while the owner comes from the creating
 		// config's author (inherited from the global config).
 		cfg, dataDir, err := storeEffectiveConfig(dir)
 		if err != nil {
@@ -299,12 +325,16 @@ func runStoreFreeze(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return printJSON(map[string]any{
+	out := map[string]any{
 		"frozen":       display,
 		"owner":        m.Owner,
 		"published_at": m.PublishedAt,
 		"note":         storeFrozenNote,
-	})
+	}
+	if w := storeServerAppearedWarning(name, dir, "frozen"); w != "" {
+		out["warning"] = w
+	}
+	return printJSON(out)
 }
 
 func runStoreThaw(cmd *cobra.Command, args []string) error {
@@ -337,6 +367,9 @@ func runStoreThaw(cmd *cobra.Command, args []string) error {
 		"note": "if this machine's install was set up against the read-only store, " +
 			"re-run 'gramaton init' to refresh the installed agent guidance",
 	}
+	if w := storeServerAppearedWarning(name, dir, "thawed"); w != "" {
+		out["warning"] = w
+	}
 	if m.Owner != "" || !m.PublishedAt.IsZero() {
 		out["owner"] = m.Owner
 		out["published_at"] = m.PublishedAt
@@ -350,7 +383,8 @@ func runStoreThaw(cmd *cobra.Command, args []string) error {
 // with the setup wizard's read-only route (which serves the
 // read-only-ONLY case: a machine whose only gramaton is the shared
 // store). Offline primitive like freeze/thaw -- no engine, no
-// server; the store being created cannot have a live server yet.
+// server; the store being created cannot have a live server yet,
+// and store.Attach itself refuses when one is serving the SOURCE.
 func runStoreAttach(cmd *cobra.Command, args []string) error {
 	base := baseConfigDir()
 
@@ -371,24 +405,61 @@ func runStoreAttach(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Resolve the freeze-original owner BEFORE mutating anything so a
+	// malformed config fails the command cleanly rather than after a
+	// successful attach.
+	freezeOwner := ""
+	if storeAttachFreezeOriginal {
+		cfg, _, err := storeEffectiveConfig(base)
+		if err != nil {
+			return err
+		}
+		freezeOwner = cfg.Author.String()
+	}
+
 	res, err := store.Attach(base, name, srcData)
 	if err != nil {
 		return err
 	}
 
-	out := map[string]any{
-		"attached":  res.Name,
-		"path":      res.StoreDir,
-		"data_dir":  res.DataDir,
-		"read_only": true,
-		"source":    srcData,
-		"note": "the data was copied and the copy's STORE manifest frozen; " +
-			"the directory you received was not modified. Reads and search work in full; all writes are rejected.",
-		"access": fmt.Sprintf("gramaton --store %s <command>  (or set GRAMATON_STORE=%s)", res.Name, res.Name),
-		"mcp": fmt.Sprintf("to let an AI harness search it, add a second MCP entry running: gramaton --store %s mcp "+
-			"(e.g. claude mcp add --scope user gramaton-%s gramaton -- --store %s mcp); "+
-			"only read tools are registered against a frozen store", res.Name, res.Name, res.Name),
+	// The optional freeze-the-original (contract: default no, offered
+	// as a flag on the non-interactive command; the wizard's
+	// read-only route asks the same question interactively). Runs
+	// AFTER the attach so a failed copy never leaves the source
+	// changed. An already-frozen source is never re-stamped --
+	// core.FreezeStore preserves existing provenance anyway, and the
+	// output says so instead of pretending this command froze it.
+	sourceNote := "the directory you received was not modified."
+	out := map[string]any{}
+	if storeAttachFreezeOriginal {
+		switch {
+		case res.SourceFrozen:
+			out["original_frozen"] = true
+			out["original_note"] = "the source was already frozen; its manifest and provenance are unchanged"
+		default:
+			if err := core.FreezeStore(srcData, freezeOwner); err != nil {
+				out["warning"] = fmt.Sprintf("couldn't freeze the original at %s: %v (the attached copy is still frozen)", srcData, err)
+			} else {
+				out["original_frozen"] = true
+				if freezeOwner != "" {
+					out["original_owner"] = freezeOwner
+				}
+				sourceNote = "the source directory was also frozen (--freeze-original)."
+			}
+		}
 	}
+
+	out["attached"] = res.Name
+	out["path"] = res.StoreDir
+	out["data_dir"] = res.DataDir
+	out["read_only"] = true
+	out["source"] = srcData
+	out["note"] = "the data was copied and the copy's STORE manifest frozen; " +
+		sourceNote + " Reads and search work in full; all writes are rejected."
+	out["access"] = fmt.Sprintf("gramaton --store %s <command>  (or set GRAMATON_STORE=%s)", res.Name, res.Name)
+	out["mcp"] = fmt.Sprintf("to let an AI harness search it, add a second MCP entry running: gramaton --store %s mcp "+
+		"(e.g. claude mcp add --scope user gramaton-%s gramaton -- --store %s mcp); "+
+		"only read tools are registered against a frozen store", res.Name, res.Name, res.Name)
 	if res.Manifest.Owner != "" {
 		out["owner"] = res.Manifest.Owner
 	}
@@ -446,6 +517,30 @@ func refuseIfStoreServerAlive(name, cfgDirPath, display string) error {
 	return fmt.Errorf("store %s has a running server (pid %d); its engine reads the read-only flag at startup and would not honor the change. Stop it first: %s", display, info.PID, hint)
 }
 
+// storeServerAppearedWarning re-probes for a live server immediately
+// AFTER a freeze/thaw manifest write. refuseIfStoreServerAlive is
+// check-then-act: a server that opens its engine between the alive
+// check and the manifest write (CLI auto-start racing the command, or
+// `gramaton serve` mid startup, which loads the engine before writing
+// server.json) has latched the OLD read-only state and enforces it
+// until restart. The window is seconds on a single-user tool, so no
+// locking -- this warning closes the confusion, not the window.
+// Returns "" when no server appeared; verb is the past participle for
+// the message ("frozen", "thawed").
+func storeServerAppearedWarning(name, cfgDirPath, verb string) string {
+	info, err := server.ReadServerInfo(cfgDirPath)
+	if err != nil || !server.IsProcessAlive(info.PID) {
+		return ""
+	}
+	hint := "gramaton stop"
+	if name != "" {
+		hint = fmt.Sprintf("gramaton --store %s stop", name)
+	}
+	return fmt.Sprintf(
+		"a server (pid %d) started while the store was being %s; it opened the store before the change and will not enforce it. Restart it for the change to take effect: %s",
+		info.PID, verb, hint)
+}
+
 // storeEffectiveConfig loads a store's effective config (store
 // config overlaid on global, the same merge the engine uses) and
 // resolves its data directory: the store's OWN config.yaml's
@@ -453,13 +548,14 @@ func refuseIfStoreServerAlive(name, cfgDirPath, display string) error {
 //
 // This matches the engine's resolution (core/engine.go: cfg.DataDir,
 // defaulting to <cfgDir>/data when empty) for every store `gramaton
-// init` produces, because init always writes a per-store data_dir.
-// The one divergence is deliberate: for a named store that has no
-// config.yaml of its own (bare `store create`), the engine's merge
-// lets the GLOBAL config's data_dir bleed through, which resolves
-// the DEFAULT store's data dir -- freezing or badging the wrong
-// store. The store's own file is read directly (ownDataDir) because
-// after the Defaults()+global merge an unset data_dir is
+// init`, `store create`, or `store attach` produces, because all
+// three write a per-store data_dir. The one divergence is deliberate:
+// for a named store that has no config.yaml of its own (hand-built,
+// or created before store create pinned data_dir), the engine's
+// merge lets the GLOBAL config's data_dir bleed through, which
+// resolves the DEFAULT store's data dir -- freezing or badging the
+// wrong store. The store's own file is read directly (ownDataDir)
+// because after the Defaults()+global merge an unset data_dir is
 // indistinguishable from an inherited one.
 func storeEffectiveConfig(cfgDirPath string) (config.Config, string, error) {
 	cfgPath := filepath.Join(cfgDirPath, "config.yaml")

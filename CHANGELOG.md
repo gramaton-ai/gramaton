@@ -18,13 +18,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lands. On a frozen store every logical write is rejected with a
   `forbidden` error (saves, updates, collections, session capture,
   curation, branches, restore/import), background writers never
-  start (curation runner, self-heal, access flusher, jobs sweeper),
-  and search/inspect stop updating access metadata -- reads never
+  start (curation runner, self-heal, access flusher, jobs sweeper)
+  -- and if restoring a frozen backup flips a live store read-only,
+  the curation runner and access flusher quiesce at their next cycle
+  -- and search/inspect stop updating access metadata: reads never
   touch the write lock. Reads, search, and export work in full;
   derived local caches (search indexes) stay maintainable. Every
-  response from a frozen store carries `store_readonly: true` in
-  its envelope, MCP clients are not offered write tools at all, and
-  `store list`/`status` badge the state live from the manifest.
+  HTTP response from a frozen store carries `store_readonly: true`
+  in its envelope; MCP clients learn the frozen state from a
+  read-only notice in the server instructions, a tool list with no
+  write tools registered, and a `store_readonly` field in
+  `gramaton_status`. `store list`/`status` badge the state live
+  from the manifest.
   Thawing preserves the original publication provenance.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received

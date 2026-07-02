@@ -668,7 +668,8 @@ func (s *Server) recordActivity() {
 
 // accessFlusher periodically persists deferred access metadata
 // (access_count, last_accessed, activation_boost). Runs as a
-// background goroutine. Exits when ctx is cancelled.
+// background goroutine. Exits when ctx is cancelled or when the
+// store becomes read-only (see accessFlushTick).
 func (s *Server) accessFlusher(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -679,9 +680,31 @@ func (s *Server) accessFlusher(ctx context.Context) {
 			s.engine.FlushAccess()
 			return
 		case <-ticker.C:
-			s.engine.FlushAccess()
+			if !s.accessFlushTick() {
+				return
+			}
 		}
 	}
+}
+
+// accessFlushTick runs one flusher tick. Returns false -- stopping
+// the flusher goroutine -- when the store has become read-only since
+// the flusher started. startAccessFlusher gates on ReadOnly at boot,
+// but a BackupRestore of a frozen archive flips the live engine
+// read-only mid-process (Engine.OpenFiles re-reads the restored STORE
+// manifest); after that flip there is never anything to flush (the
+// read paths skip access bookkeeping and engine.FlushAccess
+// short-circuits), so the goroutine quiesces at the next tick instead
+// of ticking until process restart. The leftover s.accessCancel is
+// harmless: cancelling a context whose goroutine already exited is a
+// no-op.
+func (s *Server) accessFlushTick() bool {
+	if s.engine.ReadOnly() {
+		s.log.Debug("access flusher stopping: store became read-only")
+		return false
+	}
+	s.engine.FlushAccess()
+	return true
 }
 
 // startAccessFlusher starts the background access flusher and

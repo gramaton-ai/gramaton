@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"testing"
 
@@ -108,5 +109,75 @@ func TestMCPToolRegistryReadOnly(t *testing.T) {
 	full := listServerMCPTools(t, writable)
 	if len(full) != len(mcpToolAccess) {
 		t.Errorf("writable server surface has %d tools, want the full classified set of %d", len(full), len(mcpToolAccess))
+	}
+}
+
+// callServerMCPTool connects an in-memory client to srv's MCP surface,
+// invokes one tool with no arguments, and returns the decoded JSON
+// payload from its text content.
+func callServerMCPTool(t *testing.T, srv *Server, name string) map[string]any {
+	t.Helper()
+
+	mcpServer := srv.MCPServer()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = mcpServer.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "readonly-test", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      name,
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("call %s: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("call %s returned a tool error: %+v", name, res.Content)
+	}
+	if len(res.Content) == 0 {
+		t.Fatalf("call %s returned no content", name)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("call %s: content[0] is %T, want *mcp.TextContent", name, res.Content[0])
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text.Text), &out); err != nil {
+		t.Fatalf("parse %s payload: %v\npayload: %s", name, err, text.Text)
+	}
+	return out
+}
+
+// TestMCPStatusInlinesStoreReadonly pins the direct-MCP half of the
+// store_readonly contract. MCP tool results bypass writeJSONRaw's
+// envelope, so gramaton_status is the one direct-MCP tool that
+// inlines the flag -- the surface a stdio-attached agent on a frozen
+// store actually queries. Same only-when-frozen shape as the HTTP
+// envelope (TestReadOnlyEnvelopeFlag): frozen stores carry
+// store_readonly=true, writable stores omit the key entirely.
+func TestMCPStatusInlinesStoreReadonly(t *testing.T) {
+	frozen, _ := setupReadOnlyTestServer(t)
+	out := callServerMCPTool(t, frozen, "gramaton_status")
+	if got, ok := out["store_readonly"].(bool); !ok || !got {
+		t.Errorf("frozen store: gramaton_status store_readonly = %v, want true", out["store_readonly"])
+	}
+	if _, ok := out["store"]; !ok {
+		t.Errorf("gramaton_status payload missing the store block: %v", out)
+	}
+
+	writable, _ := setupTestServer(t)
+	out = callServerMCPTool(t, writable, "gramaton_status")
+	if _, present := out["store_readonly"]; present {
+		t.Errorf("writable store: gramaton_status should omit store_readonly, got %v", out["store_readonly"])
 	}
 }

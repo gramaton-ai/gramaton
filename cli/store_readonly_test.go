@@ -295,6 +295,112 @@ func TestStoreCreateReadOnlyBornFrozen(t *testing.T) {
 	}
 }
 
+// TestStoreCreateReadOnlyEngineOpensOwnFrozenDataDir pins the
+// badge/enforcement alignment through the REAL resolution path: a
+// store born with create --read-only must be frozen where the engine
+// actually opens it. The global config here carries a data_dir (the
+// init default), which is exactly the bleed-through source -- without
+// the per-store config `store create` now writes, the engine's
+// global-then-store merge would resolve the DEFAULT store's data dir
+// and open it writable while every badge said the named store was
+// frozen.
+func TestStoreCreateReadOnlyEngineOpensOwnFrozenDataDir(t *testing.T) {
+	base := newFreezeTestBase(t)
+	t.Cleanup(func() { storeCreateReadOnly = false })
+
+	out, err := runCmd(t, "store", "create", "pub", "--read-only", "--config-dir", base)
+	if err != nil {
+		t.Fatalf("create --read-only: %v", err)
+	}
+	got := parseJSONMap(t, out)
+	if cfgPath, _ := got["config"].(string); cfgPath == "" {
+		t.Error("create output missing the per-store config path")
+	}
+
+	dir := filepath.Join(base, "stores", "pub")
+	ownData := filepath.Join(dir, "data")
+
+	// The engine's own resolution (per-store config overlaid on the
+	// global) must land on the store's OWN data dir and latch the
+	// frozen manifest there.
+	eng, err := core.LoadEngine(dir, base)
+	if err != nil {
+		t.Fatalf("LoadEngine on the created store: %v", err)
+	}
+	t.Cleanup(func() {
+		if cerr := eng.Close(); cerr != nil {
+			t.Logf("engine close: %v", cerr)
+		}
+	})
+	if eng.Config().DataDir != ownData {
+		t.Errorf("engine data dir = %q, want the store's own %q (global data_dir bled through)",
+			eng.Config().DataDir, ownData)
+	}
+	if !eng.ReadOnly() {
+		t.Error("engine opened the store writable; the read_only badge is not enforced where the engine opens")
+	}
+
+	// The DEFAULT store was never frozen.
+	if _, serr := os.Stat(filepath.Join(base, "data", "STORE")); !os.IsNotExist(serr) {
+		t.Errorf("default store gained a STORE manifest, stat err = %v", serr)
+	}
+
+	// The "always" half: a plain create also pins its own data_dir.
+	storeCreateReadOnly = false
+	if _, err := runCmd(t, "store", "create", "plain2", "--config-dir", base); err != nil {
+		t.Fatalf("plain create: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(base, "stores", "plain2", "config.yaml"))
+	if err != nil {
+		t.Fatalf("plain create wrote no per-store config: %v", err)
+	}
+	if !strings.Contains(string(raw), "data_dir:") {
+		t.Errorf("per-store config missing data_dir:\n%s", raw)
+	}
+}
+
+// TestStoreServerAppearedWarning exercises the post-write re-probe
+// directly: the freeze/thaw guard is check-then-act, so the only
+// end-to-end trigger is a server appearing mid-command -- injected
+// here as a server.json (own PID, the guard-test pattern) present at
+// re-probe time.
+func TestStoreServerAppearedWarning(t *testing.T) {
+	base := t.TempDir()
+
+	if w := storeServerAppearedWarning("", base, "frozen"); w != "" {
+		t.Errorf("no server.json: warning = %q, want empty", w)
+	}
+
+	writeInfo := func(pid int) {
+		t.Helper()
+		info := server.ServerInfo{PID: pid, Port: 1, StartedAt: time.Now().UTC()}
+		data, err := json.Marshal(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, "server.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeInfo(os.Getpid())
+	w := storeServerAppearedWarning("", base, "frozen")
+	for _, want := range []string{"frozen", "before the change", "gramaton stop"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("default-store warning = %q, want it to mention %q", w, want)
+		}
+	}
+	if w := storeServerAppearedWarning("pub", base, "thawed"); !strings.Contains(w, "gramaton --store pub stop") {
+		t.Errorf("named-store warning = %q, want the --store stop hint", w)
+	}
+
+	// A stale server.json (dead PID) is not a server that appeared.
+	writeInfo(1 << 30)
+	if w := storeServerAppearedWarning("", base, "frozen"); w != "" {
+		t.Errorf("dead PID: warning = %q, want empty", w)
+	}
+}
+
 func TestStoreListReadOnlyBadge(t *testing.T) {
 	base := newFreezeTestBase(t)
 	frozenData := addNamedStore(t, base, "frozen")

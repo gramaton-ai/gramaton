@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/index"
@@ -75,9 +76,13 @@ func setupFrozenAPI(t *testing.T) (*API, *core.Engine, string) {
 }
 
 // TestReadOnlyAPIRejectsWrites drives representative mutating
-// operations from every cluster against a manifest-frozen store and
+// operations from every cluster -- records, collections, sessions,
+// curation, branches, backup -- against a manifest-frozen store and
 // asserts each is rejected with the taxonomy code "forbidden" (not
 // just any error -- the code is the wire contract agents branch on).
+// This is the behavioral backstop for the AST tripwire in
+// readonly_guard_test.go, which only proves a rejectIfReadOnly call
+// EXISTS in each write method's body, not that its error is returned.
 func TestReadOnlyAPIRejectsWrites(t *testing.T) {
 	a, _, recID := setupFrozenAPI(t)
 	ctx := context.Background()
@@ -116,6 +121,23 @@ func TestReadOnlyAPIRejectsWrites(t *testing.T) {
 		}},
 		{"CurationTrigger", func() *APIError {
 			_, e := a.CurationTrigger(ctx)
+			return e
+		}},
+		{"BranchCreate", func() *APIError {
+			_, e := a.BranchCreate(ctx, BranchCreateRequest{Name: "frozen-branch"})
+			return e
+		}},
+		{"BackupRestore", func() *APIError {
+			// A plausible request (absolute path, force set) so that a
+			// dropped guard would surface as a non-"forbidden" code
+			// from the later validation, not as a masked pass.
+			_, e := a.BackupRestore(ctx, RestoreRequest{Path: "/nonexistent/backup.tar.gz", Force: true})
+			return e
+		}},
+		{"BackupImport", func() *APIError {
+			_, e := a.BackupImport(ctx, ImportRequest{Records: []backup.ExportRecord{
+				{ID: "rec-1", Properties: map[string]any{"content_full": "nope"}},
+			}})
 			return e
 		}},
 	}

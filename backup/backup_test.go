@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 	"github.com/gramaton-ai/gramaton/testutil"
 )
 
@@ -65,6 +69,100 @@ func TestCreateAndRestore(t *testing.T) {
 	assertFileContent(t, filepath.Join(restoreDir, "BRANCH"), "main")
 	assertFileContent(t, filepath.Join(restoreDir, "refs", "main"), "abc123hash")
 	assertFileContent(t, filepath.Join(restoreDir, "ab", "abc123hash"), `{"data":"test"}`)
+}
+
+// TestBackupCarriesStoreManifest pins the "manifest travels with
+// backup" half of the sharing contract end to end: a frozen store's
+// STORE manifest survives the real Create -> Restore path, and an
+// engine opened on the restored data dir comes up read-only. This
+// guards shouldExcludeSnapshot against ever listing STORE next to
+// HEAD/FORMAT (those are excluded and re-injected from the snapshot;
+// STORE must simply travel in the walk) -- doing so would make a
+// frozen store shared via backup restore fully writable on the
+// recipient's machine.
+func TestBackupCarriesStoreManifest(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := t.TempDir()
+
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = ""
+	if err := config.Save(cfg, filepath.Join(dir, "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	openEngine := func(configDir string) *core.Engine {
+		eng, err := core.LoadEngineWithOptions(configDir, nil, []core.EngineOption{
+			core.WithVectorIndex(index.NewFlatIndex()),
+			core.WithVolatileStorage(),
+		})
+		if err != nil {
+			t.Fatalf("LoadEngineWithOptions(%s): %v", configDir, err)
+		}
+		return eng
+	}
+
+	// Seed one committed record so the archive is a real store.
+	eng := openEngine(dir)
+	eng.Lock()
+	eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("frozen knowledge travels with the backup"),
+		"temporality":  graph.StringProperty("durable"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("seed save: %v", err)
+	}
+	eng.Unlock()
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close seeding engine: %v", err)
+	}
+
+	// Freeze the store, then archive it through the real backup path.
+	if err := core.FreezeStore(dir, "publisher@example.com"); err != nil {
+		t.Fatalf("FreezeStore: %v", err)
+	}
+	archivePath, err := Create(dir, "", backupDir)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Restore through the real extraction path into a fresh dir.
+	restoreDir := t.TempDir()
+	if err := Restore(archivePath, restoreDir); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	// The restored data dir carries the STORE manifest intact,
+	// provenance included.
+	m, err := core.ReadStoreManifest(restoreDir)
+	if err != nil {
+		t.Fatalf("restored STORE manifest unreadable: %v", err)
+	}
+	if !m.ReadOnly {
+		t.Fatal("restored STORE manifest is not frozen -- the manifest must travel with the backup")
+	}
+	if m.Owner != "publisher@example.com" {
+		t.Errorf("restored manifest owner = %q, want the publication provenance preserved", m.Owner)
+	}
+
+	// An engine opened on the restored data dir honors the manifest.
+	cfg2 := config.Defaults()
+	cfg2.DataDir = restoreDir
+	cfg2.Embedding.Provider = ""
+	cfg2.LLM.Provider = ""
+	if err := config.Save(cfg2, filepath.Join(restoreDir, "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	restored := openEngine(restoreDir)
+	defer restored.Close()
+	if !restored.ReadOnly() {
+		t.Error("engine opened on the restored data dir should be read-only")
+	}
+	if restored.NodeCount() == 0 {
+		t.Error("restored store lost its records")
+	}
 }
 
 func TestRestoreInvalidArchive(t *testing.T) {

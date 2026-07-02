@@ -219,9 +219,14 @@ func (w *Wizard) promptStoreName(srcData string) (string, bool, error) {
 func (w *Wizard) attachStoreCopy(srcData, name string, src core.StoreManifest) (store.AttachResult, bool) {
 	// Interrupt cleanup: a Ctrl+C mid-copy must not leave a
 	// half-attached store. store.Attach removes the store home
-	// itself on its own failure paths.
+	// itself on its own failure paths. Armed only when this attach
+	// will be the CREATOR of the store home: Attach refuses a
+	// pre-existing home, and an interrupt arriving after that
+	// refusal must not delete a store the user already had.
 	storeHome := store.Resolve(w.configDir, name)
-	w.addCleanup(func() { _ = os.RemoveAll(storeHome) })
+	if _, statErr := os.Stat(storeHome); os.IsNotExist(statErr) {
+		w.addCleanup(func() { _ = os.RemoveAll(storeHome) })
+	}
 
 	result, err := store.Attach(w.configDir, name, srcData)
 	if err != nil {

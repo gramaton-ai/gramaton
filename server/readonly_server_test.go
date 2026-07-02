@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/index"
 )
 
@@ -193,5 +195,53 @@ func TestReadOnlyBackgroundWritersGated(t *testing.T) {
 		// Nothing is access-dirty, so the flusher's final flush is a
 		// no-op and cannot race the engine close in cleanup.
 		wAccessCancel()
+	}
+}
+
+// TestAccessFlushTickStopsWhenReadOnly covers the runtime-flip half
+// of the access-flusher gate. startAccessFlusher gates at boot, but a
+// BackupRestore of a frozen archive flips the live engine read-only
+// mid-process; the per-tick seam must then report stop so the flusher
+// goroutine quiesces at its next tick instead of ticking until
+// process restart. Control: a writable store's tick flushes and
+// continues.
+func TestAccessFlushTickStopsWhenReadOnly(t *testing.T) {
+	frozen, _ := setupReadOnlyTestServer(t)
+	if frozen.accessFlushTick() {
+		t.Error("accessFlushTick on a read-only store should report stop")
+	}
+
+	writable, _ := setupTestServer(t)
+	if !writable.accessFlushTick() {
+		t.Error("accessFlushTick on a writable store should report continue")
+	}
+}
+
+// TestCurationCycleSkipsWhenReadOnly covers the runtime-flip half of
+// the curation gate. startCurationRunner gates at boot, but a
+// BackupRestore of a frozen archive flips the live engine read-only
+// after the runner started; the cycle entry must then early-return --
+// no deterministic write rejection logged, no LLM spend -- so the
+// runner quiesces at its next interval. Observed via Runner.Status():
+// an early-returned cycle never sets LastRun, so LastCurated stays
+// nil. Control: on a writable store the same trigger runs a cycle and
+// stamps LastCurated.
+func TestCurationCycleSkipsWhenReadOnly(t *testing.T) {
+	_, frozenEng := setupReadOnlyTestServer(t)
+	runner := curation.NewRunner(frozenEng, nil, frozenEng.Config(), slog.Default())
+	if !runner.Trigger(context.Background()) {
+		t.Fatal("Trigger reported a cycle already in progress")
+	}
+	if got := runner.Status().LastCurated; got != nil {
+		t.Errorf("curation cycle ran against a read-only store (LastCurated = %v, want nil)", got)
+	}
+
+	_, writableEng := setupTestServer(t)
+	wRunner := curation.NewRunner(writableEng, nil, writableEng.Config(), slog.Default())
+	if !wRunner.Trigger(context.Background()) {
+		t.Fatal("writable store: Trigger reported a cycle already in progress")
+	}
+	if wRunner.Status().LastCurated == nil {
+		t.Error("writable store: a triggered cycle should set LastCurated")
 	}
 }

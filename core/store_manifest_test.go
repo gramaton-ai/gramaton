@@ -30,7 +30,11 @@ func TestStoreManifestRoundTrip(t *testing.T) {
 	}
 
 	// Pin the on-disk JSON shape: the manifest travels with copies,
-	// tars, and backups, so the serialization is a contract.
+	// tars, and backups, so the serialization is a contract. This
+	// pins the shape only; the backup half of the travel contract is
+	// exercised end to end by TestBackupCarriesStoreManifest in
+	// backup/ (freeze -> Create -> Restore -> engine opens read-only)
+	// and the copy half by the attach tests in store/.
 	data, err := os.ReadFile(filepath.Join(dir, "STORE"))
 	if err != nil {
 		t.Fatalf("read STORE file: %v", err)

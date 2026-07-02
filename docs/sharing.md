@@ -48,9 +48,11 @@ thaw a store. It is a lid, not a lock.
 - Derived local caches (`indexes.db`, the vector index) remain
   writable: they are rebuilt from the graph at startup by design and
   are not part of the store's knowledge.
-- Every MCP/HTTP response from a frozen store carries
-  `store_readonly: true` in its envelope, and MCP clients connected
-  to it are not offered write tools at all.
+- Every HTTP response from a frozen store carries
+  `store_readonly: true` in its envelope. MCP clients learn the
+  frozen state three ways: the server instructions open with a
+  read-only notice, no write tools are registered at all, and the
+  `gramaton_status` tool reports `store_readonly: true`.
 
 ## Receiving a shared store
 
