@@ -53,7 +53,8 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	s.registerCollectionsMCPTools(mcpServer)
 	// Sessions cluster: bindings_sessions.go (api-typed).
 	s.registerSessionsMCPTools(mcpServer)
-	s.registerMCPGuideTools(mcpServer)
+	// Guide cluster: bindings_guide.go (api-typed).
+	s.registerGuideMCPTools(mcpServer)
 }
 
 // mcpAlwaysLoadMeta returns the `_meta` payload that pins an MCP

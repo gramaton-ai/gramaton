@@ -159,7 +159,7 @@ Gramaton-development-internal markers that are cryptic to public readers and mak
 - [ ] No `"Phase N follow-on"`, `"Wave N"`-style multi-commit-series labels.
 - [ ] No raw 26-char Crockford-base32 ULIDs (`01[A-HJKMNP-TV-Z0-9]{24}`) used as `Tracker:` / `tracker` references in comments, CHANGELOG entries, or doc prose.
 
-Apply across: `*.go` comments (production AND test), `CHANGELOG.md`, `docs/**/*.md`, `server/guide/*.md`, `README.md`, `HOW_TO_USE_GRAMATON.md`, `CONTRIBUTING.md`, `integration/**/*.md`, commit-message bodies in scope.
+Apply across: `*.go` comments (production AND test), `CHANGELOG.md`, `docs/**/*.md`, `api/guide/*.md`, `README.md`, `HOW_TO_USE_GRAMATON.md`, `CONTRIBUTING.md`, `integration/**/*.md`, commit-message bodies in scope.
 
 **Distinguish from things that should NOT be scrubbed:**
 - `D-NN` (`D40`, `D33`) used as section / decision-record headings in `docs/project-design/design-decisions.md` — those are doc-internal anchors, not tracker references.

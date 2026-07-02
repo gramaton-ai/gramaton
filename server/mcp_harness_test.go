@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"sort"
 	"testing"
 
@@ -117,6 +119,80 @@ func TestMCPToolRegistry(t *testing.T) {
 			"If you intentionally added a tool, add it to the want list above (alphabetised).\n"+
 			"Also verify: shared input struct vs server/mcp_*.go vs cli/mcp_proxy*.go.",
 			unexpected)
+	}
+}
+
+// TestMCPCollectionMigrateValueAdvertisesMultiType is the server-side
+// twin of the CLI proxy assertion in cli/mcp_proxy_test.go. Regression
+// for #91: the collection_migrate `value` argument is `any` in Go
+// (a migration default is genuinely polymorphic), jsonschema inference
+// leaves it type-less, and MCP clients stringify arguments with no
+// advertised type -- so object and array defaults (e.g. an enum[]
+// field default) arrived as JSON strings and failed validation. Both
+// transports build the tool's input schema via
+// api.CollectionMigrateInputSchema, which overrides `value` with an
+// explicit multi-type list; this asserts the override survives to the
+// published schema.
+func TestMCPCollectionMigrateValueAdvertisesMultiType(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	mcpServer := srv.MCPServer()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = mcpServer.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "harness-test", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	found := false
+	for _, tool := range res.Tools {
+		if tool.Name != "gramaton_collection_migrate" {
+			continue
+		}
+		found = true
+
+		// InputSchema round-trips as JSON over the transport;
+		// re-marshal and read the `value` property's advertised types.
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal input schema: %v", err)
+		}
+		var doc struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("parse input schema: %v\nraw: %s", err, raw)
+		}
+		var value struct {
+			Types       []string `json:"type"`
+			Description string   `json:"description"`
+		}
+		if err := json.Unmarshal(doc.Properties["value"], &value); err != nil {
+			t.Fatalf("parse `value` property: %v\nraw: %s", err, doc.Properties["value"])
+		}
+		want := []string{"string", "number", "boolean", "array", "object", "null"}
+		if !slices.Equal(value.Types, want) {
+			t.Fatalf("collection_migrate `value` arg advertises type %v, want %v -- a type-less arg makes MCP clients stringify non-scalars (#91)", value.Types, want)
+		}
+		if value.Description == "" {
+			t.Fatal("collection_migrate `value` arg has empty description")
+		}
+	}
+	if !found {
+		t.Fatal("gramaton_collection_migrate tool not registered")
 	}
 }
 

@@ -445,11 +445,15 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 	type migrateArgs struct {
 		CollectionID string `json:"collection_id" jsonschema:"collection ID"`
 		Field        string `json:"field" jsonschema:"field name to migrate"`
-		Value        any    `json:"value" jsonschema:"value to set on all items missing this field (use null for explicit null)"`
+		// Value's advertised schema (multi-type + description) comes from
+		// api.CollectionMigrateInputSchema, which overrides the type-less
+		// inference for `any` so clients don't stringify non-scalars (#91).
+		Value any `json:"value"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_collection_migrate",
 		Description: api.CollectionMigrateDescription,
+		InputSchema: api.CollectionMigrateInputSchema[migrateArgs](),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args migrateArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_collection_migrate")
 		defer done(nil)

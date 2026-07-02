@@ -53,7 +53,7 @@ func setupObserveEngine(t *testing.T, emb *configurableObsEmbedder) *core.Engine
 	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
 		t.Fatal(err)
 	}
-	opts := []core.EngineOption{core.WithVectorIndex(index.NewFlatIndex())}
+	opts := []core.EngineOption{core.WithVectorIndex(index.NewFlatIndex()), core.WithVolatileStorage()}
 	if emb != nil {
 		opts = append(opts, core.WithEmbedder(emb))
 	}

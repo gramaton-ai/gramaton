@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1096,33 +1096,19 @@ func TestCollectionNaNRejection(t *testing.T) {
 	}
 }
 
-func TestCollectionPerformance(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping performance test")
-	}
-	if runtime.GOOS == "windows" {
-		// Perf-shape test; structural correctness is covered by smaller
-		// sibling tests (TestCollectionAdd*, TestCollectionItems*). On
-		// slow Windows CI runners this consumes ~15-50s of the api
-		// package's 10-min budget under race + parallel-suite load,
-		// pushing the package over its budget. Linux/macOS still run
-		// full size.
-		t.Skip("perf-shape test; structural correctness covered by smaller siblings; saves Windows CI budget")
-	}
+// TestCollectionBulkCounts: after a run of schema-validated adds,
+// CollectionItems.Count and CollectionList's ItemCount both reflect
+// every add. Small N so it runs on every platform including Windows
+// CI; the 100-item perf-shape version of this test is now
+// BenchmarkCollectionBulk (#54).
+func TestCollectionBulkCounts(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
 
-	schema := &CollectionSchema{
-		Fields: []SchemaField{
-			{Name: "title", Type: FieldTypeString, Required: true},
-			{Name: "status", Type: FieldTypeEnum, Required: true, Values: []string{"open", "done"}},
-			{Name: "priority", Type: FieldTypeNumber, Required: false},
-		},
-	}
-	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Perf Test", Schema: schema})
+	result, _ := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Bulk Counts", Schema: bulkBenchSchema()})
 	collID := result.ID
 
-	const numItems = 100
+	const numItems = 10
 	for i := 0; i < numItems; i++ {
 		_, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
 			Fields: map[string]any{
@@ -1154,6 +1140,53 @@ func TestCollectionPerformance(t *testing.T) {
 	}
 }
 
+func bulkBenchSchema() *CollectionSchema {
+	return &CollectionSchema{
+		Fields: []SchemaField{
+			{Name: "title", Type: FieldTypeString, Required: true},
+			{Name: "status", Type: FieldTypeEnum, Required: true, Values: []string{"open", "done"}},
+			{Name: "priority", Type: FieldTypeNumber, Required: false},
+		},
+	}
+}
+
+// BenchmarkCollectionBulk: the former TestCollectionPerformance body
+// (100 schema-validated adds + a sorted items read + a list with item
+// counts per iteration), moved out of the test budget (#54). Run with:
+//
+//	go test -run '^$' -bench CollectionBulk ./api/
+func BenchmarkCollectionBulk(b *testing.B) {
+	a, _ := setupTestAPI(b)
+	ctx := context.Background()
+
+	const numItems = 100
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: fmt.Sprintf("Perf Test %d", i), Schema: bulkBenchSchema()})
+		if apiErr != nil {
+			b.Fatalf("create: %v", apiErr)
+		}
+		collID := result.ID
+		for j := 0; j < numItems; j++ {
+			if _, apiErr := a.CollectionAdd(ctx, collID, CollectionAddRequest{
+				Fields: map[string]any{
+					"title":    fmt.Sprintf("Task %d", j),
+					"status":   "open",
+					"priority": float64(j % 4),
+				},
+			}); apiErr != nil {
+				b.Fatalf("add %d: %v", j, apiErr)
+			}
+		}
+		if _, apiErr := a.CollectionItems(ctx, collID, CollectionItemsRequest{Sort: "priority"}); apiErr != nil {
+			b.Fatalf("items: %v", apiErr)
+		}
+		if _, apiErr := a.CollectionList(ctx, CollectionListRequest{}); apiErr != nil {
+			b.Fatalf("list: %v", apiErr)
+		}
+	}
+}
+
 func TestCollectionEnumSet(t *testing.T) {
 	a, _ := setupTestAPI(t)
 	ctx := context.Background()
@@ -1180,5 +1213,169 @@ func TestCollectionEnumSet(t *testing.T) {
 	})
 	if apiErr == nil {
 		t.Fatal("expected error for invalid enum[] value")
+	}
+}
+
+// TestCollectionAddEchoesCollectionIdentity pins the #98 contract:
+// the add response carries the target collection's name and
+// description so the filing agent sees what the collection is for
+// at the moment of adding.
+func TestCollectionAddEchoesCollectionIdentity(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	created, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:        "Bugs",
+		Description: "Open bug reports awaiting triage",
+	})
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
+	}
+
+	added, apiErr := a.CollectionAdd(ctx, created.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "crash on start"},
+	})
+	if apiErr != nil {
+		t.Fatalf("add: %v", apiErr)
+	}
+	if added.CollectionName != "Bugs" {
+		t.Errorf("collection_name = %q, want %q", added.CollectionName, "Bugs")
+	}
+	if added.CollectionDescription != "Open bug reports awaiting triage" {
+		t.Errorf("collection_description = %q, want %q", added.CollectionDescription, "Open bug reports awaiting triage")
+	}
+}
+
+// TestCollectionAddEchoOmitsEmptyDescription: a collection created
+// without a description echoes name only; collection_description is
+// absent from the wire shape (omitempty), preserving compatibility.
+func TestCollectionAddEchoOmitsEmptyDescription(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	created, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Scratch"})
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
+	}
+
+	added, apiErr := a.CollectionAdd(ctx, created.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "loose note"},
+	})
+	if apiErr != nil {
+		t.Fatalf("add: %v", apiErr)
+	}
+	if added.CollectionName != "Scratch" {
+		t.Errorf("collection_name = %q, want %q", added.CollectionName, "Scratch")
+	}
+	if added.CollectionDescription != "" {
+		t.Errorf("collection_description = %q, want empty", added.CollectionDescription)
+	}
+
+	raw, err := json.Marshal(added)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "collection_description") {
+		t.Errorf("empty description should be omitted from wire shape, got %s", raw)
+	}
+	if !strings.Contains(string(raw), "collection_name") {
+		t.Errorf("collection_name should be on the wire, got %s", raw)
+	}
+}
+
+// TestCollectionAddDedupEchoesCollectionIdentity: the idempotent
+// dedup branch (curation=none duplicate title) carries the echo too,
+// so both success shapes stay symmetric.
+func TestCollectionAddDedupEchoesCollectionIdentity(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	created, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:        "Groceries",
+		Description: "Weekly shopping list",
+		Curation:    "none",
+	})
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
+	}
+
+	if _, apiErr := a.CollectionAdd(ctx, created.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "eggs"},
+	}); apiErr != nil {
+		t.Fatalf("first add: %v", apiErr)
+	}
+
+	dup, apiErr := a.CollectionAdd(ctx, created.ID, CollectionAddRequest{
+		Fields: map[string]any{"title": "eggs"},
+	})
+	if apiErr != nil {
+		t.Fatalf("second add should be idempotent, got: %v", apiErr)
+	}
+	if !dup.Deduplicated {
+		t.Fatalf("expected deduplicated=true, got %+v", dup)
+	}
+	if dup.CollectionName != "Groceries" {
+		t.Errorf("collection_name = %q, want %q", dup.CollectionName, "Groceries")
+	}
+	if dup.CollectionDescription != "Weekly shopping list" {
+		t.Errorf("collection_description = %q, want %q", dup.CollectionDescription, "Weekly shopping list")
+	}
+}
+
+// TestCollectionAddBatchEchoesCollectionIdentity mirrors the
+// single-add echo tests for the batch response: name + description
+// when present, description omitted from the wire when the
+// collection has none.
+func TestCollectionAddBatchEchoesCollectionIdentity(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	created, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
+		Name:        "Reading",
+		Description: "Articles and books to read",
+	})
+	if apiErr != nil {
+		t.Fatalf("create: %v", apiErr)
+	}
+
+	batch, apiErr := a.CollectionAddBatch(ctx, created.ID, CollectionAddBatchRequest{
+		Items: []CollectionAddItem{
+			{Fields: map[string]any{"title": "paper one"}},
+			{Fields: map[string]any{"title": "paper two"}},
+		},
+	})
+	if apiErr != nil {
+		t.Fatalf("batch add: %v", apiErr)
+	}
+	if len(batch.Added) != 2 {
+		t.Fatalf("expected 2 added, got %d", len(batch.Added))
+	}
+	if batch.CollectionName != "Reading" {
+		t.Errorf("collection_name = %q, want %q", batch.CollectionName, "Reading")
+	}
+	if batch.CollectionDescription != "Articles and books to read" {
+		t.Errorf("collection_description = %q, want %q", batch.CollectionDescription, "Articles and books to read")
+	}
+
+	// No-description collection: name echoed, description omitted.
+	bare, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{Name: "Bare"})
+	if apiErr != nil {
+		t.Fatalf("create bare: %v", apiErr)
+	}
+	bareBatch, apiErr := a.CollectionAddBatch(ctx, bare.ID, CollectionAddBatchRequest{
+		Items: []CollectionAddItem{{Fields: map[string]any{"title": "solo"}}},
+	})
+	if apiErr != nil {
+		t.Fatalf("bare batch add: %v", apiErr)
+	}
+	if bareBatch.CollectionName != "Bare" {
+		t.Errorf("collection_name = %q, want %q", bareBatch.CollectionName, "Bare")
+	}
+	raw, err := json.Marshal(bareBatch)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "collection_description") {
+		t.Errorf("empty description should be omitted from wire shape, got %s", raw)
 	}
 }

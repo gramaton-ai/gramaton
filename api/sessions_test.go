@@ -31,8 +31,9 @@ func (noopLLM) CompleteStructured(_ context.Context, _ map[string]any, _ string)
 // setupTestAPI constructs an API + engine backed by a temp data dir.
 // Mirrors server.setupTestServer; kept in this package so tests can
 // access unexported api state (preparedMu, preparedSessions, sweep
-// helpers) required to verify restart + TTL behavior.
-func setupTestAPI(t *testing.T) (*API, *core.Engine) {
+// helpers) required to verify restart + TTL behavior. Takes
+// testing.TB so benchmarks share the fixture (#54).
+func setupTestAPI(t testing.TB) (*API, *core.Engine) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Defaults()
@@ -48,6 +49,7 @@ func setupTestAPI(t *testing.T) (*API, *core.Engine) {
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)

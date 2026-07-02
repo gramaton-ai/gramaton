@@ -26,6 +26,7 @@ func setupTestEngine(t *testing.T) *Engine {
 	}
 	eng, err := LoadEngineWithOptions(dir, nil, []EngineOption{
 		WithVectorIndex(index.NewFlatIndex()),
+		WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
@@ -97,6 +98,7 @@ func TestWrapLLMReplacesProvider(t *testing.T) {
 	eng, err := LoadEngineWithOptions(dir, nil, []EngineOption{
 		WithVectorIndex(index.NewFlatIndex()),
 		WithLLM(inner),
+		WithVolatileStorage(),
 	})
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
