@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"testing"
 
@@ -517,6 +518,99 @@ func TestProxyCollectionCreateSchemaAdvertisesObjectType(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("gramaton_collection_create tool not registered")
+	}
+}
+
+func TestProxyCollectionMigrateValueAdvertisesMultiType(t *testing.T) {
+	// Regression for #91: the collection_migrate `value` argument must
+	// advertise an explicit multi-type list in the published tool input
+	// schema. `value` is genuinely polymorphic (`any` in Go), so
+	// jsonschema-go infers a type-less property, and MCP clients
+	// stringify non-scalar arguments with no advertised type -- an
+	// object or array default (e.g. for an enum[] field) arrived as a
+	// JSON string and failed validation. Retyping the field (the #88
+	// fix for collection_create `schema`) would reject scalar defaults,
+	// the dominant case, so the registration overrides the property
+	// schema explicitly via api.CollectionMigrateInputSchema.
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name: "gramaton-test", Version: "0.0.0",
+	}, nil)
+	registerProxyTools(mcpServer)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go mcpServer.Run(ctx, serverTransport)
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "test-client", Version: "0.0.0",
+	}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+
+	found := false
+	for _, tool := range res.Tools {
+		if tool.Name != "gramaton_collection_migrate" {
+			continue
+		}
+		found = true
+		assertMigrateValueMultiType(t, tool.InputSchema)
+	}
+	if !found {
+		t.Fatal("gramaton_collection_migrate tool not registered")
+	}
+}
+
+// assertMigrateValueMultiType checks that a listed tool's input schema
+// advertises the full multi-type list for the `value` property (#91).
+// Shared shape with the server-side harness assertion in
+// server/mcp_harness_test.go.
+func assertMigrateValueMultiType(t *testing.T, inputSchema any) {
+	t.Helper()
+
+	// InputSchema round-trips as JSON over the transport; re-marshal
+	// and read the `value` property's advertised type list.
+	raw, err := json.Marshal(inputSchema)
+	if err != nil {
+		t.Fatalf("marshal input schema: %v", err)
+	}
+	var doc struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse input schema: %v\nraw: %s", err, raw)
+	}
+	var value struct {
+		Types       []string `json:"type"`
+		Description string   `json:"description"`
+	}
+	if err := json.Unmarshal(doc.Properties["value"], &value); err != nil {
+		t.Fatalf("parse `value` property: %v\nraw: %s", err, doc.Properties["value"])
+	}
+	want := []string{"string", "number", "boolean", "array", "object", "null"}
+	if !slices.Equal(value.Types, want) {
+		t.Fatalf("collection_migrate `value` arg advertises type %v, want %v -- a type-less arg makes MCP clients stringify non-scalars (#91)", value.Types, want)
+	}
+	if value.Description == "" {
+		t.Fatal("collection_migrate `value` arg has empty description")
+	}
+
+	// The override must not clobber the inferred schema for the other
+	// arguments: collection_id keeps its plain string type.
+	var collectionID struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(doc.Properties["collection_id"], &collectionID); err != nil {
+		t.Fatalf("parse `collection_id` property: %v", err)
+	}
+	if collectionID.Type != "string" {
+		t.Fatalf("collection_migrate `collection_id` arg advertises type %q, want \"string\"", collectionID.Type)
 	}
 }
 

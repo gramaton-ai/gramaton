@@ -99,6 +99,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the history documented in `api/intake.go` and the write-path
   roles clarified in `docs/integrator-guide.md`.
 
+- **`gramaton_collection_migrate` accepts non-scalar `value` defaults
+  over MCP.** The `value` argument is polymorphic (`any` in Go), which
+  jsonschema-go infers with no `type`, so MCP clients serialized object
+  and array defaults (e.g. a default for an `enum[]` field) as JSON
+  strings and the server rejected them. Retyping the field — the #88
+  fix for `collection_create` `schema` — would reject scalar defaults,
+  the dominant case, so both the server MCP binding and the CLI proxy
+  now build the tool's input schema via a shared helper
+  (`api.CollectionMigrateInputSchema`) that overrides `value` with an
+  explicit `string|number|boolean|array|object|null` type list. Scalar
+  defaults behave as before; the HTTP endpoint was never affected
+  (#91).
+
 
 ## [0.3.0-alpha.4] - 2026-06-27
 

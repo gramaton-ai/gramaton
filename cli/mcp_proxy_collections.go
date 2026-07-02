@@ -323,13 +323,17 @@ func registerCollectionSchemaProxy(s *mcp.Server) {
 type proxyCollectionMigrateInput struct {
 	CollectionID string `json:"collection_id" jsonschema:"collection ID"`
 	Field        string `json:"field" jsonschema:"field name to migrate"`
-	Value        any    `json:"value" jsonschema:"value to set on all items missing this field (use null for explicit null)"`
+	// Value's advertised schema (multi-type + description) comes from
+	// api.CollectionMigrateInputSchema, which overrides the type-less
+	// inference for `any` so clients don't stringify non-scalars (#91).
+	Value any `json:"value"`
 }
 
 func registerCollectionMigrateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_migrate",
 		Description: api.CollectionMigrateDescription,
+		InputSchema: api.CollectionMigrateInputSchema[proxyCollectionMigrateInput](),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionMigrateInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.Field == "" {
 			return proxyErr("collection_id and field are required")
