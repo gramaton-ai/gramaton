@@ -284,11 +284,11 @@ func joinCollectionNames(names []string) string {
 
 const CollectionCreateDescription = "Create a new collection. Collections provide structured, exhaustive retrieval -- every item is always returned. Use for tasks, backlogs, reading lists, checklists. Use Memory (gramaton_save) for semantic knowledge like decisions, context, and research."
 
-const CollectionListDescription = "List collections with names, item counts, and schema status. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page."
+const CollectionListDescription = "List collections with names, descriptions, item counts, and schema status. Each collection's description says what that collection is for -- read it to decide where an item belongs before filing. Returns {showing, total, has_more, next_offset} for pagination. Call again with offset=next_offset to get the next page."
 
 const CollectionItemsDescription = "List items in a collection. Returns every item matching the filter, guaranteed complete (no pagination). Supports sorting by any field. Use `fields` to project a subset of schema fields (e.g. [\"title\",\"status\"]), `filter` to narrow by exact schema-field match (e.g. {\"status\":\"open\"} or {\"severity\":[\"P1\",\"P2\"]}), and `match` for case-insensitive substring search across string fields (e.g. match=\"auth\" returns items whose title/details/notes/etc. contain \"auth\")."
 
-const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On curation=standard (backlog / todo / default), a duplicate returns ErrConflict with the existing id in the message."
+const CollectionAddDescription = "Add an item to a collection. Use for tasks, TODOs, action items, or any structured data that needs exhaustive tracking. Collection descriptions say what each collection is for and should drive the filing choice; check them via gramaton_collection_list before adding. The response echoes the target collection's name and description so a mis-filed item is visible immediately. Fields are validated against the collection's schema. Duplicate-title handling depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), a duplicate returns the existing item's id with deduplicated=true (idempotent add). On curation=standard (backlog / todo / default), a duplicate returns ErrConflict with the existing id in the message."
 
 const CollectionUpdateDescription = "Update fields on a collection item. Existing fields are preserved; only specified fields are changed. Validated against the collection schema."
 
@@ -304,7 +304,7 @@ const CollectionSchemaDescription = "Read a collection's schema and migration st
 
 const CollectionMigrateDescription = "Bulk-update items for a schema migration. Sets the specified field on all items that are missing it. Required after adding a new required field to a schema."
 
-const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On curation=standard, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure."
+const CollectionAddBatchDescription = "Add many items to a collection in a single call. Items are schema-validated and dedup-checked individually; items that pass commit atomically in one engine save, items that fail are reported per-item in the Failed array. Use instead of repeated gramaton_collection_add when loading more than ~10 items. Max 500 items per call. Duplicate-title handling mirrors gramaton_collection_add and depends on the collection's `curation` profile: on curation=none collections (shopping-list / packing-list shape), duplicates land in Added with deduplicated=true pointing to the existing item's id (idempotent batch). On curation=standard, duplicates land in Failed with code=duplicate. Returns {index, client_ref, id, deduplicated?} per success and {index, client_ref, code, message} per failure, plus the target collection's name and description at the top level (as gramaton_collection_add does) so a mis-filed batch is visible immediately."
 
 // --- service methods ---
 
@@ -1150,6 +1150,12 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	if isRetired(coll) {
 		return CollectionAddResponse{}, ErrInvalid("cannot add to retired collection")
 	}
+	// Echoed on every success branch so the agent sees what the
+	// collection is for at filing time (#98). Read from the node
+	// fetched under the write lock, not the pre-lock contextParts,
+	// so the echo reflects the state the item commits against.
+	collName, _ := coll.Properties.GetString("collection_name")
+	collDesc, _ := coll.Properties.GetString("collection_description")
 
 	// Schema validation.
 	schema, err := loadSchema(coll)
@@ -1191,9 +1197,11 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 					}
 					if CollectionCuration(coll) == CurationNone {
 						return CollectionAddResponse{
-							ID:           e.SourceID,
-							CollectionID: collectionID,
-							Deduplicated: true,
+							ID:                    e.SourceID,
+							CollectionID:          collectionID,
+							CollectionName:        collName,
+							CollectionDescription: collDesc,
+							Deduplicated:          true,
 						}, nil
 					}
 					return CollectionAddResponse{}, ErrConflict(fmt.Sprintf("item with title %q already exists in this collection (existing id: %s)", titleStr, e.SourceID))
@@ -1247,7 +1255,12 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 		return CollectionAddResponse{}, ErrInternal("failed to save collection item")
 	}
 
-	return CollectionAddResponse{ID: n.ID, CollectionID: collectionID}, nil
+	return CollectionAddResponse{
+		ID:                    n.ID,
+		CollectionID:          collectionID,
+		CollectionName:        collName,
+		CollectionDescription: collDesc,
+	}, nil
 }
 
 // CollectionAddItem is one item inside a CollectionAddBatchRequest.
@@ -1285,10 +1298,16 @@ type BatchAddFailure struct {
 	Message   string `json:"message"`
 }
 
+// CollectionAddBatchResponse echoes the target collection's name and
+// description alongside the per-item results, mirroring
+// CollectionAddResponse (#98). Both are omitempty for wire
+// compatibility.
 type CollectionAddBatchResponse struct {
-	CollectionID string            `json:"collection_id"`
-	Added        []BatchAddSuccess `json:"added"`
-	Failed       []BatchAddFailure `json:"failed"`
+	CollectionID          string            `json:"collection_id"`
+	CollectionName        string            `json:"collection_name,omitempty"`
+	CollectionDescription string            `json:"collection_description,omitempty"`
+	Added                 []BatchAddSuccess `json:"added"`
+	Failed                []BatchAddFailure `json:"failed"`
 }
 
 // CollectionAddBatch adds many items to a collection in one call. The
@@ -1416,6 +1435,11 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 		a.log.Warn("collection schema load failed", "component", "collection", "err", err)
 		return CollectionAddBatchResponse{}, ErrInternal("failed to load schema")
 	}
+	// Echoed in the response so the agent sees what the collection
+	// is for at filing time (#98). Read under the write lock, same
+	// rationale as single CollectionAdd.
+	collName, _ := coll.Properties.GetString("collection_name")
+	collDesc, _ := coll.Properties.GetString("collection_description")
 
 	// Build the existing-title set once. Iterating collectionItemEdges
 	// per item would be O(N*M); doing it once is O(M). Keys go through
@@ -1590,9 +1614,11 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 	}
 
 	return CollectionAddBatchResponse{
-		CollectionID: collectionID,
-		Added:        added,
-		Failed:       failed,
+		CollectionID:          collectionID,
+		CollectionName:        collName,
+		CollectionDescription: collDesc,
+		Added:                 added,
+		Failed:                failed,
 	}, nil
 }
 

@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Collection add responses echo the target collection's name and
+  description** (#98). `collection_add` and `collection_add_batch`
+  now return `collection_name` and `collection_description`
+  (omitted when empty, so existing consumers are unaffected),
+  putting what the collection is for in front of the agent at
+  filing time. The `collection_list` and `collection_add` tool
+  descriptions and the collections guide now say that descriptions
+  should drive the filing choice.
+
 ### Changed
 
 - **Test suites no longer pay for durability they cannot use.** A new
@@ -55,6 +66,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configs keep loading, nothing reads the value, the default and
   docs are gone, and render omits the key going forward. Safe to
   delete from any `config.yaml`.
+
 
 ## [0.3.0-alpha.4] - 2026-06-27
 
