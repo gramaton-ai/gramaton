@@ -68,12 +68,17 @@ func TestParseAuthor(t *testing.T) {
 	}
 }
 
-// TestDefaultAuthorFallback covers the non-interactive path's author
-// defaulting: a blank cfg.Author gets Name from the OS account (same
-// preference order as the wizard) with Email left blank, and a
-// cfg.Author already populated from --author is not touched. The
-// save/load round-trip pins that the fallback lands in the file
-// runInitNonInteractive writes, not just the in-memory struct.
+// TestDefaultAuthorFallback covers the defaultAuthor helper plus the
+// config.Save serialization it feeds: a blank cfg.Author gets Name
+// from the OS account (same preference order as the wizard) with
+// Email left blank, a cfg.Author already populated from --author is
+// not touched, and the resulting Author survives a Save/Load
+// round-trip. It does NOT drive runInitNonInteractive itself -- that
+// function's embedding detection (embed.SetupEmbedding) probes
+// providers and may download models, so there is no hermetic way to
+// run it. The uncovered wiring is one line: runInitNonInteractive
+// calls defaultAuthor(&cfg) immediately before the same config.Save
+// exercised here.
 func TestDefaultAuthorFallback(t *testing.T) {
 	cfg := config.Defaults()
 	defaultAuthor(&cfg)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // The composed identity every author-configured test engine stamps.
@@ -58,6 +59,32 @@ func TestSaveStampsAuthor(t *testing.T) {
 		t.Fatalf("Save: %v", apiErr)
 	}
 	assertAuthor(t, eng, resp.ID, "save")
+}
+
+// TestSaveIndexesAuthor: the stamped author property reaches the
+// engine's property index, not just the node. The test engine is
+// built through the production construction path (core's newIndexSet
+// passes index.DefaultIndexedFields to the bbolt property index), so
+// this test fails if "author" is dropped from DefaultIndexedFields:
+// isIndexed would silently discard the key on Add and the exact
+// lookup below would come back empty.
+func TestSaveIndexesAuthor(t *testing.T) {
+	a, eng := setupAuthorAPI(t)
+	resp, apiErr := a.Save(context.Background(), SaveRequest{Content: "author lands in the property index"})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	assertAuthor(t, eng, resp.ID, "save")
+
+	eng.RLock()
+	ids := eng.PropIdx().Lookup("author", graph.StringProperty(wantTestAuthor))
+	eng.RUnlock()
+	for _, id := range ids {
+		if id == resp.ID {
+			return
+		}
+	}
+	t.Fatalf("property index lookup author=%q returned %v, want it to contain %s", wantTestAuthor, ids, resp.ID)
 }
 
 // TestSaveBlankAuthorStampsNothing: with no author configured the

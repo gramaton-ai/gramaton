@@ -19,7 +19,7 @@ import (
 //
 //   - STAMPED: the site stamps the composed config identity
 //     (engine.Config().Author.String()); empty identity stamps nothing.
-//   - CURATION: system-created node; stamps the nodeAuthorCuration
+//   - CURATION: system-created node; stamps the curation.NodeAuthor
 //     constant ("curation") unconditionally.
 //   - INHERITS: sub-node copies the parent record's author (chunking's
 //     inheritedMetadataKeys); config is never consulted.
@@ -28,6 +28,12 @@ import (
 //     identity is never re-stamped.
 //   - EXEMPT: test fixture builders in testutil/; fixtures stay
 //     unstamped by design.
+//   - DEFINITION: the file defines the AddNode methods themselves;
+//     a method definition carries no receiver dot, so the `.AddNode(`
+//     pattern matches nothing. Pinned at 0 so any CALL added to the
+//     file trips the count.
+//   - DELEGATE: pass-through wrapper; the author decision belongs to
+//     each of the wrapper's callers, which the walk counts separately.
 //
 // If this test fails because a NEW `.AddNode(` call site appeared:
 //  1. Decide the site's category. A user-initiated create path must
@@ -41,6 +47,14 @@ import (
 //
 // Never add an entry without the category annotation -- the list is
 // the audit trail for who writes `author` and why.
+//
+// Residual limits, acknowledged: the tripwire is grep-level. Per-file
+// counts cannot see a same-file swap of WHICH call site is stamped
+// (two sites in one file trading their stamps keeps the count
+// constant), and node creation that bypasses the `.AddNode(` spelling
+// entirely -- constructing Node values directly, as the method bodies
+// in graph/node.go do -- is invisible to it. Behavioral coverage of
+// the stamps themselves lives in the author integration tests.
 func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -86,13 +100,15 @@ func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 		filepath.Join("testutil", "populated.go"): 3,
 		// EXEMPT: generic record fixture builder.
 		filepath.Join("testutil", "testutil.go"): 1,
-	}
-
-	// Excluded from the walk: the method definitions and the batched
-	// delegate. Neither is a node-creation decision point.
-	excluded := map[string]bool{
-		filepath.Join("graph", "node.go"):         true, // Graph.AddNode definition
-		filepath.Join("core", "write_session.go"): true, // WriteSession.AddNode delegate
+		// DEFINITION x0: Graph.AddNode and AddNodeWithIDForTest are
+		// defined here; both bodies construct the Node struct directly,
+		// so no `.AddNode(` call appears. A new production call site
+		// added to this file breaks the 0 count.
+		filepath.Join("graph", "node.go"): 0,
+		// DELEGATE: WriteSession.AddNode's single forward to
+		// ws.engine.graph.AddNode(props). Not a decision point -- the
+		// author decision belongs to each WriteSession.AddNode caller.
+		filepath.Join("core", "write_session.go"): 1,
 	}
 
 	found := map[string]int{}
@@ -111,9 +127,6 @@ func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		if excluded[rel] {
-			return nil
-		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -139,6 +152,11 @@ func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 		}
 	}
 	for rel, want := range expected {
+		if want == 0 {
+			// Zero-count entries (DEFINITION) document a file that must
+			// stay free of call sites; absence from found IS the pass.
+			continue
+		}
 		if _, ok := found[rel]; !ok {
 			problems = append(problems, fmt.Sprintf("%s: expected %d .AddNode( call site(s), found none (stale expectation entry?)", rel, want))
 		}

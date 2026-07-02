@@ -83,6 +83,19 @@ func OSAccountName() string {
 	if err != nil {
 		return ""
 	}
+	return osAccountNameFrom(u)
+}
+
+// osAccountNameFrom holds OSAccountName's truncation and fallback
+// logic on an explicit *user.User so it is testable without depending
+// on the account the tests run under: GECOS truncated at the first
+// comma, trimmed; empty full name falls back to the username; nil
+// user (defensive -- user.Current never returns one on a nil error)
+// yields "".
+func osAccountNameFrom(u *user.User) string {
+	if u == nil {
+		return ""
+	}
 	name := u.Name
 	if i := strings.IndexByte(name, ','); i >= 0 {
 		name = name[:i]

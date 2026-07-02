@@ -3,12 +3,63 @@ package setup
 import (
 	"bytes"
 	"context"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/config"
 )
+
+// TestOSAccountNameFrom pins the GECOS-truncation and username-
+// fallback rules on controlled *user.User values, independent of the
+// account the tests run under (OSAccountName itself is untestable
+// beyond wiring -- user.Current answers differently per machine).
+func TestOSAccountNameFrom(t *testing.T) {
+	tests := []struct {
+		name string
+		u    *user.User
+		want string
+	}{
+		{
+			name: "GECOS subfields truncated at first comma",
+			u:    &user.User{Name: "Ada Lovelace,Room 3,555", Username: "ada"},
+			want: "Ada Lovelace",
+		},
+		{
+			name: "plain full name passes through",
+			u:    &user.User{Name: "Ada Lovelace", Username: "ada"},
+			want: "Ada Lovelace",
+		},
+		{
+			name: "empty full name falls back to username",
+			u:    &user.User{Name: "", Username: "ada"},
+			want: "ada",
+		},
+		{
+			name: "whitespace-only full name falls back to username",
+			u:    &user.User{Name: "   ", Username: "ada"},
+			want: "ada",
+		},
+		{
+			name: "both empty yields empty",
+			u:    &user.User{},
+			want: "",
+		},
+		{
+			name: "nil user yields empty",
+			u:    nil,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := osAccountNameFrom(tt.u); got != tt.want {
+				t.Errorf("osAccountNameFrom(%+v) = %q, want %q", tt.u, got, tt.want)
+			}
+		})
+	}
+}
 
 // newWizardForIdentityTest builds a wizard whose identity answers the
 // caller controls, with the rest of the flow scripted to skip ("1"
@@ -61,17 +112,25 @@ func TestStepIdentityValuesLandInConfig(t *testing.T) {
 	}
 }
 
-// TestStepIdentityEnterThroughUsesOSDefault covers the lazy path: a
-// bare Enter at the name prompt accepts the OS-account default (full
-// name preferred, username fallback, possibly "" on exotic CI), and
-// a bare Enter at the email prompt leaves it blank.
+// TestStepIdentityEnterThroughUsesOSDefault is a wiring test for the
+// lazy path: a bare Enter at the name prompt accepts the OS-account
+// default (the osAccountNameFrom rules are pinned hermetically in
+// TestOSAccountNameFrom), and a bare Enter at the email prompt leaves
+// it blank. When the OS default is "" the name assertion would pass
+// vacuously (blank answer and missing default are indistinguishable),
+// so the test skips rather than pretend coverage.
 func TestStepIdentityEnterThroughUsesOSDefault(t *testing.T) {
+	want := OSAccountName()
+	if want == "" {
+		t.Skip("OS account name unavailable; enter-through default is indistinguishable from a blank answer")
+	}
+
 	wiz, _ := newWizardForIdentityTest(t, "", "")
 	if err := wiz.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if want := OSAccountName(); wiz.cfg.Author.Name != want {
+	if wiz.cfg.Author.Name != want {
 		t.Errorf("Author.Name = %q, want OS default %q", wiz.cfg.Author.Name, want)
 	}
 	if wiz.cfg.Author.Email != "" {

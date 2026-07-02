@@ -250,8 +250,8 @@ func TestObserveSuccessClearsAttempts(t *testing.T) {
 		if !ok {
 			t.Fatalf("observation node %s missing", e.SourceID)
 		}
-		if author, ok := obs.Properties.GetString("author"); !ok || author != nodeAuthorCuration {
-			t.Errorf("observation %s author = %q (present=%v), want %q", e.SourceID, author, ok, nodeAuthorCuration)
+		if author, ok := obs.Properties.GetString("author"); !ok || author != NodeAuthor {
+			t.Errorf("observation %s author = %q (present=%v), want %q", e.SourceID, author, ok, NodeAuthor)
 		}
 	}
 	if observations == 0 {

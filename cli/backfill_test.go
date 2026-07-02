@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/gramaton-ai/gramaton/testutil"
 )
 
@@ -244,6 +248,114 @@ func TestBackfillAuthorFlagOverridesConfig(t *testing.T) {
 	author, err = resolveBackfillAuthor("Just A Flag", "")
 	if err != nil || author != "Just A Flag" {
 		t.Errorf("resolve with flag only = (%q, %v), want flag value and no error", author, err)
+	}
+}
+
+// headCommitActions loads the HEAD commit and returns its action
+// list. Same read path as api/history_test.go's commit inspections:
+// Engine.HeadHash + graph.LoadCommitMeta against the engine's store.
+func headCommitActions(t *testing.T, eng *core.Engine) []graph.CommitAction {
+	t.Helper()
+	commit, err := graph.LoadCommitMeta(eng.Store(), eng.HeadHash())
+	if err != nil {
+		t.Fatalf("LoadCommitMeta: %v", err)
+	}
+	return commit.Actions
+}
+
+// TestBackfillAuthorCommitCarriesSingleBackfillAction pins the commit
+// contract: a real run that stamps anything appends exactly one commit
+// carrying exactly one field-scoped {ActionBackfill, "author"} action
+// (never per-node actions), while a dry run and a no-op rerun append
+// no commit at all.
+func TestBackfillAuthorCommitCarriesSingleBackfillAction(t *testing.T) {
+	eng := newBackfillTestEngine(t, "Ada Lovelace", "ada@example.com")
+	testutil.Record("plain record without author").AddDirect(eng)
+
+	headBefore := eng.HeadHash()
+
+	// Dry run: no commit.
+	if _, err := executeAuthorBackfill(eng, "Ada Lovelace <ada@example.com>", true); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if got := eng.HeadHash(); got != headBefore {
+		t.Errorf("dry run moved HEAD %s -> %s, want no commit", headBefore, got)
+	}
+
+	// Real run: one commit, one backfill action.
+	if _, err := executeAuthorBackfill(eng, "Ada Lovelace <ada@example.com>", false); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	headAfter := eng.HeadHash()
+	if headAfter == headBefore {
+		t.Fatal("real run did not append a commit")
+	}
+	actions := headCommitActions(t, eng)
+	if len(actions) != 1 {
+		t.Fatalf("HEAD commit actions = %d, want exactly 1", len(actions))
+	}
+	if actions[0].Kind != graph.ActionBackfill {
+		t.Errorf("Actions[0].Kind = %q, want %q", actions[0].Kind, graph.ActionBackfill)
+	}
+	if actions[0].Field != "author" {
+		t.Errorf("Actions[0].Field = %q, want %q", actions[0].Field, "author")
+	}
+
+	// No-op rerun: nothing left to stamp, no commit.
+	if _, err := executeAuthorBackfill(eng, "Ada Lovelace <ada@example.com>", false); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if got := eng.HeadHash(); got != headAfter {
+		t.Errorf("no-op rerun moved HEAD %s -> %s, want no commit", headAfter, got)
+	}
+}
+
+// TestBackfillAuthorRefusesWhileServerAlive exercises
+// runBackfillAuthor's server-alive gate: with a server.json naming a
+// live PID (this test process's own), both the real run and --dry-run
+// must refuse up front. Neither may reach core.LoadEngine -- against
+// a real server that call would block forever on the bbolt lock.
+func TestBackfillAuthorRefusesWhileServerAlive(t *testing.T) {
+	dir := t.TempDir()
+
+	// Point configDir() at an isolated dir. cfgDir is package state
+	// shared with the integration-test server (set in TestMain), so
+	// restore it. cli tests run sequentially (no t.Parallel), which
+	// makes the swap safe.
+	oldCfgDir := cfgDir
+	cfgDir = dir
+	t.Cleanup(func() { cfgDir = oldCfgDir })
+	t.Setenv("GRAMATON_STORE", "")
+
+	// A server-info file whose PID is this test process: guaranteed
+	// alive without starting a real server.
+	info := server.ServerInfo{PID: os.Getpid(), Port: 1, StartedAt: time.Now().UTC()}
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "server.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dryRun := range []bool{false, true} {
+		name := "real run"
+		if dryRun {
+			name = "dry run"
+		}
+		t.Run(name, func(t *testing.T) {
+			oldDry := backfillAuthorDryRun
+			backfillAuthorDryRun = dryRun
+			t.Cleanup(func() { backfillAuthorDryRun = oldDry })
+
+			err := runBackfillAuthor(backfillAuthorCmd, nil)
+			if err == nil {
+				t.Fatal("expected the server-running refusal, got nil error")
+			}
+			if !strings.Contains(err.Error(), "server is running") {
+				t.Errorf("error = %q, want the server-running refusal", err)
+			}
+		})
 	}
 }
 

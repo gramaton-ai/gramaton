@@ -264,7 +264,7 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 				"created_at":        graph.TimestampProperty(time.Now().UTC()),
 				"access_count":      graph.Int64Property(0),
 				"node_type":         graph.StringProperty("observation"),
-				"author":            graph.StringProperty(nodeAuthorCuration),
+				"author":            graph.StringProperty(NodeAuthor),
 			}
 
 			for _, key := range []string{

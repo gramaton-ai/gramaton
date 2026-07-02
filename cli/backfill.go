@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
@@ -41,8 +42,9 @@ are attributed to "curation" instead.
 Nodes that already carry an author property are never touched
 (author is set-once), so reruns are no-ops.
 
-Refuses to run while a gramaton server is active to prevent
-concurrent writes. Stop the server first: gramaton stop.
+Refuses to run while a gramaton server is active, --dry-run
+included (even a preview opens the store the server holds locked).
+Stop the server first: gramaton stop.
 Use --dry-run to preview changes without applying them.`,
 	RunE: runBackfillAuthor,
 }
@@ -59,11 +61,11 @@ func runBackfillAuthor(cmd *cobra.Command, args []string) error {
 	dir := configDir()
 
 	// Refuse to run while the server is active to prevent concurrent
-	// writes to the same store.
-	if !backfillAuthorDryRun {
-		if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
-			return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
-		}
+	// access to the same store. Unconditional -- a dry run opens the
+	// same bbolt file, which a live server holds locked, so proceeding
+	// would block indefinitely instead of failing cleanly.
+	if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
+		return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
 	}
 
 	eng, err := core.LoadEngine(dir, baseConfigDir())
@@ -189,7 +191,7 @@ func executeAuthorBackfill(eng *core.Engine, author string, dryRun bool) (author
 			ws.SetProp(id, "author", graph.StringProperty(author))
 		}
 		for _, id := range plan.stampCuration {
-			ws.SetProp(id, "author", graph.StringProperty("curation"))
+			ws.SetProp(id, "author", graph.StringProperty(curation.NodeAuthor))
 		}
 		if plan.stampCount() > 0 {
 			ws.AddAction(graph.CommitAction{Kind: graph.ActionBackfill, Field: "author"})
@@ -205,7 +207,7 @@ func printAuthorBackfillPlan(p authorBackfillPlan, author string, dryRun bool) {
 		verb = "would stamp"
 	}
 	fmt.Printf("  %s: %d nodes with author %q\n", verb, len(p.stampAuthor), author)
-	fmt.Printf("  %s: %d curation-created nodes with author %q\n", verb, len(p.stampCuration), "curation")
+	fmt.Printf("  %s: %d curation-created nodes with author %q\n", verb, len(p.stampCuration), curation.NodeAuthor)
 	fmt.Printf("  already stamped (skipped): %d\n", p.alreadyStamped)
 	fmt.Printf("  total nodes: %d\n", p.total)
 }
