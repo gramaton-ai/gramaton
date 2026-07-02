@@ -1,11 +1,41 @@
 package claudecli
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/internal/strutil"
 	"github.com/gramaton-ai/gramaton/llm/telemetry"
 )
+
+// TestRunArgsDisablesToolsWithCurrentFlag pins the argv shape passed
+// to the claude binary. The CLI's flag surface drifts between
+// releases: the boolean `--no-allowedTools` was removed and every
+// invocation using it failed with "error unknown option". The
+// current CLI disables all built-in tools via `--tools ""`. This
+// test fails if the dead flag reappears or the no-tools pair drifts.
+func TestRunArgsDisablesToolsWithCurrentFlag(t *testing.T) {
+	args := runArgs("sonnet")
+
+	if slices.Contains(args, "--no-allowedTools") {
+		t.Fatalf("args contain removed flag --no-allowedTools: %q", args)
+	}
+
+	i := slices.Index(args, "--tools")
+	if i == -1 {
+		t.Fatalf("args missing --tools: %q", args)
+	}
+	if i+1 >= len(args) || args[i+1] != "" {
+		t.Fatalf("--tools must be followed by empty string to disable all tools, got: %q", args)
+	}
+
+	// The rest of the invocation shape: print mode, JSON output, model.
+	for _, want := range []string{"-p", "--output-format", "json", "--model", "sonnet"} {
+		if !slices.Contains(args, want) {
+			t.Fatalf("args missing %q: %q", want, args)
+		}
+	}
+}
 
 func TestModelAliases(t *testing.T) {
 	if modelAliases["haiku"] != "haiku" {

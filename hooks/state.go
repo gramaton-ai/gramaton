@@ -8,7 +8,8 @@
 // gramaton CLI. The scripts carried a hidden python3 dependency
 // and a read-modify-write race in the counter update. Phase 2
 // moves the logic into Go: ~/.gramaton/hooks/**/*.sh becomes a
-// one-line proxy that execs `gramaton hook <event>`; all real
+// thin proxy that execs `gramaton hook <event>` (via the binary's
+// absolute path, with a bare PATH lookup as fallback); all real
 // work lives here.
 //
 // The handlers are "fail open" — any error is logged to
