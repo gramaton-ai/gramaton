@@ -102,9 +102,10 @@ func New(prompter Prompter, writer Writer, cfg *config.Config, cfgPath, configDi
 
 // totalSteps is the number shown in "Step N of M" headers. Five
 // numbered steps (bootstrap, LLM, MCP, instructions, hooks); Step 0
-// (the fresh-vs-import branch) and the closing verification pass are
-// unnumbered. Kept as a constant so a refactor that adds/removes a
-// step updates every header consistently.
+// (the route branch), the identity section, the read-only attach
+// route, and the closing verification pass are unnumbered. Kept as a
+// constant so a refactor that adds/removes a step updates every
+// header consistently.
 const totalSteps = 5
 
 // Run drives the full wizard flow. It returns a non-nil error only
@@ -113,8 +114,8 @@ const totalSteps = 5
 // are reported via the Writer and Run returns nil.
 //
 // Step order:
-//  0. Welcome banner + author identity (unnumbered) +
-//     fresh-vs-import branch.
+//  0. Welcome banner + route branch (fresh / import / attach a
+//     read-only store), then author identity (unnumbered).
 //  1. Knowledge-store bootstrap (data dir, embedding, model download).
 //  2. LLM provider + API key + cost caps (optional but strongly
 //     recommended).
@@ -129,6 +130,12 @@ const totalSteps = 5
 // restored archive populates the data dir) but still walks through
 // Steps 2-5 because API keys, MCP registration, instructions, and
 // hooks are all per-machine and deliberately not included in backups.
+//
+// The read-only branch (Step 0 -> [3]) is its own unnumbered flow
+// (step_readonly.go) and returns without touching the numbered
+// steps: a read-only consumer never stamps authorship (no identity),
+// never runs curation (no LLM), and never captures sessions (no
+// hooks).
 // addCleanup registers a function to be executed on wizard interrupt.
 // Called by steps after they write persistent state (e.g., API key
 // files). Safe for concurrent calls, though in practice the wizard
@@ -247,20 +254,36 @@ func (w *Wizard) Run(ctx context.Context) error {
 
 	w.welcome()
 
-	// Author identity first: it frames everything that follows
-	// ("records created in your store carry this identity") and is
-	// the one question every install path -- fresh or import --
-	// answers the same way. Unnumbered, like askImportOrFresh.
-	if err := w.stepIdentity(); err != nil {
-		return fmt.Errorf("identity step: %w", err)
-	}
-
-	importing, err := w.askImportOrFresh()
+	// Route first: attaching a read-only store is a fundamentally
+	// different install (no identity, no LLM, no hooks), so the
+	// branch has to happen before any question that assumes the
+	// user will ever write to a store.
+	route, err := w.askSetupRoute()
 	if err != nil {
 		return err
 	}
 
-	if importing {
+	if route == routeReadOnly {
+		// The read-only attach flow is self-contained: it prints its
+		// own verification summary and next steps, and none of the
+		// numbered steps below apply to a store this machine never
+		// writes to.
+		if err := w.runReadOnlyAttach(ctx); err != nil {
+			return fmt.Errorf("read-only attach: %w", err)
+		}
+		w.markCommitted()
+		return nil
+	}
+
+	// Author identity next: it frames everything that follows
+	// ("records created in your store carry this identity") and is
+	// the one question both writable install paths -- fresh or
+	// import -- answer the same way. Unnumbered, like askSetupRoute.
+	if err := w.stepIdentity(); err != nil {
+		return fmt.Errorf("identity step: %w", err)
+	}
+
+	if route == routeImport {
 		// runImport replaces Step 1 bootstrap: restore populates the
 		// data directory atomically from the archive. Steps 2-5 still
 		// run because keys are stripped from backups and MCP/
@@ -310,28 +333,65 @@ func (w *Wizard) welcome() {
 	)
 }
 
-// askImportOrFresh is Step 0: route between fresh install and import.
-// Kept as a named method (not inlined) because the same branching
-// logic will be called from a future "reconfigure existing install"
-// menu, and factoring it now avoids a later refactor.
+// setupRoute names the three top-level install paths the wizard's
+// first question branches between.
+type setupRoute int
+
+const (
+	// routeFresh: first-time install (or reconfigure re-run) of the
+	// user's own writable store. Identity + Steps 1-5.
+	routeFresh setupRoute = iota
+
+	// routeImport: restore the user's own store from a backup made
+	// on another machine. Identity + import + Steps 2-5.
+	routeImport
+
+	// routeReadOnly: attach a read-only store someone shared. Its
+	// own unnumbered flow (step_readonly.go); skips identity, LLM,
+	// and hooks entirely.
+	routeReadOnly
+)
+
+// askSetupRoute is Step 0: the wizard's FIRST interactive question,
+// branching between fresh install, import, and attaching a shared
+// read-only store. It runs before the identity section because the
+// read-only route never stamps authorship and must not be asked for
+// one. Kept as a named method (not inlined) because the same
+// branching logic will be called from a future "reconfigure existing
+// install" menu, and factoring it now avoids a later refactor.
 //
-// Returns (true, nil) for import, (false, nil) for fresh.
-func (w *Wizard) askImportOrFresh() (bool, error) {
+// The [3] option text carries the read-only-ONLY consequence inline
+// (not just in the route's later explanation), and the trailing note
+// advertises `gramaton store attach` -- the path for users who want
+// a shared store ALONGSIDE their own writable one. Both are pinned
+// by TestSetupRoutePromptPinsReadOnlyClarity: a rewording must not
+// silently drop either.
+func (w *Wizard) askSetupRoute() (setupRoute, error) {
 	w.writer.Blank()
 	w.writer.Paragraph(
-		"Is this your first time using Gramaton, or are you importing",
-		"an existing knowledge store from another computer?",
+		"Is this your first time using Gramaton, are you importing your",
+		"own knowledge store from another computer, or attaching a",
+		"read-only store that someone shared with you?",
 	)
 	w.writer.Blank()
 	w.writer.Raw("    [1] First time  (or re-running to reconfigure — won't touch your existing data)")
 	w.writer.Raw("    [2] Import a backup from another computer  (replaces data with the archive)")
+	w.writer.Raw("    [3] Attach a shared read-only store  (read-only ONLY: your agent gets no write")
+	w.writer.Raw("        tools on this machine — no personal store, no capture, nothing is ever")
+	w.writer.Raw("        saved. Search and reads work in full.)")
+	w.writer.Blank()
+	w.writer.Paragraph(
+		"Already have your own Gramaton here, or want one? Pick [1] or",
+		"[2] — you can add shared read-only stores alongside it at any",
+		"time with: gramaton store attach <path>",
+	)
 	w.writer.Blank()
 	w.writer.Prompt(">")
 
-	idx, err := w.prompter.Choice(2, 0)
+	idx, err := w.prompter.Choice(3, 0)
 	if err != nil {
 		if errors.Is(err, ErrAborted) {
-			return false, err
+			return routeFresh, err
 		}
 		// Re-prompt on invalid input with a user-facing error. Keeping
 		// the re-prompt loop here (not inside Prompter.Choice) lets
@@ -340,12 +400,12 @@ func (w *Wizard) askImportOrFresh() (bool, error) {
 		// destructive step might abort on anything unexpected.
 		w.writer.ErrorLine(err.Error())
 		w.writer.Prompt(">")
-		idx, err = w.prompter.Choice(2, 0)
+		idx, err = w.prompter.Choice(3, 0)
 		if err != nil {
-			return false, err
+			return routeFresh, err
 		}
 	}
-	return idx == 1, nil
+	return setupRoute(idx), nil
 }
 
 // nextSteps prints the end-of-wizard block with concrete actions

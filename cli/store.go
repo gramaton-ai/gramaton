@@ -18,6 +18,7 @@ import (
 var (
 	storeDeleteForce    bool
 	storeCreateReadOnly bool
+	storeAttachName     string
 )
 
 var storeCmd = &cobra.Command{
@@ -75,6 +76,35 @@ Reverse with: gramaton store thaw [name]`,
 	RunE: runStoreFreeze,
 }
 
+var storeAttachCmd = &cobra.Command{
+	Use:   "attach <path>",
+	Short: "Attach a shared read-only store as a named store",
+	Long: `Registers a store directory someone shared with you as a local named
+store, alongside any stores you already have. The directory may be
+either a store dir (containing data/) or the data dir itself; its
+format version must match this binary.
+
+The data is COPIED under stores/<name>/ -- the directory you received
+is never modified -- and the local copy's STORE manifest is frozen,
+so every gramaton surface treats the attached store as read-only:
+all writes are rejected, no curation runs, and MCP processes serving
+it register only the read tools. Reads and search work in full.
+
+A minimal per-store config.yaml is written (data_dir only); all
+other settings inherit from your global config. Your own stores and
+their configuration are untouched.
+
+Reach the attached store with --store or GRAMATON_STORE:
+
+  gramaton --store <name> search "<query>" --top 5
+
+To let an AI harness search it, add a second MCP entry running
+'gramaton --store <name> mcp' (for example:
+claude mcp add --scope user gramaton-<name> gramaton -- --store <name> mcp).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runStoreAttach,
+}
+
 var storeThawCmd = &cobra.Command{
 	Use:   "thaw [name]",
 	Short: "Clear a store's read-only flag, making it writable again",
@@ -93,7 +123,9 @@ func init() {
 	storeCreateCmd.Flags().BoolVar(&storeCreateReadOnly, "read-only", false,
 		"freeze the store immediately after creation (owner: the configured author)")
 	storeDeleteCmd.Flags().BoolVar(&storeDeleteForce, "force", false, "skip confirmation prompt")
-	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd)
+	storeAttachCmd.Flags().StringVar(&storeAttachName, "name", "",
+		"local name for the attached store (default: derived from the directory name)")
+	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
 	rootCmd.AddCommand(storeCmd)
 }
 
@@ -309,6 +341,59 @@ func runStoreThaw(cmd *cobra.Command, args []string) error {
 		out["owner"] = m.Owner
 		out["published_at"] = m.PublishedAt
 		out["provenance"] = "owner and published_at record the original publication and are preserved; a future freeze overwrites them"
+	}
+	return printJSON(out)
+}
+
+// runStoreAttach registers a shared read-only store alongside the
+// user's existing stores. The mechanics live in store.Attach, shared
+// with the setup wizard's read-only route (which serves the
+// read-only-ONLY case: a machine whose only gramaton is the shared
+// store). Offline primitive like freeze/thaw -- no engine, no
+// server; the store being created cannot have a live server yet.
+func runStoreAttach(cmd *cobra.Command, args []string) error {
+	base := baseConfigDir()
+
+	src, err := filepath.Abs(args[0])
+	if err != nil {
+		return fmt.Errorf("resolve path %q: %w", args[0], err)
+	}
+	srcData, err := store.ResolveAttachSource(src)
+	if err != nil {
+		return err
+	}
+
+	name := storeAttachName
+	if name == "" {
+		name = store.DefaultAttachName(srcData, base)
+	}
+	if err := store.ValidateName(name); err != nil {
+		return err
+	}
+
+	res, err := store.Attach(base, name, srcData)
+	if err != nil {
+		return err
+	}
+
+	out := map[string]any{
+		"attached":  res.Name,
+		"path":      res.StoreDir,
+		"data_dir":  res.DataDir,
+		"read_only": true,
+		"source":    srcData,
+		"note": "the data was copied and the copy's STORE manifest frozen; " +
+			"the directory you received was not modified. Reads and search work in full; all writes are rejected.",
+		"access": fmt.Sprintf("gramaton --store %s <command>  (or set GRAMATON_STORE=%s)", res.Name, res.Name),
+		"mcp": fmt.Sprintf("to let an AI harness search it, add a second MCP entry running: gramaton --store %s mcp "+
+			"(e.g. claude mcp add --scope user gramaton-%s gramaton -- --store %s mcp); "+
+			"only read tools are registered against a frozen store", res.Name, res.Name, res.Name),
+	}
+	if res.Manifest.Owner != "" {
+		out["owner"] = res.Manifest.Owner
+	}
+	if !res.Manifest.PublishedAt.IsZero() {
+		out["published_at"] = res.Manifest.PublishedAt
 	}
 	return printJSON(out)
 }

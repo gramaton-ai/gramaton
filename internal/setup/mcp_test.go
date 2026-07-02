@@ -23,6 +23,9 @@ type fakeMCPBackend struct {
 	// assertions (did the wizard call us for every client? in the
 	// expected order?).
 	calls []string
+	// storeCalls captures RegisterStore invocations from the
+	// read-only attach route, as "<client>:<store>".
+	storeCalls []string
 }
 
 type fakeRegisterResult struct {
@@ -42,15 +45,20 @@ func (f *fakeMCPBackend) Register(_ context.Context, c DetectedClient) (bool, er
 	return result.already, result.err
 }
 
+func (f *fakeMCPBackend) RegisterStore(_ context.Context, c DetectedClient, storeName string) (bool, error) {
+	f.storeCalls = append(f.storeCalls, c.Name+":"+storeName)
+	return false, nil
+}
+
 // Helper: build a wizard that will run Steps 1 and 2 with skip, then
 // reach Step 3. Avoids repeating the boilerplate script in every
 // Step-3 test.
 //
 // Answers layout (in order the scripted prompter will consume):
 //
-//	[0]: identity name   ("" = accept the OS-account default)
-//	[1]: identity email  ("" = skip)
-//	[2]: Step 0 fresh-vs-import choice  (pass "1" for fresh)
+//	[0]: Step 0 route choice            (pass "1" for fresh)
+//	[1]: identity name   ("" = accept the OS-account default)
+//	[2]: identity email  ("" = skip)
 //	[3]: Step 1 embedding menu choice   (pass "5" for skip)
 //	[4]: Step 2 LLM menu choice         (pass "5" for skip)
 //	[5]: Step 3 YesNo confirm           (caller controls)
@@ -59,7 +67,7 @@ func newWizardForMCPTest(t *testing.T, backend MCPBackend, mcpConfirm string) (*
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("", "", "1", "5", "5", mcpConfirm)
+	prompter := NewScriptedPrompter("1", "", "", "5", "5", mcpConfirm)
 
 	tmpDir := t.TempDir()
 	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey

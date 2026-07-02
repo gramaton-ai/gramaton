@@ -6,12 +6,14 @@ import (
 	"strings"
 )
 
-// stepIdentity is the unnumbered author-identity section that opens
-// the wizard, before the fresh-vs-import branch and the numbered
-// steps. Unnumbered (like askImportOrFresh and stepVerify) because
-// it's a 10-second framing question, not a setup step with work
-// behind it -- numbering it would inflate the "Step N of M" count
-// for something that barely qualifies.
+// stepIdentity is the unnumbered author-identity section that runs
+// right after the route branch, before the numbered steps, on the
+// writable routes only (fresh + import; the read-only attach route
+// never stamps authorship and skips it). Unnumbered (like
+// askSetupRoute and stepVerify) because it's a 10-second framing
+// question, not a setup step with work behind it -- numbering it
+// would inflate the "Step N of M" count for something that barely
+// qualifies.
 //
 // The identity is git-style: a name and an email that compose into
 // "Name <email>" at use time (config.AuthorConfig.String). Records

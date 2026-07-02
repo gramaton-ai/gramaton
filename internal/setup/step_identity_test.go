@@ -63,14 +63,15 @@ func TestOSAccountNameFrom(t *testing.T) {
 
 // newWizardForIdentityTest builds a wizard whose identity answers the
 // caller controls, with the rest of the flow scripted to skip ("1"
-// fresh, "5" skip embedding, "5" skip LLM; Steps 3-5 short-circuit
-// via a fakeMCPBackend with no clients).
+// fresh at the Step 0 route question that now leads, "5" skip
+// embedding, "5" skip LLM; Steps 3-5 short-circuit via a
+// fakeMCPBackend with no clients).
 func newWizardForIdentityTest(t *testing.T, name, email string) (*Wizard, *bytes.Buffer) {
 	t.Helper()
 	tmpDir := t.TempDir()
 
 	var buf bytes.Buffer
-	prompter := NewScriptedPrompter(name, email, "1", "5", "5")
+	prompter := NewScriptedPrompter("1", name, email, "5", "5")
 	// Hermeticity: wiz.Run reaches stepVerify, whose MCP survey
 	// bypasses the injected backend and probes the real PATH + home
 	// (same sandboxing as newWizardForMCPTest).
@@ -141,10 +142,10 @@ func TestStepIdentityEnterThroughUsesOSDefault(t *testing.T) {
 // TestStepIdentityPresetSkipsPrompts covers the --author path:
 // cli/init.go parses the flag into cfg.Author before the wizard is
 // constructed, so the section must consume NO prompter answers and
-// report the preset identity instead. The scripted answers here
-// start at Step 0 -- if the identity section prompted anyway, "1"
-// would be eaten as the name and the fresh-vs-import Choice would
-// abort the run.
+// report the preset identity instead. The scripted answers cover
+// exactly Step 0 route, Step 1 embedding, and Step 2 LLM -- if the
+// identity section prompted anyway, it would eat "5" as the name and
+// the script would run dry mid-wizard, aborting the run.
 func TestStepIdentityPresetSkipsPrompts(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -57,9 +57,9 @@ func (f *fakeHookBackend) RegisterHooks(_ context.Context, client string, paths 
 //
 // Script answers in order (prompter):
 //
-//	[0] identity name:               "" (accept OS-account default)
-//	[1] identity email:              "" (skip)
-//	[2] Step 0 fresh-vs-import:      "1" (fresh)
+//	[0] Step 0 route choice:         "1" (fresh)
+//	[1] identity name:               "" (accept OS-account default)
+//	[2] identity email:              "" (skip)
 //	[3] Step 1 embedding menu:       "5" (skip)
 //	[4] Step 2 LLM menu:             "5" (skip)
 //	[5] Step 3 MCP confirm:          "y" or "n" (caller picks)
@@ -77,7 +77,7 @@ func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend Hook
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("", "", "1", "5", "5", mcpConfirm, "n", hookConfirm)
+	prompter := NewScriptedPrompter("1", "", "", "5", "5", mcpConfirm, "n", hookConfirm)
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)

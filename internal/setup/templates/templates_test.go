@@ -100,6 +100,35 @@ func TestCustomAgentsRenderClean(t *testing.T) {
 	}
 }
 
+// TestReadOnlyVariantEmbedded catches empty-embed bugs on the
+// read-only guidance variant and pins its load-bearing content: the
+// read-only statement, the read surface, and the write-tool absence.
+func TestReadOnlyVariantEmbedded(t *testing.T) {
+	if len(readOnly) == 0 {
+		t.Fatal("readonly is empty — //go:embed directive broken")
+	}
+	for _, want := range []string{
+		"read-only",
+		"gramaton_search",
+		"gramaton_inspect",
+		"gramaton_explore",
+		"nothing is ever saved",
+		"{{mcp_reconnect_hint}}",
+		"{{store_name}}",
+	} {
+		if !strings.Contains(readOnly, want) {
+			t.Errorf("readonly.md missing %q", want)
+		}
+	}
+	got := RenderReadOnly(Vars{ClientName: "X", ReconnectHint: "wiggle the cable", StoreName: "shared"})
+	if strings.Contains(got, "{{") {
+		t.Error("rendered read-only variant has unfilled interpolation vars")
+	}
+	if !strings.HasSuffix(got, "\n") || strings.HasSuffix(got, "\n\n") {
+		t.Error("rendered read-only variant must end with exactly one newline")
+	}
+}
+
 // TestAddendaEmbedded pins each addendum's load-bearing content (or
 // deliberate emptiness).
 func TestAddendaEmbedded(t *testing.T) {

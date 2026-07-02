@@ -70,6 +70,17 @@ var AddendumKiro string
 //go:embed guidance/addendum_codex.md
 var AddendumCodex string
 
+// readOnly is the sibling guidance variant installed by the wizard's
+// read-only attach route in place of base.md: it states that the
+// attached store is read-only for everything, lists the read surface
+// that keeps working (search, inspect, explore, ...), and says the
+// write tools are not registered. A standalone body (not an
+// addendum): most of base.md is save/session/collection-write
+// guidance that would be misleading against a frozen store.
+//
+//go:embed guidance/readonly.md
+var readOnly string
+
 // AddendumCursor is reserved for Cursor-specific guidance.
 // Intentionally empty (the marker is stripped at render time):
 // Cursor has no verified native long-term memory analogue to route
@@ -95,6 +106,13 @@ type Vars struct {
 	// so it must read as a parenthetical clause, no trailing
 	// punctuation.
 	ReconnectHint string
+
+	// StoreName replaces {{store_name}}: the local named store an
+	// attached read-only store was registered under. Only used by
+	// the read-only variant (RenderReadOnly); base.md carries no
+	// {{store_name}} marker because the writable guidance targets
+	// the default store.
+	StoreName string
 }
 
 // Render produces the final guidance body: the shared base with the
@@ -118,6 +136,19 @@ func Render(addendum string, v Vars) string {
 	}
 	body = strings.ReplaceAll(body, "{{client_name}}", v.ClientName)
 	body = strings.ReplaceAll(body, "{{mcp_reconnect_hint}}", v.ReconnectHint)
+	return strings.TrimSpace(body) + "\n"
+}
+
+// RenderReadOnly produces the read-only guidance variant: the
+// standalone readonly.md body with the interpolation variables
+// applied. No addendum substitution -- the per-harness addenda are
+// save-routing rules that don't apply to a store nothing here ever
+// writes to. Same output normalization contract as Render.
+func RenderReadOnly(v Vars) string {
+	body := strings.ReplaceAll(readOnly, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "{{client_name}}", v.ClientName)
+	body = strings.ReplaceAll(body, "{{mcp_reconnect_hint}}", v.ReconnectHint)
+	body = strings.ReplaceAll(body, "{{store_name}}", v.StoreName)
 	return strings.TrimSpace(body) + "\n"
 }
 
