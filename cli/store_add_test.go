@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -59,6 +60,36 @@ func TestStoreAddSeedFlagsTriggerCarve(t *testing.T) {
 				t.Fatalf("seed flag %q must be recognized on `store add`", flag)
 			}
 		})
+	}
+}
+
+// TestStoreAddRejectsSelfAdd pins the self-add guard: `gramaton --store foo
+// store add foo` (destination == the active SOURCE store) must be rejected
+// with a clear message BEFORE any server call, rather than auto-starting
+// foo's server and then deadlocking on bbolt's file lock when the api opens
+// a second engine on foo's own data dir. Falsifiable: without the
+// destIsActiveSource guard, runStoreAdd would fall through to serverPostSlow.
+func TestStoreAddRejectsSelfAdd(t *testing.T) {
+	base := t.TempDir()
+	addNamedStore(t, base, "self") // creates stores/self/{data,config.yaml}
+
+	oldCfg, oldStore := cfgDir, storeName
+	t.Cleanup(func() { cfgDir, storeName = oldCfg, oldStore })
+	cfgDir = base
+	storeName = "self" // the active SOURCE store
+	t.Setenv("GRAMATON_STORE", "")
+
+	cmd := newStoreAddCmd()
+	if err := cmd.Flags().Set("from-id", "01ABC"); err != nil {
+		t.Fatalf("set from-id: %v", err)
+	}
+
+	err := runStoreAdd(cmd, []string{"self"})
+	if err == nil {
+		t.Fatal("expected `store add self` (into the active store itself) to be rejected")
+	}
+	if !strings.Contains(err.Error(), "into itself") {
+		t.Fatalf("error = %q, want it to explain a store cannot be added into itself", err)
 	}
 }
 

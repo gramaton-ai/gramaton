@@ -71,7 +71,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never overwritten or deleted, and a failed add leaves its data intact.
   A new loopback-gated `POST /v1/store/add` HTTP route backs it (the new
   `api.CarveAdd` operation), and `--dry-run` previews the counts without
-  writing. No MCP tool ships this pass; carve and add stay CLI-only.
+  writing. `store add` refuses to add a store into itself, and refuses a
+  destination that is currently served by a running server (returning a
+  `conflict` -- stop it first with `gramaton stop`), rather than blocking
+  on the destination store's file lock. No MCP tool ships this pass; carve
+  and add stay CLI-only.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless

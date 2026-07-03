@@ -501,6 +501,17 @@ func runStoreAdd(cmd *cobra.Command, args []string) error {
 	if !store.Exists(base, name) {
 		return fmt.Errorf("store %q does not exist; create it first with: gramaton store create %s", name, name)
 	}
+	// Reject a self-add (destination == the active SOURCE store) up front,
+	// BEFORE serverPostSlow can auto-start the source's server. Adding a
+	// store into itself would have the source's own server LoadEngine its
+	// already-locked data dir and block forever on bbolt's file lock; catch
+	// the common `gramaton --store foo store add foo` mistake with a clear
+	// message rather than the auto-start-then-hang (or 409) dance.
+	if self, err := destIsActiveSource(base, name); err != nil {
+		return err
+	} else if self {
+		return fmt.Errorf("cannot add store %q into itself: --store selects the SOURCE store and the argument names the DESTINATION, so they must be different stores", name)
+	}
 	// Guard against a bbolt lock conflict: the api opens a second engine on
 	// the target's data dir, which would collide with the target's own
 	// running server (same guard shape as `store delete`).
@@ -932,6 +943,44 @@ func storeReadOnlyBadge(cfgDirPath string) (readOnly bool, note string) {
 		return false, "(manifest unreadable)"
 	}
 	return m.ReadOnly, ""
+}
+
+// destIsActiveSource reports whether the top-up destination store resolves
+// to the SAME data directory as the currently-active source store (the one
+// --store / GRAMATON_STORE selects, which the server-mediated add reads
+// live under a read lock). Adding a store into itself deadlocks on bbolt's
+// single-writer file lock, so runStoreAdd refuses it before auto-starting
+// the source's server. Compares the effective data dirs (honoring any
+// per-store config data_dir override) so it catches the case regardless of
+// how each store's directory is configured.
+func destIsActiveSource(base, destName string) (bool, error) {
+	_, srcData, err := storeEffectiveConfig(store.Resolve(base, activeStoreName()))
+	if err != nil {
+		return false, err
+	}
+	_, destData, err := storeEffectiveConfig(store.Resolve(base, destName))
+	if err != nil {
+		return false, err
+	}
+	return sameDir(srcData, destData), nil
+}
+
+// sameDir reports whether two filesystem paths name the same directory,
+// canonicalizing separators, "." / ".." and (best-effort) symlinks. Falls
+// back to a lexical compare when a path cannot be resolved on disk.
+func sameDir(a, b string) bool {
+	return canonDir(a) == canonDir(b)
+}
+
+func canonDir(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return filepath.Clean(abs)
 }
 
 // isServerRunning checks if a server is running for a config directory.

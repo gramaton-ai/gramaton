@@ -97,6 +97,14 @@ type CarveAddResponse struct {
 	// the add then re-frozen to its exact prior state.
 	Thawed bool `json:"thawed_and_refrozen"`
 
+	// LeftThawed is true when the destination was frozen and thawed for
+	// the add but could NOT be re-frozen afterward (the manifest write
+	// failed): the store is left WRITABLE and must be re-frozen manually
+	// with `gramaton store freeze <name>`. Mutually exclusive with Thawed --
+	// a caller is never told the store was cleanly re-frozen while it is
+	// actually writable.
+	LeftThawed bool `json:"left_thawed,omitempty"`
+
 	// EmbeddingDim is the vector dimension of the incoming records (0 when
 	// the selection carries no embeddings).
 	EmbeddingDim int `json:"embedding_dim,omitempty"`
@@ -129,7 +137,7 @@ func (a *API) CarveAdd(ctx context.Context, req CarveAddRequest) (CarveAddRespon
 // destination store. Validates the destination, guards the embedding
 // dimension, and -- transactionally around any freeze state -- skips
 // present nodes, adds new ones, and reconnects deduped interior edges.
-func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveAddResponse, *APIError) {
+func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (resp CarveAddResponse, apiErr *APIError) {
 	if req.DestDataDir == "" {
 		return CarveAddResponse{}, ErrMissing("dest_data_dir is required")
 	}
@@ -162,7 +170,7 @@ func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveA
 	}
 	wasFrozen := origManifest.ReadOnly
 
-	resp := CarveAddResponse{
+	resp = CarveAddResponse{
 		DryRun:        req.DryRun,
 		SeedCount:     g.seedCount,
 		SelectedNodes: len(g.nodes),
@@ -176,30 +184,35 @@ func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveA
 	}
 
 	// Commit path. Thaw a frozen destination so the engine opens writable,
-	// remembering to restore the EXACT original manifest on EVERY exit.
+	// then restore the EXACT original manifest on EVERY exit via defer --
+	// including a panic between the thaw and the end. carveAddRefreeze
+	// SURFACES a restore failure (destination left writable) instead of
+	// swallowing it, so a clean re-frozen success is never reported for a
+	// store that is actually still writable.
 	if wasFrozen {
 		if err := core.ThawStore(req.DestDataDir); err != nil {
 			a.log.Warn("carve add: thaw destination", "component", "carveout", "err", err)
 			return CarveAddResponse{}, ErrInternal("failed to thaw destination store")
 		}
-	}
-	restoreFreeze := func() {
-		if !wasFrozen {
-			return
-		}
-		if err := core.WriteStoreManifest(req.DestDataDir, origManifest); err != nil {
-			// The store was left thawed. Loud: a shared read-only artifact is
-			// now writable and an operator must re-freeze it manually.
-			a.log.Error("carve add: restore destination freeze state; store left THAWED",
-				"component", "carveout", "data_dir", req.DestDataDir, "err", err)
-		}
+		defer func() {
+			if rerr := a.carveAddRefreeze(req.DestDataDir, req.DestName, origManifest, &resp); rerr != nil && apiErr == nil {
+				apiErr = rerr
+			}
+		}()
 	}
 
 	// Open the destination WRITABLE (it opened writable because the
 	// manifest is thawed) and top it up.
+	//
+	// The /v1/store/add HTTP handler already refused this add if a live
+	// server was serving the destination (the only holder of its bbolt
+	// file lock), so LoadEngine does not contend here -- core.LoadEngine
+	// opens bbolt with no lock timeout and would otherwise block forever.
+	// A server that grabbed the lock in the sliver between that check and
+	// this open would still block: a negligible window on a single-user
+	// tool, the same TOCTOU the freeze/thaw commands already accept.
 	destEng, err := core.LoadEngine(home)
 	if err != nil {
-		restoreFreeze()
 		a.log.Warn("carve add: open destination engine", "component", "carveout", "err", err)
 		return CarveAddResponse{}, ErrInternal("failed to open destination store")
 	}
@@ -212,7 +225,6 @@ func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveA
 	destDim := destEng.Config().Embedding.Dimension
 	if g.embedDim != 0 && g.embedDim != destDim {
 		_ = destEng.Close()
-		restoreFreeze()
 		return CarveAddResponse{}, ErrInvalid(fmt.Sprintf(
 			"incoming embedding dimension %d does not match destination dimension %d; cannot add",
 			g.embedDim, destDim))
@@ -284,18 +296,16 @@ func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveA
 	})
 	if writeErr != nil {
 		_ = destEng.Close()
-		restoreFreeze()
 		a.log.Warn("carve add: populate destination", "component", "carveout", "err", writeErr)
 		return CarveAddResponse{}, ErrInternal("failed to add to destination store")
 	}
 
-	// Close flushes vectors + commits. Must precede the re-freeze.
+	// Close flushes vectors + commits. Must precede the re-freeze, which
+	// the deferred carveAddRefreeze performs after this function returns.
 	if err := destEng.Close(); err != nil {
-		restoreFreeze()
 		a.log.Warn("carve add: close destination engine", "component", "carveout", "err", err)
 		return CarveAddResponse{}, ErrInternal("failed to finalize destination store")
 	}
-	restoreFreeze()
 
 	resp.DestName = req.DestName
 	resp.DestDataDir = req.DestDataDir
@@ -308,6 +318,32 @@ func (a *API) carveAddMaterialize(req CarveAddRequest, g *carveGathered) (CarveA
 	resp.DanglingSample = part.sample
 	resp.Thawed = wasFrozen
 	return resp, nil
+}
+
+// carveAddRefreeze re-applies the destination's original (frozen) manifest
+// after a top-up thawed it, and SURFACES a write failure instead of
+// swallowing it. On failure the destination is left WRITABLE, so it clears
+// resp.Thawed, sets resp.LeftThawed, logs loudly, and returns an
+// ErrInternal telling the operator to re-freeze -- the caller must never be
+// told the store was cleanly re-frozen while it is actually writable.
+// Returns nil on a successful re-freeze. Split out from the deferred
+// restore so the failure plumbing is unit-testable. Uses
+// WriteStoreManifest (not FreezeStore) to restore the EXACT prior manifest,
+// preserving the original owner and published_at rather than re-stamping.
+func (a *API) carveAddRefreeze(dataDir, name string, orig core.StoreManifest, resp *CarveAddResponse) *APIError {
+	if err := core.WriteStoreManifest(dataDir, orig); err != nil {
+		a.log.Error("carve add: restore destination freeze state; store left THAWED",
+			"component", "carveout", "data_dir", dataDir, "err", err)
+		resp.Thawed = false
+		resp.LeftThawed = true
+		target := name
+		if target == "" {
+			target = dataDir
+		}
+		return ErrInternal(fmt.Sprintf(
+			"records were added but the destination could not be re-frozen and is left WRITABLE; re-freeze it with: gramaton store freeze %s", target))
+	}
+	return nil
 }
 
 // carveAddPreview computes the top-up diff against the destination

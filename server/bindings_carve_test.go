@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -176,5 +177,49 @@ func TestStoreAddRoundTrip(t *testing.T) {
 	dest.RUnlock()
 	if !has1 || !has2 {
 		t.Errorf("dest missing records: has id1=%v has id2=%v", has1, has2)
+	}
+}
+
+// TestStoreAddServedDestinationRejected pins the anti-hang guard: adding
+// into a destination whose store is served by a LIVE server must return a
+// prompt 409, never block on bbolt's file lock. Opening a second engine on
+// a served store's data dir would hang forever (core.LoadEngine opens bbolt
+// with no lock timeout), and this also covers a self-add (the mediating
+// server is itself serving the destination). The test plants a server.json
+// marker carrying THIS process's own (alive) PID in the dest home; the
+// guard reads it and refuses before api.CarveAdd opens the engine. No real
+// server is started, so the test cannot hang. Falsifiable: without the
+// guard the add opens the (unlocked) dest and returns 200, not 409.
+func TestStoreAddServedDestinationRejected(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	id := addRecord(t, eng, "served-dest record")
+
+	destHome := filepath.Join(t.TempDir(), "served")
+	destData := filepath.Join(destHome, "data")
+
+	// Create the destination store first.
+	w := doRequest(t, srv, "POST", "/v1/store/carve", api.CarveOutRequest{
+		IDs: []string{id}, DestName: "served", DestDataDir: destData,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("carve: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Plant a live-server marker in the dest home: server.json with THIS
+	// process's PID (guaranteed alive). No real server is started.
+	marker, err := json.Marshal(ServerInfo{PID: os.Getpid(), StoreDir: destData})
+	if err != nil {
+		t.Fatalf("marshal server info: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destHome, "server.json"), marker, 0o600); err != nil {
+		t.Fatalf("write server.json: %v", err)
+	}
+
+	// The add must be refused promptly with 409 (never opens a 2nd engine).
+	w = doRequest(t, srv, "POST", "/v1/store/add", api.CarveAddRequest{
+		IDs: []string{id}, DestName: "served", DestDataDir: destData,
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for a served destination, got %d: %s", w.Code, w.Body.String())
 	}
 }

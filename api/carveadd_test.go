@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
@@ -87,6 +90,18 @@ func destCounts(t *testing.T, home string) (nodes, edges int) {
 	edges = eng.Graph().EdgeCount()
 	eng.RUnlock()
 	return nodes, edges
+}
+
+// destHead reads a destination store's HEAD commit hash directly from its
+// data dir. Used to assert that an idempotent no-op add writes NO new
+// commit (HEAD unchanged) rather than landing an empty carve_add commit.
+func destHead(t *testing.T, dataDir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dataDir, "HEAD"))
+	if err != nil {
+		t.Fatalf("read HEAD %s: %v", dataDir, err)
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // TestCarveAddMissedRecords is the headline top-up: carve a subset, then
@@ -193,6 +208,7 @@ func TestCarveAddIdempotent(t *testing.T) {
 		t.Fatalf("first add: NodesAdded=%d EdgesAdded=%d, want 1/2", first.NodesAdded, first.EdgesAdded)
 	}
 	nodesAfterFirst, edgesAfterFirst := destCounts(t, destHome)
+	headAfterFirst := destHead(t, destData)
 
 	second, apiErr := a.CarveAdd(ctx, addReq)
 	if apiErr != nil {
@@ -218,6 +234,16 @@ func TestCarveAddIdempotent(t *testing.T) {
 	if edgesAfterSecond != edgesAfterFirst {
 		t.Errorf("edge count changed on re-run: %d -> %d", edgesAfterFirst, edgesAfterSecond)
 	}
+
+	// A pure no-op must NOT write an (empty) commit: the second run adds
+	// nothing, so WithWriteBatch returns mutated=false and skips the save,
+	// leaving HEAD unchanged. Guards the `return true, nil` regression that
+	// would land an empty carve_add commit -- and advance HEAD -- on every
+	// re-run even when nothing changed.
+	headAfterSecond := destHead(t, destData)
+	if headAfterSecond != headAfterFirst {
+		t.Errorf("no-op re-run advanced HEAD (empty commit written): %s -> %s", headAfterFirst, headAfterSecond)
+	}
 }
 
 // TestCarveAddFrozenTarget adds into a FROZEN destination: it must be
@@ -234,6 +260,21 @@ func TestCarveAddFrozenTarget(t *testing.T) {
 		IDs: []string{"a1", "a2"}, DestName: "frozen", DestDataDir: destData, ReadOnly: true,
 	}); apiErr != nil {
 		t.Fatalf("CarveOut: %v", apiErr)
+	}
+
+	// Re-stamp the frozen manifest with a deliberately PAST published_at and
+	// a DISTINCT owner. The add must restore the destination via
+	// WriteStoreManifest(origManifest), which preserves both EXACTLY; a
+	// substitution to FreezeStore -- which re-stamps published_at=now and a
+	// fresh owner on the thawed store -- would be CAUGHT by the assertions
+	// below (same-wall-clock-second runs would otherwise hide the swap).
+	stampedPast := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := core.WriteStoreManifest(destData, core.StoreManifest{
+		ReadOnly:    true,
+		Owner:       "original-owner",
+		PublishedAt: stampedPast,
+	}); err != nil {
+		t.Fatalf("stamp frozen manifest: %v", err)
 	}
 
 	before, err := core.ReadStoreManifest(destData)
@@ -269,6 +310,12 @@ func TestCarveAddFrozenTarget(t *testing.T) {
 	}
 	if !after.PublishedAt.Equal(before.PublishedAt) {
 		t.Errorf("published_at not preserved: before %v, after %v", before.PublishedAt, after.PublishedAt)
+	}
+	// Explicit: the EXACT past manifest survived (a FreezeStore substitution
+	// would have re-stamped published_at to ~now and overwritten the owner).
+	if after.Owner != "original-owner" || !after.PublishedAt.Equal(stampedPast) {
+		t.Errorf("frozen manifest re-stamped rather than exactly restored: owner=%q published_at=%v (want original-owner / %v)",
+			after.Owner, after.PublishedAt, stampedPast)
 	}
 
 	dest := openStore(t, destHome)
@@ -394,6 +441,17 @@ func TestCarveAddFailureLeavesDestIntact(t *testing.T) {
 	}); apiErr != nil {
 		t.Fatalf("CarveOut: %v", apiErr)
 	}
+	// Re-stamp with a PAST published_at and DISTINCT owner so the failed
+	// add's freeze-restore is proven to use WriteStoreManifest(origManifest)
+	// (exact) rather than a re-stamping FreezeStore. See TestCarveAddFrozenTarget.
+	stampedPast := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := core.WriteStoreManifest(destData, core.StoreManifest{
+		ReadOnly:    true,
+		Owner:       "original-owner",
+		PublishedAt: stampedPast,
+	}); err != nil {
+		t.Fatalf("stamp frozen manifest: %v", err)
+	}
 	before, err := core.ReadStoreManifest(destData)
 	if err != nil {
 		t.Fatalf("ReadStoreManifest: %v", err)
@@ -428,6 +486,11 @@ func TestCarveAddFailureLeavesDestIntact(t *testing.T) {
 		t.Errorf("freeze provenance not restored exactly: before {%q %v}, after {%q %v}",
 			before.Owner, before.PublishedAt, after.Owner, after.PublishedAt)
 	}
+	// Explicit: the EXACT past manifest survived the failed add's restore.
+	if after.Owner != "original-owner" || !after.PublishedAt.Equal(stampedPast) {
+		t.Errorf("failed-add restore re-stamped rather than exactly restored: owner=%q published_at=%v (want original-owner / %v)",
+			after.Owner, after.PublishedAt, stampedPast)
+	}
 
 	dest := openStore(t, destHome)
 	if !nodeExists(t, dest, "rec-4") {
@@ -459,5 +522,44 @@ func TestCarveAddMissingDestination(t *testing.T) {
 	})
 	if apiErr == nil || apiErr.Code != "not_found" {
 		t.Fatalf("expected not_found for a missing destination, got %v", apiErr)
+	}
+}
+
+// TestCarveAddRefreezeSurfacesWriteFailure pins that a failed re-freeze is
+// SURFACED, never swallowed: when WriteStoreManifest fails after a thawed
+// add, the destination is left writable, so the response must not claim a
+// clean re-freeze. It forces the write to fail deterministically by
+// pointing the "data dir" at a regular file (so filepath.Join(dir,"STORE")
+// cannot be created) -- no clean integration seam exists because thaw and
+// restore write the same manifest to the same dir, so any filesystem
+// condition that fails the restore also fails the thaw. Falsifiable: if the
+// helper swallowed the error (returned nil / left Thawed set), every
+// assertion below fails.
+func TestCarveAddRefreezeSurfacesWriteFailure(t *testing.T) {
+	a := buildCarveAddSource(t)
+
+	// A regular file where the helper expects a directory: WriteStoreManifest
+	// -> AtomicWriteFile(<file>/STORE, ...) cannot create its temp file.
+	badDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed bad dir: %v", err)
+	}
+
+	resp := CarveAddResponse{Thawed: true}
+	apiErr := a.carveAddRefreeze(badDir, "shared", core.StoreManifest{ReadOnly: true}, &resp)
+	if apiErr == nil {
+		t.Fatal("expected a surfaced error when the re-freeze write fails")
+	}
+	if apiErr.Code != "internal_error" {
+		t.Errorf("apiErr.Code = %q, want internal_error", apiErr.Code)
+	}
+	if !strings.Contains(apiErr.Message, "WRITABLE") || !strings.Contains(apiErr.Message, "store freeze") {
+		t.Errorf("apiErr.Message = %q, want it to say the store is left writable and how to re-freeze", apiErr.Message)
+	}
+	if resp.Thawed {
+		t.Error("Thawed must be cleared when the re-freeze fails (store is not frozen)")
+	}
+	if !resp.LeftThawed {
+		t.Error("LeftThawed must be set when the re-freeze fails")
 	}
 }
