@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/setup"
 	"github.com/gramaton-ai/gramaton/server"
 )
 
@@ -35,9 +37,19 @@ func serverURL() (string, error) {
 		server.RemoveServerInfo(dir)
 	}
 
-	// No running server. Respect server.auto_start (defaults true).
-	// A user running gramaton under systemd / launchd flips it to
-	// false so the CLI stops silently spawning a second server.
+	// No running server. GRAMATON_NO_AUTOSTART=1 is a hard override
+	// set by `gramaton uninstall` on every vendor-CLI invocation:
+	// `claude mcp list` health-checks stdio entries by SPAWNING
+	// them, and a spawned `gramaton mcp` inheriting that environment
+	// must not resurrect the server uninstall just stopped (or, on a
+	// dry run, start one that was never running). Checked before the
+	// config-driven auto_start so no config state can re-enable it.
+	if os.Getenv(setup.NoAutostartEnv) == "1" {
+		return "", fmt.Errorf("no running server (%s=1 suppresses auto-start)", setup.NoAutostartEnv)
+	}
+	// Respect server.auto_start (defaults true). A user running
+	// gramaton under systemd / launchd flips it to false so the CLI
+	// stops silently spawning a second server.
 	if !shouldAutoStart(dir) {
 		return "", fmt.Errorf("no running server (server.auto_start=false); run `gramaton serve` first")
 	}
