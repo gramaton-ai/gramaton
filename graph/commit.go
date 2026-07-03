@@ -71,7 +71,8 @@ const (
 	ActionCollectionSchemaUpdate = "collection_schema_update"
 	ActionCollectionMigrate      = "collection_migrate"
 	ActionCurationStuckReset     = "curation_stuck_reset"
-	ActionBackfill               = "backfill" // one-time CLI backfills (cli/backfill.go); Field names the stamped property
+	ActionBackfill               = "backfill"  // one-time CLI backfills (cli/backfill.go); Field names the stamped property
+	ActionCarveOut               = "carve_out" // store carve-out: the genesis commit of a store created by copying a subset of another store
 
 	// Curation cycle actions (autonomous + deterministic passes).
 	ActionCurationClassify           = "curation:classify"

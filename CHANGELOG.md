@@ -31,6 +31,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gramaton_status`. `store list`/`status` badge the state live
   from the manifest.
   Thawing preserves the original publication provenance.
+- **Stores can be carved into a shareable subset** (#97). A new
+  `CarveOut` api operation copies a selected subset of a store --
+  memory records and collections -- into a brand-new store,
+  non-destructively, for sharing. The selection is the union of
+  explicit record ids, a query (the same filter fields as export), and
+  named collections; the copy automatically pulls in each selected
+  record's chunks and sections, the collection node and schema behind
+  any selected member, and -- unless `heads_only` -- superseded
+  predecessors. Sessions are never carried. The copy is faithful at the
+  graph level: record ids, embeddings, and structural edges are all
+  preserved, so vector search works in the copy with no re-embedding.
+  Edges that cross the selection boundary are dropped and reported
+  grouped by type. The destination can be frozen read-only in the same
+  step, and a dry run reports the resolved selection without writing
+  anything.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless

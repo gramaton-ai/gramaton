@@ -104,6 +104,13 @@ var readOnlyClassification = map[string]string{
 	"BackupRestore": guardWrite,
 	"BackupImport":  guardWrite,
 
+	// CarveOut READS the source store and writes only to a BRAND-NEW
+	// destination store (its own data dir, outside the source's) --
+	// same rationale as BackupCreate/Export. Carving a shareable subset
+	// out of a frozen store is a primary use case, so it must NOT be
+	// gated behind the source's read-only flag.
+	"CarveOut": guardRead,
+
 	// Curation cluster. DryRun still APPLIES the deterministic
 	// phase; Drain writes no_contradiction edges; Batch classifies
 	// (writes) every pending record.
