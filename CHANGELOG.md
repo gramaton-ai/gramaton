@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton uninstall` removes the harness integrations** (#101).
+  The new command inventories and removes what `gramaton init`
+  installed into each supported harness (Claude Code, kiro, Codex,
+  Cursor): MCP registrations (the default `gramaton` entry and any
+  `gramaton-<store>` attached-store entries, enumerated from the
+  harness's own config by naming convention), hook registrations
+  (user hook entries are preserved verbatim; config files get a
+  timestamped backup before any rewrite), rendered hook scripts
+  under `<config-dir>/hooks/`, and installed agent guidance
+  (managed fenced blocks are stripped from shared instruction
+  files, leaving user content in place; wholly-owned guidance files
+  are deleted). Running gramaton servers and MCP proxies are
+  stopped first -- proxies before servers, matching `gramaton
+  stop` -- after an interactive confirmation. Uninstall never
+  deletes data: config.yaml and every store are left in place, and
+  the final output names the directory to delete by hand.
+  `--harness <name>` limits the run to one harness, `--dry-run`
+  prints the full inventory without changing anything, and `--yes`
+  skips the confirmation for scripts. A second run is a clean
+  no-op.
 - **Stores can be frozen into shareable read-only artifacts** (#97).
   `gramaton store freeze`/`thaw` (and `store create --read-only`)
   write a `STORE` manifest into the data directory recording

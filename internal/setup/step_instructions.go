@@ -386,6 +386,70 @@ func replaceOrAppendFence(existing []byte, fenced string) ([]byte, string, error
 	return newContent, "updated", nil
 }
 
+// stripFence removes the gramaton-managed fenced region from an
+// instruction file's content: the uninstall counterpart of
+// replaceOrAppendFence. found=false (content returned unchanged)
+// when no fence is present. Detection keys off
+// instructionsFenceBeginPrefix, so blocks written by any gramaton
+// version -- versioned or pre-stamp -- are matched. Unbalanced
+// markers error, mirroring replaceOrAppendFence: guessing where a
+// corrupted managed region ends risks deleting user content.
+//
+// When the fence is the last content in the file, the whitespace-only
+// tail and the blank-line separator the installer's append path added
+// are swallowed too, so install -> uninstall round-trips
+// byte-identically for files that ended with a single newline (LF or
+// CRLF) before the block was appended. Files that ended with no
+// trailing newline, or with extra blank lines, come back normalized
+// toward a single trailing newline -- the closest inversion an
+// append-only separator allows.
+func stripFence(existing []byte) ([]byte, bool, error) {
+	beginIdx := bytes.Index(existing, []byte(instructionsFenceBeginPrefix))
+	endIdx := bytes.Index(existing, []byte(instructionsFenceEnd))
+
+	if beginIdx == -1 && endIdx == -1 {
+		return existing, false, nil
+	}
+	if beginIdx == -1 || endIdx == -1 {
+		return nil, false, errors.New("instruction file has unbalanced fence markers; won't touch it — fix by hand")
+	}
+	if endIdx < beginIdx {
+		return nil, false, errors.New("instruction file has END before BEGIN; won't touch it — fix by hand")
+	}
+
+	endMarkerEnd := endIdx + len(instructionsFenceEnd)
+	// Swallow the newline after the end marker, CRLF-aware -- the
+	// same rule as replaceOrAppendFence.
+	if endMarkerEnd+1 < len(existing) && existing[endMarkerEnd] == '\r' && existing[endMarkerEnd+1] == '\n' {
+		endMarkerEnd += 2
+	} else if endMarkerEnd < len(existing) && existing[endMarkerEnd] == '\n' {
+		endMarkerEnd++
+	}
+
+	head := existing[:beginIdx]
+	tail := existing[endMarkerEnd:]
+
+	if len(bytes.TrimSpace(tail)) > 0 {
+		// User content after the fence: remove exactly the managed
+		// region and keep everything else in place.
+		out := make([]byte, 0, len(head)+len(tail))
+		out = append(out, head...)
+		out = append(out, tail...)
+		return out, true, nil
+	}
+
+	// The fence was the last content. Drop the whitespace-only tail
+	// and collapse the blank-line separator the append path added
+	// down to the file's own final newline. Stops as soon as the
+	// content no longer ends in a blank LF line, so a CRLF-terminated
+	// user file ("...\r\n") keeps its terminator intact.
+	out := append([]byte(nil), head...)
+	for bytes.HasSuffix(out, []byte("\n\n")) {
+		out = out[:len(out)-1]
+	}
+	return out, true, nil
+}
+
 // claudeAutoMemoryPresent reports whether the given home dir holds at
 // least one Claude Code auto-memory file
 // (~/.claude/projects/*/memory/MEMORY.md). Used to print a one-line

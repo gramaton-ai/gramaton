@@ -419,7 +419,7 @@ func registerCursorEntry(entry string, args []string) (bool, error) {
 
 	// Back up before rewriting, then atomic write. 0600 perms:
 	// mcp.json can carry API keys in env/headers for other servers.
-	if err := writeConfigBackup(mcpPath, original); err != nil {
+	if _, err := writeConfigBackup(mcpPath, original); err != nil {
 		return false, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {

@@ -423,39 +423,7 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 		// new subdir layout (~/.gramaton/hooks/claude-code/*.sh) and
 		// the legacy flat layout (~/.gramaton/hooks/*.sh) that a
 		// user may have from an earlier manual setup.
-		kept := make([]any, 0, len(blocks))
-		for _, b := range blocks {
-			bm, ok := b.(map[string]any)
-			if !ok {
-				kept = append(kept, b)
-				continue
-			}
-			inner, innerIsArr := bm["hooks"].([]any)
-			if !innerIsArr {
-				// Not the matcher-block shape we manage (missing or
-				// non-array hooks key); preserve verbatim rather
-				// than dropping the user's block.
-				kept = append(kept, b)
-				continue
-			}
-			newInner := make([]any, 0, len(inner))
-			for _, h := range inner {
-				hm, ok := h.(map[string]any)
-				if !ok {
-					newInner = append(newInner, h)
-					continue
-				}
-				cmd, _ := hm["command"].(string)
-				if isGramatonHookCommand(cmd, scriptPaths) {
-					continue // drop this entry; we'll add our canonical one
-				}
-				newInner = append(newInner, h)
-			}
-			if len(newInner) > 0 {
-				bm["hooks"] = newInner
-				kept = append(kept, bm)
-			}
-		}
+		kept, _ := stripGramatonHookBlocks(blocks, scriptPaths, "command")
 
 		// Add our canonical block.
 		kept = append(kept, map[string]any{
@@ -490,7 +458,7 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	// Back up the existing settings.json before writing. A failed
 	// backup aborts: we are about to mutate the very file the backup
 	// protects.
-	if err := writeConfigBackup(settingsPath, original); err != nil {
+	if _, err := writeConfigBackup(settingsPath, original); err != nil {
 		return false, err
 	}
 
@@ -508,19 +476,21 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 }
 
 // writeConfigBackup writes a timestamped .bak sibling of path holding
-// the original bytes, before a patcher rewrites the file. A nil/empty
-// original (file didn't exist) is a no-op. Failure is an error, not
+// the original bytes, before a patcher rewrites the file. Returns the
+// backup path so callers (the uninstall report, notably) can tell the
+// user where the pre-rewrite copy went. A nil/empty original (file
+// didn't exist) is a no-op returning "". Failure is an error, not
 // best-effort: proceeding without a backup would leave the user's
 // only copy exposed to the rewrite.
-func writeConfigBackup(path string, original []byte) error {
+func writeConfigBackup(path string, original []byte) (string, error) {
 	if len(original) == 0 {
-		return nil
+		return "", nil
 	}
 	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().UTC().Format("20060102T150405Z"))
 	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
-		return fmt.Errorf("write backup %s: %w (aborting before modifying the original)", backupPath, err)
+		return "", fmt.Errorf("write backup %s: %w (aborting before modifying the original)", backupPath, err)
 	}
-	return nil
+	return backupPath, nil
 }
 
 // isGramatonHookCommand reports whether a hook command string points
@@ -560,6 +530,206 @@ func isGramatonHookCommand(cmd string, scriptPaths []string) bool {
 		}
 	}
 	return false
+}
+
+// stripGramatonHookBlocks removes gramaton-owned command entries from
+// a claude-protocol matcher-block array (the nested shape Claude
+// Code's settings.json and Codex's hooks.json share). cmdFields names
+// the entry fields that can carry a script path: "command" for Claude
+// Code; "command" and "commandWindows" for Codex. Ownership is by
+// command path (isGramatonHookCommand); user entries, non-map blocks,
+// and blocks without a hooks array are preserved verbatim. A matcher
+// block emptied by the strip is dropped -- it would still match
+// events while running nothing -- but a block that was already empty
+// before the strip is preserved (it is the user's, however odd).
+//
+// Shared by the register patchers (strip, then re-add the canonical
+// entries) and the uninstall path (strip only), so install and
+// uninstall can never disagree about what counts as ours.
+func stripGramatonHookBlocks(blocks []any, scriptPaths []string, cmdFields ...string) (kept []any, removed bool) {
+	kept = make([]any, 0, len(blocks))
+	for _, b := range blocks {
+		bm, ok := b.(map[string]any)
+		if !ok {
+			kept = append(kept, b)
+			continue
+		}
+		inner, innerIsArr := bm["hooks"].([]any)
+		if !innerIsArr {
+			// Not the matcher-block shape we manage (missing or
+			// non-array hooks key); preserve verbatim rather than
+			// dropping the user's block.
+			kept = append(kept, b)
+			continue
+		}
+		strippedHere := false
+		newInner := make([]any, 0, len(inner))
+		for _, h := range inner {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				newInner = append(newInner, h)
+				continue
+			}
+			ours := false
+			for _, f := range cmdFields {
+				cmd, _ := hm[f].(string)
+				if isGramatonHookCommand(cmd, scriptPaths) {
+					ours = true
+					break
+				}
+			}
+			if ours {
+				strippedHere = true
+				removed = true
+				continue
+			}
+			newInner = append(newInner, h)
+		}
+		if len(newInner) == 0 && strippedHere {
+			continue // drop the block the strip emptied
+		}
+		bm["hooks"] = newInner
+		kept = append(kept, bm)
+	}
+	return kept, removed
+}
+
+// stripGramatonFlatHookEntries removes gramaton-owned entries from a
+// Cursor-shape hook array (flat: the command field sits directly on
+// each entry). Same ownership rule and preservation contract as
+// stripGramatonHookBlocks.
+func stripGramatonFlatHookEntries(entries []any, scriptPaths []string) (kept []any, removed bool) {
+	kept = make([]any, 0, len(entries))
+	for _, e := range entries {
+		em, ok := e.(map[string]any)
+		if !ok {
+			kept = append(kept, e)
+			continue
+		}
+		cmd, _ := em["command"].(string)
+		if isGramatonHookCommand(cmd, scriptPaths) {
+			removed = true
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, removed
+}
+
+// unwireHookConfig strips gramaton-owned entries from one hook config
+// file: the strip-only counterpart of the register patchers, shared
+// by every harness's UnwireHooks strategy. strip transforms one
+// event's entry array (stripGramatonHookBlocks or
+// stripGramatonFlatHookEntries, ownership paths already bound).
+// Every event key in the hooks object is visited -- enumeration is
+// by ownership convention, not by the events the current version
+// wires, so stale entries from older layouts are caught too. An
+// event key whose array the strip empties is deleted: we created it,
+// and `"SessionStart": []` left behind is pure residue.
+//
+// apply=false probes without touching the file (uninstall's
+// inventory and dry-run pass). Returns changed=true when the file
+// holds (or, with apply, held) gramaton entries; backupPath is the
+// timestamped copy written before the rewrite ("" when nothing was
+// written).
+//
+// A missing file is a clean no-op. Unparseable JSON is refused with
+// the same message contract as the register patchers. A missing or
+// non-object "hooks" value means nothing of ours can be registered
+// in it -- unlike register, which must write into that value and
+// therefore refuses, the strip path has nothing at risk and treats
+// it as nothing-to-do.
+func unwireHookConfig(hooksPath string, strip func([]any) ([]any, bool), apply bool) (bool, string, error) {
+	raw, err := os.ReadFile(hooksPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("read %s: %w", hooksPath, err)
+	}
+	existing := map[string]any{}
+	if err := json.Unmarshal(stripBOM(raw), &existing); err != nil {
+		return false, "", fmt.Errorf("parse %s: %w (won't touch a file we can't parse -- fix or remove it and re-run)", hooksPath, err)
+	}
+	hooksObj, ok := existing["hooks"].(map[string]any)
+	if !ok {
+		return false, "", nil
+	}
+
+	changed := false
+	for event, rawVal := range hooksObj {
+		arr, isArr := rawVal.([]any)
+		if !isArr {
+			continue // not a shape we manage; preserve verbatim
+		}
+		kept, removed := strip(arr)
+		if !removed {
+			continue
+		}
+		changed = true
+		if len(kept) == 0 {
+			delete(hooksObj, event)
+		} else {
+			hooksObj[event] = kept
+		}
+	}
+	if !changed || !apply {
+		return changed, "", nil
+	}
+
+	backup, err := writeConfigBackup(hooksPath, raw)
+	if err != nil {
+		return true, "", err
+	}
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return true, backup, fmt.Errorf("serialize %s: %w", hooksPath, err)
+	}
+	return true, backup, writeAtomic(hooksPath, out, 0o600)
+}
+
+// unregisterClaudeHooks strips gramaton-owned hook entries from the
+// user-scope ~/.claude/settings.json: the strip-only counterpart of
+// registerClaudeHooks, with the same ownership rule and preservation
+// contract.
+func unregisterClaudeHooks(_ context.Context, scriptPaths []string, apply bool) (bool, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return unwireHookConfig(filepath.Join(home, ".claude", "settings.json"),
+		func(blocks []any) ([]any, bool) {
+			return stripGramatonHookBlocks(blocks, scriptPaths, "command")
+		}, apply)
+}
+
+// unregisterCodexHooks strips gramaton-owned hook entries from
+// $CODEX_HOME/hooks.json (default ~/.codex/hooks.json), resolving the
+// config root exactly like registerCodexHooks. Both command and
+// commandWindows can carry our path (proxyDualVariant).
+func unregisterCodexHooks(_ context.Context, scriptPaths []string, apply bool) (bool, string, error) {
+	dir, err := codexConfigDir()
+	if err != nil {
+		return false, "", err
+	}
+	return unwireHookConfig(filepath.Join(dir, "hooks.json"),
+		func(blocks []any) ([]any, bool) {
+			return stripGramatonHookBlocks(blocks, scriptPaths, "command", "commandWindows")
+		}, apply)
+}
+
+// unregisterCursorHooks strips gramaton-owned hook entries from
+// ~/.cursor/hooks.json (flat entry shape). The `version` key and
+// every non-gramaton entry are left exactly as found.
+func unregisterCursorHooks(_ context.Context, scriptPaths []string, apply bool) (bool, string, error) {
+	dir, err := cursorConfigDir()
+	if err != nil {
+		return false, "", err
+	}
+	return unwireHookConfig(filepath.Join(dir, "hooks.json"),
+		func(entries []any) ([]any, bool) {
+			return stripGramatonFlatHookEntries(entries, scriptPaths)
+		}, apply)
 }
 
 // cursorConfigDir resolves Cursor's config root: ~/.cursor. No env
@@ -688,39 +858,7 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 
 		// Filter out existing gramaton-owned entries (either command
 		// field may carry our path).
-		kept := make([]any, 0, len(blocks))
-		for _, b := range blocks {
-			bm, ok := b.(map[string]any)
-			if !ok {
-				kept = append(kept, b)
-				continue
-			}
-			inner, innerIsArr := bm["hooks"].([]any)
-			if !innerIsArr {
-				// Not the matcher-block shape we manage; preserve
-				// verbatim rather than dropping the user's block.
-				kept = append(kept, b)
-				continue
-			}
-			newInner := make([]any, 0, len(inner))
-			for _, h := range inner {
-				hm, ok := h.(map[string]any)
-				if !ok {
-					newInner = append(newInner, h)
-					continue
-				}
-				cmd, _ := hm["command"].(string)
-				cmdWin, _ := hm["commandWindows"].(string)
-				if isGramatonHookCommand(cmd, scriptPaths) || isGramatonHookCommand(cmdWin, scriptPaths) {
-					continue // drop; we'll add our canonical entry
-				}
-				newInner = append(newInner, h)
-			}
-			if len(newInner) > 0 {
-				bm["hooks"] = newInner
-				kept = append(kept, bm)
-			}
-		}
+		kept, _ := stripGramatonHookBlocks(blocks, scriptPaths, "command", "commandWindows")
 
 		// Add our canonical block. No matcher field: omitted means
 		// "all occurrences" per vendor docs.
@@ -749,7 +887,7 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 	}
 	existing["hooks"] = hooksObj
 
-	if err := writeConfigBackup(hooksPath, original); err != nil {
+	if _, err := writeConfigBackup(hooksPath, original); err != nil {
 		return false, err
 	}
 
@@ -843,19 +981,7 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 
 		// Filter out existing gramaton-owned entries (flat shape:
 		// the command field sits directly on the entry).
-		kept := make([]any, 0, len(entries))
-		for _, e := range entries {
-			em, ok := e.(map[string]any)
-			if !ok {
-				kept = append(kept, e)
-				continue
-			}
-			cmd, _ := em["command"].(string)
-			if isGramatonHookCommand(cmd, scriptPaths) {
-				continue // drop; we'll add our canonical entry
-			}
-			kept = append(kept, e)
-		}
+		kept, _ := stripGramatonFlatHookEntries(entries, scriptPaths)
 
 		// Add our canonical entry. No matcher (omitted = every
 		// occurrence), no failClosed (Cursor defaults fail-open,
@@ -876,7 +1002,7 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	}
 	existing["hooks"] = hooksObj
 
-	if err := writeConfigBackup(hooksPath, original); err != nil {
+	if _, err := writeConfigBackup(hooksPath, original); err != nil {
 		return false, err
 	}
 

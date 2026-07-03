@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,6 +150,56 @@ type Harness struct {
 	// path while writing the relocated one would mislead. Required
 	// when WireHooks is set.
 	HookConfigPathHint func() string
+
+	// ListMCPEntries enumerates the gramaton-owned MCP entry names
+	// currently registered with this harness: the default "gramaton"
+	// entry plus any "gramaton-<store>" attached-store entries
+	// (storeMCPEntryName). Enumeration is by naming convention from
+	// the harness's own config — never from a record of what init
+	// wrote — so hand-added entries and stale entries for
+	// since-deleted stores are caught too. bin is the detected
+	// binary path (empty for dir-detected harnesses). Nil means
+	// uninstall cannot enumerate this harness's MCP entries.
+	ListMCPEntries func(ctx context.Context, bin string) ([]string, error)
+
+	// RemoveMCPEntries removes the named MCP entries from this
+	// harness's config in one pass. Returns the entries actually
+	// removed (a prefix of the input when a mid-run failure stops
+	// the loop) and, for harnesses that rewrite a config file
+	// directly (Cursor), the backup written before the rewrite.
+	// Required when ListMCPEntries is set.
+	RemoveMCPEntries func(ctx context.Context, bin string, entries []string) (removed []string, backupPath string, err error)
+
+	// ManualMCPRemoveHint returns the exact command (or edit) a user
+	// can perform by hand to remove one MCP entry — shown when the
+	// harness binary has gone missing or enumeration fails. Required
+	// when ListMCPEntries is set.
+	ManualMCPRemoveHint func(entry string) string
+
+	// MCPBestEffort marks a harness whose MCP integration is
+	// best-effort (kiro: registration syntax unverified, integration
+	// parked). Uninstall downgrades an MCP removal failure to an
+	// informative skip instead of failing the run, mirroring the
+	// wizard's warn-and-continue install behavior.
+	MCPBestEffort bool
+
+	// UnwireHooks strips gramaton-owned entries from this harness's
+	// hook config: the strip-only counterpart of WireHooks, sharing
+	// its ownership rule (isGramatonHookCommand). scriptPaths
+	// carries ownership paths so hooks materialized under a
+	// relocated config dir are matched (#83). apply=false probes
+	// without touching the file. Existence-driven — runs whenever
+	// the config file exists, regardless of whether the harness
+	// binary is still installed. Required when WireHooks is set, so
+	// uninstall coverage automatically tracks hook-wiring coverage.
+	UnwireHooks func(ctx context.Context, scriptPaths []string, apply bool) (changed bool, backupPath string, err error)
+
+	// OwnsInstructionsDir marks a wholeFileOwned harness whose
+	// instructions file lives in a gramaton-dedicated directory
+	// (Cursor's ~/.cursor/skills/gramaton/). Uninstall removes the
+	// directory after the file — but only when empty, so user-added
+	// siblings survive. Meaningless for fenced layouts.
+	OwnsInstructionsDir bool
 }
 
 // harnesses is the registry of supported AI harnesses, in detection
@@ -165,6 +216,11 @@ var harnesses = []Harness{
 		},
 		ManualMCPHint:       "claude mcp add --scope user gramaton gramaton -- mcp",
 		VerifyMCPRegistered: verifyClaudeMCPRegistered,
+		ListMCPEntries:      listClaudeMCPEntries,
+		RemoveMCPEntries:    removeClaudeMCPEntries,
+		ManualMCPRemoveHint: func(entry string) string {
+			return "claude mcp remove --scope user " + entry
+		},
 		// Claude Code loads ~/.claude/CLAUDE.md as one merged
 		// system-prompt piece; users routinely add their own
 		// content alongside. Fence the managed region.
@@ -177,6 +233,7 @@ var harnesses = []Harness{
 		ProxyStyle:          proxyPosixOnly,
 		WireHooks:           registerClaudeHooks,
 		HookConfigPathHint:  homeRelHint(".claude", "settings.json"),
+		UnwireHooks:         unregisterClaudeHooks,
 	},
 	{
 		Name: harnessKiroCLI,
@@ -194,7 +251,16 @@ var harnesses = []Harness{
 		RegisterMCPStore: func(ctx context.Context, bin, storeName string) (bool, error) {
 			return registerKiroEntry(ctx, bin, storeMCPEntryName(storeName), storeMCPArgs(storeName))
 		},
-		ManualMCPHint: "(kiro-cli's equivalent -- check `kiro mcp --help`)",
+		ManualMCPHint:    "(kiro-cli's equivalent -- check `kiro mcp --help`)",
+		ListMCPEntries:   listKiroMCPEntries,
+		RemoveMCPEntries: removeKiroMCPEntries,
+		ManualMCPRemoveHint: func(entry string) string {
+			return "kiro mcp remove --scope user " + entry + " (kiro-cli may use different syntax; check `kiro mcp --help`)"
+		},
+		// Best-effort, matching the install side: kiro-cli's MCP
+		// surface is unverified, so a failed removal warns with the
+		// manual hint instead of failing the whole uninstall.
+		MCPBestEffort: true,
 		// Kiro loads every .md in ~/.kiro/steering/ on session
 		// start, so single-purpose files are the idiomatic shape.
 		// Own gramaton.md entirely; users add siblings for their
@@ -223,6 +289,11 @@ var harnesses = []Harness{
 		// config.toml entry is user-global by nature.
 		ManualMCPHint:       "codex mcp add gramaton -- gramaton mcp",
 		VerifyMCPRegistered: verifyCodexMCPRegistered,
+		ListMCPEntries:      listCodexMCPEntries,
+		RemoveMCPEntries:    removeCodexMCPEntries,
+		ManualMCPRemoveHint: func(entry string) string {
+			return "codex mcp remove " + entry
+		},
 		// Codex loads $CODEX_HOME/AGENTS.md (default ~/.codex/) as
 		// user-global agent instructions, shared with user content --
 		// same merged-file model as Claude Code's CLAUDE.md, so the
@@ -243,6 +314,7 @@ var harnesses = []Harness{
 		ProxyStyle:         proxyDualVariant,
 		WireHooks:          registerCodexHooks,
 		HookConfigPathHint: codexHooksPathHint,
+		UnwireHooks:        unregisterCodexHooks,
 	},
 	{
 		Name: harnessCursor,
@@ -256,6 +328,11 @@ var harnesses = []Harness{
 		},
 		ManualMCPHint:       `(Cursor has no CLI -- add to ~/.cursor/mcp.json under mcpServers: "gramaton": {"type": "stdio", "command": "gramaton", "args": ["mcp"]})`,
 		VerifyMCPRegistered: verifyCursorMCPRegistered,
+		ListMCPEntries:      listCursorMCPEntries,
+		RemoveMCPEntries:    removeCursorMCPEntries,
+		ManualMCPRemoveHint: func(entry string) string {
+			return fmt.Sprintf("edit ~/.cursor/mcp.json and delete the %q key under mcpServers", entry)
+		},
 		// Personal skills live at ~/.cursor/skills/<name>/SKILL.md
 		// (verified 2026-06-09 from Cursor's vendor-shipped
 		// create-skill skill; ~/.cursor/skills-cursor/ is
@@ -280,6 +357,10 @@ var harnesses = []Harness{
 		ProxyStyle:         proxyNativePerOS,
 		WireHooks:          registerCursorHooks,
 		HookConfigPathHint: homeRelHint(".cursor", "hooks.json"),
+		UnwireHooks:        unregisterCursorHooks,
+		// SKILL.md lives in a dedicated ~/.cursor/skills/gramaton/
+		// directory we created; uninstall removes it when empty.
+		OwnsInstructionsDir: true,
 	},
 }
 
