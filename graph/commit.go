@@ -73,6 +73,7 @@ const (
 	ActionCurationStuckReset     = "curation_stuck_reset"
 	ActionBackfill               = "backfill"  // one-time CLI backfills (cli/backfill.go); Field names the stamped property
 	ActionCarveOut               = "carve_out" // store carve-out: the genesis commit of a store created by copying a subset of another store
+	ActionCarveAdd               = "carve_add" // store carve top-up: additively copying more of a source store's subset into an existing store
 
 	// Curation cycle actions (autonomous + deterministic passes).
 	ActionCurationClassify           = "curation:classify"

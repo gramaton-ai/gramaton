@@ -60,6 +60,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   loopback-gated `POST /v1/store/carve` HTTP route backs it (it
   materializes a store at a caller-supplied filesystem path, so remote
   callers are refused).
+  An existing carved store can be topped up with more of the source:
+  `gramaton store add <name>` takes the same seed flags as `store create
+  --from` (minus `--read-only`) and copies the resolved selection into the
+  already-existing store additively and idempotently -- records already
+  present are skipped, edges are reconnected to already-present records and
+  de-duplicated (a re-run adds nothing), and edges whose other endpoint is
+  absent from the destination are dropped and reported. A frozen target is
+  thawed for the add and re-frozen to its exact prior state; the target is
+  never overwritten or deleted, and a failed add leaves its data intact.
+  A new loopback-gated `POST /v1/store/add` HTTP route backs it (the new
+  `api.CarveAdd` operation), and `--dry-run` previews the counts without
+  writing. No MCP tool ships this pass; carve and add stay CLI-only.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless

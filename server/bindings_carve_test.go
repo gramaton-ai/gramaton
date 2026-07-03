@@ -114,3 +114,67 @@ func TestStoreCarveRequiresSeedHTTP(t *testing.T) {
 		t.Fatalf("expected 400 for a seedless carve, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestStoreAddLoopbackOnly is the security guard for the top-up route: it
+// opens and writes a store at a caller-supplied absolute filesystem path,
+// so a non-loopback origin must be rejected with 403 before any decode or
+// api call. Mirrors TestStoreCarveLoopbackOnly.
+func TestStoreAddLoopbackOnly(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	w := doRequestFrom(t, srv, "POST", "/v1/store/add",
+		api.CarveAddRequest{IDs: []string{"whatever"}, DestDataDir: "/tmp/whatever/data"},
+		"203.0.113.7:5555")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-loopback add, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestStoreAddRoundTrip drives the full server-mediated top-up: carve a
+// destination with one record, then add a second record into it via the
+// add route; the response reports one node added and both records are
+// present in the destination.
+func TestStoreAddRoundTrip(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	id1 := addRecord(t, eng, "first record")
+	id2 := addRecord(t, eng, "second record added later")
+
+	destHome := filepath.Join(t.TempDir(), "topup")
+	destData := filepath.Join(destHome, "data")
+
+	w := doRequest(t, srv, "POST", "/v1/store/carve", api.CarveOutRequest{
+		IDs: []string{id1}, DestName: "topup", DestDataDir: destData,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("carve: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = doRequest(t, srv, "POST", "/v1/store/add", api.CarveAddRequest{
+		IDs: []string{id2}, DestName: "topup", DestDataDir: destData,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("add: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data, ok := parseResponse(t, w)["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("add response has no data object")
+	}
+	if got := data["nodes_added"].(float64); got != 1 {
+		t.Errorf("nodes_added = %v, want 1", got)
+	}
+	if data["dry_run"].(bool) {
+		t.Error("dry_run should be false for a committing add")
+	}
+
+	dest, err := core.LoadEngine(destHome)
+	if err != nil {
+		t.Fatalf("open dest store: %v", err)
+	}
+	t.Cleanup(func() { dest.Close() })
+	dest.RLock()
+	_, has1 := dest.Graph().GetNode(id1)
+	_, has2 := dest.Graph().GetNode(id2)
+	dest.RUnlock()
+	if !has1 || !has2 {
+		t.Errorf("dest missing records: has id1=%v has id2=%v", has1, has2)
+	}
+}

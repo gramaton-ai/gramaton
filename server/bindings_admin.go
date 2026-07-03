@@ -178,6 +178,34 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 		}
 		s.writeJSON(w, http.StatusOK, result)
 	})
+
+	// --- Store carve top-up ---
+	// Adds more of the LIVE source (read under the engine RLock in this
+	// process) into an EXISTING destination store, idempotently. Loopback-
+	// gated as its FIRST act (mirroring carve): CarveAdd opens and writes a
+	// store at a caller-supplied absolute filesystem path, so a remote
+	// caller reaching it would be an arbitrary host-path write. The
+	// agent-facing description of this op is api.CarveAddDescription (the
+	// single source of truth, shared with the CLI help); HTTP exposes no
+	// description surface, and no MCP tool ships this pass.
+	mux.HandleFunc("POST /v1/store/add", func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"store add is restricted to loopback connections", false)
+			return
+		}
+		var req api.CarveAddRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CarveAdd(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
 }
 
 // registerAdminMCPTools wires gramaton_branch + gramaton_backup.

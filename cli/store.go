@@ -45,6 +45,13 @@ var storeCreateCmd = &cobra.Command{
 	RunE:  runStoreCreate,
 }
 
+var storeAddCmd = &cobra.Command{
+	Use:   "add <name>",
+	Short: "Add more records from the active store into an existing store",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runStoreAdd,
+}
+
 var storeDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a named store and all its data",
@@ -153,12 +160,30 @@ Examples:
   gramaton store create authwork --keywords auth --temporality durable
   gramaton store create demo --from-collection tasks --read-only
   gramaton store create preview --keywords auth --dry-run`
+	addStoreAddFlags(storeAddCmd)
+	// `store add` is exactly api.CarveAdd; reference its shared description
+	// constant so the CLI help and the api/server surface never drift (no
+	// duplicated literal -- api/carveadd.go owns the string).
+	storeAddCmd.Long = `Add more records from the CURRENTLY ACTIVE store into an EXISTING store,
+server-mediated (it reads the live source under a read lock).
+
+  ` + api.CarveAddDescription + `
+
+The target must already exist (create it with 'gramaton store create'). The
+same seed flags as 'store create --from' select what to bring over. There is
+deliberately no --read-only flag: a frozen target keeps its frozen state (it
+is thawed for the add and re-frozen to its exact prior state).
+
+Examples:
+  gramaton store add shared --from-id 01ABC...,01DEF...
+  gramaton store add shared --from-collection tasks
+  gramaton store add shared --keywords auth --dry-run`
 	storeDeleteCmd.Flags().BoolVar(&storeDeleteForce, "force", false, "skip confirmation prompt")
 	storeAttachCmd.Flags().StringVar(&storeAttachName, "name", "",
 		"local name for the attached store (default: derived from the directory name)")
 	storeAttachCmd.Flags().BoolVar(&storeAttachFreezeOriginal, "freeze-original", false,
 		"also freeze the source directory when it is writable on disk (owner: the configured author)")
-	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
+	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeAddCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
 	rootCmd.AddCommand(storeCmd)
 }
 
@@ -209,14 +234,29 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 
 // addStoreCreateFlags registers every flag `store create` accepts. Kept
 // as a standalone function (not inline in init) so tests can build an
-// isolated command carrying the identical flag set. The query-seed
-// filters are REUSED from addSearchFlags rather than reinvented; the
-// carve-specific seeds/options are added on top.
+// isolated command carrying the identical flag set. --read-only is
+// create-specific (it also governs the offline empty-store path); the
+// shared carve seed/query/option flags come from addCarveSeedFlags.
 func addStoreCreateFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("read-only", false,
 		"freeze the store immediately after creation (owner: the configured author)")
-	// Query-seed filters (keywords/temporality/knowledge-type/
-	// epistemic-status/resolution/match/since, ...) shared with search+export.
+	addCarveSeedFlags(cmd)
+}
+
+// addStoreAddFlags registers every flag `store add` accepts: the shared
+// carve seeds/query/options, but NOT --read-only -- a top-up preserves
+// the target's existing frozen state (thawed for the add and re-frozen)
+// rather than choosing a new one.
+func addStoreAddFlags(cmd *cobra.Command) {
+	addCarveSeedFlags(cmd)
+}
+
+// addCarveSeedFlags registers the seed + query-filter + option flags
+// shared by `store create --from` and `store add`. The query-seed filters
+// (keywords/temporality/knowledge-type/epistemic-status/resolution/match/
+// since, ...) are REUSED from addSearchFlags rather than reinvented; the
+// carve-specific seeds/options are added on top.
+func addCarveSeedFlags(cmd *cobra.Command) {
 	addSearchFlags(cmd)
 	// Carve seeds (union with the query above).
 	cmd.Flags().StringSlice("from-id", nil,
@@ -412,6 +452,111 @@ func printCarveSummary(w io.Writer, name, destDir string, cr api.CarveOutRespons
 		}
 		if cr.DroppedTotal > len(cr.DanglingSample) {
 			fmt.Fprintf(w, "  ... and %d more (sample capped)\n", cr.DroppedTotal-len(cr.DanglingSample))
+		}
+	}
+}
+
+// buildCarveAddRequest maps the command's flags to an api.CarveAddRequest.
+// The destination is computed as the ABSOLUTE path of the EXISTING store's
+// data dir (stores/<name>/data). There is no --read-only flag: the target's
+// existing frozen state is preserved by the api.
+func buildCarveAddRequest(cmd *cobra.Command, name string) api.CarveAddRequest {
+	req := api.CarveAddRequest{
+		DestName:    name,
+		DestDataDir: filepath.Join(store.Resolve(baseConfigDir(), name), "data"),
+	}
+	req.IDs, _ = cmd.Flags().GetStringSlice("from-id")
+	req.Collections, _ = cmd.Flags().GetStringSlice("from-collection")
+	req.Text, _ = cmd.Flags().GetString("query")
+	req.Match, _ = cmd.Flags().GetString("match")
+	req.Temporality, _ = cmd.Flags().GetString("temporality")
+	req.KnowledgeType, _ = cmd.Flags().GetString("knowledge-type")
+	req.EpistemicStatus, _ = cmd.Flags().GetString("epistemic-status")
+	req.Resolution, _ = cmd.Flags().GetString("resolution")
+	req.Since, _ = cmd.Flags().GetString("since")
+	if kw, _ := cmd.Flags().GetString("keywords"); kw != "" {
+		req.Keywords = strings.Split(kw, ",")
+	}
+	if meta, _ := cmd.Flags().GetStringToString("meta"); len(meta) > 0 {
+		req.Meta = meta
+	}
+	req.HeadsOnly, _ = cmd.Flags().GetBool("heads-only")
+	req.DryRun, _ = cmd.Flags().GetBool("dry-run")
+	return req
+}
+
+// runStoreAdd tops up an EXISTING store with more records from the active
+// store, server-mediated (same as the carve half of `store create`): the
+// op runs in the source store's server process so it reads the live source
+// under the engine RLock. The target must already exist; the api opens it,
+// skips records already present, reconnects+dedupes edges, and preserves
+// the target's frozen state.
+func runStoreAdd(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	base := baseConfigDir()
+
+	if err := store.ValidateName(name); err != nil {
+		return err
+	}
+	if !store.Exists(base, name) {
+		return fmt.Errorf("store %q does not exist; create it first with: gramaton store create %s", name, name)
+	}
+	// Guard against a bbolt lock conflict: the api opens a second engine on
+	// the target's data dir, which would collide with the target's own
+	// running server (same guard shape as `store delete`).
+	if isServerRunning(store.Resolve(base, name)) {
+		return fmt.Errorf("store %q has a running server; stop it first with: gramaton --store %s stop", name, name)
+	}
+	if !carveRequested(cmd) {
+		return fmt.Errorf("store add requires at least one seed: --from-id, --from-collection, " +
+			"--query, or a query filter such as --keywords")
+	}
+
+	req := buildCarveAddRequest(cmd, name)
+
+	resp, err := serverPostSlow("/v1/store/add", req)
+	if err != nil {
+		return writeServerError("store add", err)
+	}
+
+	// Human-readable summary to stderr; the machine-parseable JSON envelope
+	// stays on stdout (printEnvelope convention).
+	if raw, mErr := json.Marshal(resp.Data); mErr == nil {
+		var ar api.CarveAddResponse
+		if json.Unmarshal(raw, &ar) == nil {
+			printCarveAddSummary(os.Stderr, name, req.DestDataDir, ar)
+		}
+	}
+	return printEnvelope(resp)
+}
+
+// printCarveAddSummary writes a short human summary of a top-up to w. On a
+// dry run it is an explicit PREVIEW that names the would-be counts and
+// states nothing was written; on a commit it names the target, the added
+// vs already-present counts, and whether the target was thawed and
+// re-frozen. Dropped boundary edges are summarized by type with the sample.
+func printCarveAddSummary(w io.Writer, name, destDir string, ar api.CarveAddResponse) {
+	if ar.DryRun {
+		fmt.Fprintf(w, "PREVIEW (dry run -- nothing written): store %q would add "+
+			"%d new node(s) (%d already present) and %d new edge(s) (%d already present) "+
+			"from %d seed(s) -> %d selected node(s).\n",
+			name, ar.NodesAdded, ar.NodesSkippedPresent, ar.EdgesAdded, ar.EdgesSkippedPresent,
+			ar.SeedCount, ar.SelectedNodes)
+	} else {
+		fmt.Fprintf(w, "Added to store %q at %s: %d new node(s) (%d already present), "+
+			"%d new edge(s) (%d already present).\n",
+			name, destDir, ar.NodesAdded, ar.NodesSkippedPresent, ar.EdgesAdded, ar.EdgesSkippedPresent)
+		if ar.Thawed {
+			fmt.Fprintf(w, "The destination was frozen; it was thawed for the add and re-frozen to its prior state.\n")
+		}
+	}
+	if ar.DroppedTotal > 0 {
+		fmt.Fprintf(w, "Dropped %d boundary-crossing edge(s) by type: %v\n", ar.DroppedTotal, ar.DroppedByType)
+		for _, d := range ar.DanglingSample {
+			fmt.Fprintf(w, "  %s -[%s]-> %s\n", d.SourceID, d.Type, d.TargetID)
+		}
+		if ar.DroppedTotal > len(ar.DanglingSample) {
+			fmt.Fprintf(w, "  ... and %d more (sample capped)\n", ar.DroppedTotal-len(ar.DanglingSample))
 		}
 	}
 }

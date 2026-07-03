@@ -111,6 +111,12 @@ var readOnlyClassification = map[string]string{
 	// gated behind the source's read-only flag.
 	"CarveOut": guardRead,
 
+	// CarveAdd, like CarveOut, READS the source store and writes only to
+	// a SEPARATE existing destination store (its own data dir). It
+	// manages the DESTINATION's freeze state (thaw/refreeze), never the
+	// source's, so it is not gated behind the source's read-only flag.
+	"CarveAdd": guardRead,
+
 	// Curation cluster. DryRun still APPLIES the deterministic
 	// phase; Drain writes no_contradiction edges; Batch classifies
 	// (writes) every pending record.

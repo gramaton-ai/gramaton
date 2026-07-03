@@ -106,6 +106,48 @@ type CarveOutResponse struct {
 
 const CarveOutDescription = "Non-destructively copy a subset of the store (memory records + collections) into a brand-new store, optionally frozen read-only, for sharing. Seeds are the union of explicit record ids, a query, and named collections; structural children (chunks/sections), collection schemas, and superseded predecessors are pulled in automatically. Sessions are never carried. Reads the source only and writes a fresh destination; use dry_run to preview the selection without writing."
 
+// carveSelection is the seed + query + closure specification shared by
+// the create carve (CarveOut) and the top-up (CarveAdd). Both entry
+// points resolve the SAME union of seeds -- explicit ids, a query, and
+// named collections -- and expand the same structural + supersedes
+// closure; only what they do with the gathered payload differs. Holding
+// the selection in one internal struct lets carveGather serve both
+// without either public request type having to embed the other.
+type carveSelection struct {
+	IDs         []string
+	Collections []string
+
+	Text            string
+	Match           string
+	Keywords        []string
+	Temporality     string
+	KnowledgeType   string
+	EpistemicStatus string
+	Resolution      string
+	Since           string
+	Meta            map[string]string
+
+	HeadsOnly bool
+}
+
+// selection projects a CarveOutRequest onto the shared carveSelection.
+func (req CarveOutRequest) selection() carveSelection {
+	return carveSelection{
+		IDs:             req.IDs,
+		Collections:     req.Collections,
+		Text:            req.Text,
+		Match:           req.Match,
+		Keywords:        req.Keywords,
+		Temporality:     req.Temporality,
+		KnowledgeType:   req.KnowledgeType,
+		EpistemicStatus: req.EpistemicStatus,
+		Resolution:      req.Resolution,
+		Since:           req.Since,
+		Meta:            req.Meta,
+		HeadsOnly:       req.HeadsOnly,
+	}
+}
+
 // carveNode is one gathered record: its id, a clone of every property
 // (the FULL set -- embeddings, context_*, meta, author, valid_until,
 // resolution -- not the export allowlist), the BM25 index text, and the
@@ -125,32 +167,52 @@ type carveEdge struct {
 	props    graph.Properties
 }
 
-// CarveOut copies a selected subset of the source store into a new
-// destination store via a faithful graph-level copy (IDs preserved,
-// embeddings and structural edges carried), optionally freezing the
-// result read-only.
+// carveGathered is the faithful payload produced under a single source
+// RLock: the resolved + closed node set (full properties, index text, and
+// embedding vector) plus EVERY outbound edge from those nodes, left
+// UNPARTITIONED. Partitioning into interior vs dangling is deferred to
+// carvePartitionEdges because the "present" set differs by caller: create
+// partitions against the gathered set alone (a fresh destination holds
+// nothing else), while the top-up partitions against the destination's
+// existing nodes UNION the gathered set (so a missed record's edge to an
+// already-present record reconnects instead of dangling).
+type carveGathered struct {
+	seedCount int
+	nodes     []carveNode
+	gathered  map[string]struct{}
+	edges     []carveEdge
+
+	// embedDim is the shared dimension of the gathered vectors (0 when the
+	// selection carries no embeddings). srcCfgDim is the source's declared
+	// embedding dimension, a fallback for the no-embeddings case.
+	embedDim  int
+	srcCfgDim int
+}
+
+// carveGather runs the READ side of a carve -- resolve seeds, expand the
+// closure, and gather the faithful node + edge payload -- shared by
+// CarveOut (create) and CarveAdd (top-up). Neither writes anything here.
 //
-// This is a READ on the source plus a WRITE to a fresh destination, so
-// it is NOT gated behind the source's read-only flag: a frozen store is
-// exactly the kind of store one carves a shareable subset out of.
+// This is a READ on the source, so it is NOT gated behind the source's
+// read-only flag: a frozen store is exactly the kind of store one carves
+// (or tops up from) a shareable subset out of.
 //
-// Lock discipline (three-phase): seeds + closure + gather all run under
-// a single source RLock (pure in-memory graph traversal, no I/O -- the
-// one I/O step, embedding the query text, happens off-lock before the
-// RLock). The source lock is released before any destination I/O; the
-// destination is populated on its own engine under its own write batch.
-func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutResponse, *APIError) {
+// Lock discipline (three-phase): the one I/O step -- embedding a text
+// query -- happens off-lock inside carveResolveQuery; seeds + closure +
+// gather then run under a SINGLE source RLock with no intervening unlock
+// or I/O; the lock is released before the caller touches any destination.
+func (a *API) carveGather(ctx context.Context, sel carveSelection) (*carveGathered, *APIError) {
 	// A carve must name at least one seed source up front.
-	if len(req.IDs) == 0 && len(req.Collections) == 0 && !carveHasQuery(req) {
-		return CarveOutResponse{}, ErrMissing("at least one seed is required: ids, a query, or collections")
+	if len(sel.IDs) == 0 && len(sel.Collections) == 0 && !carveHasQuery(sel) {
+		return nil, ErrMissing("at least one seed is required: ids, a query, or collections")
 	}
 
 	// Query seeds first, OFF the main lock: resolving a text query
 	// embeds it (I/O). collectExportIDs handles the embed-off-lock +
 	// brief RLock itself, so this must run before we take our own RLock.
-	queryIDs, apiErr := a.carveResolveQuery(ctx, req)
+	queryIDs, apiErr := a.carveResolveQuery(ctx, sel)
 	if apiErr != nil {
-		return CarveOutResponse{}, apiErr
+		return nil, apiErr
 	}
 
 	// Phase 1-3 under a single source RLock: resolve seeds -> closure ->
@@ -159,10 +221,10 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 	g := a.engine.Graph()
 
 	seeds := make(map[string]struct{})
-	for _, id := range req.IDs {
+	for _, id := range sel.IDs {
 		if _, ok := g.GetNode(id); !ok {
 			a.engine.RUnlock()
-			return CarveOutResponse{}, ErrNotFound("record not found: " + id)
+			return nil, ErrNotFound("record not found: " + id)
 		}
 		seeds[id] = struct{}{}
 	}
@@ -171,7 +233,7 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 			seeds[id] = struct{}{}
 		}
 	}
-	for _, c := range req.Collections {
+	for _, c := range sel.Collections {
 		collID, ok := a.collectionByName(c)
 		if !ok {
 			// Fall back to treating c as a collection node id.
@@ -181,7 +243,7 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 		}
 		if !ok {
 			a.engine.RUnlock()
-			return CarveOutResponse{}, ErrNotFound("collection not found: " + c)
+			return nil, ErrNotFound("collection not found: " + c)
 		}
 		seeds[collID] = struct{}{}
 		for _, e := range a.collectionItemEdges(collID) {
@@ -191,15 +253,11 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 
 	if len(seeds) == 0 {
 		a.engine.RUnlock()
-		return CarveOutResponse{}, ErrInvalid("carve selection is empty; provide ids, a query, or collections that resolve to records")
+		return nil, ErrInvalid("carve selection is empty; provide ids, a query, or collections that resolve to records")
 	}
 
-	selection := carveClosure(g, seeds, req.HeadsOnly)
+	selection := carveClosure(g, seeds, sel.HeadsOnly)
 
-	// Gather the payload + dangling report under the same RLock. Two
-	// passes so edges are partitioned against the set of nodes that
-	// ACTUALLY made it into the copy, not the raw selection map.
-	//
 	// Pass 1: materialize every selection id that resolves to a node,
 	// recording the gathered id set.
 	nodes := make([]carveNode, 0, len(selection))
@@ -213,9 +271,9 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 			// corrupt/phantom selection id (a closure target with no
 			// backing node). Skip it -- and because it never enters
 			// `gathered`, any edge that points at it is reported as
-			// dangling in pass 2 rather than being mis-classified interior
-			// (which would abort the destination AddEdge on a missing
-			// endpoint and fail the whole carve).
+			// dangling by carvePartitionEdges rather than being
+			// mis-classified interior (which would abort the destination
+			// AddEdge on a missing endpoint and fail the whole carve).
 			continue
 		}
 		cn := carveNode{
@@ -230,36 +288,21 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 		gathered[id] = struct{}{}
 	}
 
-	// Pass 2: interior edges are copied; boundary-crossing edges (target
-	// not gathered) are dropped and reported. Walking outbound-only over
-	// the gathered set visits every interior edge exactly once (each has
-	// its source in the gathered set) and yields exactly the "from
-	// gathered to not-gathered" dangling set.
-	interior := make([]carveEdge, 0)
-	droppedByType := make(map[string]int)
-	droppedTotal := 0
-	sample := make([]CarveDangling, 0, carveDanglingSampleCap)
+	// Pass 2: gather EVERY outbound edge from a gathered node, left
+	// unpartitioned. Walking outbound-only over the gathered set visits
+	// each interior edge exactly once (its source is in the gathered set)
+	// and captures every boundary-crossing candidate for the caller to
+	// classify against its own "present" set.
+	edges := make([]carveEdge, 0)
 	for id := range gathered {
 		for _, e := range g.EdgesFrom(id) {
-			if _, in := gathered[e.TargetID]; in {
-				interior = append(interior, carveEdge{
-					src:    e.SourceID,
-					dst:    e.TargetID,
-					etype:  e.Type,
-					weight: e.Weight,
-					props:  e.Properties.Clone(),
-				})
-				continue
-			}
-			droppedTotal++
-			droppedByType[e.Type]++
-			if len(sample) < carveDanglingSampleCap {
-				sample = append(sample, CarveDangling{
-					SourceID: e.SourceID,
-					TargetID: e.TargetID,
-					Type:     e.Type,
-				})
-			}
+			edges = append(edges, carveEdge{
+				src:    e.SourceID,
+				dst:    e.TargetID,
+				etype:  e.Type,
+				weight: e.Weight,
+				props:  e.Properties.Clone(),
+			})
 		}
 	}
 
@@ -281,22 +324,86 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 			continue
 		}
 		if len(cn.vec) != embedDim {
-			return CarveOutResponse{}, ErrInvalid(fmt.Sprintf(
+			return nil, ErrInvalid(fmt.Sprintf(
 				"source selection has inconsistent embedding dimensions (%d and %d); cannot carve",
 				embedDim, len(cn.vec)))
 		}
 	}
 
+	return &carveGathered{
+		seedCount: len(seeds),
+		nodes:     nodes,
+		gathered:  gathered,
+		edges:     edges,
+		embedDim:  embedDim,
+		srcCfgDim: srcCfgDim,
+	}, nil
+}
+
+// carvePartition is the interior/dangling split of a gathered edge set
+// against a "present" node set.
+type carvePartition struct {
+	interior      []carveEdge
+	droppedTotal  int
+	droppedByType map[string]int
+	sample        []CarveDangling
+}
+
+// carvePartitionEdges splits gathered edges into interior (target present)
+// and dangling (target absent) against a present-node set, building the
+// grouped drop count and a bounded sample. Pure and side-effect free so
+// create (present = the gathered set) and the top-up (present =
+// destination nodes UNION the gathered set) share one classifier.
+func carvePartitionEdges(edges []carveEdge, present map[string]struct{}) carvePartition {
+	p := carvePartition{
+		droppedByType: make(map[string]int),
+		sample:        make([]CarveDangling, 0, carveDanglingSampleCap),
+	}
+	for _, e := range edges {
+		if _, in := present[e.dst]; in {
+			p.interior = append(p.interior, e)
+			continue
+		}
+		p.droppedTotal++
+		p.droppedByType[e.etype]++
+		if len(p.sample) < carveDanglingSampleCap {
+			p.sample = append(p.sample, CarveDangling{
+				SourceID: e.src,
+				TargetID: e.dst,
+				Type:     e.etype,
+			})
+		}
+	}
+	return p
+}
+
+// CarveOut copies a selected subset of the source store into a new
+// destination store via a faithful graph-level copy (IDs preserved,
+// embeddings and structural edges carried), optionally freezing the
+// result read-only.
+//
+// The read side (resolve + closure + gather) is carveGather; the write
+// side materializes a BRAND-NEW destination on its own engine. A fresh
+// destination holds nothing, so an edge is interior iff BOTH endpoints
+// are in the gathered selection.
+func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutResponse, *APIError) {
+	g, apiErr := a.carveGather(ctx, req.selection())
+	if apiErr != nil {
+		return CarveOutResponse{}, apiErr
+	}
+
+	part := carvePartitionEdges(g.edges, g.gathered)
+
 	resp := CarveOutResponse{
 		DryRun:         req.DryRun,
 		ReadOnly:       req.ReadOnly && !req.DryRun,
-		SeedCount:      len(seeds),
-		NodeCount:      len(nodes),
-		InteriorEdges:  len(interior),
-		DroppedTotal:   droppedTotal,
-		DroppedByType:  droppedByType,
-		DanglingSample: sample,
-		EmbeddingDim:   embedDim,
+		SeedCount:      g.seedCount,
+		NodeCount:      len(g.nodes),
+		InteriorEdges:  len(part.interior),
+		DroppedTotal:   part.droppedTotal,
+		DroppedByType:  part.droppedByType,
+		DanglingSample: part.sample,
+		EmbeddingDim:   g.embedDim,
 	}
 
 	if req.DryRun {
@@ -307,11 +414,11 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 	// Materialize. destDim pins the destination's vector index size so
 	// the copied vectors are accepted verbatim (the mmap index silently
 	// drops vectors whose length != its configured dimension).
-	destDim := embedDim
+	destDim := g.embedDim
 	if destDim == 0 {
-		destDim = srcCfgDim
+		destDim = g.srcCfgDim
 	}
-	if apiErr := a.carveMaterialize(req, nodes, interior, destDim); apiErr != nil {
+	if apiErr := a.carveMaterialize(req, g.nodes, part.interior, destDim); apiErr != nil {
 		return CarveOutResponse{}, apiErr
 	}
 
@@ -526,41 +633,41 @@ func carveClosure(g *graph.Graph, seeds map[string]struct{}, headsOnly bool) map
 	return selection
 }
 
-// carveResolveQuery resolves the request's query seed to a list of
-// record IDs, or returns nil when the request carries no query. Sessions
-// are excluded (Store="memory") so a query can never seed a session
-// segment. Reuses collectExportIDs, which embeds off-lock and takes its
-// own brief RLock.
-func (a *API) carveResolveQuery(ctx context.Context, req CarveOutRequest) ([]string, *APIError) {
-	if !carveHasQuery(req) {
+// carveResolveQuery resolves the selection's query seed to a list of
+// record IDs, or returns nil when the selection carries no query.
+// Sessions are excluded (Store="memory") so a query can never seed a
+// session segment. Reuses collectExportIDs, which embeds off-lock and
+// takes its own brief RLock.
+func (a *API) carveResolveQuery(ctx context.Context, sel carveSelection) ([]string, *APIError) {
+	if !carveHasQuery(sel) {
 		return nil, nil
 	}
 	er := ExportRequest{
-		Text:            req.Text,
-		Match:           req.Match,
+		Text:            sel.Text,
+		Match:           sel.Match,
 		Store:           "memory",
-		Keywords:        req.Keywords,
-		Temporality:     req.Temporality,
-		KnowledgeType:   req.KnowledgeType,
-		EpistemicStatus: req.EpistemicStatus,
-		Resolution:      req.Resolution,
-		Since:           req.Since,
-		Meta:            req.Meta,
+		Keywords:        sel.Keywords,
+		Temporality:     sel.Temporality,
+		KnowledgeType:   sel.KnowledgeType,
+		EpistemicStatus: sel.EpistemicStatus,
+		Resolution:      sel.Resolution,
+		Since:           sel.Since,
+		Meta:            sel.Meta,
 	}
 	return a.collectExportIDs(ctx, er)
 }
 
-// carveHasQuery reports whether the request carries any query-seed
+// carveHasQuery reports whether the selection carries any query-seed
 // filter (the caller-facing fields only -- Store is injected by
 // carveResolveQuery, not user-supplied here).
-func carveHasQuery(req CarveOutRequest) bool {
-	return req.Text != "" ||
-		req.Match != "" ||
-		req.Temporality != "" ||
-		req.KnowledgeType != "" ||
-		req.EpistemicStatus != "" ||
-		req.Resolution != "" ||
-		req.Since != "" ||
-		len(req.Keywords) > 0 ||
-		len(req.Meta) > 0
+func carveHasQuery(sel carveSelection) bool {
+	return sel.Text != "" ||
+		sel.Match != "" ||
+		sel.Temporality != "" ||
+		sel.KnowledgeType != "" ||
+		sel.EpistemicStatus != "" ||
+		sel.Resolution != "" ||
+		sel.Since != "" ||
+		len(sel.Keywords) > 0 ||
+		len(sel.Meta) > 0
 }
