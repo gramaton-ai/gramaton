@@ -42,7 +42,7 @@ func init() {
 // Do not invert this order.
 func runStop(dir string, keepMCP bool) error {
 	if !keepMCP {
-		if n := reapMCPProxies(dir, defaultProcOps(dir), os.Stderr); n > 0 {
+		if n, _ := reapMCPProxies(dir, defaultProcOps(dir), os.Stderr); n > 0 {
 			noun := "proxies"
 			if n == 1 {
 				noun = "proxy"

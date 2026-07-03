@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,10 +33,12 @@ func setupUninstallCLITest(t *testing.T) string {
 
 	origHarness, origDryRun, origYes := uninstallHarnessFlag, uninstallDryRun, uninstallYes
 	origTTY, origInput := uninstallStdinIsTTY, uninstallInput
+	origReap, origStop := uninstallReapProxies, uninstallStopServer
 	t.Cleanup(func() {
 		cfgDir = origCfgDir
 		uninstallHarnessFlag, uninstallDryRun, uninstallYes = origHarness, origDryRun, origYes
 		uninstallStdinIsTTY, uninstallInput = origTTY, origInput
+		uninstallReapProxies, uninstallStopServer = origReap, origStop
 	})
 	uninstallHarnessFlag, uninstallDryRun, uninstallYes = "", false, false
 	return home
@@ -129,7 +132,8 @@ func TestUninstallNonTTYWithoutYesErrors(t *testing.T) {
 }
 
 // TestUninstallAbortOnNo: answering "n" (and the default empty
-// answer) aborts cleanly -- no error, nothing changed.
+// answer) aborts cleanly -- no error, nothing changed, and the
+// always-printed data-location footer still shows.
 func TestUninstallAbortOnNo(t *testing.T) {
 	for _, answer := range []string{"n\n", "\n"} {
 		t.Run(fmt.Sprintf("answer %q", strings.TrimSpace(answer)), func(t *testing.T) {
@@ -145,6 +149,9 @@ func TestUninstallAbortOnNo(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "Aborted") {
 				t.Errorf("output should say aborted:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), "Gramaton data and configuration remain at") {
+				t.Errorf("abort must still print the data-location footer:\n%s", out.String())
 			}
 			if after := snapshotHome(t, home); !reflect.DeepEqual(before, after) {
 				t.Error("filesystem changed despite user answering no")
@@ -232,13 +239,24 @@ func TestUninstallDryRunMutatesNothing(t *testing.T) {
 			t.Errorf("dry-run inventory missing %q:\n%s", want, s)
 		}
 	}
+	// The active-session warning is part of the explanation contract:
+	// users must learn their running harness sessions will lose the
+	// MCP connection and need a restart.
+	for _, want := range []string{"will lose their Gramaton MCP connection", "restarted"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("dry-run output missing the session-restart warning (%q):\n%s", want, s)
+		}
+	}
 	if strings.Contains(s, "Proceed?") {
 		t.Errorf("dry run must not prompt:\n%s", s)
 	}
 }
 
 // TestUninstallNothingToRemove: a machine with no integrations at all
-// reports "nothing to remove" and exits clean without prompting.
+// reports "nothing to remove" and exits clean without prompting. The
+// cannot-check MCP notes for missing harness binaries still print --
+// they are informational and must neither suppress the headline nor
+// flip the exit code.
 func TestUninstallNothingToRemove(t *testing.T) {
 	setupUninstallCLITest(t)
 	uninstallStdinIsTTY = func() bool { return false } // would error if a prompt were required
@@ -249,6 +267,13 @@ func TestUninstallNothingToRemove(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Nothing to remove") {
 		t.Errorf("output should say nothing to remove:\n%s", out.String())
+	}
+	// PATH is empty, so every vendor-CLI harness gets the note.
+	if !strings.Contains(out.String(), "cannot check MCP registration (claude not on PATH)") {
+		t.Errorf("missing-binary note should always print:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "claude mcp remove --scope user") {
+		t.Errorf("note should carry the exact manual command:\n%s", out.String())
 	}
 }
 
@@ -316,8 +341,9 @@ func TestUninstallInvalidHarnessErrors(t *testing.T) {
 
 // TestUninstallSecondRunNothingToRemove: after a successful
 // uninstall, a re-run is a clean no-op ending at "nothing to
-// remove" (the claude binary is absent and no footprint remains, so
-// not even a manual-removal warning fires).
+// remove" -- the informational cannot-check notes for missing
+// binaries may still print but never suppress the headline or
+// change bytes on disk.
 func TestUninstallSecondRunNothingToRemove(t *testing.T) {
 	home := setupUninstallCLITest(t)
 	buildUninstallCLIFixture(t, home)
@@ -338,5 +364,184 @@ func TestUninstallSecondRunNothingToRemove(t *testing.T) {
 	}
 	if after := snapshotHome(t, home); !reflect.DeepEqual(before, after) {
 		t.Error("second run mutated the filesystem")
+	}
+}
+
+// TestUninstallIgnoresStoreScoping: harness integrations are
+// machine-level, so uninstall must resolve every surface from the
+// BASE config dir even when GRAMATON_STORE points at a named store.
+// Regression test for the config-dir drift where a set store made
+// hook-script deletion resolve to stores/<name>/hooks/ and silently
+// miss the real installs.
+func TestUninstallIgnoresStoreScoping(t *testing.T) {
+	home := setupUninstallCLITest(t)
+	buildUninstallCLIFixture(t, home)
+	t.Setenv("GRAMATON_STORE", "somestore")
+	uninstallYes = true
+
+	var out bytes.Buffer
+	if err := runUninstall(context.Background(), &out); err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gramaton", "hooks", "claude-code")); !os.IsNotExist(err) {
+		t.Error("base-config-dir hook scripts were missed with GRAMATON_STORE set")
+	}
+	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if strings.Contains(string(settings), ".gramaton") {
+		t.Error("gramaton hook entry survived with GRAMATON_STORE set")
+	}
+}
+
+// TestUninstallPartialFailureExitsNonzero: one broken surface (an
+// unparseable cursor mcp.json) must not strand the rest -- the other
+// harnesses' surfaces are still removed -- but the run reports the
+// failure and exits non-zero.
+func TestUninstallPartialFailureExitsNonzero(t *testing.T) {
+	home := setupUninstallCLITest(t)
+	buildUninstallCLIFixture(t, home)
+	badMCP := filepath.Join(home, ".cursor", "mcp.json")
+	writeUninstallFixtureFile(t, badMCP, "{definitely not json")
+	uninstallYes = true
+
+	var out bytes.Buffer
+	err := runUninstall(context.Background(), &out)
+	if err == nil {
+		t.Fatal("expected a failure exit for the refused mcp.json")
+	}
+	if !strings.Contains(err.Error(), "failure") {
+		t.Errorf("error should summarize failures: %v", err)
+	}
+
+	// The refused file is untouched...
+	raw, _ := os.ReadFile(badMCP)
+	if string(raw) != "{definitely not json" {
+		t.Error("refused mcp.json was modified")
+	}
+	// ...while the other surfaces still completed.
+	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if strings.Contains(string(settings), ".gramaton") {
+		t.Error("claude surface should still complete despite the cursor failure")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gramaton", "hooks", "claude-code")); !os.IsNotExist(err) {
+		t.Error("hook scripts should still be deleted despite the cursor failure")
+	}
+	if !strings.Contains(out.String(), "✗") {
+		t.Errorf("report should mark the failed surface:\n%s", out.String())
+	}
+}
+
+// seedRunningStore fabricates a store with a live-looking server:
+// a data dir (so store.List sees it) plus a server.json recording
+// this test process's own PID (alive by construction). The stop
+// seams are faked, so nothing is ever signalled for real.
+func seedRunningStore(t *testing.T, base string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info := fmt.Sprintf(`{"pid": %d, "port": 65535, "bind": "127.0.0.1", "version": "test"}`, os.Getpid())
+	writeUninstallFixtureFile(t, filepath.Join(base, "server.json"), info)
+}
+
+// TestUninstallStopsProxiesBeforeServer pins the load-bearing stop
+// order through the seams: for each store, the MCP-proxy reap runs
+// BEFORE the server shutdown (a surviving proxy auto-starts a
+// replacement server on its next tool call).
+func TestUninstallStopsProxiesBeforeServer(t *testing.T) {
+	home := setupUninstallCLITest(t)
+	buildUninstallCLIFixture(t, home)
+	base := filepath.Join(home, ".gramaton")
+	seedRunningStore(t, base)
+
+	var seq []string
+	uninstallReapProxies = func(dir string, _ io.Writer) (int, int) {
+		seq = append(seq, "reap:"+dir)
+		return 1, 0
+	}
+	uninstallStopServer = func(dir string) error {
+		seq = append(seq, "stop:"+dir)
+		return nil
+	}
+	uninstallYes = true
+
+	var out bytes.Buffer
+	if err := runUninstall(context.Background(), &out); err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+	want := []string{"reap:" + base, "stop:" + base}
+	if !reflect.DeepEqual(seq, want) {
+		t.Errorf("stop sequence = %v, want %v (proxies reaped first)", seq, want)
+	}
+}
+
+// TestUninstallStopFailuresExitNonzero: a server that cannot be
+// stopped, and gramaton proxies that survive the kill escalation,
+// both count toward the failure total and flip the exit code.
+func TestUninstallStopFailuresExitNonzero(t *testing.T) {
+	home := setupUninstallCLITest(t)
+	buildUninstallCLIFixture(t, home)
+	base := filepath.Join(home, ".gramaton")
+	seedRunningStore(t, base)
+
+	uninstallReapProxies = func(_ string, _ io.Writer) (int, int) {
+		return 0, 1 // one proxy survived SIGKILL escalation
+	}
+	uninstallStopServer = func(_ string) error {
+		return fmt.Errorf("shutdown request failed: connection refused")
+	}
+	uninstallYes = true
+
+	var out bytes.Buffer
+	err := runUninstall(context.Background(), &out)
+	if err == nil {
+		t.Fatal("stop failures must exit non-zero")
+	}
+	if !strings.Contains(err.Error(), "2 failure") {
+		t.Errorf("both the surviving proxy and the failed stop should count: %v", err)
+	}
+	if !strings.Contains(out.String(), "did not exit") {
+		t.Errorf("report should name the surviving proxy:\n%s", out.String())
+	}
+}
+
+// TestSanitizeTerminal pins the control-character stripping applied
+// to strings sourced from harness configs before printing.
+func TestSanitizeTerminal(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"plain text", "plain text"},
+		{"a\x1b[31mred\x1b[0mb", "aredb"},
+		{"osc\x1b]0;title\x07done", "oscdone"},
+		{"bare\x1besc", "baresc"},
+		{"tab\tand\nnewline", "tabandnewline"},
+		{"del\x7fchar", "delchar"},
+		{"unicode ✓ passes", "unicode ✓ passes"},
+	}
+	for _, tt := range tests {
+		if got := sanitizeTerminal(tt.in); got != tt.want {
+			t.Errorf("sanitizeTerminal(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestUninstallSanitizesConfigStrings: an ANSI-escape-bearing entry
+// name planted in cursor's mcp.json must never reach the terminal
+// raw -- no ESC byte anywhere in the output.
+func TestUninstallSanitizesConfigStrings(t *testing.T) {
+	home := setupUninstallCLITest(t)
+	writeUninstallFixtureFile(t, filepath.Join(home, ".cursor", "mcp.json"),
+		`{"mcpServers": {"gramaton-\u001b[31mevil": {"type": "stdio", "command": "gramaton", "args": ["mcp"]}}}`)
+	uninstallDryRun = true
+
+	var out bytes.Buffer
+	if err := runUninstall(context.Background(), &out); err != nil {
+		t.Fatalf("runUninstall: %v", err)
+	}
+	if bytes.ContainsRune(out.Bytes(), 0x1b) {
+		t.Errorf("raw ESC byte reached the terminal output:\n%q", out.String())
+	}
+	if !strings.Contains(out.String(), "gramaton-") {
+		t.Errorf("sanitized entry name should still be recognizable:\n%s", out.String())
 	}
 }

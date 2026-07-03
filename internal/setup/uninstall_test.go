@@ -127,40 +127,94 @@ func TestIsGramatonMCPEntryName(t *testing.T) {
 	}
 }
 
-// TestParseColonMCPList pins the `claude mcp list` parser: entry
-// name is everything before the first colon of a trimmed line, and
-// only convention-named entries are selected -- gramatonx and
-// unrelated servers must not be.
+// TestIsGramatonCommandToken pins the command leg of the ownership
+// check: bare "gramaton", any path ending in /gramaton (or a Windows
+// .exe variant) is ours; everything else is a foreign binary.
+func TestIsGramatonCommandToken(t *testing.T) {
+	tests := []struct {
+		tok  string
+		want bool
+	}{
+		{"gramaton", true},
+		{"/opt/homebrew/bin/gramaton", true},
+		{`C:\Users\x\go\bin\gramaton.exe`, true},
+		{"gramaton.exe", true},
+		{"othercmd", false},
+		{"/usr/bin/notgramaton", false},
+		{"gramatond", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isGramatonCommandToken(tt.tok); got != tt.want {
+			t.Errorf("isGramatonCommandToken(%q) = %v, want %v", tt.tok, got, tt.want)
+		}
+	}
+}
+
+// TestParseColonMCPList pins the `claude mcp list` parser: the entry
+// name before the first colon must match the naming convention AND
+// the command token after it must run gramaton. gramatonx, unrelated
+// servers, and convention-NAMED entries running a foreign command
+// must not be selected; failed-health-check status tails parse the
+// same as connected ones.
 func TestParseColonMCPList(t *testing.T) {
 	out := "Checking MCP server health...\n" +
 		"\n" +
 		"gramaton: gramaton mcp - ✓ Connected\n" +
-		"gramaton-work: gramaton --store work mcp - ✓ Connected\n" +
+		"gramaton-work: gramaton --store work mcp - ✗ Failed to connect\n" +
+		"gramaton-abs: /opt/homebrew/bin/gramaton mcp - ✓ Connected\n" +
+		"gramaton-evil: othercmd mcp - ✓ Connected\n" +
 		"gramatonx: something else - ✓ Connected\n" +
 		"playwright: npx @playwright/mcp@latest - ✗ Failed to connect\n" +
 		"gramaton: gramaton mcp - duplicate line should dedupe\n"
 	got := parseColonMCPList(out)
-	want := []string{"gramaton", "gramaton-work"}
+	want := []string{"gramaton", "gramaton-abs", "gramaton-work"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseColonMCPList = %v, want %v", got, want)
 	}
 }
 
 // TestParseTokenMCPList pins the tabular parser (`codex mcp list`,
-// best-effort kiro): only the FIRST token of a row is a candidate
-// name. The "notes" row runs the gramaton binary but is not
-// convention-named -- it must not be selected (the Command column
-// must never leak in).
+// best-effort kiro): first token is the name, second the command,
+// and BOTH ownership legs must hold. The "notes" row runs the
+// gramaton binary but is not convention-named; "gramaton-evil" is
+// convention-named but runs a foreign binary; neither is ours. Under
+// strictCommand a row with no visible command column is refused;
+// the lenient variant (kiro, format unverified) accepts it on the
+// name convention alone.
 func TestParseTokenMCPList(t *testing.T) {
 	out := "Name          Command   Args              Env\n" +
 		"gramaton      gramaton  mcp               -\n" +
 		"gramaton-foo  gramaton  --store foo mcp   -\n" +
+		"gramaton-evil othercmd  -                 -\n" +
 		"gramatonx     other     -                 -\n" +
-		"notes         gramaton  mcp               -\n"
-	got := parseTokenMCPList(out)
-	want := []string{"gramaton", "gramaton-foo"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseTokenMCPList = %v, want %v", got, want)
+		"notes         gramaton  mcp               -\n" +
+		"gramaton-bare\n"
+	strict := parseTokenMCPList(out, true)
+	if want := []string{"gramaton", "gramaton-foo"}; !reflect.DeepEqual(strict, want) {
+		t.Errorf("strict parseTokenMCPList = %v, want %v", strict, want)
+	}
+	lenient := parseTokenMCPList(out, false)
+	if want := []string{"gramaton", "gramaton-bare", "gramaton-foo"}; !reflect.DeepEqual(lenient, want) {
+		t.Errorf("lenient parseTokenMCPList = %v, want %v", lenient, want)
+	}
+}
+
+// TestRunHarnessCommandSetsNoAutostart pins MAJOR safety plumbing:
+// every vendor-CLI invocation must carry GRAMATON_NO_AUTOSTART=1 in
+// its environment, because `claude mcp list` health-checks stdio
+// entries by spawning them and a spawned `gramaton mcp` must not
+// auto-start a server.
+func TestRunHarnessCommandSetsNoAutostart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	out, err := runHarnessCommand(context.Background(), "/bin/sh", "-c", `printf '%s' "$GRAMATON_NO_AUTOSTART"`)
+	if err != nil {
+		t.Fatalf("runHarnessCommand: %v", err)
+	}
+	if out != "1" {
+		t.Errorf("GRAMATON_NO_AUTOSTART in vendor-CLI env = %q, want \"1\"", out)
 	}
 }
 
@@ -917,7 +971,7 @@ func TestUninstallInventoryMutatesNothing(t *testing.T) {
 	}
 
 	before := snapshotTree(t, home)
-	results := UninstallInventory(context.Background(), cfgDir, targets)
+	_, results := UninstallInventory(context.Background(), cfgDir, targets)
 	after := snapshotTree(t, home)
 
 	if !reflect.DeepEqual(before, after) {
@@ -927,15 +981,15 @@ func TestUninstallInventoryMutatesNothing(t *testing.T) {
 	// The inventory must actually see the fixture: at least the hook
 	// configs, scripts, guidance, and Cursor MCP entries.
 	present := 0
-	skipped := 0
+	notes := 0
 	for _, r := range results {
 		switch r.Outcome {
 		case UninstallPresent:
 			present++
-		case UninstallSkipped:
-			skipped++
-		case UninstallFailed:
-			t.Errorf("unexpected failure in inventory: %+v", r)
+		case UninstallNote:
+			notes++
+		case UninstallSkipped, UninstallFailed:
+			t.Errorf("unexpected skip/failure in inventory: %+v", r)
 		}
 	}
 	// 3 hook configs + 4 script dirs + 4 guidance files + 2 cursor
@@ -943,10 +997,10 @@ func TestUninstallInventoryMutatesNothing(t *testing.T) {
 	if present != 13 {
 		t.Errorf("present surfaces = %d, want 13:\n%+v", present, results)
 	}
-	// claude, kiro, codex binaries are all missing but each harness
-	// has a footprint -> 3 skipped MCP surfaces with manual hints.
-	if skipped != 3 {
-		t.Errorf("skipped surfaces = %d, want 3:\n%+v", skipped, results)
+	// claude, kiro, codex binaries are all missing -> 3 informational
+	// cannot-check notes with manual hints (never skips or failures).
+	if notes != 3 {
+		t.Errorf("note surfaces = %d, want 3:\n%+v", notes, results)
 	}
 }
 
@@ -961,7 +1015,8 @@ func TestUninstallApplyFullFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results := UninstallApply(context.Background(), cfgDir, targets)
+	plan, _ := UninstallInventory(context.Background(), cfgDir, targets)
+	results := UninstallApply(context.Background(), plan)
 	for _, r := range results {
 		if r.Outcome == UninstallFailed {
 			t.Errorf("unexpected failure: %+v", r)
@@ -1012,7 +1067,8 @@ func TestUninstallApplyFullFixture(t *testing.T) {
 	// Second run: idempotent no-op. No removals, no failures, no
 	// byte changes, no new backups.
 	before := snapshotTree(t, home)
-	second := UninstallApply(context.Background(), cfgDir, targets)
+	plan2, _ := UninstallInventory(context.Background(), cfgDir, targets)
+	second := UninstallApply(context.Background(), plan2)
 	after := snapshotTree(t, home)
 	if !reflect.DeepEqual(before, after) {
 		t.Error("second apply mutated the filesystem")
@@ -1024,33 +1080,58 @@ func TestUninstallApplyFullFixture(t *testing.T) {
 	}
 }
 
-// TestUninstallMCPBinaryMissingFootprintGating: a missing vendor
-// binary yields a skipped-with-manual-hint MCP line only when the
-// harness left other gramaton footprint behind; with no footprint at
-// all it reports not-present, keeping never-installed machines (and
-// post-uninstall re-runs) at "nothing to remove".
-func TestUninstallMCPBinaryMissingFootprintGating(t *testing.T) {
-	setUninstallTestEnv(t) // PATH is empty: no binaries anywhere
-	h := harnessByName(harnessClaudeCode)
-
-	noFootprint := uninstallMCP(context.Background(), h, false, true)
-	if len(noFootprint) != 1 || noFootprint[0].Outcome != UninstallNotPresent {
-		t.Errorf("no footprint: got %+v, want a single not-present result", noFootprint)
+// TestUninstallMCPBinaryMissingAlwaysNotes pins the missing-binary
+// contract: whether or not the harness left any other gramaton
+// footprint behind (the wizard allows registering MCP while
+// declining hooks and guidance), a missing vendor binary ALWAYS
+// yields an informational note carrying the exact manual command --
+// never a skip or failure, in inventory and apply alike.
+func TestUninstallMCPBinaryMissingAlwaysNotes(t *testing.T) {
+	home := setUninstallTestEnv(t) // PATH is empty: no binaries anywhere
+	targets, err := UninstallTargets("claude-code")
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	withFootprint := uninstallMCP(context.Background(), h, true, true)
-	if len(withFootprint) != 1 || withFootprint[0].Outcome != UninstallSkipped {
-		t.Fatalf("with footprint: got %+v, want a single skipped result", withFootprint)
+	assertNote := func(t *testing.T, results []UninstallResult) {
+		t.Helper()
+		var note *UninstallResult
+		for i, r := range results {
+			if r.Surface == "MCP entries" {
+				note = &results[i]
+			}
+			if r.Outcome == UninstallSkipped || r.Outcome == UninstallFailed {
+				t.Errorf("missing binary must never skip/fail, got %+v", r)
+			}
+		}
+		if note == nil || note.Outcome != UninstallNote {
+			t.Fatalf("want an MCP note result, got %+v", results)
+		}
+		if !strings.Contains(note.Detail, "cannot check MCP registration") ||
+			!strings.Contains(note.Detail, "claude mcp remove --scope user") {
+			t.Errorf("note detail should carry the cannot-check text and manual command: %q", note.Detail)
+		}
 	}
-	if !strings.Contains(withFootprint[0].Detail, "claude mcp remove --scope user") {
-		t.Errorf("skip detail should carry the manual removal command: %q", withFootprint[0].Detail)
-	}
+
+	// Bare machine: no footprint at all.
+	cfgDir := filepath.Join(home, ".gramaton")
+	plan, inv := UninstallInventory(context.Background(), cfgDir, targets)
+	assertNote(t, inv)
+	assertNote(t, UninstallApply(context.Background(), plan))
+
+	// MCP-only-style footprint variants must not change the outcome.
+	mustWriteFile(t, filepath.Join(cfgDir, "hooks", "claude-code", "stop.sh"), "#!/bin/bash\n")
+	plan2, inv2 := UninstallInventory(context.Background(), cfgDir, targets)
+	assertNote(t, inv2)
+	assertNote(t, UninstallApply(context.Background(), plan2))
 }
 
 // TestUninstallEngineMCPWithFakeBinary drives the engine MCP surface
 // end to end with a PATH-visible fake binary and the exec seam:
-// inventory enumerates without removing; apply removes with the
-// right argv.
+// inventory enumerates without removing; apply consumes the PLAN --
+// exactly one `mcp list` across both phases (a second list would
+// re-spawn claude's health-check proxies against the servers the
+// stop step just shut down) -- and removes with the right argv.
 func TestUninstallEngineMCPWithFakeBinary(t *testing.T) {
 	setUninstallTestEnv(t)
 	fakeBinaryOnPath(t, "claude")
@@ -1070,7 +1151,7 @@ func TestUninstallEngineMCPWithFakeBinary(t *testing.T) {
 	}
 	cfgDir := filepath.Join(t.TempDir(), "cfg")
 
-	inv := UninstallInventory(context.Background(), cfgDir, targets)
+	plan, inv := UninstallInventory(context.Background(), cfgDir, targets)
 	foundEntry := false
 	for _, r := range inv {
 		if r.Outcome == UninstallPresent && strings.Contains(r.Surface, `MCP entry "gramaton"`) {
@@ -1086,8 +1167,7 @@ func TestUninstallEngineMCPWithFakeBinary(t *testing.T) {
 		}
 	}
 
-	calls = nil
-	res := UninstallApply(context.Background(), cfgDir, targets)
+	res := UninstallApply(context.Background(), plan)
 	removedEntry := false
 	for _, r := range res {
 		if r.Outcome == UninstallRemoved && strings.Contains(r.Surface, `MCP entry "gramaton"`) {
@@ -1097,13 +1177,287 @@ func TestUninstallEngineMCPWithFakeBinary(t *testing.T) {
 	if !removedEntry {
 		t.Fatalf("apply should remove the gramaton MCP entry: %+v", res)
 	}
-	sawRemove := false
+
+	// Exactly ONE list (from inventory) and ONE remove (from apply)
+	// across the whole flow: apply must reuse the plan's enumeration.
+	var lists, removes [][]string
 	for _, c := range calls {
-		if reflect.DeepEqual(c, []string{"mcp", "remove", "--scope", "user", "gramaton"}) {
-			sawRemove = true
+		switch {
+		case len(c) >= 2 && c[1] == "list":
+			lists = append(lists, c)
+		case len(c) >= 2 && c[1] == "remove":
+			removes = append(removes, c)
 		}
 	}
-	if !sawRemove {
-		t.Errorf("apply should run `mcp remove --scope user gramaton`, calls: %v", calls)
+	if len(lists) != 1 {
+		t.Errorf("`mcp list` invoked %d times across inventory+apply, want exactly 1: %v", len(lists), calls)
+	}
+	if len(removes) != 1 || !reflect.DeepEqual(removes[0], []string{"mcp", "remove", "--scope", "user", "gramaton"}) {
+		t.Errorf("apply should run `mcp remove --scope user gramaton` exactly once, got %v", removes)
+	}
+}
+
+// TestKiroBestEffortRemoveFailureSkips pins the MCPBestEffort
+// downgrade: kiro's MCP integration is parked, so a removal failure
+// surfaces as an informative skip (manual hint included), never as a
+// failure that would flip the exit code.
+func TestKiroBestEffortRemoveFailureSkips(t *testing.T) {
+	setUninstallTestEnv(t)
+	fakeBinaryOnPath(t, "kiro")
+
+	swapHarnessCommand(t, func(_ context.Context, _ string, args ...string) (string, error) {
+		if len(args) >= 2 && args[1] == "list" {
+			return "gramaton gramaton mcp\n", nil
+		}
+		return "Unknown command: remove", fmt.Errorf("exit status 2")
+	})
+
+	targets, err := UninstallTargets("kiro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := UninstallInventory(context.Background(), filepath.Join(t.TempDir(), "cfg"), targets)
+	results := UninstallApply(context.Background(), plan)
+
+	sawSkip := false
+	for _, r := range results {
+		if r.Outcome == UninstallFailed {
+			t.Errorf("best-effort kiro must not produce failures: %+v", r)
+		}
+		if r.Outcome == UninstallSkipped && strings.Contains(r.Surface, `MCP entry "gramaton"`) {
+			sawSkip = true
+			if !strings.Contains(r.Detail, "kiro mcp remove") {
+				t.Errorf("skip detail should carry the manual hint: %q", r.Detail)
+			}
+		}
+	}
+	if !sawSkip {
+		t.Fatalf("want a skipped MCP entry result, got %+v", results)
+	}
+}
+
+// TestInstallUninstallRoundTripHooksAndMCP is the hooks-and-MCP
+// counterpart of TestInstallUninstallRoundTrip: the REAL install
+// paths (Materialize + register*Hooks + registerCursorEntry) run
+// against fixture configs seeded with user entries, then a full
+// engine uninstall must strip everything gramaton installed while
+// preserving the user entries -- so the install patchers and the
+// uninstall strips can never drift apart.
+func TestInstallUninstallRoundTripHooksAndMCP(t *testing.T) {
+	home := setUninstallTestEnv(t)
+	cfgDir := filepath.Join(home, ".gramaton")
+
+	// Pre-existing user entries in every hook config.
+	mustWriteFile(t, filepath.Join(home, ".claude", "settings.json"), `{
+  "permissions": {"allow": ["thing"]},
+  "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/user/custom/stop.sh"}]}]}
+}`)
+	mustWriteFile(t, filepath.Join(home, ".codex", "hooks.json"),
+		`{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/user/codex-stop.sh"}]}]}}`)
+	mustWriteFile(t, filepath.Join(home, ".cursor", "hooks.json"),
+		`{"version": 1, "hooks": {"stop": [{"command": "/user/cursor-stop.sh"}]}}`)
+	mustWriteFile(t, filepath.Join(home, ".cursor", "mcp.json"),
+		`{"mcpServers": {"other": {"type": "stdio", "command": "npx", "args": ["x"]}}}`)
+
+	// Real install: materialize proxy scripts and wire them through
+	// the actual register patchers; register Cursor MCP entries
+	// through the actual registration path (default + per-store).
+	backend := DefaultHookBackend{}
+	for _, embedDir := range []string{"claude-code", "codex", "cursor"} {
+		scripts, err := backend.Materialize(embedDir, cfgDir)
+		if err != nil {
+			t.Fatalf("Materialize(%s): %v", embedDir, err)
+		}
+		if _, err := backend.RegisterHooks(context.Background(), embedDir, scripts); err != nil {
+			t.Fatalf("RegisterHooks(%s): %v", embedDir, err)
+		}
+	}
+	if _, err := registerCursorEntry("gramaton", []string{"mcp"}); err != nil {
+		t.Fatalf("registerCursorEntry: %v", err)
+	}
+	if _, err := registerCursorEntry(storeMCPEntryName("work"), storeMCPArgs("work")); err != nil {
+		t.Fatalf("registerCursorEntry(store): %v", err)
+	}
+
+	// Sanity: install really landed.
+	installed, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if !strings.Contains(string(installed), "hooks/claude-code") {
+		t.Fatalf("install fixture broken; settings.json: %s", installed)
+	}
+
+	// Full uninstall over every harness.
+	targets, err := UninstallTargets("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := UninstallInventory(context.Background(), cfgDir, targets)
+	results := UninstallApply(context.Background(), plan)
+	for _, r := range results {
+		if r.Outcome == UninstallFailed {
+			t.Errorf("unexpected failure: %+v", r)
+		}
+	}
+
+	// Hook configs: gramaton entries gone, user entries preserved.
+	claude, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if strings.Contains(string(claude), "hooks/claude-code") || strings.Contains(string(claude), ".gramaton") {
+		t.Errorf("claude settings.json still has installed hooks:\n%s", claude)
+	}
+	if !strings.Contains(string(claude), "/user/custom/stop.sh") || !strings.Contains(string(claude), `"permissions"`) {
+		t.Errorf("claude user content lost:\n%s", claude)
+	}
+	codex, _ := os.ReadFile(filepath.Join(home, ".codex", "hooks.json"))
+	if strings.Contains(string(codex), "hooks/codex") {
+		t.Errorf("codex hooks.json still has installed hooks:\n%s", codex)
+	}
+	if !strings.Contains(string(codex), "/user/codex-stop.sh") {
+		t.Errorf("codex user hook lost:\n%s", codex)
+	}
+	cursor, _ := os.ReadFile(filepath.Join(home, ".cursor", "hooks.json"))
+	if strings.Contains(string(cursor), "hooks/cursor") {
+		t.Errorf("cursor hooks.json still has installed hooks:\n%s", cursor)
+	}
+	if !strings.Contains(string(cursor), "/user/cursor-stop.sh") {
+		t.Errorf("cursor user hook lost:\n%s", cursor)
+	}
+
+	// Cursor MCP: both real-registered entries gone, user server kept.
+	mcp, _ := os.ReadFile(filepath.Join(home, ".cursor", "mcp.json"))
+	if strings.Contains(string(mcp), `"gramaton"`) || strings.Contains(string(mcp), `"gramaton-work"`) {
+		t.Errorf("cursor mcp.json still has gramaton entries:\n%s", mcp)
+	}
+	if !strings.Contains(string(mcp), `"other"`) {
+		t.Errorf("cursor mcp.json lost the user server:\n%s", mcp)
+	}
+
+	// Materialized scripts gone.
+	for _, embedDir := range []string{"claude-code", "codex", "cursor"} {
+		if _, err := os.Stat(filepath.Join(cfgDir, "hooks", embedDir)); !os.IsNotExist(err) {
+			t.Errorf("script dir %s should be deleted", embedDir)
+		}
+	}
+}
+
+// TestUninstallCodexRelocatedConfigRoot: with CODEX_HOME pointing at
+// a relocated root, both the AGENTS.md fence strip and the
+// hooks.json unwire must operate on the relocated files -- the same
+// ConfigRootEnv resolution install uses.
+func TestUninstallCodexRelocatedConfigRoot(t *testing.T) {
+	home := setUninstallTestEnv(t)
+	codexHome := filepath.Join(home, "relocated-codex")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	mustWriteFile(t, filepath.Join(codexHome, "AGENTS.md"),
+		"# codex user notes\n\n"+instructionsFenceBegin()+"\nguidance\n"+instructionsFenceEnd+"\n")
+	mustWriteFile(t, filepath.Join(codexHome, "hooks.json"), `{
+  "hooks": {"Stop": [
+    {"hooks": [{"type": "command", "command": "/home/x/.gramaton/hooks/codex/stop.sh"}]},
+    {"hooks": [{"type": "command", "command": "/user/keep.sh"}]}
+  ]}
+}`)
+
+	targets, err := UninstallTargets("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := UninstallInventory(context.Background(), filepath.Join(home, ".gramaton"), targets)
+	results := UninstallApply(context.Background(), plan)
+	for _, r := range results {
+		if r.Outcome == UninstallFailed {
+			t.Errorf("unexpected failure: %+v", r)
+		}
+	}
+
+	agents, err := os.ReadFile(filepath.Join(codexHome, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("relocated AGENTS.md unreadable after strip: %v", err)
+	}
+	if string(agents) != "# codex user notes\n" {
+		t.Errorf("relocated AGENTS.md after strip = %q, want the user notes only", agents)
+	}
+	hooks, _ := os.ReadFile(filepath.Join(codexHome, "hooks.json"))
+	if strings.Contains(string(hooks), ".gramaton") {
+		t.Errorf("relocated hooks.json still has gramaton hooks:\n%s", hooks)
+	}
+	if !strings.Contains(string(hooks), "/user/keep.sh") {
+		t.Errorf("relocated hooks.json lost the user hook:\n%s", hooks)
+	}
+}
+
+// TestUninstallCodexRelativeConfigRootRefused: a relative CODEX_HOME
+// is refused with failed surfaces (same absolute-path guard as
+// install), never a panic or a write anywhere.
+func TestUninstallCodexRelativeConfigRootRefused(t *testing.T) {
+	setUninstallTestEnv(t)
+	t.Setenv("CODEX_HOME", "relative/codex")
+
+	targets, err := UninstallTargets("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, inv := UninstallInventory(context.Background(), filepath.Join(t.TempDir(), "cfg"), targets)
+
+	assertRefused := func(t *testing.T, results []UninstallResult) {
+		t.Helper()
+		failed := 0
+		for _, r := range results {
+			if r.Outcome == UninstallFailed {
+				failed++
+				if !strings.Contains(r.Detail, "absolute path") {
+					t.Errorf("failure detail should mention the absolute-path guard: %q", r.Detail)
+				}
+			}
+		}
+		// Both CODEX_HOME-resolved surfaces refuse: hook config and
+		// agent guidance.
+		if failed != 2 {
+			t.Errorf("failed surfaces = %d, want 2 (hooks.json + AGENTS.md):\n%+v", failed, results)
+		}
+	}
+	assertRefused(t, inv)
+	assertRefused(t, UninstallApply(context.Background(), plan))
+}
+
+// TestUninstallFencedBackupFailureAborts (MINOR: backup-write parity)
+// -- when the .bak sibling cannot be written, the fenced strip must
+// abort the surface and leave the original untouched.
+func TestUninstallFencedBackupFailureAborts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-bit test; NTFS ACL model differs")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission bits")
+	}
+	setUninstallTestEnv(t)
+	h := harnessByName(harnessClaudeCode)
+	path, _, err := instructionsPathForClient(h.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "# user notes\n\n" + instructionsFenceBegin() + "\nguidance\n" + instructionsFenceEnd + "\n"
+	mustWriteFile(t, path, content)
+
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil { // read+exec: .bak creation fails
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	res := uninstallInstructions(h, probeInstructions(h), true)
+	if res == nil || res.Outcome != UninstallFailed {
+		t.Fatalf("outcome = %+v, want failed when the backup can't be written", res)
+	}
+	if !strings.Contains(res.Detail, "backup") {
+		t.Errorf("failure detail should mention the backup: %q", res.Detail)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != content {
+		t.Error("original was modified despite the aborted backup")
 	}
 }

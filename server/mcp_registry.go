@@ -82,6 +82,19 @@ func RemoveMCPProxy(cfgDir string, pid int) {
 // (notably the stop command's reaper) must verify the process
 // identity before signalling it.
 func ListMCPProxies(cfgDir string) []MCPProxyInfo {
+	return listMCPProxies(cfgDir, true)
+}
+
+// ListMCPProxiesNoPrune is the read-only variant of ListMCPProxies:
+// the same live-proxy filtering, but stale or unparseable entries
+// are left on disk instead of being collected. For inventory-style
+// callers (uninstall's dry-run and pre-confirmation survey) that
+// must not mutate anything on disk.
+func ListMCPProxiesNoPrune(cfgDir string) []MCPProxyInfo {
+	return listMCPProxies(cfgDir, false)
+}
+
+func listMCPProxies(cfgDir string, prune bool) []MCPProxyInfo {
 	entries, err := os.ReadDir(mcpRegistryDir(cfgDir))
 	if err != nil {
 		return nil // no registry dir yet: no proxies ever registered
@@ -99,11 +112,15 @@ func ListMCPProxies(cfgDir string) []MCPProxyInfo {
 		}
 		var info MCPProxyInfo
 		if err := json.Unmarshal(data, &info); err != nil || info.PID <= 0 {
-			_ = os.Remove(path)
+			if prune {
+				_ = os.Remove(path)
+			}
 			continue
 		}
 		if !IsProcessAlive(info.PID) {
-			_ = os.Remove(path)
+			if prune {
+				_ = os.Remove(path)
+			}
 			continue
 		}
 		out = append(out, info)

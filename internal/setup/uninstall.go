@@ -19,6 +19,14 @@ import (
 // cli/uninstall.go; this file owns the surface mechanics and
 // returns structured per-surface results.
 //
+// The flow is two-phase: UninstallInventory probes everything ONCE
+// into an UninstallPlan (never mutating), and UninstallApply acts on
+// that plan. Apply deliberately does not re-enumerate MCP entries:
+// `claude mcp list` health-checks each configured stdio entry by
+// spawning it, so a second enumeration after the CLI's stop step
+// would re-spawn proxies against the servers just shut down -- and
+// plan and apply could disagree about what exists.
+//
 // Uninstall NEVER deletes data: config.yaml and every store are out
 // of scope by design.
 
@@ -36,11 +44,17 @@ const (
 	// UninstallNotPresent: nothing to do for this surface.
 	UninstallNotPresent UninstallOutcome = "not present"
 
-	// UninstallSkipped: the surface could not be handled (missing
-	// harness binary, failed enumeration, best-effort harness) and
-	// needs manual attention; Detail carries the reason and, where
-	// possible, the exact manual command. Skips are warnings, not
-	// failures.
+	// UninstallNote: informational only -- the surface could not be
+	// verified (the harness binary is not on PATH, so its MCP
+	// registration can't be checked). Notes never affect the exit
+	// code and never suppress the CLI's "nothing to remove"
+	// headline; Detail carries the manual check/removal command.
+	UninstallNote UninstallOutcome = "note"
+
+	// UninstallSkipped: the surface could not be handled (failed
+	// enumeration, best-effort harness) and needs manual attention;
+	// Detail carries the reason and, where possible, the exact
+	// manual command. Skips are warnings, not failures.
 	UninstallSkipped UninstallOutcome = "skipped"
 
 	// UninstallFailed: removal was attempted and failed, or a config
@@ -88,26 +102,63 @@ func UninstallTargets(slug string) ([]*Harness, error) {
 	return nil, fmt.Errorf("unknown harness %q (valid values: %s)", slug, strings.Join(valid, ", "))
 }
 
+// UninstallPlan carries the probed state from UninstallInventory to
+// UninstallApply so the two phases cannot disagree and every vendor
+// CLI is invoked exactly once per harness.
+type UninstallPlan struct {
+	items []harnessPlan
+}
+
+// harnessPlan is the probed state of one harness's surfaces.
+type harnessPlan struct {
+	h        *Harness
+	ownPaths []string
+
+	hookPresent  bool
+	hookProbeErr error
+
+	scriptsDir     string
+	scriptsPresent bool
+
+	instr instructionsProbe
+
+	// MCP surface. mcpApplicable is false when the harness has no
+	// ListMCPEntries strategy; mcpBinMissing means the vendor binary
+	// wasn't found on PATH (Cursor, DetectBinary == "", is
+	// file-driven and never bin-missing).
+	mcpApplicable bool
+	mcpBin        string
+	mcpBinMissing bool
+	mcpEntries    []string
+	mcpListErr    error
+}
+
 // UninstallInventory probes every uninstall surface for the selected
-// harnesses without modifying anything. Present surfaces come back
-// with UninstallPresent; surfaces that would be skipped or refused
-// report that up front so the user sees it before confirming.
-func UninstallInventory(ctx context.Context, configDir string, targets []*Harness) []UninstallResult {
-	return uninstallWalk(ctx, configDir, targets, false)
-}
-
-// UninstallApply removes every uninstall surface for the selected
-// harnesses. Partial failure is deliberate: a failed surface is
-// reported and the walk continues, so one broken config file doesn't
-// strand the rest of the cleanup.
-func UninstallApply(ctx context.Context, configDir string, targets []*Harness) []UninstallResult {
-	return uninstallWalk(ctx, configDir, targets, true)
-}
-
-func uninstallWalk(ctx context.Context, configDir string, targets []*Harness, apply bool) []UninstallResult {
+// harnesses without modifying anything, and returns the plan a
+// subsequent UninstallApply consumes plus the per-surface inventory
+// results. Present surfaces come back with UninstallPresent;
+// surfaces that would be skipped or refused report that up front so
+// the user sees it before confirming.
+func UninstallInventory(ctx context.Context, configDir string, targets []*Harness) (*UninstallPlan, []UninstallResult) {
+	plan := &UninstallPlan{}
 	var results []UninstallResult
 	for _, h := range targets {
-		results = append(results, uninstallHarness(ctx, configDir, h, apply)...)
+		plan.items = append(plan.items, probeHarness(ctx, configDir, h))
+	}
+	for i := range plan.items {
+		results = append(results, reportHarness(ctx, &plan.items[i], false)...)
+	}
+	return plan, results
+}
+
+// UninstallApply removes every uninstall surface captured in the
+// plan. Partial failure is deliberate: a failed surface is reported
+// and the walk continues, so one broken config file doesn't strand
+// the rest of the cleanup.
+func UninstallApply(ctx context.Context, plan *UninstallPlan) []UninstallResult {
+	var results []UninstallResult
+	for i := range plan.items {
+		results = append(results, reportHarness(ctx, &plan.items[i], true)...)
 	}
 	return results
 }
@@ -127,108 +178,98 @@ func hookOwnershipPaths(configDir string) []string {
 	return []string{filepath.Join(configDir, "hooks", "own")}
 }
 
-// uninstallHarness walks one harness's surfaces in a stable order:
-// MCP entries, hook-config entries, rendered scripts, agent
-// guidance. The non-MCP surfaces are probed first because their
-// presence is the "footprint" signal deciding whether a missing
-// harness binary earns a skipped-with-manual-hint MCP line (the
-// harness was clearly installed here once) or a quiet not-present
-// (nothing was ever installed; a second uninstall run must stay a
-// clean no-op).
-func uninstallHarness(ctx context.Context, configDir string, h *Harness, apply bool) []UninstallResult {
-	ownPaths := hookOwnershipPaths(configDir)
+// probeHarness surveys one harness's surfaces without mutating
+// anything. This is the ONLY place vendor CLIs are invoked.
+func probeHarness(ctx context.Context, configDir string, h *Harness) harnessPlan {
+	hp := harnessPlan{h: h, ownPaths: hookOwnershipPaths(configDir)}
 
-	// Probe pass (never mutates).
-	hookPresent := false
-	var hookProbeErr error
 	if h.UnwireHooks != nil {
-		hookPresent, _, hookProbeErr = h.UnwireHooks(ctx, ownPaths, false)
+		hp.hookPresent, _, hp.hookProbeErr = h.UnwireHooks(ctx, hp.ownPaths, false)
 	}
 
-	scriptsDir := ""
-	scriptsPresent := false
 	// The configDir != "" guard keeps a misconfigured caller from
 	// ever aiming the scripts RemoveAll at a cwd-relative "hooks/"
 	// path.
 	if h.HookEmbedDir != "" && configDir != "" {
-		scriptsDir = filepath.Join(configDir, "hooks", h.HookEmbedDir)
-		if fi, err := os.Stat(scriptsDir); err == nil && fi.IsDir() {
-			scriptsPresent = true
+		hp.scriptsDir = filepath.Join(configDir, "hooks", h.HookEmbedDir)
+		if fi, err := os.Stat(hp.scriptsDir); err == nil && fi.IsDir() {
+			hp.scriptsPresent = true
 		}
 	}
 
-	instr := probeInstructions(h)
+	hp.instr = probeInstructions(h)
 
-	footprint := hookPresent || hookProbeErr != nil || scriptsPresent || instr.present
+	if h.ListMCPEntries != nil {
+		hp.mcpApplicable = true
+		if h.DetectBinary != "" {
+			p, err := exec.LookPath(h.DetectBinary)
+			if err != nil {
+				hp.mcpBinMissing = true
+			} else {
+				hp.mcpBin = p
+			}
+		}
+		if !hp.mcpBinMissing {
+			hp.mcpEntries, hp.mcpListErr = h.ListMCPEntries(ctx, hp.mcpBin)
+		}
+	}
+	return hp
+}
 
+// reportHarness turns one harness's probed state into per-surface
+// results, applying the removals when apply is true. Surface order
+// is stable: MCP entries, hook-config entries, rendered scripts,
+// agent guidance.
+func reportHarness(ctx context.Context, hp *harnessPlan, apply bool) []UninstallResult {
 	var results []UninstallResult
-	results = append(results, uninstallMCP(ctx, h, footprint, apply)...)
-	if r := uninstallHookConfig(ctx, h, ownPaths, hookPresent, hookProbeErr, apply); r != nil {
+	results = append(results, reportMCP(ctx, hp, apply)...)
+	if r := reportHookConfig(ctx, hp, apply); r != nil {
 		results = append(results, *r)
 	}
-	if r := uninstallHookScripts(h, scriptsDir, scriptsPresent, apply); r != nil {
+	if r := reportHookScripts(hp, apply); r != nil {
 		results = append(results, *r)
 	}
-	if r := uninstallInstructions(h, instr, apply); r != nil {
+	if r := uninstallInstructions(hp.h, hp.instr, apply); r != nil {
 		results = append(results, *r)
 	}
 	return results
 }
 
-// uninstallMCP handles the MCP-entries surface for one harness.
-// Vendor-CLI harnesses are gated on their binary being present --
-// gramaton does not hand-edit configs it registered through a vendor
-// CLI. Cursor (DetectBinary == "") is file-driven and always
-// probed.
-func uninstallMCP(ctx context.Context, h *Harness, footprint, apply bool) []UninstallResult {
-	if h.ListMCPEntries == nil {
+// reportMCP handles the MCP-entries surface for one harness from the
+// probed plan. Vendor-CLI harnesses whose binary is missing get an
+// informational note with the exact manual command -- always, so an
+// MCP-only install (the wizard allows registering MCP while
+// declining hooks and guidance) is never left without guidance just
+// because its binary went away.
+func reportMCP(ctx context.Context, hp *harnessPlan, apply bool) []UninstallResult {
+	h := hp.h
+	if !hp.mcpApplicable {
 		return nil
 	}
-
-	bin := ""
-	if h.DetectBinary != "" {
-		p, err := exec.LookPath(h.DetectBinary)
-		if err != nil {
-			if !footprint {
-				// No binary and no other gramaton footprint for this
-				// harness: nothing was ever installed here worth a
-				// warning. Report not-present so a machine that
-				// never had the harness (and a re-run after a full
-				// uninstall) stays a clean "nothing to remove".
-				return []UninstallResult{{
-					Harness: h.Name,
-					Surface: "MCP entries",
-					Outcome: UninstallNotPresent,
-					Detail:  h.DetectBinary + " not found",
-				}}
-			}
-			return []UninstallResult{{
-				Harness: h.Name,
-				Surface: "MCP entries",
-				Outcome: UninstallSkipped,
-				Detail: fmt.Sprintf("%s binary not found; if registered, remove manually with: %s (entries are named gramaton or gramaton-<store>)",
-					h.DetectBinary, h.ManualMCPRemoveHint("<entry>")),
-			}}
-		}
-		bin = p
-	}
-
-	entries, err := h.ListMCPEntries(ctx, bin)
-	if err != nil {
+	if hp.mcpBinMissing {
 		return []UninstallResult{{
 			Harness: h.Name,
 			Surface: "MCP entries",
-			Outcome: mcpFailureOutcome(h, err),
-			Detail:  fmt.Sprintf("could not enumerate: %v; remove manually with: %s", err, h.ManualMCPRemoveHint("<entry>")),
+			Outcome: UninstallNote,
+			Detail: fmt.Sprintf("cannot check MCP registration (%s not on PATH); if registered, remove with: %s (entries are named gramaton or gramaton-<store>)",
+				h.DetectBinary, h.ManualMCPRemoveHint("<entry>")),
 		}}
 	}
-	if len(entries) == 0 {
+	if hp.mcpListErr != nil {
+		return []UninstallResult{{
+			Harness: h.Name,
+			Surface: "MCP entries",
+			Outcome: mcpFailureOutcome(h),
+			Detail:  fmt.Sprintf("could not enumerate: %v; remove manually with: %s", hp.mcpListErr, h.ManualMCPRemoveHint("<entry>")),
+		}}
+	}
+	if len(hp.mcpEntries) == 0 {
 		return []UninstallResult{{Harness: h.Name, Surface: "MCP entries", Outcome: UninstallNotPresent}}
 	}
 
 	if !apply {
 		var out []UninstallResult
-		for _, e := range entries {
+		for _, e := range hp.mcpEntries {
 			out = append(out, UninstallResult{
 				Harness: h.Name,
 				Surface: fmt.Sprintf("MCP entry %q", e),
@@ -239,7 +280,7 @@ func uninstallMCP(ctx context.Context, h *Harness, footprint, apply bool) []Unin
 		return out
 	}
 
-	removed, backup, err := h.RemoveMCPEntries(ctx, bin, entries)
+	removed, backup, err := h.RemoveMCPEntries(ctx, hp.mcpBin, hp.mcpEntries)
 	removedSet := map[string]bool{}
 	var out []UninstallResult
 	for _, e := range removed {
@@ -252,14 +293,14 @@ func uninstallMCP(ctx context.Context, h *Harness, footprint, apply bool) []Unin
 		})
 	}
 	if err != nil {
-		for _, e := range entries {
+		for _, e := range hp.mcpEntries {
 			if removedSet[e] {
 				continue
 			}
 			out = append(out, UninstallResult{
 				Harness: h.Name,
 				Surface: fmt.Sprintf("MCP entry %q", e),
-				Outcome: mcpFailureOutcome(h, err),
+				Outcome: mcpFailureOutcome(h),
 				Detail:  fmt.Sprintf("%v; remove manually with: %s", err, h.ManualMCPRemoveHint(e)),
 			})
 		}
@@ -270,18 +311,20 @@ func uninstallMCP(ctx context.Context, h *Harness, footprint, apply bool) []Unin
 // mcpFailureOutcome downgrades an MCP failure to an informative skip
 // for best-effort harnesses (kiro), matching the wizard's
 // warn-and-continue install behavior for the same integration.
-func mcpFailureOutcome(h *Harness, _ error) UninstallOutcome {
+func mcpFailureOutcome(h *Harness) UninstallOutcome {
 	if h.MCPBestEffort {
 		return UninstallSkipped
 	}
 	return UninstallFailed
 }
 
-// uninstallHookConfig handles the hook-registrations surface.
-// Existence-driven: the config file is edited if it exists,
-// regardless of whether the harness binary survives. Returns nil for
-// harnesses without hook auto-wiring (kiro) -- no surface to report.
-func uninstallHookConfig(ctx context.Context, h *Harness, ownPaths []string, present bool, probeErr error, apply bool) *UninstallResult {
+// reportHookConfig handles the hook-registrations surface from the
+// probed plan. Existence-driven: the config file is edited if it
+// exists, regardless of whether the harness binary survives. Returns
+// nil for harnesses without hook auto-wiring (kiro) -- no surface to
+// report.
+func reportHookConfig(ctx context.Context, hp *harnessPlan, apply bool) *UninstallResult {
+	h := hp.h
 	if h.UnwireHooks == nil {
 		return nil
 	}
@@ -290,12 +333,12 @@ func uninstallHookConfig(ctx context.Context, h *Harness, ownPaths []string, pre
 		surface = fmt.Sprintf("hook registrations in %s", h.HookConfigPathHint())
 	}
 	r := UninstallResult{Harness: h.Name, Surface: surface}
-	if probeErr != nil {
+	if hp.hookProbeErr != nil {
 		r.Outcome = UninstallFailed
-		r.Detail = probeErr.Error()
+		r.Detail = hp.hookProbeErr.Error()
 		return &r
 	}
-	if !present {
+	if !hp.hookPresent {
 		r.Outcome = UninstallNotPresent
 		return &r
 	}
@@ -303,7 +346,7 @@ func uninstallHookConfig(ctx context.Context, h *Harness, ownPaths []string, pre
 		r.Outcome = UninstallPresent
 		return &r
 	}
-	changed, backup, err := h.UnwireHooks(ctx, ownPaths, true)
+	changed, backup, err := h.UnwireHooks(ctx, hp.ownPaths, true)
 	if err != nil {
 		r.Outcome = UninstallFailed
 		r.Detail = err.Error()
@@ -320,14 +363,15 @@ func uninstallHookConfig(ctx context.Context, h *Harness, ownPaths []string, pre
 	return &r
 }
 
-// uninstallHookScripts handles the rendered proxy-script directory
+// reportHookScripts handles the rendered proxy-script directory
 // <configDir>/hooks/<HookEmbedDir>/. Existence-driven.
-func uninstallHookScripts(h *Harness, scriptsDir string, present, apply bool) *UninstallResult {
-	if h.HookEmbedDir == "" || scriptsDir == "" {
+func reportHookScripts(hp *harnessPlan, apply bool) *UninstallResult {
+	h := hp.h
+	if h.HookEmbedDir == "" || hp.scriptsDir == "" {
 		return nil
 	}
-	r := UninstallResult{Harness: h.Name, Surface: fmt.Sprintf("hook scripts at %s", scriptsDir)}
-	if !present {
+	r := UninstallResult{Harness: h.Name, Surface: fmt.Sprintf("hook scripts at %s", hp.scriptsDir)}
+	if !hp.scriptsPresent {
 		r.Outcome = UninstallNotPresent
 		return &r
 	}
@@ -335,7 +379,7 @@ func uninstallHookScripts(h *Harness, scriptsDir string, present, apply bool) *U
 		r.Outcome = UninstallPresent
 		return &r
 	}
-	if err := os.RemoveAll(scriptsDir); err != nil {
+	if err := os.RemoveAll(hp.scriptsDir); err != nil {
 		r.Outcome = UninstallFailed
 		r.Detail = err.Error()
 		return &r
@@ -408,8 +452,10 @@ func probeInstructions(h *Harness) instructionsProbe {
 //
 //   - fencedBlockInSharedFile: strip the managed fenced region,
 //     preserving everything outside it; a .bak sibling is written
-//     first (install parity). If nothing but whitespace remains, the
-//     file is deleted -- we created it in that case.
+//     first, and a failed backup ABORTS the surface -- same contract
+//     as every other rewrite path. If nothing but whitespace remains
+//     after the strip, the file is deleted (we created it in that
+//     case).
 //   - wholeFileOwned: delete the file; when OwnsInstructionsDir, also
 //     remove its (gramaton-dedicated) directory if now empty.
 func uninstallInstructions(h *Harness, p instructionsProbe, apply bool) *UninstallResult {
@@ -468,12 +514,16 @@ func uninstallInstructions(h *Harness, p instructionsProbe, apply bool) *Uninsta
 		return &r
 	}
 
-	// Best-effort .bak sibling before the rewrite, matching
-	// installFencedBlock's rollback affordance.
+	// .bak sibling before the rewrite (installFencedBlock's rollback
+	// affordance). A failed backup aborts: we are about to mutate
+	// the very file the backup protects.
 	backupPath := p.path + ".bak"
-	if werr := os.WriteFile(backupPath, raw, 0o600); werr == nil {
-		r.Backup = backupPath
+	if err := os.WriteFile(backupPath, raw, 0o600); err != nil {
+		r.Outcome = UninstallFailed
+		r.Detail = fmt.Sprintf("write backup %s: %v (aborting before modifying the original)", backupPath, err)
+		return &r
 	}
+	r.Backup = backupPath
 
 	if len(bytes.TrimSpace(remaining)) == 0 {
 		if err := os.Remove(p.path); err != nil {

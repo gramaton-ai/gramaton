@@ -85,8 +85,11 @@ func reapDecision(alive, looksLikeGramaton bool) reapAction {
 }
 
 // reapMCPProxies stops the registered MCP proxy processes for the
-// store at cfgDir and returns the number of proxies stopped.
-// Warnings for entries it refuses to act on go to w.
+// store at cfgDir and returns the number of proxies stopped plus the
+// number of gramaton proxies that survived the SIGTERM->kill
+// escalation (failed). Warnings for entries it refuses to act on go
+// to w; skipped non-gramaton PIDs are warned about but never counted
+// as failures -- they are not our processes.
 //
 // Registry entries whose PID is already dead are pruned inside
 // ListMCPProxies; entries for successfully terminated proxies are
@@ -99,8 +102,7 @@ func reapDecision(alive, looksLikeGramaton bool) reapAction {
 // signalling the server out-of-band would race stopServer's
 // graceful path. Such entries are skipped and left for
 // ListMCPProxies to prune once the real owner exits.
-func reapMCPProxies(cfgDir string, ops procOps, w io.Writer) int {
-	stopped := 0
+func reapMCPProxies(cfgDir string, ops procOps, w io.Writer) (stopped, failed int) {
 	for _, p := range server.ListMCPProxies(cfgDir) {
 		if ops.protected != nil && ops.protected(p.PID) {
 			fmt.Fprintf(w, "warning: registered mcp proxy pid %d belongs to the stop or server process (pid reused?); not signalling it\n", p.PID)
@@ -119,11 +121,12 @@ func reapMCPProxies(cfgDir string, ops procOps, w io.Writer) int {
 				server.RemoveMCPProxy(cfgDir, p.PID)
 				stopped++
 			} else {
+				failed++
 				fmt.Fprintf(w, "warning: mcp proxy pid %d did not exit; leaving its registry entry\n", p.PID)
 			}
 		}
 	}
-	return stopped
+	return stopped, failed
 }
 
 // terminateWithEscalation asks a process to exit gracefully, waits

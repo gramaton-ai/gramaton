@@ -26,13 +26,25 @@ import (
 // hand-added "gramaton-scratch" entry or a stale entry for a
 // since-deleted store must be caught too.
 
+// NoAutostartEnv, when set to "1" in a gramaton process's
+// environment, suppresses the CLI client's auto-start of a
+// background server (cli/client.go serverURL). Uninstall sets it on
+// every vendor-CLI invocation -- list AND remove -- because `claude
+// mcp list` health-checks each configured stdio entry by SPAWNING
+// it, and a spawned `gramaton mcp` would otherwise auto-start the
+// very server uninstall just stopped (or, on a dry run, one that was
+// never running at all).
+const NoAutostartEnv = "GRAMATON_NO_AUTOSTART"
+
 // runHarnessCommand is the exec seam for uninstall's vendor-CLI
 // calls (`claude mcp list/remove`, `codex ...`, `kiro ...`).
-// Production shells out and returns combined output; tests swap in a
-// fake to exercise enumeration parsing and removal argv without real
-// binaries.
+// Production shells out with NoAutostartEnv=1 (see above) and
+// returns combined output; tests swap in a fake to exercise
+// enumeration parsing and removal argv without real binaries.
 var runHarnessCommand = func(ctx context.Context, bin string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(os.Environ(), NoAutostartEnv+"=1")
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
@@ -62,12 +74,27 @@ func dedupeSortedEntries(entries []string) []string {
 	return out
 }
 
+// isGramatonCommandToken reports whether a command token from vendor
+// list output runs the gramaton binary: bare "gramaton" or a path
+// ending in /gramaton (backslashes normalized; a trailing .exe is
+// tolerated for Windows-registered absolute paths). This is the
+// ownership check's second leg -- a convention-NAMED entry whose
+// command is a foreign binary is not ours to remove.
+func isGramatonCommandToken(tok string) bool {
+	tok = strings.ReplaceAll(strings.TrimSpace(tok), `\`, "/")
+	tok = strings.TrimSuffix(tok, ".exe")
+	return tok == "gramaton" || strings.HasSuffix(tok, "/gramaton")
+}
+
 // parseColonMCPList extracts gramaton-owned entry names from
 // `claude mcp list`-style output: one server per line, shaped
-// "name: command - status". The name is everything before the first
-// colon -- the same line shape verifyClaudeMCPEntry prefix-matches.
-// Header or status lines never match because their pre-colon text
-// isn't a gramaton-convention name.
+// "name: command args - status" (the status tail is "✓ Connected",
+// "✗ Failed to connect", etc. -- both shapes parse identically, so a
+// health check failed by NoAutostartEnv suppression doesn't hide the
+// entry). The name before the first colon must match the naming
+// convention AND the command token after it must run gramaton
+// (isGramatonCommandToken). Header lines never match because their
+// pre-colon text isn't a gramaton-convention name.
 func parseColonMCPList(out string) []string {
 	var entries []string
 	for _, line := range strings.Split(out, "\n") {
@@ -77,30 +104,46 @@ func parseColonMCPList(out string) []string {
 			continue
 		}
 		name := strings.TrimSpace(line[:idx])
-		if isGramatonMCPEntryName(name) {
-			entries = append(entries, name)
+		if !isGramatonMCPEntryName(name) {
+			continue
 		}
+		rest := strings.Fields(line[idx+1:])
+		if len(rest) == 0 || !isGramatonCommandToken(rest[0]) {
+			continue
+		}
+		entries = append(entries, name)
 	}
 	return dedupeSortedEntries(entries)
 }
 
 // parseTokenMCPList extracts gramaton-owned entry names from tabular
 // `codex mcp list`-style output: the server name is the first
-// whitespace-separated token of its row. Only the first token is
-// consulted, deliberately -- the Command column is literally
-// "gramaton" for our entries, and a user's unrelated server that
-// happens to RUN gramaton under a non-convention name is not ours to
-// remove.
-func parseTokenMCPList(out string) []string {
+// whitespace-separated token of its row, the command the second.
+// Selection requires the convention name AND a gramaton command
+// token -- a user's unrelated server that happens to RUN gramaton
+// under a non-convention name is not ours, and neither is a
+// convention-named entry running a foreign binary.
+//
+// strictCommand=false (kiro, whose list format is unverified)
+// tolerates a row with no visible command column: the name
+// convention alone selects it, but a VISIBLE foreign command still
+// excludes it.
+func parseTokenMCPList(out string, strictCommand bool) []string {
 	var entries []string
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		if len(fields) == 0 || !isGramatonMCPEntryName(fields[0]) {
 			continue
 		}
-		if isGramatonMCPEntryName(fields[0]) {
-			entries = append(entries, fields[0])
+		switch {
+		case len(fields) >= 2:
+			if !isGramatonCommandToken(fields[1]) {
+				continue
+			}
+		case strictCommand:
+			continue // no command column visible; refuse under strict
 		}
+		entries = append(entries, fields[0])
 	}
 	return dedupeSortedEntries(entries)
 }
@@ -140,7 +183,7 @@ func listCodexMCPEntries(ctx context.Context, bin string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("`codex mcp list` failed: %w: %s", err, strings.TrimSpace(out))
 	}
-	return parseTokenMCPList(out), nil
+	return parseTokenMCPList(out, true), nil
 }
 
 // removeCodexMCPEntries removes entries via `codex mcp remove
@@ -169,7 +212,7 @@ func listKiroMCPEntries(ctx context.Context, bin string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("`kiro mcp list` failed (kiro-cli may use different MCP syntax): %w: %s", err, strings.TrimSpace(out))
 	}
-	return parseTokenMCPList(out), nil
+	return parseTokenMCPList(out, false), nil
 }
 
 // removeKiroMCPEntries removes entries via the claude-compatible

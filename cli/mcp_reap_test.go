@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestReapMCPProxiesMatrix(t *testing.T) {
 
 	ops, calls := stubOps(target)
 	var warnings bytes.Buffer
-	stopped := reapMCPProxies(dir, ops, &warnings)
+	stopped, _ := reapMCPProxies(dir, ops, &warnings)
 
 	if stopped != 1 {
 		t.Fatalf("stopped = %d, want 1", stopped)
@@ -156,7 +157,7 @@ func TestReapEscalatesToKill(t *testing.T) {
 	}
 
 	var warnings bytes.Buffer
-	stopped := reapMCPProxies(dir, ops, &warnings)
+	stopped, _ := reapMCPProxies(dir, ops, &warnings)
 
 	if stopped != 1 {
 		t.Fatalf("stopped = %d, want 1", stopped)
@@ -167,6 +168,46 @@ func TestReapEscalatesToKill(t *testing.T) {
 	}
 	if got := server.ListMCPProxies(dir); len(got) != 0 {
 		t.Fatalf("expected entry pruned after kill, got %d entries", len(got))
+	}
+}
+
+// TestReapMCPProxiesCountsSurvivorsAsFailed drives the escalation
+// timeout leg: a gramaton proxy that ignores both SIGTERM and the
+// kill escalation must come back in the failed count (uninstall
+// turns survivors into a non-zero exit), keep its registry entry,
+// and be warned about.
+func TestReapMCPProxiesCountsSurvivorsAsFailed(t *testing.T) {
+	// Shrink the grace periods so the doubled waitForExit timeout
+	// costs milliseconds, not seconds.
+	oldWait, oldStep := reapWait, reapPollStep
+	reapWait, reapPollStep = 10*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { reapWait, reapPollStep = oldWait, oldStep })
+
+	dir := t.TempDir()
+	target := os.Getpid() // must be genuinely alive for ListMCPProxies
+	entryPath := writeProxyEntry(t, dir, target)
+
+	ops := procOps{
+		alive:             func(int) bool { return true }, // survives everything
+		looksLikeGramaton: func(pid int) bool { return pid == target },
+		protected:         func(int) bool { return false },
+		terminate:         func(int) error { return nil },
+		kill:              func(int) error { return nil },
+	}
+
+	var warnings bytes.Buffer
+	stopped, failed := reapMCPProxies(dir, ops, &warnings)
+	if stopped != 0 {
+		t.Errorf("stopped = %d, want 0", stopped)
+	}
+	if failed != 1 {
+		t.Errorf("failed = %d, want 1 (the survivor must be counted)", failed)
+	}
+	if !strings.Contains(warnings.String(), "did not exit") {
+		t.Errorf("warning should name the surviving proxy: %q", warnings.String())
+	}
+	if _, err := os.Stat(entryPath); err != nil {
+		t.Errorf("registry entry should remain for a surviving proxy: %v", err)
 	}
 }
 
@@ -199,7 +240,7 @@ func TestReapRealProcess(t *testing.T) {
 	ops.looksLikeGramaton = func(p int) bool { return p == pid }
 
 	var warnings bytes.Buffer
-	stopped := reapMCPProxies(dir, ops, &warnings)
+	stopped, _ := reapMCPProxies(dir, ops, &warnings)
 
 	if stopped != 1 {
 		t.Fatalf("stopped = %d, want 1 (warnings: %q)", stopped, warnings.String())
@@ -312,7 +353,7 @@ func TestReapNeverSignalsSelf(t *testing.T) {
 	}
 
 	var warnings bytes.Buffer
-	if stopped := reapMCPProxies(dir, ops, &warnings); stopped != 0 {
+	if stopped, _ := reapMCPProxies(dir, ops, &warnings); stopped != 0 {
 		t.Fatalf("stopped = %d, want 0", stopped)
 	}
 	if len(calls) != 0 {
