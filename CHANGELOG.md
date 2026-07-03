@@ -49,6 +49,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   boundary are dropped and reported grouped by type. The destination can
   be frozen read-only in the same step, and a dry run reports the resolved
   selection without writing anything.
+  Carve is now reachable from the CLI: `gramaton store create <name>`
+  grows seed flags (`--from-id`, `--from-collection`, `--query`, and the
+  shared search filters `--keywords`/`--temporality`/`--knowledge-type`/
+  `--epistemic-status`/`--resolution`/`--match`/`--meta`/`--since`) plus
+  `--read-only`/`--heads-only`/`--dry-run`; when any seed flag is present it
+  carves a subset of the active store into the new one, and with no seed
+  flags it stays the existing offline empty-store create. The carve is
+  server-mediated so it reads the live source under a read lock; a new
+  loopback-gated `POST /v1/store/carve` HTTP route backs it (it
+  materializes a store at a caller-supplied filesystem path, so remote
+  callers are refused).
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless
