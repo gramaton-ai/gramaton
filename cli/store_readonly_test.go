@@ -224,8 +224,8 @@ func TestStoreCreateReadOnlyBornFrozen(t *testing.T) {
 	// --read-only lives on a nested subcommand, which runCmd's
 	// top-level flag reset does not cover; restore it explicitly.
 	// The writable control runs FIRST for the same reason -- after a
-	// --read-only parse the flag variable stays true until reset.
-	t.Cleanup(func() { storeCreateReadOnly = false })
+	// --read-only parse the flag stays true until reset.
+	t.Cleanup(func() { _ = storeCreateCmd.Flags().Set("read-only", "false") })
 
 	// Control: a plain create stays writable.
 	if _, err := runCmd(t, "store", "create", "plain", "--config-dir", base); err != nil {
@@ -269,7 +269,7 @@ func TestStoreCreateReadOnlyBornFrozen(t *testing.T) {
 	// store's OWN data dir. With the merged-config resolution, the
 	// global data_dir bled through and the badge read the DEFAULT
 	// store's (writable) manifest instead.
-	storeCreateReadOnly = false
+	_ = storeCreateCmd.Flags().Set("read-only", "false")
 	out, err = runCmd(t, "store", "list", "--config-dir", base)
 	if err != nil {
 		t.Fatalf("store list: %v", err)
@@ -306,7 +306,7 @@ func TestStoreCreateReadOnlyBornFrozen(t *testing.T) {
 // frozen.
 func TestStoreCreateReadOnlyEngineOpensOwnFrozenDataDir(t *testing.T) {
 	base := newFreezeTestBase(t)
-	t.Cleanup(func() { storeCreateReadOnly = false })
+	t.Cleanup(func() { _ = storeCreateCmd.Flags().Set("read-only", "false") })
 
 	out, err := runCmd(t, "store", "create", "pub", "--read-only", "--config-dir", base)
 	if err != nil {
@@ -346,7 +346,7 @@ func TestStoreCreateReadOnlyEngineOpensOwnFrozenDataDir(t *testing.T) {
 	}
 
 	// The "always" half: a plain create also pins its own data_dir.
-	storeCreateReadOnly = false
+	_ = storeCreateCmd.Flags().Set("read-only", "false")
 	if _, err := runCmd(t, "store", "create", "plain2", "--config-dir", base); err != nil {
 		t.Fatalf("plain create: %v", err)
 	}

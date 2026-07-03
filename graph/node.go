@@ -33,12 +33,20 @@ func (g *Graph) AddNode(props Properties) *Node {
 	return n
 }
 
-// AddNodeWithIDForTest creates a node with a caller-chosen ID. Exists
-// only to let tests construct the record-deleted-then-recreated-with-
-// same-ID scenario (RC-4 regression) that no user-facing API path
-// produces. Do not call from production code -- the ID collision
-// risk defeats the ULID invariant.
-func (g *Graph) AddNodeWithIDForTest(id string, props Properties) *Node {
+// AddNodeWithID creates a node with a caller-supplied ID instead of a
+// freshly minted ULID, and returns it. Properties are cloned on
+// creation, exactly like AddNode.
+//
+// SAFETY: bypassing ULID minting is safe ONLY when populating a FRESH
+// store where the caller owns every ID, so a collision is impossible
+// by construction. The sole production caller is the store carve-out
+// engine (api.CarveOut): it copies a subset of a source store into a
+// brand-new destination and must PRESERVE each source record's ULID so
+// that edges, supersedes chains, and collection membership continue to
+// resolve inside the copy. Never call this against a live,
+// ULID-minting store -- a colliding ID would silently overwrite an
+// unrelated node and defeat the ULID uniqueness invariant.
+func (g *Graph) AddNodeWithID(id string, props Properties) *Node {
 	n := &Node{
 		ID:         id,
 		Properties: props.Clone(),
@@ -52,6 +60,16 @@ func (g *Graph) AddNodeWithIDForTest(id string, props Properties) *Node {
 	g.cacheMu.Unlock()
 	g.markNodeDirty(n.ID)
 	return n
+}
+
+// AddNodeWithIDForTest creates a node with a caller-chosen ID. Exists
+// only to let tests construct the record-deleted-then-recreated-with-
+// same-ID scenario (RC-4 regression) that no user-facing API path
+// produces. Delegates to AddNodeWithID; kept as a distinct,
+// clearly test-scoped name so production call sites can't reach for it
+// by habit.
+func (g *Graph) AddNodeWithIDForTest(id string, props Properties) *Node {
+	return g.AddNodeWithID(id, props)
 }
 
 // GetNode returns the node with the given ID, or nil and false if not found.

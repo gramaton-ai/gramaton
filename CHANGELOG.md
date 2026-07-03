@@ -31,6 +31,51 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gramaton_status`. `store list`/`status` badge the state live
   from the manifest.
   Thawing preserves the original publication provenance.
+- **Stores can be carved into a shareable subset** (#97). A new
+  `CarveOut` api operation copies a selected subset of a store --
+  memory records and collections -- into a brand-new store,
+  non-destructively, for sharing. The selection is the union of
+  explicit record ids, a query (the same filter fields as export), and
+  named collections; the copy automatically pulls in each selected
+  record's chunks and sections, the collection node and schema behind
+  any selected member, and -- unless `heads_only` -- superseded
+  predecessors. Sessions are never carried. The copy is faithful at the
+  graph level: record ids, embeddings, and structural edges are all
+  preserved, so vector search works in the copy with no re-embedding.
+  The destination inherits the source's embedding configuration (with any
+  API key stripped, and the LLM left off), so the carved store is fully
+  semantically searchable -- a recipient can run free-text queries against
+  it, not just probe it with raw vectors. Edges that cross the selection
+  boundary are dropped and reported grouped by type. The destination can
+  be frozen read-only in the same step, and a dry run reports the resolved
+  selection without writing anything.
+  Carve is now reachable from the CLI: `gramaton store create <name>`
+  grows seed flags (`--from-id`, `--from-collection`, `--query`, and the
+  shared search filters `--keywords`/`--temporality`/`--knowledge-type`/
+  `--epistemic-status`/`--resolution`/`--match`/`--meta`/`--since`) plus
+  `--read-only`/`--heads-only`/`--dry-run`; when any seed flag is present it
+  carves a subset of the active store into the new one, and with no seed
+  flags it stays the existing offline empty-store create. The carve is
+  server-mediated so it reads the live source under a read lock; a new
+  loopback-gated `POST /v1/store/carve` HTTP route backs it (it
+  materializes a store at a caller-supplied filesystem path, so remote
+  callers are refused).
+  An existing carved store can be topped up with more of the source:
+  `gramaton store add <name>` takes the same seed flags as `store create
+  --from` (minus `--read-only`) and copies the resolved selection into the
+  already-existing store additively and idempotently -- records already
+  present are skipped, edges are reconnected to already-present records and
+  de-duplicated (a re-run adds nothing), and edges whose other endpoint is
+  absent from the destination are dropped and reported. A frozen target is
+  thawed for the add and re-frozen to its exact prior state; the target is
+  never overwritten or deleted, and a failed add leaves its data intact.
+  A new loopback-gated `POST /v1/store/add` HTTP route backs it (the new
+  `api.CarveAdd` operation), and `--dry-run` previews the counts without
+  writing. `store add` refuses to add a store into itself, and refuses a
+  destination that is currently served by a running server (returning a
+  `conflict` -- stop it first with `gramaton stop`), rather than blocking
+  on the destination store's file lock. No MCP tool ships this pass; carve
+  and add stay CLI-only.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless

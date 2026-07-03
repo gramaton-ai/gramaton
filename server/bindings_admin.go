@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"path/filepath"
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -150,6 +151,93 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 		}
 		s.writeJSON(w, http.StatusOK, result)
 	})
+
+	// --- Store carve-out ---
+	// Server-mediated so the carve reads the LIVE source under the
+	// engine RLock in this process. Loopback-gated as its FIRST act
+	// (mirroring backup/restore/export/import): CarveOut materializes a
+	// brand-new store at a caller-supplied absolute filesystem path, so a
+	// remote caller reaching it would be an arbitrary host-path write.
+	// The agent-facing description of this op is api.CarveOutDescription
+	// (the single source of truth, shared with the CLI help); HTTP itself
+	// exposes no description surface, and no MCP tool ships this pass.
+	mux.HandleFunc("POST /v1/store/carve", func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"store carve is restricted to loopback connections", false)
+			return
+		}
+		var req api.CarveOutRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.CarveOut(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	// --- Store carve top-up ---
+	// Adds more of the LIVE source (read under the engine RLock in this
+	// process) into an EXISTING destination store, idempotently. Loopback-
+	// gated as its FIRST act (mirroring carve): CarveAdd opens and writes a
+	// store at a caller-supplied absolute filesystem path, so a remote
+	// caller reaching it would be an arbitrary host-path write. The
+	// agent-facing description of this op is api.CarveAddDescription (the
+	// single source of truth, shared with the CLI help); HTTP exposes no
+	// description surface, and no MCP tool ships this pass.
+	mux.HandleFunc("POST /v1/store/add", func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopback(r) {
+			s.writeError(w, http.StatusForbidden, "forbidden",
+				"store add is restricted to loopback connections", false)
+			return
+		}
+		var req api.CarveAddRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		// Anti-hang guard: a top-up opens a SECOND engine on the
+		// destination's data dir. If a live server is already serving that
+		// store, bbolt's file lock is held and core.LoadEngine would block
+		// FOREVER (it opens bbolt with no lock timeout). Refuse promptly
+		// with a 409 -- BEFORE api.CarveAdd, so BOTH the commit and the
+		// dry-run paths are covered. This also covers a self-add
+		// (gramaton --store foo store add foo): the mediating server is
+		// itself serving the destination, so it detects its own liveness
+		// here. api/ cannot host this check -- it must not import server/ --
+		// so the guard lives at the transport that already owns
+		// server-liveness detection.
+		if destServerAlive(filepath.Dir(req.DestDataDir)) {
+			s.writeAPIError(w, api.ErrConflict(
+				"destination store is served by a running server; stop it before adding (gramaton stop)"))
+			return
+		}
+		result, apiErr := s.api.CarveAdd(r.Context(), req)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+}
+
+// destServerAlive reports whether a live gramaton server is currently
+// serving the store whose config dir is cfgDir (the parent of the store's
+// data dir, holding server.json). It reads server.json and checks the
+// recorded PID is alive -- the same liveness probe cli/store.go's
+// isServerRunning and `store freeze`/`store delete` use. Used to refuse a
+// carve top-up into a store another process (or this one, for a self-add)
+// holds open, which would otherwise block forever on bbolt's file lock.
+func destServerAlive(cfgDir string) bool {
+	info, err := ReadServerInfo(cfgDir)
+	if err != nil {
+		return false
+	}
+	return IsProcessAlive(info.PID)
 }
 
 // registerAdminMCPTools wires gramaton_branch + gramaton_backup.

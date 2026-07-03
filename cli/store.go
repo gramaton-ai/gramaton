@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/server"
@@ -17,7 +20,6 @@ import (
 
 var (
 	storeDeleteForce          bool
-	storeCreateReadOnly       bool
 	storeAttachName           string
 	storeAttachFreezeOriginal bool
 )
@@ -41,6 +43,13 @@ var storeCreateCmd = &cobra.Command{
 	Short: "Create a new named store",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runStoreCreate,
+}
+
+var storeAddCmd = &cobra.Command{
+	Use:   "add <name>",
+	Short: "Add more records from the active store into an existing store",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runStoreAdd,
 }
 
 var storeDeleteCmd = &cobra.Command{
@@ -130,14 +139,51 @@ server is running, for the same reason freeze does.`,
 }
 
 func init() {
-	storeCreateCmd.Flags().BoolVar(&storeCreateReadOnly, "read-only", false,
-		"freeze the store immediately after creation (owner: the configured author)")
+	addStoreCreateFlags(storeCreateCmd)
+	// The carve half of `store create` is exactly api.CarveOut; reference
+	// its shared description constant here so the CLI help and the api/MCP
+	// surface never drift (no duplicated literal -- api/carveout.go owns
+	// the string).
+	storeCreateCmd.Long = `Create a new named store.
+
+With no seed flags this creates an empty store (add --read-only to freeze
+it immediately into a shareable read-only artifact).
+
+With one or more seed flags (--from-id, --from-collection, --query, or a
+query filter such as --keywords/--temporality) it instead carves a subset
+of the CURRENTLY ACTIVE store into the new one, server-mediated:
+
+  ` + api.CarveOutDescription + `
+
+Examples:
+  gramaton store create shared --from-id 01ABC...,01DEF...
+  gramaton store create authwork --keywords auth --temporality durable
+  gramaton store create demo --from-collection tasks --read-only
+  gramaton store create preview --keywords auth --dry-run`
+	addStoreAddFlags(storeAddCmd)
+	// `store add` is exactly api.CarveAdd; reference its shared description
+	// constant so the CLI help and the api/server surface never drift (no
+	// duplicated literal -- api/carveadd.go owns the string).
+	storeAddCmd.Long = `Add more records from the CURRENTLY ACTIVE store into an EXISTING store,
+server-mediated (it reads the live source under a read lock).
+
+  ` + api.CarveAddDescription + `
+
+The target must already exist (create it with 'gramaton store create'). The
+same seed flags as 'store create --from' select what to bring over. There is
+deliberately no --read-only flag: a frozen target keeps its frozen state (it
+is thawed for the add and re-frozen to its exact prior state).
+
+Examples:
+  gramaton store add shared --from-id 01ABC...,01DEF...
+  gramaton store add shared --from-collection tasks
+  gramaton store add shared --keywords auth --dry-run`
 	storeDeleteCmd.Flags().BoolVar(&storeDeleteForce, "force", false, "skip confirmation prompt")
 	storeAttachCmd.Flags().StringVar(&storeAttachName, "name", "",
 		"local name for the attached store (default: derived from the directory name)")
 	storeAttachCmd.Flags().BoolVar(&storeAttachFreezeOriginal, "freeze-original", false,
 		"also freeze the source directory when it is writable on disk (owner: the configured author)")
-	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
+	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeAddCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
 	rootCmd.AddCommand(storeCmd)
 }
 
@@ -186,9 +232,115 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 	return printJSON(entries)
 }
 
+// addStoreCreateFlags registers every flag `store create` accepts. Kept
+// as a standalone function (not inline in init) so tests can build an
+// isolated command carrying the identical flag set. --read-only is
+// create-specific (it also governs the offline empty-store path); the
+// shared carve seed/query/option flags come from addCarveSeedFlags.
+func addStoreCreateFlags(cmd *cobra.Command) {
+	cmd.Flags().Bool("read-only", false,
+		"freeze the store immediately after creation (owner: the configured author)")
+	addCarveSeedFlags(cmd)
+}
+
+// addStoreAddFlags registers every flag `store add` accepts: the shared
+// carve seeds/query/options, but NOT --read-only -- a top-up preserves
+// the target's existing frozen state (thawed for the add and re-frozen)
+// rather than choosing a new one.
+func addStoreAddFlags(cmd *cobra.Command) {
+	addCarveSeedFlags(cmd)
+}
+
+// addCarveSeedFlags registers the seed + query-filter + option flags
+// shared by `store create --from` and `store add`. The query-seed filters
+// (keywords/temporality/knowledge-type/epistemic-status/resolution/match/
+// since, ...) are REUSED from addSearchFlags rather than reinvented; the
+// carve-specific seeds/options are added on top.
+func addCarveSeedFlags(cmd *cobra.Command) {
+	addSearchFlags(cmd)
+	// Carve seeds (union with the query above).
+	cmd.Flags().StringSlice("from-id", nil,
+		"carve seed: record IDs to include verbatim (repeatable or comma-separated)")
+	cmd.Flags().StringSlice("from-collection", nil,
+		"carve seed: collection names or ids (repeatable or comma-separated)")
+	cmd.Flags().String("query", "",
+		"carve query seed: vector-similarity query text")
+	cmd.Flags().StringToString("meta", nil,
+		"carve query seed: meta key=value filter (repeatable)")
+	// Carve options.
+	cmd.Flags().Bool("heads-only", false,
+		"carve: skip the supersedes closure (omit superseded predecessors)")
+	cmd.Flags().Bool("dry-run", false,
+		"carve: resolve and report the selection without writing anything")
+}
+
+// carveSeedFlags are the flags whose presence flips `store create` from
+// the offline empty-store path to the server-mediated carve. --read-only,
+// --heads-only, and --dry-run are options, NOT seeds: they never trigger a
+// carve on their own (in particular `store create <name> --read-only` keeps
+// meaning "make an empty frozen store").
+var carveSeedFlags = []string{
+	"from-id", "from-collection", "query", "keywords", "temporality",
+	"knowledge-type", "epistemic-status", "resolution", "match", "meta", "since",
+}
+
+// carveRequested reports whether any seed flag was set on the command.
+func carveRequested(cmd *cobra.Command) bool {
+	for _, name := range carveSeedFlags {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildCarveRequest maps the command's flags to an api.CarveOutRequest.
+// The destination is computed as an ABSOLUTE path under the base config
+// dir (stores/<name>/data); the api's carveMaterialize creates the home,
+// config, and data dir there, so the CLI must NOT pre-create them.
+func buildCarveRequest(cmd *cobra.Command, name string) api.CarveOutRequest {
+	req := api.CarveOutRequest{
+		DestName:    name,
+		DestDataDir: filepath.Join(store.Resolve(baseConfigDir(), name), "data"),
+	}
+	req.IDs, _ = cmd.Flags().GetStringSlice("from-id")
+	req.Collections, _ = cmd.Flags().GetStringSlice("from-collection")
+	req.Text, _ = cmd.Flags().GetString("query")
+	req.Match, _ = cmd.Flags().GetString("match")
+	req.Temporality, _ = cmd.Flags().GetString("temporality")
+	req.KnowledgeType, _ = cmd.Flags().GetString("knowledge-type")
+	req.EpistemicStatus, _ = cmd.Flags().GetString("epistemic-status")
+	req.Resolution, _ = cmd.Flags().GetString("resolution")
+	req.Since, _ = cmd.Flags().GetString("since")
+	if kw, _ := cmd.Flags().GetString("keywords"); kw != "" {
+		req.Keywords = strings.Split(kw, ",")
+	}
+	if meta, _ := cmd.Flags().GetStringToString("meta"); len(meta) > 0 {
+		req.Meta = meta
+	}
+	req.ReadOnly, _ = cmd.Flags().GetBool("read-only")
+	req.HeadsOnly, _ = cmd.Flags().GetBool("heads-only")
+	req.DryRun, _ = cmd.Flags().GetBool("dry-run")
+	return req
+}
+
 func runStoreCreate(cmd *cobra.Command, args []string) error {
 	name := args[0]
+
+	// A seed flag routes to the server-mediated carve; nothing else does.
+	if carveRequested(cmd) {
+		return runStoreCarve(cmd, name)
+	}
+	// --dry-run / --heads-only are carve-only options; without a seed there
+	// is nothing to carve, so fail loudly rather than silently ignore them
+	// on the offline path.
+	if cmd.Flags().Changed("dry-run") || cmd.Flags().Changed("heads-only") {
+		return fmt.Errorf("--dry-run and --heads-only apply only to a carve; " +
+			"add a seed (--from-id, --from-collection, --query, or a query filter such as --keywords)")
+	}
+
 	base := baseConfigDir()
+	readOnly, _ := cmd.Flags().GetBool("read-only")
 
 	if err := store.Create(base, name); err != nil {
 		return err
@@ -214,7 +366,7 @@ func runStoreCreate(cmd *cobra.Command, args []string) error {
 		"config":  cfgPath,
 	}
 
-	if storeCreateReadOnly {
+	if readOnly {
 		// storeEffectiveConfig resolves the data dir the per-store
 		// config just pinned (<dir>/data) -- the same dir the engine
 		// will open -- while the owner comes from the creating
@@ -237,6 +389,187 @@ func runStoreCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return printJSON(out)
+}
+
+// runStoreCarve is the server-mediated carve path of `store create`. The
+// op MUST run in the server process so it reads the LIVE source under the
+// engine RLock (the CLI never opens its own engine against the source);
+// serverURL auto-starts the source store's server the same way export and
+// backup do. The destination is a brand-new store; the api creates it on
+// disk (home + config + data) at the absolute path we compute here.
+func runStoreCarve(cmd *cobra.Command, name string) error {
+	base := baseConfigDir()
+
+	// Friendly pre-checks; the api's ValidateName + ErrConflict remain the
+	// source of truth (the server re-checks under its own lock).
+	if err := store.ValidateName(name); err != nil {
+		return err
+	}
+	if store.Exists(base, name) {
+		return fmt.Errorf("store %q already exists", name)
+	}
+
+	req := buildCarveRequest(cmd, name)
+
+	resp, err := serverPostSlow("/v1/store/carve", req)
+	if err != nil {
+		return writeServerError("store create --from", err)
+	}
+
+	// Human-readable summary to stderr; the machine-parseable JSON
+	// envelope stays on stdout (printEnvelope convention).
+	if raw, mErr := json.Marshal(resp.Data); mErr == nil {
+		var cr api.CarveOutResponse
+		if json.Unmarshal(raw, &cr) == nil {
+			printCarveSummary(os.Stderr, name, req.DestDataDir, cr)
+		}
+	}
+	return printEnvelope(resp)
+}
+
+// printCarveSummary writes a short human summary of a carve to w. On a
+// dry run it is an explicit PREVIEW that names the counts and states that
+// nothing was written; on a commit it names the created store, its path,
+// the counts, and whether it was frozen. The dropped boundary edges are
+// summarized by type with the bounded sample.
+func printCarveSummary(w io.Writer, name, destDir string, cr api.CarveOutResponse) {
+	if cr.DryRun {
+		fmt.Fprintf(w, "PREVIEW (dry run -- nothing written): store %q would carve "+
+			"%d seed(s) -> %d node(s), %d interior edge(s).\n",
+			name, cr.SeedCount, cr.NodeCount, cr.InteriorEdges)
+	} else {
+		state := "writable"
+		if cr.ReadOnly {
+			state = "frozen read-only"
+		}
+		fmt.Fprintf(w, "Created store %q at %s (%s): %d seed(s) -> %d node(s), %d interior edge(s).\n",
+			name, destDir, state, cr.SeedCount, cr.NodeCount, cr.InteriorEdges)
+	}
+	if cr.DroppedTotal > 0 {
+		fmt.Fprintf(w, "Dropped %d boundary-crossing edge(s) by type: %v\n", cr.DroppedTotal, cr.DroppedByType)
+		for _, d := range cr.DanglingSample {
+			fmt.Fprintf(w, "  %s -[%s]-> %s\n", d.SourceID, d.Type, d.TargetID)
+		}
+		if cr.DroppedTotal > len(cr.DanglingSample) {
+			fmt.Fprintf(w, "  ... and %d more (sample capped)\n", cr.DroppedTotal-len(cr.DanglingSample))
+		}
+	}
+}
+
+// buildCarveAddRequest maps the command's flags to an api.CarveAddRequest.
+// The destination is computed as the ABSOLUTE path of the EXISTING store's
+// data dir (stores/<name>/data). There is no --read-only flag: the target's
+// existing frozen state is preserved by the api.
+func buildCarveAddRequest(cmd *cobra.Command, name string) api.CarveAddRequest {
+	req := api.CarveAddRequest{
+		DestName:    name,
+		DestDataDir: filepath.Join(store.Resolve(baseConfigDir(), name), "data"),
+	}
+	req.IDs, _ = cmd.Flags().GetStringSlice("from-id")
+	req.Collections, _ = cmd.Flags().GetStringSlice("from-collection")
+	req.Text, _ = cmd.Flags().GetString("query")
+	req.Match, _ = cmd.Flags().GetString("match")
+	req.Temporality, _ = cmd.Flags().GetString("temporality")
+	req.KnowledgeType, _ = cmd.Flags().GetString("knowledge-type")
+	req.EpistemicStatus, _ = cmd.Flags().GetString("epistemic-status")
+	req.Resolution, _ = cmd.Flags().GetString("resolution")
+	req.Since, _ = cmd.Flags().GetString("since")
+	if kw, _ := cmd.Flags().GetString("keywords"); kw != "" {
+		req.Keywords = strings.Split(kw, ",")
+	}
+	if meta, _ := cmd.Flags().GetStringToString("meta"); len(meta) > 0 {
+		req.Meta = meta
+	}
+	req.HeadsOnly, _ = cmd.Flags().GetBool("heads-only")
+	req.DryRun, _ = cmd.Flags().GetBool("dry-run")
+	return req
+}
+
+// runStoreAdd tops up an EXISTING store with more records from the active
+// store, server-mediated (same as the carve half of `store create`): the
+// op runs in the source store's server process so it reads the live source
+// under the engine RLock. The target must already exist; the api opens it,
+// skips records already present, reconnects+dedupes edges, and preserves
+// the target's frozen state.
+func runStoreAdd(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	base := baseConfigDir()
+
+	if err := store.ValidateName(name); err != nil {
+		return err
+	}
+	if !store.Exists(base, name) {
+		return fmt.Errorf("store %q does not exist; create it first with: gramaton store create %s", name, name)
+	}
+	// Reject a self-add (destination == the active SOURCE store) up front,
+	// BEFORE serverPostSlow can auto-start the source's server. Adding a
+	// store into itself would have the source's own server LoadEngine its
+	// already-locked data dir and block forever on bbolt's file lock; catch
+	// the common `gramaton --store foo store add foo` mistake with a clear
+	// message rather than the auto-start-then-hang (or 409) dance.
+	if self, err := destIsActiveSource(base, name); err != nil {
+		return err
+	} else if self {
+		return fmt.Errorf("cannot add store %q into itself: --store selects the SOURCE store and the argument names the DESTINATION, so they must be different stores", name)
+	}
+	// Guard against a bbolt lock conflict: the api opens a second engine on
+	// the target's data dir, which would collide with the target's own
+	// running server (same guard shape as `store delete`).
+	if isServerRunning(store.Resolve(base, name)) {
+		return fmt.Errorf("store %q has a running server; stop it first with: gramaton --store %s stop", name, name)
+	}
+	if !carveRequested(cmd) {
+		return fmt.Errorf("store add requires at least one seed: --from-id, --from-collection, " +
+			"--query, or a query filter such as --keywords")
+	}
+
+	req := buildCarveAddRequest(cmd, name)
+
+	resp, err := serverPostSlow("/v1/store/add", req)
+	if err != nil {
+		return writeServerError("store add", err)
+	}
+
+	// Human-readable summary to stderr; the machine-parseable JSON envelope
+	// stays on stdout (printEnvelope convention).
+	if raw, mErr := json.Marshal(resp.Data); mErr == nil {
+		var ar api.CarveAddResponse
+		if json.Unmarshal(raw, &ar) == nil {
+			printCarveAddSummary(os.Stderr, name, req.DestDataDir, ar)
+		}
+	}
+	return printEnvelope(resp)
+}
+
+// printCarveAddSummary writes a short human summary of a top-up to w. On a
+// dry run it is an explicit PREVIEW that names the would-be counts and
+// states nothing was written; on a commit it names the target, the added
+// vs already-present counts, and whether the target was thawed and
+// re-frozen. Dropped boundary edges are summarized by type with the sample.
+func printCarveAddSummary(w io.Writer, name, destDir string, ar api.CarveAddResponse) {
+	if ar.DryRun {
+		fmt.Fprintf(w, "PREVIEW (dry run -- nothing written): store %q would add "+
+			"%d new node(s) (%d already present) and %d new edge(s) (%d already present) "+
+			"from %d seed(s) -> %d selected node(s).\n",
+			name, ar.NodesAdded, ar.NodesSkippedPresent, ar.EdgesAdded, ar.EdgesSkippedPresent,
+			ar.SeedCount, ar.SelectedNodes)
+	} else {
+		fmt.Fprintf(w, "Added to store %q at %s: %d new node(s) (%d already present), "+
+			"%d new edge(s) (%d already present).\n",
+			name, destDir, ar.NodesAdded, ar.NodesSkippedPresent, ar.EdgesAdded, ar.EdgesSkippedPresent)
+		if ar.Thawed {
+			fmt.Fprintf(w, "The destination was frozen; it was thawed for the add and re-frozen to its prior state.\n")
+		}
+	}
+	if ar.DroppedTotal > 0 {
+		fmt.Fprintf(w, "Dropped %d boundary-crossing edge(s) by type: %v\n", ar.DroppedTotal, ar.DroppedByType)
+		for _, d := range ar.DanglingSample {
+			fmt.Fprintf(w, "  %s -[%s]-> %s\n", d.SourceID, d.Type, d.TargetID)
+		}
+		if ar.DroppedTotal > len(ar.DanglingSample) {
+			fmt.Fprintf(w, "  ... and %d more (sample capped)\n", ar.DroppedTotal-len(ar.DanglingSample))
+		}
+	}
 }
 
 func runStoreDelete(cmd *cobra.Command, args []string) error {
@@ -610,6 +943,44 @@ func storeReadOnlyBadge(cfgDirPath string) (readOnly bool, note string) {
 		return false, "(manifest unreadable)"
 	}
 	return m.ReadOnly, ""
+}
+
+// destIsActiveSource reports whether the top-up destination store resolves
+// to the SAME data directory as the currently-active source store (the one
+// --store / GRAMATON_STORE selects, which the server-mediated add reads
+// live under a read lock). Adding a store into itself deadlocks on bbolt's
+// single-writer file lock, so runStoreAdd refuses it before auto-starting
+// the source's server. Compares the effective data dirs (honoring any
+// per-store config data_dir override) so it catches the case regardless of
+// how each store's directory is configured.
+func destIsActiveSource(base, destName string) (bool, error) {
+	_, srcData, err := storeEffectiveConfig(store.Resolve(base, activeStoreName()))
+	if err != nil {
+		return false, err
+	}
+	_, destData, err := storeEffectiveConfig(store.Resolve(base, destName))
+	if err != nil {
+		return false, err
+	}
+	return sameDir(srcData, destData), nil
+}
+
+// sameDir reports whether two filesystem paths name the same directory,
+// canonicalizing separators, "." / ".." and (best-effort) symlinks. Falls
+// back to a lexical compare when a path cannot be resolved on disk.
+func sameDir(a, b string) bool {
+	return canonDir(a) == canonDir(b)
+}
+
+func canonDir(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return filepath.Clean(abs)
 }
 
 // isServerRunning checks if a server is running for a config directory.
