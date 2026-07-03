@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gramaton-ai/gramaton/backup"
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
@@ -195,18 +196,26 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 
 	selection := carveClosure(g, seeds, req.HeadsOnly)
 
-	// Gather the payload + dangling report under the same RLock.
+	// Gather the payload + dangling report under the same RLock. Two
+	// passes so edges are partitioned against the set of nodes that
+	// ACTUALLY made it into the copy, not the raw selection map.
+	//
+	// Pass 1: materialize every selection id that resolves to a node,
+	// recording the gathered id set.
 	nodes := make([]carveNode, 0, len(selection))
-	interior := make([]carveEdge, 0)
-	droppedByType := make(map[string]int)
-	droppedTotal := 0
-	sample := make([]CarveDangling, 0, carveDanglingSampleCap)
-
+	gathered := make(map[string]struct{}, len(selection))
 	for id := range selection {
 		n, ok := g.GetNode(id)
 		if !ok {
-			// Raced away between closure and gather; skip it (and its
-			// edges are unreachable now anyway).
+			// The single source RLock spans resolve -> closure -> gather
+			// with no intervening unlock or I/O, so no concurrent delete is
+			// possible: a missing node here can only be a pre-existing
+			// corrupt/phantom selection id (a closure target with no
+			// backing node). Skip it -- and because it never enters
+			// `gathered`, any edge that points at it is reported as
+			// dangling in pass 2 rather than being mis-classified interior
+			// (which would abort the destination AddEdge on a missing
+			// endpoint and fail the whole carve).
 			continue
 		}
 		cn := carveNode{
@@ -218,13 +227,21 @@ func (a *API) CarveOut(ctx context.Context, req CarveOutRequest) (CarveOutRespon
 			cn.vec = v
 		}
 		nodes = append(nodes, cn)
+		gathered[id] = struct{}{}
+	}
 
-		// Interior edges are copied; boundary-crossing edges are dropped
-		// and reported. Walking outbound-only visits every interior edge
-		// exactly once (each has its source in the selection) and yields
-		// exactly the "from S to not-S" dangling set.
+	// Pass 2: interior edges are copied; boundary-crossing edges (target
+	// not gathered) are dropped and reported. Walking outbound-only over
+	// the gathered set visits every interior edge exactly once (each has
+	// its source in the gathered set) and yields exactly the "from
+	// gathered to not-gathered" dangling set.
+	interior := make([]carveEdge, 0)
+	droppedByType := make(map[string]int)
+	droppedTotal := 0
+	sample := make([]CarveDangling, 0, carveDanglingSampleCap)
+	for id := range gathered {
 		for _, e := range g.EdgesFrom(id) {
-			if _, in := selection[e.TargetID]; in {
+			if _, in := gathered[e.TargetID]; in {
 				interior = append(interior, carveEdge{
 					src:    e.SourceID,
 					dst:    e.TargetID,
@@ -344,22 +361,53 @@ func (a *API) carveMaterialize(req CarveOutRequest, nodes []carveNode, interior 
 		return fail(ErrInternal("failed to create destination directory"))
 	}
 
-	// Minimal destination config: pin data_dir so a global config can't
-	// bleed through (see store.WriteDataDirConfig for that rationale),
-	// disable the embedder (a shared read-only artifact never
-	// re-embeds; keeping it off means no model load on open), and pin
-	// the embedding dimension to the copied vectors' dimension so the
-	// vec index rebuilds coherently.
+	// Destination config. Pin data_dir so a global config can't bleed
+	// through (see store.WriteDataDirConfig for that rationale) and
+	// INHERIT the source's embedding config (provider, model, ...) so the
+	// carved store has a working query-time embedder: a recipient can
+	// semantically search the shared store, not just probe it with raw
+	// vectors. The default embedder is the bundled pure-Go `bert` (no API
+	// key). Pin the embedding DIMENSION to the copied vectors' actual
+	// dimension so the vec index rebuilds coherently and accepts the
+	// copied vectors verbatim (in production the source-provider dim ==
+	// copied-vector dim; the pin is a safety belt).
+	//
+	// The LLM stays DISABLED: a carved store runs no curation, and leaving
+	// it off avoids writing the source's LLM credentials into the dest, so
+	// we start from Defaults() rather than inheriting a.engine.Config().LLM.
+	//
+	// Secrets are then stripped from the on-disk config (backup.StripAPIKeys,
+	// the same allowlist sanitizer backups use): the dest config.yaml is a
+	// local artifact that ships with the shared store and must NEVER carry
+	// a credential -- correct even when the source uses an API embedder.
 	destCfg := config.Defaults()
 	destCfg.DataDir = req.DestDataDir
-	destCfg.Embedding.Provider = ""
+	destCfg.Embedding = a.engine.Config().Embedding
 	if destDim > 0 {
 		destCfg.Embedding.Dimension = destDim
 	}
 	destCfg.LLM.Provider = ""
-	if err := config.Save(destCfg, filepath.Join(home, "config.yaml")); err != nil {
+	cfgPath := filepath.Join(home, "config.yaml")
+	if err := config.Save(destCfg, cfgPath); err != nil {
 		a.log.Warn("carve: write destination config", "component", "carveout", "err", err)
 		return fail(ErrInternal("failed to write destination config"))
+	}
+	// Strip any inherited credential before the config can be shared.
+	// Reusing StripAPIKeys (an allowlist, not a blocklist) means a future
+	// secret-bearing embedding field is stripped too rather than leaking.
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		a.log.Warn("carve: reread destination config", "component", "carveout", "err", err)
+		return fail(ErrInternal("failed to sanitize destination config"))
+	}
+	sanitized, err := backup.StripAPIKeys(raw)
+	if err != nil {
+		a.log.Warn("carve: sanitize destination config", "component", "carveout", "err", err)
+		return fail(ErrInternal("failed to sanitize destination config"))
+	}
+	if err := os.WriteFile(cfgPath, sanitized, 0o600); err != nil {
+		a.log.Warn("carve: rewrite destination config", "component", "carveout", "err", err)
+		return fail(ErrInternal("failed to sanitize destination config"))
 	}
 
 	// Open the destination WRITABLE (its STORE manifest is absent, so it

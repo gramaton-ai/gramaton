@@ -42,10 +42,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   predecessors. Sessions are never carried. The copy is faithful at the
   graph level: record ids, embeddings, and structural edges are all
   preserved, so vector search works in the copy with no re-embedding.
-  Edges that cross the selection boundary are dropped and reported
-  grouped by type. The destination can be frozen read-only in the same
-  step, and a dry run reports the resolved selection without writing
-  anything.
+  The destination inherits the source's embedding configuration (with any
+  API key stripped, and the LLM left off), so the carved store is fully
+  semantically searchable -- a recipient can run free-text queries against
+  it, not just probe it with raw vectors. Edges that cross the selection
+  boundary are dropped and reported grouped by type. The destination can
+  be frozen read-only in the same step, and a dry run reports the resolved
+  selection without writing anything.
 - **Shared stores can be attached** (#86, first increment).
   `gramaton store attach <path> [--name <name>]` copies a received
   store in as a named store and freezes the local copy regardless
