@@ -150,6 +150,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The README was rewritten for accuracy and adoption** (#87). It
+  now opens with the one-line definition, three short usage vignettes
+  (software, research, business records), and a code-verified feature
+  surface: a supported-harnesses table (Claude Code, Codex, Cursor --
+  Kiro is omitted until Gramaton's Kiro integration is reliable), an
+  uninstall
+  section, store sharing (freeze/thaw, attach, query-seeded
+  carve-outs), collections with templates and custom schemas, and CLI
+  coverage that was previously missing (`stop`, `backup`/`restore`,
+  `backfill author`, `validate`/`migrate`, the full `store`
+  subcommand set). The MCP tool tables now list only what the
+  `gramaton mcp` proxy registers, so `gramaton_intake` (HTTP-only) is
+  no longer shown as an agent-facing tool.
 - **The race-detector CI lane no longer enforces the embedding
   throughput gates.** The four bert speedup-gate tests skip under
   `-race`: the detector's instrumentation reliably drops the measured
