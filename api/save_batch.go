@@ -811,6 +811,12 @@ func validateBatchItem(item *SaveBatchItem) error {
 	if item.Content == "" {
 		return errors.New("content is required")
 	}
+	// client_token is the request-level idempotency key. The embedded
+	// SaveRequest would otherwise accept it per-item and silently
+	// ignore it (the canonical hash excludes it), so reject loudly.
+	if item.ClientToken != "" {
+		return errors.New("client_token is set on the batch request, not on items")
+	}
 	if item.ClientRef != "" {
 		if err := validateClientRef(item.ClientRef); err != nil {
 			return err

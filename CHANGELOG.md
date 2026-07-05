@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`gramaton_save` accepts an optional `client_token` idempotency
+  key** (#96 groundwork). Retrying a timed-out or failed save with
+  the same token (a caller-generated UUID) returns the originally
+  created record instead of storing a duplicate; the same token with
+  a different body is rejected with a conflict. This closes the
+  duplicate-on-retry gap for single saves: the MCP proxy's HTTP
+  client times out at 30 seconds while the server may still commit
+  the record, so an agent retry previously produced a second copy.
+  Matches the `client_token` semantics `gramaton_save_batch` already
+  had. Batch items reject a per-item `client_token` explicitly (the
+  key is request-level). The token is stored as an indexed
+  `client_token` property on the record.
+
+### Changed
+
+- **The save duplicate scan runs outside the engine write lock.**
+  Save now runs its dedup candidate search (a brute-force scan over
+  the whole vector index) against a read snapshot before acquiring
+  the write lock, and re-verifies the candidate under the lock
+  before superseding it. Previously the scan ran inside the write
+  critical section, so save lock-hold time grew with store size and
+  concurrent saves queued behind O(N) scans plus the fsync'd commit
+  -- the direct cause of multi-agent save timeouts. Behavior change:
+  a duplicate that commits between the scan and the lock acquisition
+  is not detected by that save (the curation duplicate sweep remains
+  the backstop); in `dedup.action: reject` mode the duplicate is now
+  refused before the node is created rather than inserted and
+  deleted.
+
 ## [0.3.0-alpha.5] - 2026-07-04
 
 ### Added

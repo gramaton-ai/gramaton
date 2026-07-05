@@ -63,6 +63,12 @@ var DefaultIndexedFields = []string{
 	// core's rebuildPrimaryIfMissing always rebuilds the property
 	// index at startup.
 	"author",
+	// client_token is the save idempotency key: a replayed save does
+	// an exact Lookup on it under the write lock to return the
+	// original record. client_request_hash deliberately stays
+	// unindexed -- the replay path reads it off the node it just
+	// looked up.
+	"client_token",
 }
 
 // NewBboltPropertyIndex opens or creates a bbolt-backed property index.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -42,6 +43,7 @@ type SaveRequest struct {
 	ValidUntil             string         `json:"valid_until,omitempty" jsonschema:"RFC3339; optional expiration"`
 	AssertedAsOf           string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339). Distinct from created_at (when we captured it)."`
 	Meta                   map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems (e.g. {assignee: Sarah, priority: P1, sprint: 23}). Stored as meta.* properties, indexed for keyword search."`
+	ClientToken            string         `json:"client_token,omitempty" jsonschema:"UUID; optional idempotency key. Retrying a timed-out save with the same token returns the already-created record instead of duplicating it; the same token with a different body is rejected."`
 }
 
 // SupersededRecord describes a record that Capture automatically marked
@@ -71,16 +73,27 @@ NOT for saving the session/conversation itself, or for extracting knowledge from
 
 Field roles: content is unbounded and should be self-contained with rationale; summary_short (~750 chars) is the embedding-ready semantic anchor for vector search; keywords are BM25 terms a future agent would type. These are different outputs serving different parts of retrieval, not nested compressions. For full guidance on what to save, classification heuristics per question type, and synthesis-not-summarization discipline, call gramaton_guide(topic="save").
 
-IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).`
+IMPORTANT: confidence must be a number (not a string). keywords must be an array (not a string).
+
+Retry safety: when retrying after a timeout or transport error, pass the same client_token (a UUID you generate) on both attempts -- the retry returns the originally created record instead of storing a duplicate.`
 
 // Capture creates a new knowledge record. Pre-embeds content_short
-// outside the engine write lock, then holds the lock for the minimum
-// time needed to insert the node, attach the embedding, check dedup,
-// and save. Auto-supersession: if the captured record is a
-// near-duplicate (cosine >= dedup.threshold) of an existing record,
-// the older one is marked historical and a "supersedes" edge links
-// the new record to it. Returns ErrConflict only when dedup.action =
-// "reject" AND a duplicate is found.
+// and runs the duplicate candidate scan outside the engine write
+// lock (the scan is O(index size)), then holds the lock only to
+// insert the node, attach the embedding, re-verify the duplicate
+// candidate, and save. Auto-supersession: if the captured record is
+// a near-duplicate (cosine >= dedup.threshold) of an existing
+// record, the older one is marked historical and a "supersedes" edge
+// links the new record to it. Returns ErrConflict when dedup.action
+// = "reject" AND a duplicate is found, or when client_token is
+// reused with a different body.
+//
+// Concurrency note: the off-lock scan means a duplicate that commits
+// between the scan and this save's write-lock acquisition is not
+// detected here. That race is accepted -- the curation duplicate
+// sweep (gramaton_duplicates) is the backstop -- in exchange for
+// keeping the store-size-dependent scan out of the write critical
+// section.
 func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIError) {
 	if apiErr := a.rejectIfReadOnly("save"); apiErr != nil {
 		return SaveResponse{}, apiErr
@@ -100,14 +113,84 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		return SaveResponse{}, ErrInvalid(err.Error())
 	}
 
+	// Idempotency prep: hash the canonical request (client_token
+	// itself excluded by the canonical form) so a replay can be told
+	// apart from token reuse with a different body. Hash computed
+	// off-lock; the token lookup happens under the write lock where
+	// check-then-insert is atomic.
+	var requestHash string
+	if req.ClientToken != "" {
+		if err := validateClientToken(req.ClientToken); err != nil {
+			return SaveResponse{}, ErrInvalid(err.Error())
+		}
+		canonical, err := json.Marshal(canonicalizeItem(SaveBatchItem{SaveRequest: req}))
+		if err != nil {
+			a.log.Warn("save canonicalize failed", "err", err)
+			return SaveResponse{}, ErrInternal("failed to canonicalize request")
+		}
+		requestHash = hashCanonical(canonical)
+	}
+
 	// Pre-embed outside the lock. Observation extraction (D18/D23)
 	// happens asynchronously in the curation cycle, not here.
 	embedStart := time.Now()
 	preEmbedded := a.preEmbedContent(ctx, req)
 	embedDur := time.Since(embedStart)
 
+	// Duplicate scan against a read snapshot, before the write lock.
+	// The candidate search is O(index size) and does not belong in
+	// the write critical section. The result is advisory: a duplicate
+	// that commits between this scan and the write lock below is
+	// missed -- an accepted race; the curation duplicate sweep is the
+	// backstop -- and the candidate is re-verified under the write
+	// lock before any supersession is applied.
+	var dupID string
+	var dupSim float64
+	if preEmbedded != nil && preEmbedded.err == nil {
+		if vec, ok := preEmbedded.vectors["embedding_full"]; ok {
+			a.engine.RLock()
+			dupID, dupSim = a.engine.CheckDedupVec(vec, req.Content)
+			a.engine.RUnlock()
+		}
+	}
+
 	a.engine.Lock()
 	defer a.engine.Unlock()
+
+	// Idempotent replay: a prior save with this token already
+	// committed. The same body returns the existing record; a
+	// different body is token misuse. Checked before the dedup-reject
+	// branch so a replay in reject mode is not mistaken for a
+	// duplicate of the very record it created.
+	if req.ClientToken != "" {
+		// Unlike the batch path's tenant-scoped FindByClientToken,
+		// this lookup has no tenant predicate -- records carry no
+		// tenant today. If record-level tenancy ever wires in
+		// (api/tenant.go), scope this lookup in lockstep.
+		ids := a.engine.PropIdx().Lookup("client_token", graph.StringProperty(req.ClientToken))
+		if len(ids) > 0 {
+			if prior, ok := a.engine.Graph().GetNode(ids[0]); ok {
+				storedHash, _ := prior.Properties.GetString("client_request_hash")
+				if storedHash != requestHash {
+					return SaveResponse{}, ErrConflict("client_token reused with different request body")
+				}
+				return SaveResponse{ID: prior.ID}, nil
+			}
+		}
+	}
+
+	if dupID != "" && a.engine.Config().Dedup.Action == "reject" {
+		// The off-lock scan lets reject fire before the node exists,
+		// replacing the insert-then-delete sequence the post-insert
+		// check required. Like the supersede branch below, re-verify
+		// the advisory candidate under the lock first: one that was
+		// hard-deleted in the scan->lock window must not produce a
+		// spurious conflict.
+		if _, ok := a.engine.Graph().GetNode(dupID); ok {
+			return SaveResponse{}, ErrConflict(fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, dupSim))
+		}
+		dupID = ""
+	}
 
 	props := graph.Properties{
 		"content_full": graph.StringProperty(req.Content),
@@ -128,6 +211,14 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		props["processing_status"] = graph.StringProperty("processed")
 	} else {
 		props["processing_status"] = graph.StringProperty("captured")
+	}
+
+	// Idempotency bookkeeping props. Top-level system props like
+	// author/processing_status (not meta.*), so they can never collide
+	// with caller metadata.
+	if req.ClientToken != "" {
+		props["client_token"] = graph.StringProperty(req.ClientToken)
+		props["client_request_hash"] = graph.StringProperty(requestHash)
 	}
 
 	setOptionalProps(props, req)
@@ -152,25 +243,21 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 	}
 
 	var superseded []SupersededRecord
-	if dupID, sim := a.engine.CheckDedup(n.ID); dupID != "" {
-		cfg := a.engine.Config()
-		if cfg.Dedup.Action == "reject" {
-			msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
-			a.engine.PropIdx().RemoveNode(n.ID, n.Properties)
-			a.engine.VecIdx().Remove(n.ID)
-			a.engine.Graph().DeleteNode(n.ID)
-			return SaveResponse{}, ErrConflict(msg)
-		}
-
+	if dupID != "" {
 		// Default action is "supersede": mark the older record historical
 		// and link the new record to it via a supersedes edge. Config.Load()
 		// validates Action to one of "supersede" or "reject" (see
-		// design-decisions.md D37), so reaching this branch implies
-		// "supersede" semantics.
+		// design-decisions.md D37) and reject returned before the insert,
+		// so reaching this branch implies "supersede" semantics.
+		//
+		// dupID came from the off-lock scan; the GetNode and
+		// alreadyHistorical checks below re-verify it under the write
+		// lock, so a candidate deleted or superseded in the gap is
+		// skipped rather than double-superseded.
 		if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
 			a.log.Debug("auto-supersession skipped: opt-out",
 				"component", "save", "new_id", n.ID, "dup_id", dupID,
-				"similarity", fmt.Sprintf("%.3f", sim))
+				"similarity", fmt.Sprintf("%.3f", dupSim))
 		} else {
 			now := time.Now().UTC()
 			oldNode, _ := a.engine.Graph().GetNode(dupID)
@@ -180,7 +267,7 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 					a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
 					a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
 					a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-					if e, err := a.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
+					if e, err := a.engine.Graph().AddEdge(n.ID, dupID, "supersedes", dupSim, nil); err == nil {
 						summary := ""
 						if v, ok := oldNode.Properties.GetString("content_short"); ok {
 							summary = v
@@ -188,7 +275,7 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 						superseded = append(superseded, SupersededRecord{
 							ID:         dupID,
 							Summary:    summary,
-							Similarity: sim,
+							Similarity: dupSim,
 							EdgeID:     e.ID,
 						})
 					}
