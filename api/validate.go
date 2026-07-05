@@ -16,9 +16,10 @@ import (
 // underscore-delimited identifiers while denying traversal primitives.
 var clientSessionIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// clientTokenRe bounds capture_batch client_token to UUID v1-v5 shape.
-// Idempotency relies on collision-resistance, not strict version: any
-// 8-4-4-4-12 hex string is accepted.
+// clientTokenRe bounds a client_token (save and save_batch
+// idempotency key) to UUID v1-v5 shape. Idempotency relies on
+// collision-resistance, not strict version: any 8-4-4-4-12 hex
+// string is accepted.
 var clientTokenRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // clientRefRe bounds the per-item ClientRef label. Letters, digits,
@@ -36,15 +37,22 @@ const (
 	reservedMetaInfix  = "._gramaton."
 )
 
-// validateClientToken enforces UUID shape on a capture_batch
+// validateClientToken enforces UUID shape on a save or save_batch
 // client_token. Idempotency hinges on this being a stable,
-// collision-resistant identifier per request.
+// collision-resistant identifier per request. The length pre-check
+// matches the sibling client_* validators: the anchored regex is
+// linear-time anyway, but an oversize blob should fail on a length
+// compare, not a scan.
 func validateClientToken(token string) error {
-	if !clientTokenRe.MatchString(token) {
+	if len(token) != canonicalUUIDLen || !clientTokenRe.MatchString(token) {
 		return fmt.Errorf("client_token must be a UUID")
 	}
 	return nil
 }
+
+// canonicalUUIDLen is the exact length of the 8-4-4-4-12 UUID text
+// form clientTokenRe accepts.
+const canonicalUUIDLen = 36
 
 // validateClientRef enforces the per-item ClientRef shape (length cap
 // + restricted charset). Empty is acceptable to callers (the ref is

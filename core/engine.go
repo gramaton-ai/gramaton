@@ -1070,6 +1070,17 @@ func (e *Engine) CheckDedup(nodeID string) (string, float64) {
 	return dedup.Check(e.graph, e.indexes.vecIdx, e.cfg.Dedup, nodeID)
 }
 
+// CheckDedupVec checks if a not-yet-inserted record -- described by
+// its embedding vector and raw content -- is a near-duplicate of an
+// existing record. Save runs this under a read lock before acquiring
+// the write lock so the O(N) candidate scan stays out of the write
+// critical section. The result is advisory (see dedup.CheckVec):
+// the caller must re-verify the candidate under the write lock.
+// Caller must hold at least a read lock.
+func (e *Engine) CheckDedupVec(vec []float32, content string) (string, float64) {
+	return dedup.CheckVec(e.graph, e.indexes.vecIdx, e.cfg.Dedup, vec, content)
+}
+
 // PreChunkResult is an alias for chunking.Result, preserved so
 // callers that reference the historical name continue to compile.
 type PreChunkResult = chunking.Result

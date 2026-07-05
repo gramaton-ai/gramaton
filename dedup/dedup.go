@@ -44,6 +44,8 @@ var embeddingKeys = []string{
 // function does no locking of its own. It reads the graph and the
 // vector index concurrently and assumes a consistent snapshot.
 func Check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, nodeID string) (string, float64) {
+	// The index contains nodeID itself, so fewer than two entries
+	// means there is nothing else to compare against.
 	if vecIdx.Len() < 2 {
 		return "", 0
 	}
@@ -55,12 +57,37 @@ func Check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, nod
 	if vec == nil {
 		return "", 0
 	}
+	return check(g, vecIdx, cfg, vec, nodeContent(n), nodeID)
+}
 
-	// Request extra candidates: one will be self (skipped) and others
+// CheckVec reports whether a record that has NOT been inserted yet --
+// described by its embedding vector and raw content -- is a
+// near-duplicate of an existing record. Save uses it to run the
+// candidate scan against a read snapshot before taking the write
+// lock, so the O(N) search stays out of the critical section.
+//
+// The result is advisory: because the caller re-acquires the lock
+// after this returns, a duplicate that commits in between is missed.
+// Callers must re-verify the returned candidate under the write lock
+// (existence, not-already-historical) before acting on it.
+//
+// The caller must hold at least a read lock on the engine.
+func CheckVec(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, vec []float32, content string) (string, float64) {
+	if vecIdx.Len() < 1 || vec == nil {
+		return "", 0
+	}
+	return check(g, vecIdx, cfg, vec, content, "")
+}
+
+// check is the shared candidate scan. selfID is skipped in the
+// results (empty when the record is not in the index yet). content
+// is the record's raw text for Jaccard verification.
+func check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, vec []float32, content string, selfID string) (string, float64) {
+	// Request extra candidates: one may be self (skipped) and others
 	// may fail Jaccard verification.
 	results := vecIdx.Search(vec, 10, nil)
 	for _, r := range results {
-		if r.NodeID == nodeID {
+		if selfID != "" && r.NodeID == selfID {
 			continue
 		}
 
@@ -78,7 +105,7 @@ func Check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, nod
 		}
 
 		if sim >= cfg.SimilarityThreshold {
-			if !verifyJaccard(g, n, r.NodeID) {
+			if !verifyJaccard(g, content, r.NodeID) {
 				continue
 			}
 			return r.NodeID, sim
@@ -90,12 +117,11 @@ func Check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, nod
 // verifyJaccard confirms a cosine-similarity duplicate match by
 // checking word-level Jaccard similarity on actual content. Returns
 // false (reject) when the texts are too dissimilar.
-func verifyJaccard(g *graph.Graph, node *graph.Node, candidateID string) bool {
+func verifyJaccard(g *graph.Graph, textA string, candidateID string) bool {
 	candidate, ok := g.GetNode(candidateID)
 	if !ok {
 		return false
 	}
-	textA := nodeContent(node)
 	textB := nodeContent(candidate)
 
 	// Short content rarely triggers structural false positives -- the
