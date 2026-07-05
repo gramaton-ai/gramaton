@@ -110,6 +110,21 @@ type ServerConfig struct {
 	// before self-shutdown. Long timeouts match async usage patterns
 	// where the agent returns hours later.
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
+
+	// TLS points the remote TLS listener at a user-provided
+	// certificate instead of the generated self-signed one. Takes
+	// effect when remote access is enabled; ignored while the server
+	// is loopback-only.
+	TLS ServerTLSConfig `yaml:"tls,omitempty"`
+}
+
+// ServerTLSConfig is the bring-your-own-certificate option for the
+// remote TLS listener. Both fields are PEM file paths and must be
+// set together; leaving both empty uses the generated self-signed
+// certificate (see internal/tlscert).
+type ServerTLSConfig struct {
+	CertFile string `yaml:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty"`
 }
 
 // EmbeddingConfig controls how record text is turned into vectors.
@@ -1424,6 +1439,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config: server.port %d out of range; expected 0-65535 (0 = auto-select)", cfg.Server.Port)
 	}
 
+	if (cfg.Server.TLS.CertFile == "") != (cfg.Server.TLS.KeyFile == "") {
+		return fmt.Errorf("config: server.tls requires both cert_file and key_file (or neither for the generated self-signed certificate)")
+	}
+
 	if cfg.Decay.Rates.Immutable != 0 {
 		return fmt.Errorf("config: decay.rates.immutable must be 0 (immutable records never decay); got %v", cfg.Decay.Rates.Immutable)
 	}
@@ -1543,6 +1562,9 @@ func trimConfigStrings(cfg *Config) {
 	trim(&cfg.LLM.Models.High)
 
 	trim(&cfg.Backup.Dir)
+
+	trim(&cfg.Server.TLS.CertFile)
+	trim(&cfg.Server.TLS.KeyFile)
 }
 
 // normalize coerces legacy aliases and clamps out-of-range values on a

@@ -28,6 +28,15 @@ attributed to. Git-style: name and email compose into
 blank and records carry no author. Collected by gramaton init;
 edit here any time -- only affects records created afterwards.`,
 
+	// -------------------------------------------------------------
+	// Server TLS (bring-your-own certificate)
+	// -------------------------------------------------------------
+	"server.tls": `tls: bring-your-own certificate for the remote TLS
+listener (PEM paths; cert_file and key_file must be set together).
+Takes effect when remote access is enabled; ignored while the
+server is loopback-only. Leave empty to use the generated
+self-signed certificate.`,
+
 	// =============================================================
 	// LLM block: umbrella banner with model-staleness pointer
 	// =============================================================
