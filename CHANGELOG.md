@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0-alpha.6] - 2026-07-06
+
 ### Added
 
 - **Write admission control for remote callers.** The remote listener
@@ -6075,7 +6077,8 @@ property graph storage, vector search, and versioned persistence.
 - **Configuration** -- YAML config with all design doc defaults, prolly
   tree tuning parameters, activation settings, storage paths
 
-[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.5...HEAD
+[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.6...HEAD
+[0.3.0-alpha.6]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.3...v0.3.0-alpha.4
 [0.3.0-alpha.3]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.2...v0.3.0-alpha.3
