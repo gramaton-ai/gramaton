@@ -11,16 +11,18 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 )
 
-// TestStoreCarveLoopbackOnly is the security guard: the carve route
-// materializes a store at a caller-supplied absolute filesystem path, so
-// a non-loopback origin must be rejected with 403 before any decode or
-// api call. Mirrors the backup/restore/export/import loopback tests.
-func TestStoreCarveLoopbackOnly(t *testing.T) {
+// TestStoreCarveRejectsUnauthenticatedRemote is the security guard:
+// the carve route materializes a store at a caller-supplied absolute
+// filesystem path, so an unauthenticated non-loopback origin must be
+// rejected by the auth middleware (401) before any decode or api
+// call. The authenticated-but-not-admin_ops case (403) is covered in
+// the remote-access tier matrix.
+func TestStoreCarveRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequestFrom(t, srv, "POST", "/v1/store/carve",
 		api.CarveOutRequest{IDs: []string{"whatever"}}, "203.0.113.7:5555")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback carve, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback carve, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -116,17 +118,18 @@ func TestStoreCarveRequiresSeedHTTP(t *testing.T) {
 	}
 }
 
-// TestStoreAddLoopbackOnly is the security guard for the top-up route: it
-// opens and writes a store at a caller-supplied absolute filesystem path,
-// so a non-loopback origin must be rejected with 403 before any decode or
-// api call. Mirrors TestStoreCarveLoopbackOnly.
-func TestStoreAddLoopbackOnly(t *testing.T) {
+// TestStoreAddRejectsUnauthenticatedRemote is the security guard for
+// the top-up route: it opens and writes a store at a caller-supplied
+// absolute filesystem path, so an unauthenticated non-loopback origin
+// must be rejected by the auth middleware (401) before any decode or
+// api call. Mirrors TestStoreCarveRejectsUnauthenticatedRemote.
+func TestStoreAddRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequestFrom(t, srv, "POST", "/v1/store/add",
 		api.CarveAddRequest{IDs: []string{"whatever"}, DestDataDir: "/tmp/whatever/data"},
 		"203.0.113.7:5555")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback add, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback add, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

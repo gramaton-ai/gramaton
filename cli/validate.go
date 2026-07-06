@@ -24,6 +24,9 @@ func init() {
 }
 
 func runValidate(cmd *cobra.Command, args []string) error {
+	if err := guardLocalStore("validate"); err != nil {
+		return err
+	}
 	dir := configDir()
 
 	eng, err := core.LoadEngine(dir, baseConfigDir())

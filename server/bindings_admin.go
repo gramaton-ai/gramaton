@@ -76,11 +76,10 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/backup", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"backup is restricted to loopback connections", false)
-			return
-		}
+		// Pathless: BackupCreate writes only into the server-configured
+		// backup dir, taking no caller path, so an authenticated remote
+		// caller cannot influence where it writes. Open to remotes (the
+		// global auth middleware already required a token off-loopback).
 		result, apiErr := s.api.BackupCreate(r.Context())
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -90,9 +89,11 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/restore", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"restore is restricted to loopback connections", false)
+		// Path-taking: restore reads a caller-supplied archive path and
+		// replaces the whole store. adminAllowed keeps it loopback-only
+		// unless the operator set server.remote.admin_ops.
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "restore")
 			return
 		}
 		var req api.RestoreRequest
@@ -109,9 +110,12 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/export", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"export is restricted to loopback connections", false)
+		// Bulk raw-store egress (the whole store as a tarball). Same
+		// data class a remote already reads record-by-record, but kept
+		// behind admin_ops as the conservative default for a bulk
+		// channel.
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "export")
 			return
 		}
 		var req api.ExportRequest
@@ -134,9 +138,11 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/import", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"import is restricted to loopback connections", false)
+		// Bulk in-body record ingest. Store mutation the token already
+		// grants via save, but kept behind admin_ops as the
+		// conservative default for a bulk channel, matching export.
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "import")
 			return
 		}
 		var req api.ImportRequest
@@ -162,9 +168,8 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	// (the single source of truth, shared with the CLI help); HTTP itself
 	// exposes no description surface, and no MCP tool ships this pass.
 	mux.HandleFunc("POST /v1/store/carve", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"store carve is restricted to loopback connections", false)
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "store carve")
 			return
 		}
 		var req api.CarveOutRequest
@@ -190,9 +195,8 @@ func (s *Server) registerAdminRoutes(mux *http.ServeMux) {
 	// single source of truth, shared with the CLI help); HTTP exposes no
 	// description surface, and no MCP tool ships this pass.
 	mux.HandleFunc("POST /v1/store/add", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"store add is restricted to loopback connections", false)
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "store add")
 			return
 		}
 		var req api.CarveAddRequest

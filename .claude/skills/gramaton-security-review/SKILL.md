@@ -40,25 +40,36 @@ Path args come in through:
 
 **Severity: CRITICAL** (host-compromise class).
 
-## 2. Loopback gates on destructive HTTP routes
+## 2. Auth middleware and the loopback-only tier
 
-**Rule:** every HTTP route that writes, overwrites, exports, imports, or destroys state MUST start with a loopback check.
+**Model (since remote access, #96):** the whole mux is wrapped by `server.authenticate` — loopback passes untouched, a non-loopback caller must present a valid bearer token or gets 401. So "not loopback" no longer means "rejected"; it means "must be authenticated." Two tiers of operation sit behind that global gate:
 
-Destructive route indicators: path contains `backup`, `restore`, `export`, `import`, `merge`, `discard`, `reembed`, `delete`, `purge`, `branch/create`, `branch/checkout`, `collection/delete`, `collection/migrate`.
+- **Tier 1 — pathless admin + knowledge surface:** open to authenticated remotes. No per-route gate. Reads/writes store state or spends (capped) LLM budget but takes no caller filesystem path (records, search, collections, sessions, branches, curation, reembed, backup-create).
+- **Tier 2 — path-taking / process-control:** must stay loopback-only unless the operator opts in. Handlers call `s.adminAllowed(r)` (loopback OR authenticated-with-`server.remote.admin_ops`); shutdown and debug use bare `isLoopback(r)` and are loopback-only even with admin_ops.
+
+**A path-taking route (reads/writes a caller-supplied host path) MUST be Tier 2.** Indicators: restore, export, import, store carve/add, session archive, local-path ingest — anything that materializes or reads a filesystem path the caller influences. A bearer token proves identity, not path safety; token theft on a Tier-1-only server is store compromise, on an unguarded path route it is **host** compromise.
 
 ```go
+// Tier 2 (path-taking): loopback OR admin_ops.
+if !s.adminAllowed(r) {
+    s.writeAdminForbidden(w, "restore")
+    return
+}
+// Process control (shutdown/debug): loopback only, always.
 if !isLoopback(r) {
-    s.writeError(w, http.StatusForbidden, "forbidden", "loopback only", false)
+    s.writeError(w, http.StatusForbidden, "forbidden", "shutdown is restricted to loopback connections", false)
     return
 }
 ```
 
 Checks:
-- [ ] Gate is the **first** statement in the handler, before any body parsing or state touching.
-- [ ] Gate uses `isLoopback(r)`, not a regex on `r.RemoteAddr` (which is spoof-prone behind proxies).
-- [ ] The global `/mcp` endpoint gate is intact (shouldn't be disabled by the diff).
+- [ ] A NEW path-taking route calls `s.adminAllowed(r)` as its **first** statement (before body parse / state touch). A new pathless route correctly has NO gate (the middleware already authenticated it) — do not reintroduce a blanket `isLoopback` gate on pathless routes.
+- [ ] Gates use `isLoopback(r)` / `adminAllowed(r)`, never a regex on `r.RemoteAddr` (spoofable) and never a trusted `X-Forwarded-For`.
+- [ ] The global `authenticate` wrapper is intact (`securityHeaders(s.authenticate(mux))` in `New`). Note there is NO per-path exemption: `/v1/health` also requires a token from a non-loopback caller (loopback discovery is unaffected, and `gramaton remote add` relies on the 401 to detect a bad bundle token) — do not add a health exemption.
+- [ ] Token compare is constant-time over digests (`tokenMatches`), never `==` on raw strings.
+- [ ] **REST↔MCP symmetry:** a new path-taking MCP tool must be added to `mcpRemoteExcludedTools` (trimmed from the remote `/mcp` surface) AND its REST twin must be Tier 2 — the MCP bindings call the api directly and bypass the REST handler gates, so a tool left off the exclusion list is a silent remote bypass.
 
-**Severity: HIGH** (remote exploitation class).
+**Severity: CRITICAL** for a path-taking route reachable by an authenticated remote without admin_ops (host-compromise class); **HIGH** for a missing/weakened auth gate on any other route.
 
 ## 3. MCP tool argument bounds
 

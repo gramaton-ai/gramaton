@@ -17,6 +17,16 @@ import (
 // serverURL returns the base URL for the running server, starting it
 // if necessary. Returns an error if the server cannot be reached.
 func serverURL() (string, error) {
+	// Remote mode: dial the configured server on another machine.
+	// No local server.json, no auto-start -- there is nothing local
+	// to spawn. remoteMode also installs the auth + pinned-TLS
+	// transport on the shared clients.
+	if ep, err := remoteMode(); err != nil {
+		return "", err
+	} else if ep != nil {
+		return ep.url, nil
+	}
+
 	dir := configDir()
 
 	// Check for running server.

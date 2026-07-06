@@ -58,7 +58,36 @@ server:
 
 Long idle timeouts (hours) match async usage patterns where the agent returns later. Disable `auto_start` if you run the server as a managed service (systemd, launchd, supervisor).
 
-`server.tls` takes effect when remote access is enabled and is ignored while the server is loopback-only (remote access is in progress; see issue #96). `cert_file` and `key_file` must be set together — a config with only one of them fails to load. Note that the both-or-neither check runs after the global/per-store deep merge: a per-store config that sets only `cert_file` will inherit `key_file` from the global layer and pass validation with a mismatched pair, so per-store overrides should always set both fields together.
+`server.tls` takes effect when remote access is enabled and is ignored while the server is loopback-only. `cert_file` and `key_file` must be set together — a config with only one of them fails to load. Note that the both-or-neither check runs after the global/per-store deep merge: a per-store config that sets only `cert_file` will inherit `key_file` from the global layer and pass validation with a mismatched pair, so per-store overrides should always set both fields together.
+
+## Remote access
+
+Two related blocks, one per side of the connection. Both are written by the `gramaton remote` commands; hand-editing works but the commands also mint the token and certificate the server side requires.
+
+**Serving a store to other machines** (`server.remote`, written by `gramaton remote enable` on the host):
+
+```yaml
+server:
+  remote:
+    enabled: true                          # opt-in; never on by default
+    bind_addr: ""                          # empty = all interfaces
+    port: 42983                            # remote TLS listener (loopback listener is unchanged)
+    token_file: ~/.gramaton/remote.token   # shared bearer secret (file/env/inline triplet)
+    admin_ops: false                       # open path-taking admin ops to authenticated remotes
+```
+
+The remote listener is TLS-only and requires a bearer token from every caller; loopback clients are unaffected. A server with `enabled: true` refuses to start unless a token resolves and certificate material exists. `admin_ops` opens restore, store carve/add, session archive, and path-mode ingest to authenticated remote callers — off by default because those operations touch host filesystem paths; shutdown and debug endpoints stay loopback-only regardless.
+
+**Pointing this machine at a remote server** (top-level `remote:`, written by `gramaton remote add` from a credentials bundle):
+
+```yaml
+remote:
+  url: https://192.168.1.50:42983
+  pin: sha256:<64 hex chars>               # server certificate SPKI fingerprint
+  token_file: ~/.gramaton/remote.token
+```
+
+When `remote.url` is set, every client operation (CLI, hooks, the MCP proxy) dials the remote server, auto-start is suppressed, and commands that need the raw store files (`backfill`, `repair`, `validate`, `serve`) refuse to run. The URL must be `https`; TLS verification is pin-based, so certificate expiry and address changes on the server never break the connection — only a key rotation does, which is fixed by importing a fresh bundle.
 
 ## Embedding
 

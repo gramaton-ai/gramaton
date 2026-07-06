@@ -58,6 +58,9 @@ func init() {
 }
 
 func runBackfillAuthor(cmd *cobra.Command, args []string) error {
+	if err := guardLocalStore("backfill"); err != nil {
+		return err
+	}
 	dir := configDir()
 
 	// Refuse to run while the server is active to prevent concurrent

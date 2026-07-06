@@ -93,17 +93,3 @@ func isLoopback(r *http.Request) bool {
 	}
 	return ip.IsLoopback()
 }
-
-// loopbackOnly wraps an http.Handler with a 403 short-circuit for
-// non-loopback origins. Used for the /mcp Streamable HTTP endpoint
-// which exposes admin tools whose REST counterparts are loopback-
-// gated; this keeps the MCP transport from being a bypass.
-func loopbackOnly(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			http.Error(w, "forbidden: loopback only", http.StatusForbidden)
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
-}

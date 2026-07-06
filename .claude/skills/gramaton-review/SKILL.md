@@ -92,18 +92,15 @@ If any transport uses a string literal, the descriptions will drift and agents s
 
 **Severity: MEDIUM.**
 
-### 8. Missing loopback gates
+### 8. Auth tier on HTTP routes
 
-For every destructive HTTP route (backup/restore/export/import/merge/discard/reembed/delete/purge):
-```go
-if !isLoopback(r) {
-    s.writeError(w, http.StatusForbidden, "forbidden", "loopback only", false)
-    return
-}
-```
-must be the first check.
+Since remote access (#96) the global `authenticate` middleware fronts every route (loopback passes; remote needs a bearer token). Check the tier on any new/changed route:
+- **Path-taking** (caller-supplied host path: restore/export/import/carve/add/session-archive/local-path-ingest) → first check is `if !s.adminAllowed(r)`. Missing it = an authenticated remote reaches a host-path op (**CRITICAL**, host-compromise).
+- **Process control** (shutdown/debug) → `if !isLoopback(r)`, loopback-only always.
+- **Pathless** (knowledge surface, curation, backup-create) → no gate; the middleware already authenticated. Reintroducing a blanket `isLoopback` gate on a pathless route is a bug (breaks legitimate remote use).
+- A new path-taking MCP tool must be in `server.mcpRemoteExcludedTools` AND its REST twin `adminAllowed`-gated — MCP bindings call the api directly and bypass REST gates.
 
-**Severity: HIGH** (remote exploitation class).
+**Severity: CRITICAL** for an ungated path-taking route reachable by an authenticated remote; **HIGH** for other missing/weakened auth gates.
 
 ### 9. Returned partial state alongside `APIError`
 

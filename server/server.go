@@ -37,6 +37,27 @@ type Config struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	ConfigDir   string        // runtime, not from YAML
 	StoreName   string        // runtime, empty = default unnamed store
+
+	// Remote is the resolved remote-access configuration. Zero value
+	// (Enabled false) keeps the server loopback-only. cli/serve.go
+	// populates it -- resolving the token and certificate paths and
+	// failing closed on missing material -- so the server itself
+	// never touches config files or secret resolution.
+	Remote RemoteRuntime
+}
+
+// RemoteRuntime is the resolved, ready-to-use remote configuration
+// the server consumes. Unlike config.RemoteServerConfig it carries
+// the already-resolved bearer token and concrete certificate paths,
+// not the file/env indirections.
+type RemoteRuntime struct {
+	Enabled  bool
+	BindAddr string // empty = all interfaces
+	Port     int
+	Token    string // resolved shared secret; required when Enabled
+	CertFile string // resolved cert path; required when Enabled
+	KeyFile  string // resolved key path; required when Enabled
+	AdminOps bool   // open path-taking admin ops to authenticated remotes
 }
 
 // DefaultConfig returns server config with sensible defaults.
@@ -346,27 +367,26 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
-	// Mount MCP Streamable HTTP handler directly (not through security
-	// middleware -- MCP has its own content types and headers).
-	// Loopback-only: MCP exposes destructive admin tools (gramaton_branch
-	// merge/discard, gramaton_backup, gramaton_curation trigger/batch)
-	// whose REST counterparts are loopback-gated. Without this guard the
-	// /mcp endpoint becomes a bypass for those gates when the server
-	// binds to a non-loopback address. The supported flow (CLI MCP proxy
-	// -> HTTP localhost) is unaffected.
-	mux.Handle("/mcp", loopbackOnly(s.MCPHandler()))
+	// Mount the MCP Streamable HTTP handler. The global auth
+	// middleware (below) gates it like every other route: loopback
+	// passes, a remote caller needs a valid token. The handler's
+	// per-request server selection (MCPHandler) then hands a remote
+	// caller a trimmed tool surface -- so remote MCP is authenticated
+	// AND cannot reach path-taking tools unless admin_ops is set.
+	mux.Handle("/mcp", s.MCPHandler())
 
-	// Wrap the mux with security headers + panic-recover. /mcp passes
-	// through this wrapper too: securityHeaders skips JSON Content-Type
-	// for /mcp (MCP negotiates its own), but the panic-recover defer
-	// still applies so a tool-handler panic surfaces as a structured
-	// 500 instead of a connection reset.
+	// Middleware order (outermost first): securityHeaders records
+	// activity + recovers panics for EVERY request including auth
+	// failures; authenticate then classifies loopback vs remote and
+	// enforces the token. /mcp passes through both.
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
-		Handler:      s.securityHeaders(mux),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 120 * time.Second, // embedding and bulk ops can be slow
-		IdleTimeout:  120 * time.Second,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
+		Handler:           s.securityHeaders(s.authenticate(mux)),
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      120 * time.Second, // embedding and bulk ops can be slow
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	return s, nil
@@ -388,19 +408,43 @@ func (s *Server) Run() error {
 		return fmt.Errorf("listen on %s: %w", s.httpServer.Addr, err)
 	}
 
+	// Remote TLS listener (opt-in). A separate socket on its own port
+	// so the plain loopback listener above is entirely unaffected --
+	// no plaintext is ever served off-loopback. cli/serve.go has
+	// already failed closed if Enabled without a token/cert.
+	var remoteLn net.Listener
+	if s.cfg.Remote.Enabled {
+		remoteLn, err = s.listenRemoteTLS()
+		if err != nil {
+			_ = ln.Close()
+			return err
+		}
+	}
+
 	s.log.Info("server started",
 		"addr", ln.Addr().String(),
 		"store", s.engine.Config().DataDir,
 		"nodes", s.engine.NodeCount(),
 		"edges", s.engine.EdgeCount())
+	if remoteLn != nil {
+		s.log.Info("remote access listener started",
+			"addr", remoteLn.Addr().String(),
+			"admin_ops", s.cfg.Remote.AdminOps)
+	}
 
 	// Signal handling.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
 	// Idle timeout checker. Shares s.shutdownCh with RequestShutdown;
-	// whichever path fires first wins (buffered cap 1).
-	go s.idleWatcher(s.shutdownCh)
+	// whichever path fires first wins (buffered cap 1). Disabled when
+	// remote access is on: a remote client cannot auto-start the
+	// server (auto-start is local-CLI-only), so a self-exit would
+	// strand it. A remote-serving box is expected to run as a managed
+	// service.
+	if !s.cfg.Remote.Enabled {
+		go s.idleWatcher(s.shutdownCh)
+	}
 
 	// Start access flusher.
 	s.startAccessFlusher()
@@ -411,12 +455,25 @@ func (s *Server) Run() error {
 	go s.runStartupSelfHeal()
 	s.startCurationRunner()
 
-	// Serve in background.
-	errCh := make(chan error, 1)
-	go func() {
-		if err := s.httpServer.Serve(ln); err != http.ErrServerClosed {
-			errCh <- err
+	// Serve in background. Both listeners share s.httpServer, so one
+	// Shutdown closes both. A fatal Serve error on either socket
+	// funnels through errCh.
+	errCh := make(chan error, 2)
+	var serveWG sync.WaitGroup
+	serve := func(name string, l net.Listener) {
+		defer serveWG.Done()
+		if err := s.httpServer.Serve(l); err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("%s listener: %w", name, err)
 		}
+	}
+	serveWG.Add(1)
+	go serve("loopback", ln)
+	if remoteLn != nil {
+		serveWG.Add(1)
+		go serve("remote", remoteLn)
+	}
+	go func() {
+		serveWG.Wait()
 		close(errCh)
 	}()
 
@@ -1068,6 +1125,22 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, message str
 		Curation:      s.curationStatus(),
 		StoreReadonly: s.engine.ReadOnly(),
 	})
+}
+
+// writeBareError writes a JSON error with NO curation/store-state
+// envelope. Used for pre-authentication failures (the auth
+// middleware's 401): an unauthenticated network caller must not learn
+// store backlog counts, LLM budget usage, or the read-only flag, and
+// must not cost the server a curationStatus() engine RLock + index
+// scan on every rejected request.
+func (s *Server) writeBareError(w http.ResponseWriter, status int, code, message string) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(status)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(ErrorResponse{Error: ErrorDetail{Code: code, Message: message, Retryable: false}})
 }
 
 // ResponseEnvelope is the standard response wrapper.

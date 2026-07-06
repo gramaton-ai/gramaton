@@ -11,21 +11,41 @@ import (
 
 // MCPHandler returns an HTTP handler that serves the MCP protocol
 // via Streamable HTTP transport.
+//
+// Two servers are built once. Loopback callers (and authenticated
+// remotes on an admin_ops server) get the full surface; other
+// authenticated remotes get a trimmed surface with the path-taking
+// tools removed, so a remote agent -- or a hijacked one -- cannot
+// drive host-path operations even though it authenticated. The
+// per-request selector picks between them; the global auth
+// middleware has already rejected unauthenticated remotes before
+// the request reaches here.
 func (s *Server) MCPHandler() http.Handler {
-	mcpServer := mcp.NewServer(&mcp.Implementation{
-		Name:    "gramaton",
-		Version: version.Version,
-	}, nil)
+	full := mcp.NewServer(&mcp.Implementation{Name: "gramaton", Version: version.Version}, nil)
+	s.registerMCPTools(full)
 
-	s.registerMCPTools(mcpServer)
+	remote := mcp.NewServer(&mcp.Implementation{Name: "gramaton", Version: version.Version}, nil)
+	s.registerMCPTools(remote)
+	remote.RemoveTools(MCPRemoteExcludedToolNames()...)
 
 	return mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return mcpServer
+		if s.mcpFullSurfaceAllowed(r) {
+			return full
+		}
+		return remote
 	}, &mcp.StreamableHTTPOptions{
 		// Allow JSON responses when client sends Accept: application/json.
 		// SSE is still used when client requests text/event-stream.
 		JSONResponse: true,
 	})
+}
+
+// mcpFullSurfaceAllowed decides which MCP tool surface a caller
+// sees. It mirrors adminAllowed: loopback and admin_ops-authorized
+// remotes get every tool; a plain authenticated remote gets the
+// trimmed surface.
+func (s *Server) mcpFullSurfaceAllowed(r *http.Request) bool {
+	return s.adminAllowed(r)
 }
 
 // MCPServer returns a configured MCP server for use with stdio transport.

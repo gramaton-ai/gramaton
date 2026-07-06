@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/internal/secret"
+	"github.com/gramaton-ai/gramaton/internal/tlscert"
 	"github.com/gramaton-ai/gramaton/logging"
 	"github.com/gramaton-ai/gramaton/server"
 	"github.com/spf13/cobra"
@@ -39,6 +42,11 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// stop targets a local server; in remote mode there is nothing
+	// local to serve or stop.
+	if err := guardLocalStore("serve"); err != nil {
+		return err
+	}
 	if serveStop {
 		return stopServer(configDir())
 	}
@@ -73,6 +81,13 @@ func startForeground() error {
 	// set it to 30m, which we already have from DefaultConfig).
 	cfg.IdleTimeout = engineCfg.Server.IdleTimeout
 
+	// Resolve remote access, failing closed on missing material.
+	remote, err := resolveRemoteRuntime(engineCfg.Server, dir)
+	if err != nil {
+		return err
+	}
+	cfg.Remote = remote
+
 	// Background children (started by startBackground) set GRAMATON_BG=1.
 	// Skip stderr logging to avoid duplicating lines into gramaton.stderr.
 	foreground := os.Getenv("GRAMATON_BG") == ""
@@ -87,6 +102,54 @@ func startForeground() error {
 		return fmt.Errorf("create server: %w", err)
 	}
 	return srv.Run()
+}
+
+// remoteTLSDir is where `gramaton remote enable` writes the
+// generated certificate for a store's config dir.
+func remoteTLSDir(configDirPath string) string {
+	return filepath.Join(configDirPath, "tls")
+}
+
+// resolveRemoteRuntime turns the user's server config into the
+// server's ready-to-use RemoteRuntime, resolving the token and
+// certificate paths. Certificate paths come from server.tls when the
+// user brought their own, else the generated pair under the store's
+// tls dir. It FAILS CLOSED: an enabled remote block with no
+// resolvable token or no certificate material is a startup error, so
+// a server never binds a network socket without both.
+func resolveRemoteRuntime(sc config.ServerConfig, configDirPath string) (server.RemoteRuntime, error) {
+	rc := sc.Remote
+	if !rc.Enabled {
+		return server.RemoteRuntime{}, nil
+	}
+
+	token := secret.ResolveKey(rc.TokenFile, rc.TokenEnv, rc.Token)
+	if token == "" {
+		return server.RemoteRuntime{}, fmt.Errorf("server.remote.enabled but no token resolves (token_file/token_env/token); run `gramaton remote enable`")
+	}
+
+	certFile := sc.TLS.CertFile
+	keyFile := sc.TLS.KeyFile
+	if certFile == "" {
+		certFile = filepath.Join(remoteTLSDir(configDirPath), tlscert.CertFileName)
+		keyFile = filepath.Join(remoteTLSDir(configDirPath), tlscert.KeyFileName)
+	}
+	if _, err := os.Stat(certFile); err != nil {
+		return server.RemoteRuntime{}, fmt.Errorf("server.remote.enabled but certificate %s is missing; run `gramaton remote enable`", certFile)
+	}
+	if _, err := os.Stat(keyFile); err != nil {
+		return server.RemoteRuntime{}, fmt.Errorf("server.remote.enabled but key %s is missing; run `gramaton remote enable`", keyFile)
+	}
+
+	return server.RemoteRuntime{
+		Enabled:  true,
+		BindAddr: rc.BindAddr,
+		Port:     rc.Port,
+		Token:    token,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+		AdminOps: rc.AdminOps,
+	}, nil
 }
 
 // startBackground starts the server as a detached background process.

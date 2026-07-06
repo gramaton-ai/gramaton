@@ -104,8 +104,10 @@ Gramaton is built for exactly these gaps:
 - It searches distilled knowledge, not raw transcripts. Sessions extract the
   load-bearing pieces of a conversation; full transcripts can be archived
   alongside, readable on demand but not indexed.
-- It is single-user. There is no tenancy and no hosted service, and today
-  the server runs local-only; remote access to your own server is planned.
+- It is single-user. There is no tenancy and no hosted service. The server is
+  local-only by default; you can opt into reaching your own server from your
+  other machines over your network with token auth and TLS (`gramaton remote
+  enable`).
 
 ## What this is, and what we don't know yet
 

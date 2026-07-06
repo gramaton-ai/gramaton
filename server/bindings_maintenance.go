@@ -10,8 +10,12 @@ import (
 )
 
 // registerMaintenanceRoutes wires curation + reembed HTTP endpoints to
-// the api package. Loopback gates stay at the transport layer because
-// the api package has no concept of HTTP origin.
+// the api package. These are pathless admin operations: they mutate
+// or read store state and spend (capped) LLM budget, but take no
+// caller filesystem path, so they are open to authenticated remote
+// callers (the global auth middleware gates them). Only the
+// path-taking and process-control operations stay loopback-only (see
+// adminAllowed / the shutdown+debug handlers).
 func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/curation", func(w http.ResponseWriter, r *http.Request) {
 		result, apiErr := s.api.CurationStatus(r.Context())
@@ -23,11 +27,6 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/curation/trigger", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"curation trigger is restricted to loopback connections", false)
-			return
-		}
 		// Body is optional; the dry_run flag selects DryRun over Trigger.
 		// Real parse failures (malformed JSON, oversized body) surface
 		// as 400 -- silently defaulting to a real trigger when the
@@ -58,11 +57,6 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/curation/batch", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"batch curation is restricted to loopback connections", false)
-			return
-		}
 		result, apiErr := s.api.CurationBatch(r.Context())
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -72,11 +66,6 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/curation/drain", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"drain is restricted to loopback connections", false)
-			return
-		}
 		result, apiErr := s.api.CurationDrainContradictions(r.Context())
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -95,11 +84,6 @@ func (s *Server) registerMaintenanceRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /v1/curation/stuck-records/reset", func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"stuck-records reset is restricted to loopback connections", false)
-			return
-		}
 		var req api.CurationResetStuckRequest
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil && !errors.Is(err, errEmptyBody) {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)

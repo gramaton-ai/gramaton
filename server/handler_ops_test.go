@@ -308,13 +308,15 @@ func TestCurationTriggerWithoutRunner(t *testing.T) {
 	}
 }
 
-func TestCurationTriggerNonLoopback(t *testing.T) {
+func TestCurationTriggerRejectsUnauthenticatedRemoteOps(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	// CurationTrigger is restricted to loopback.
+	// Curation is pathless tier-1 admin (open to authenticated
+	// remotes); an unauthenticated non-loopback caller is stopped by
+	// the auth middleware with 401.
 	req := newNonLoopbackRequest(t, "POST", "/v1/curation/trigger", nil)
 	w := serveRequest(t, srv, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback trigger, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback trigger, got %d", w.Code)
 	}
 }
 
