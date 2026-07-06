@@ -69,9 +69,13 @@ grep -rn 'XxxDescription' api/ server/ cli/
 ```
 If any transport uses a string literal for description text instead of the constant, fix it. Agents see inconsistent help otherwise.
 
-### 7. Loopback gates on destructive routes
+### 7. Auth tier on new/changed HTTP routes
 
-If the diff added or modified HTTP routes that are destructive (backup, restore, export, import, merge, discard, reembed, delete, purge), confirm each has `if !isLoopback(r)` as the first check. Miss this and a remote caller can invoke destructive ops.
+Since remote access (#96) the global `authenticate` middleware fronts every route (loopback passes, remote needs a bearer token). For a NEW or changed route, confirm the tier is right:
+- **Path-taking** (reads/writes a caller-supplied host path — restore, export/import, store carve/add, session archive, local-path ingest): first statement is `if !s.adminAllowed(r)`. Missing this lets an authenticated remote reach a host-path op — host compromise.
+- **Process control** (shutdown, debug): `if !isLoopback(r)`, loopback-only always.
+- **Pathless** (knowledge surface, curation, backup-create): NO gate — the middleware already authenticated it. Do not reintroduce a blanket `isLoopback` gate.
+- A new path-taking MCP tool is in `mcpRemoteExcludedTools` AND its REST twin is `adminAllowed`-gated (MCP bindings bypass REST gates).
 
 ### 8. Lock discipline sanity
 

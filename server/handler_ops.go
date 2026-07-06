@@ -99,11 +99,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Local path mode: restricted to loopback only (SSRF protection).
+	// Local path mode reads a caller-supplied host path (SSRF / host
+	// read surface), so it stays loopback-only unless
+	// server.remote.admin_ops is set.
 	if req.Path != "" {
-		if !isLoopback(r) {
-			s.writeError(w, http.StatusForbidden, "forbidden",
-				"local path ingestion is restricted to loopback connections", false)
+		if !s.adminAllowed(r) {
+			s.writeAdminForbidden(w, "local path ingestion")
 			return
 		}
 		s.handleIngestLocalPath(w, req)

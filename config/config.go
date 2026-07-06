@@ -4,13 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// remotePinRe bounds remote.pin to the SPKI fingerprint form the
+// credentials bundle carries (see internal/tlscert.SPKIFingerprint).
+var remotePinRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // Config holds all Gramaton configuration.
 //
@@ -31,6 +38,7 @@ type Config struct {
 
 	Author    AuthorConfig    `yaml:"author,omitempty"`
 	Server    ServerConfig    `yaml:"server"`
+	Remote    RemoteConfig    `yaml:"remote,omitempty"`
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Backup    BackupConfig    `yaml:"backup"`
@@ -116,6 +124,74 @@ type ServerConfig struct {
 	// effect when remote access is enabled; ignored while the server
 	// is loopback-only.
 	TLS ServerTLSConfig `yaml:"tls,omitempty"`
+
+	// Remote opts the server into serving other machines. Never
+	// enabled by default; `gramaton remote enable` is the supported
+	// path (it also mints the token and certificate this requires).
+	Remote RemoteServerConfig `yaml:"remote,omitempty"`
+}
+
+// DefaultRemotePort is the remote TLS listener's port when
+// server.remote.port is 0. Distinct from the loopback listener's
+// 42982 so the two sockets never contend even under wildcard binds.
+const DefaultRemotePort = 42983
+
+// RemoteServerConfig exposes the store to other machines through a
+// separate TLS-only listener. The plain loopback listener is
+// unaffected. A server with Enabled true refuses to start unless a
+// token resolves and certificate material exists (fail closed).
+type RemoteServerConfig struct {
+	// Enabled turns the remote TLS listener on. Explicit opt-in.
+	Enabled bool `yaml:"enabled"`
+
+	// BindAddr is the address the remote listener binds. Empty means
+	// all interfaces (0.0.0.0).
+	BindAddr string `yaml:"bind_addr,omitempty"`
+
+	// Port is the remote listener's TCP port. 0 means the default
+	// remote port (42983) -- deliberately distinct from server.port
+	// so the plain loopback listener and the TLS listener never
+	// contend for a socket.
+	Port int `yaml:"port,omitempty"`
+
+	// TokenFile / TokenEnv / Token resolve the shared bearer secret
+	// remote callers must present, in that priority order (same
+	// triplet as llm.api_key_*). `gramaton remote enable` writes
+	// TokenFile. Inline Token ends up in backups and process
+	// listings; prefer the file.
+	TokenFile string `yaml:"token_file,omitempty"`
+	TokenEnv  string `yaml:"token_env,omitempty"`
+	Token     string `yaml:"token,omitempty"`
+
+	// AdminOps opens the path-taking admin surface (restore, store
+	// carve/add, session archive, path-mode ingest) to authenticated
+	// remote callers. Off by default because a stolen token then
+	// reads/writes arbitrary host paths -- host compromise, not just
+	// store compromise. Shutdown and debug endpoints stay
+	// loopback-only regardless.
+	AdminOps bool `yaml:"admin_ops"`
+}
+
+// RemoteConfig (top-level `remote:`) points THIS machine's CLI,
+// hooks, and MCP proxy at a Gramaton server on another machine.
+// When URL is set, every client operation dials it instead of a
+// local server, auto-start is suppressed, and commands that need
+// the raw store files refuse to run. Populated by
+// `gramaton remote add` from a credentials bundle.
+type RemoteConfig struct {
+	// URL is the remote server's base URL. https only.
+	URL string `yaml:"url,omitempty"`
+
+	// Pin is the server certificate's SPKI fingerprint
+	// (sha256:<hex>) from the credentials bundle. TLS verification
+	// is pin-based: the pin, not a CA chain, proves server identity.
+	Pin string `yaml:"pin,omitempty"`
+
+	// TokenFile / TokenEnv / Token resolve the bearer secret sent to
+	// the remote server, in that priority order.
+	TokenFile string `yaml:"token_file,omitempty"`
+	TokenEnv  string `yaml:"token_env,omitempty"`
+	Token     string `yaml:"token,omitempty"`
 }
 
 // ServerTLSConfig is the bring-your-own-certificate option for the
@@ -1443,6 +1519,41 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("config: server.tls requires both cert_file and key_file (or neither for the generated self-signed certificate)")
 	}
 
+	if cfg.Server.Remote.Port < 0 || cfg.Server.Remote.Port > 65535 {
+		return fmt.Errorf("config: server.remote.port %d out of range; expected 0-65535 (0 = default %d)", cfg.Server.Remote.Port, DefaultRemotePort)
+	}
+	if cfg.Server.Remote.Enabled {
+		if a := cfg.Server.Remote.BindAddr; a != "" && net.ParseIP(a) == nil {
+			return fmt.Errorf("config: server.remote.bind_addr %q is not an IP address (leave empty for all interfaces)", a)
+		}
+		if cfg.Server.Remote.TokenFile == "" && cfg.Server.Remote.TokenEnv == "" && cfg.Server.Remote.Token == "" {
+			return fmt.Errorf("config: server.remote.enabled requires a token source (token_file, token_env, or token); run `gramaton remote enable`")
+		}
+		effRemote := cfg.Server.Remote.Port
+		if effRemote == 0 {
+			effRemote = DefaultRemotePort
+		}
+		if cfg.Server.Port == effRemote {
+			return fmt.Errorf("config: server.remote port %d collides with server.port; the loopback and remote listeners need distinct ports", effRemote)
+		}
+	}
+
+	if cfg.Remote.URL != "" && cfg.Server.Remote.Enabled {
+		return fmt.Errorf("config: remote.url (this machine is a client) and server.remote.enabled (this machine hosts) are mutually exclusive in one config")
+	}
+	if cfg.Remote.URL != "" {
+		u, err := url.Parse(cfg.Remote.URL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("config: remote.url %q must be an https URL (plaintext would expose the bearer token)", cfg.Remote.URL)
+		}
+		if !remotePinRe.MatchString(strings.ToLower(cfg.Remote.Pin)) {
+			return fmt.Errorf("config: remote.pin must be the sha256:<hex> fingerprint from the credentials bundle")
+		}
+		if cfg.Remote.TokenFile == "" && cfg.Remote.TokenEnv == "" && cfg.Remote.Token == "" {
+			return fmt.Errorf("config: remote.url requires a token source (token_file, token_env, or token); run `gramaton remote add`")
+		}
+	}
+
 	if cfg.Decay.Rates.Immutable != 0 {
 		return fmt.Errorf("config: decay.rates.immutable must be 0 (immutable records never decay); got %v", cfg.Decay.Rates.Immutable)
 	}
@@ -1565,6 +1676,18 @@ func trimConfigStrings(cfg *Config) {
 
 	trim(&cfg.Server.TLS.CertFile)
 	trim(&cfg.Server.TLS.KeyFile)
+
+	trim(&cfg.Server.Remote.BindAddr)
+	trim(&cfg.Server.Remote.TokenFile)
+	trim(&cfg.Server.Remote.TokenEnv)
+	// Server.Remote.Token is an opaque secret -- don't trim. See
+	// Embedding.APIKey above for rationale.
+
+	trim(&cfg.Remote.URL)
+	trim(&cfg.Remote.Pin)
+	trim(&cfg.Remote.TokenFile)
+	trim(&cfg.Remote.TokenEnv)
+	// Remote.Token is an opaque secret -- don't trim.
 }
 
 // normalize coerces legacy aliases and clamps out-of-range values on a

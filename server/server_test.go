@@ -532,9 +532,13 @@ func TestDebugGoroutines(t *testing.T) {
 	}
 }
 
-// --- Shutdown restricted to loopback ---
+// --- Shutdown and restore reject unauthenticated remotes ---
 
-func TestShutdownNonLoopback(t *testing.T) {
+// An unauthenticated non-loopback caller is stopped by the auth
+// middleware (401) before reaching these handlers. That shutdown and
+// restore stay loopback-only even for an AUTHENTICATED remote (403)
+// is covered in the remote-access tier matrix.
+func TestShutdownRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	req := httptest.NewRequest("POST", "/v1/shutdown", nil)
@@ -542,14 +546,12 @@ func TestShutdownNonLoopback(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback shutdown, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback shutdown, got %d", w.Code)
 	}
 }
 
-// --- Restore restricted to loopback ---
-
-func TestRestoreNonLoopback(t *testing.T) {
+func TestRestoreRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	req := httptest.NewRequest("POST", "/v1/restore", bytes.NewBufferString(`{"path":"x","force":true}`))
@@ -558,8 +560,8 @@ func TestRestoreNonLoopback(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback restore, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback restore, got %d", w.Code)
 	}
 }
 

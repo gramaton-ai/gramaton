@@ -55,19 +55,23 @@ func TestCurationStatusHTTPSurfaces503(t *testing.T) {
 	}
 }
 
-func TestCurationTriggerLoopbackOnly(t *testing.T) {
+// Curation is pathless tier-1 admin: open to authenticated remotes,
+// so the only thing an UNauthenticated non-loopback caller gets is
+// the auth middleware's 401. (The authenticated-remote 200 case is
+// in the remote-access tier matrix.)
+func TestCurationTriggerRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequestFrom(t, srv, "POST", "/v1/curation/trigger", nil, "192.168.1.5:12345")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback trigger, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback trigger, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestCurationBatchLoopbackOnly(t *testing.T) {
+func TestCurationBatchRejectsUnauthenticatedRemote(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	w := doRequestFrom(t, srv, "POST", "/v1/curation/batch", nil, "10.0.0.1:12345")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for non-loopback batch, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated non-loopback batch, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

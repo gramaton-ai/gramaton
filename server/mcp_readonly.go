@@ -146,3 +146,35 @@ func MCPWriteToolNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// mcpRemoteExcludedTools lists the MCP tools stripped from the
+// surface a plain authenticated remote caller sees (see MCPHandler).
+//
+// This is the hook for keeping a genuinely path-taking MCP tool off
+// the remote surface (a bearer token proves identity, not path
+// safety). No MCP tool takes a host path today: the path-taking
+// operations (restore, store carve/add, session archive, local-path
+// ingest) are REST/CLI-only and are gated on the REST side via
+// adminAllowed, so nothing here mirrors them.
+//
+// gramaton_intake is excluded for a different, non-security reason:
+// it is the redundant legacy capture tool (agents should use
+// gramaton_save), already excluded from the `gramaton mcp` CLI
+// proxy, so a remote agent connecting straight to /mcp sees the same
+// surface a proxy-connected agent does. Its REST twin /v1/intake is
+// pathless and stays open -- matching gramaton_save.
+//
+// Keep in lockstep with the REST tier gates: a NEW path-taking MCP
+// tool must be added here AND its REST route must call adminAllowed.
+var mcpRemoteExcludedTools = []string{
+	"gramaton_intake",
+}
+
+// MCPRemoteExcludedToolNames returns the tools removed from the
+// trimmed remote MCP surface, sorted. Removing a name that was never
+// registered is a no-op.
+func MCPRemoteExcludedToolNames() []string {
+	names := append([]string(nil), mcpRemoteExcludedTools...)
+	sort.Strings(names)
+	return names
+}

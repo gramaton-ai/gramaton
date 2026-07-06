@@ -51,9 +51,13 @@ In scope:
 - The `gramaton` CLI and `gramaton serve` HTTP/MCP server.
 - On-disk store format, read/write integrity, and backup/restore
   flow.
-- Authentication of loopback-gated HTTP endpoints.
-- Handling of API keys and other secrets pulled from
-  `~/.gramaton/config.yaml` or the environment.
+- Authentication and transport security of remote access
+  (`server.remote`): bearer-token enforcement, TLS certificate
+  pinning, and the loopback-only / admin-ops tiering of
+  path-taking and process-control endpoints.
+- Handling of API keys, the remote bearer token, TLS private keys,
+  and other secrets pulled from `~/.gramaton/config.yaml`, the
+  store's config dir, or the environment.
 
 Out of scope (please do not report):
 
@@ -61,8 +65,9 @@ Out of scope (please do not report):
   a user's home directory or the store directory.
 - Issues in upstream dependencies -- report those directly
   upstream. We will update once a fix is available.
-- Denial-of-service via unbounded local requests (the project
-  assumes a trusted local user at this stage).
+- Denial-of-service via unbounded requests. Rate limiting is not
+  yet implemented; a remote server is expected to run on a trusted
+  LAN behind the operator's own network controls until it lands.
 
 ## Credit
 

@@ -9,18 +9,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **TLS foundation for remote access** (#96, dormant until remote
-  access ships). New `internal/tlscert` package generates the remote
-  listener's self-signed certificate: ECDSA P-256, ten-year validity,
-  SANs from supplied hosts, written 0600. Trust is pin-based -- the
-  package computes SPKI fingerprints (`sha256:<hex>`) and provides
-  the client-side pinned-verification callback, so certificate expiry
-  and SAN churn never break verification. Generation refuses to
-  overwrite existing certificate material unless forced, and a forced
-  rotation backs each file up with an ISO8601 timestamp in the name
-  (never deletes). New `server.tls` config block (`cert_file` +
-  `key_file`, validated as both-or-neither) lets a user bring their
-  own certificate; it is ignored while the server is loopback-only.
+- **Optional remote access** (#96). A store can now serve other
+  machines on your network. `gramaton remote enable` on the host
+  turns on a separate TLS-only listener (default port 42983; the
+  plain loopback listener is unchanged), mints a bearer token and a
+  self-signed certificate, and prints a one-line credentials bundle.
+  `gramaton remote add` on a client machine consumes the bundle,
+  verifies the server against its pinned certificate, and points
+  every command, hook, and the MCP proxy at the remote store. Trust
+  is pin-based (the SPKI fingerprint travels in the bundle, so there
+  is no trust-on-first-use window and address changes never break
+  verification); the shared token is compared in constant time.
+  Safe by default: remote access is never on unless enabled, a
+  server bound for remote refuses to start without a token and
+  certificate, and remote serving disables idle auto-shutdown so a
+  client is never stranded. Endpoints are tiered — the knowledge
+  surface and pathless admin (curation, reembed, backup-create) are
+  open to authenticated remotes, while path-taking operations
+  (restore, export/import, store carve/add, session archive,
+  local-path ingest) and process control (shutdown, debug) stay
+  loopback-only unless the operator sets `server.remote.admin_ops`.
+  The remote `/mcp` surface is trimmed to match. Standard library
+  only; no new dependencies.
+- **TLS certificate handling for remote access** (#96). New
+  `internal/tlscert` package generates the remote listener's
+  self-signed certificate: ECDSA P-256, ten-year validity, SANs from
+  supplied hosts, written 0600. Trust is pin-based -- the package
+  computes SPKI fingerprints (`sha256:<hex>`) and provides the
+  client-side pinned-verification callback, so certificate expiry and
+  SAN churn never break verification. Generation refuses to overwrite
+  existing certificate material unless forced, and a forced rotation
+  backs each file up with an ISO8601 timestamp in the name (never
+  deletes). New `server.tls` config block (`cert_file` + `key_file`,
+  validated as both-or-neither) lets a user bring their own
+  certificate instead of the generated one.
 
 - **`gramaton_save` accepts an optional `client_token` idempotency
   key** (#96 groundwork). Retrying a timed-out or failed save with

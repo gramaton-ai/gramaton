@@ -29,6 +29,29 @@ blank and records carry no author. Collected by gramaton init;
 edit here any time -- only affects records created afterwards.`,
 
 	// -------------------------------------------------------------
+	// Remote access (server side and client side)
+	// -------------------------------------------------------------
+	"server.remote": `remote: opt-in exposure of this store to other
+machines through a separate TLS-only listener (the plain loopback
+listener is unchanged). Never enabled by default. Run
+"gramaton remote enable" -- it mints the token and certificate this
+block requires and fills it in. A server with enabled: true refuses
+to start unless a token resolves and certificate material exists.
+admin_ops (default false) additionally opens path-taking admin
+operations (restore, store carve/add, session archive, path-mode
+ingest) to authenticated remote callers -- leave it off unless this
+machine is a dedicated appliance and you accept that a stolen token
+then reaches host paths, not just the store.`,
+
+	"remote": `remote: points THIS machine's CLI, hooks, and MCP proxy
+at a Gramaton server on another machine. Populated by
+"gramaton remote add" from a credentials bundle. When url is set,
+every client operation dials it, auto-start is suppressed, and
+commands needing the raw store files refuse to run. https only;
+pin is the server certificate's SPKI fingerprint and replaces CA
+verification.`,
+
+	// -------------------------------------------------------------
 	// Server TLS (bring-your-own certificate)
 	// -------------------------------------------------------------
 	"server.tls": `tls: bring-your-own certificate for the remote TLS
