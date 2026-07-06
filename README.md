@@ -96,8 +96,8 @@ Gramaton is built for exactly these gaps:
 - **Automatic curation.** A background process expires stale short-lived
   records, links orphans, and consolidates duplicates. With an LLM
   configured, it also classifies new records and detects contradictions.
-- **Local and portable.** The same store serves every MCP-aware tool you use,
-  and your knowledge survives switching between them.
+- **Self-hosted and portable.** One store works with every MCP-aware tool you
+  use, and your other machines can reach it over your network.
 
 ## What Gramaton doesn't do
 
@@ -106,8 +106,7 @@ Gramaton is built for exactly these gaps:
   alongside, readable on demand but not indexed.
 - It is single-user. There is no tenancy and no hosted service. The server is
   local-only by default; you can opt into reaching your own server from your
-  other machines over your network with token auth and TLS (`gramaton remote
-  enable`).
+  other machines over your network. See [Remote access](#remote-access).
 
 ## What this is, and what we don't know yet
 
@@ -298,6 +297,38 @@ the `author:` config, so shared knowledge stays attributed;
 `gramaton backfill author` stamps stores created before attribution existed.
 
 See [docs/sharing.md](docs/sharing.md) for the full flow.
+
+## Remote access
+
+Sharing hands over a frozen copy. Remote access is the live version: one store
+stays on a host, and your other machines reach it over your network. Point a
+laptop at the workstation that holds your memory, or run a small always-on
+server and connect every machine to it.
+
+```bash
+# Host: turn on remote access and print a one-line credentials bundle
+gramaton remote enable --host workstation.local
+
+# Client: connect as a named store alongside your local one
+gramaton --store home remote add   # paste the bundle when prompted
+```
+
+The host opens a separate TLS-only listener (the loopback listener is
+unchanged) with a bearer token and a self-signed certificate. The bundle
+carries the address, the certificate's pin, and the token. Trust is pinned to
+that certificate, so there is no first-connection window to intercept and a
+changed address never breaks verification. `remote add` writes the client
+config and registers the store's MCP entry, so an agent can reach the remote
+store right away.
+
+Remote stores are named, so a remote store sits alongside your local default
+instead of replacing it. Remote access is off until you enable it, and
+pointing a store that already holds local data at a remote is refused, so
+nothing is stranded. Freeze the store on the host if you want to read it from
+your other machines but never write it.
+
+See [docs/remote.md](docs/remote.md) for running the host as a managed
+service, the read-only setup, and troubleshooting.
 
 ## How it works
 
@@ -491,6 +522,7 @@ for all fields and [docs/providers.md](docs/providers.md) for provider setup.
 | [How to use Gramaton](HOW_TO_USE_GRAMATON.md) | Practical tips for driving Gramaton through an agent: what to say, what to expect, common pitfalls |
 | [Integrator Guide](docs/integrator-guide.md) | Building agents and tools on Gramaton: the three storage paths, retrieval patterns, tool reference |
 | [Sharing stores](docs/sharing.md) | Freezing, attaching, and carving read-only stores |
+| [Remote access](docs/remote.md) | Hosting a store for your other machines: enable, connect, read-only topology, troubleshooting |
 | [Architecture](docs/architecture.md) | Package layers, data flow, concurrency model, lock discipline |
 | [Configuration](docs/configuration.md) | All config fields, defaults, examples, named-store model |
 | [Providers](docs/providers.md) | Embedding and LLM provider setup |

@@ -21,7 +21,27 @@ var (
 var curationCmd = &cobra.Command{
 	Use:   "curation",
 	Short: "View curation status or trigger a curation cycle",
-	Args:  cobra.NoArgs,
+	Long: `Curation is the background process that maintains a store after records
+land: it classifies pending records, links orphans to related records,
+consolidates duplicates, and expires stale records as their temporality
+lapses. The classification and contradiction-detection passes call a
+configured LLM; without one they are skipped while the mechanical passes
+(orphan linking, expiry) still run.
+
+This command inspects that process or drives a cycle by hand. With no
+subcommand it prints the current status -- pending count and last cycle.
+--trigger runs a cycle now; --batch submits every pending record in one
+batch (half price on API providers that offer batch pricing). The
+stuck-records subcommands list and requeue records whose curation task
+jammed after repeated failures.
+
+Examples:
+  gramaton curation
+  gramaton curation --trigger
+  gramaton curation --batch
+  gramaton curation stuck-records-list
+  gramaton curation stuck-records-reset`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if curationBatch {
 			fmt.Println("Starting batch classification...")
