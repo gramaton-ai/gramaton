@@ -26,6 +26,19 @@ type fakeMCPBackend struct {
 	// storeCalls captures RegisterStore invocations from the
 	// read-only attach route, as "<client>:<store>".
 	storeCalls []string
+	// removeCalls captures RemoveStore invocations as
+	// "<client>:<store>" ("<client>:" for the default store).
+	removeCalls []string
+	// removePresent makes RemoveStore report removed=true (the entry
+	// existed); the default false reports a no-op not-present removal.
+	removePresent bool
+	// removeErr, when set, makes every RemoveStore fail.
+	removeErr error
+	// entries is what ListEntries reports for every client (the
+	// gramaton-owned entries currently registered); listErr forces a
+	// failure.
+	entries []string
+	listErr error
 }
 
 type fakeRegisterResult struct {
@@ -48,6 +61,21 @@ func (f *fakeMCPBackend) Register(_ context.Context, c DetectedClient) (bool, er
 func (f *fakeMCPBackend) RegisterStore(_ context.Context, c DetectedClient, storeName string) (bool, error) {
 	f.storeCalls = append(f.storeCalls, c.Name+":"+storeName)
 	return false, nil
+}
+
+func (f *fakeMCPBackend) RemoveStore(_ context.Context, c DetectedClient, storeName string) (bool, error) {
+	f.removeCalls = append(f.removeCalls, c.Name+":"+storeName)
+	if f.removeErr != nil {
+		return false, f.removeErr
+	}
+	return f.removePresent, nil
+}
+
+func (f *fakeMCPBackend) ListEntries(_ context.Context, _ DetectedClient) ([]string, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.entries, nil
 }
 
 // Helper: build a wizard that will run Steps 1 and 2 with skip, then

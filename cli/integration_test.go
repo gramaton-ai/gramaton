@@ -124,6 +124,14 @@ func TestMain(m *testing.M) {
 	cfgDir = dir
 	testCfgDir = dir
 
+	// Default the store-lifecycle harness backend to a no-op fake for
+	// the whole suite: the production DefaultMCPBackend shells out to the
+	// real claude/codex CLIs and edits ~/.cursor/mcp.json, so leaving it
+	// live would let `store create`/`attach`/`delete`/`rename` tests
+	// mutate the developer's actual harness config. Tests that assert
+	// registration wiring swap in a fake with detected clients.
+	storeHarnessBackend = &fakeStoreHarnessBackend{}
+
 	code := m.Run()
 
 	testSrv.Shutdown()

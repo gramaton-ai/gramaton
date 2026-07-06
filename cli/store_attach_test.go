@@ -72,13 +72,15 @@ func TestStoreAttachEndToEnd(t *testing.T) {
 	if got["owner"] != "Ada Lovelace <ada@example.com>" {
 		t.Errorf("owner = %v, want the publisher's provenance", got["owner"])
 	}
-	// The completion output must show how to reach the store and how
-	// a harness gets a second MCP entry pointed at it.
+	// The completion output must show how to reach the store from the
+	// CLI, and carry a harness-registration report (the suite-default
+	// backend detects no clients, so the report is present but empty;
+	// dedicated wiring assertions live in store_harness_test.go).
 	if access, _ := got["access"].(string); !strings.Contains(access, "--store team-notes") || !strings.Contains(access, "GRAMATON_STORE") {
 		t.Errorf("access hint = %q, want the --store / GRAMATON_STORE forms", access)
 	}
-	if mcp, _ := got["mcp"].(string); !strings.Contains(mcp, "gramaton --store team-notes mcp") {
-		t.Errorf("mcp hint = %q, want the --store mcp form", mcp)
+	if _, present := got["harness"]; !present {
+		t.Error("attach output should carry a harness-registration report")
 	}
 
 	// On disk: copied data, frozen manifest, minimal config.

@@ -67,10 +67,12 @@ gramaton store attach <path> [--name <name>]
 
 This copies the store into your named-store directory, freezes the
 local copy regardless of the artifact's own state (your copy is
-read-only, ever; the original is untouched), and prints how to reach
-it: `gramaton --store <name> ...`, `GRAMATON_STORE=<name>`, and the
-`gramaton --store <name> mcp` form for wiring a dedicated MCP entry
-into an agent harness.
+read-only, ever; the original is untouched), and registers its MCP
+entry (`gramaton-<name>`) with every detected AI tool so an agent can
+search it right away -- only read tools surface against the frozen
+copy. Reach it from the CLI with `gramaton --store <name> ...` or
+`GRAMATON_STORE=<name>`; pass `--no-harness` to skip the AI-tool
+registration and wire the entry yourself.
 
 **Read-only-only machine.** If the machine should have no writable
 Gramaton at all, run `gramaton init` and pick the "attach a shared
