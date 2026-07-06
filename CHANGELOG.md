@@ -9,6 +9,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TLS foundation for remote access** (#96, dormant until remote
+  access ships). New `internal/tlscert` package generates the remote
+  listener's self-signed certificate: ECDSA P-256, ten-year validity,
+  SANs from supplied hosts, written 0600. Trust is pin-based -- the
+  package computes SPKI fingerprints (`sha256:<hex>`) and provides
+  the client-side pinned-verification callback, so certificate expiry
+  and SAN churn never break verification. Generation refuses to
+  overwrite existing certificate material unless forced, and a forced
+  rotation backs each file up with an ISO8601 timestamp in the name
+  (never deletes). New `server.tls` config block (`cert_file` +
+  `key_file`, validated as both-or-neither) lets a user bring their
+  own certificate; it is ignored while the server is loopback-only.
+
 - **`gramaton_save` accepts an optional `client_token` idempotency
   key** (#96 groundwork). Retrying a timed-out or failed save with
   the same token (a caller-generated UUID) returns the originally
