@@ -141,14 +141,18 @@ func resolveRemoteRuntime(sc config.ServerConfig, configDirPath string) (server.
 		return server.RemoteRuntime{}, fmt.Errorf("server.remote.enabled but key %s is missing; run `gramaton remote enable`", keyFile)
 	}
 
+	writeRate, writeBurst, maxConcurrentWrites := rc.ResolvedWriteLimits()
 	return server.RemoteRuntime{
-		Enabled:  true,
-		BindAddr: rc.BindAddr,
-		Port:     rc.Port,
-		Token:    token,
-		CertFile: certFile,
-		KeyFile:  keyFile,
-		AdminOps: rc.AdminOps,
+		Enabled:             true,
+		BindAddr:            rc.BindAddr,
+		Port:                rc.Port,
+		Token:               token,
+		CertFile:            certFile,
+		KeyFile:             keyFile,
+		AdminOps:            rc.AdminOps,
+		WriteRate:           writeRate,
+		WriteBurst:          writeBurst,
+		MaxConcurrentWrites: maxConcurrentWrites,
 	}, nil
 }
 

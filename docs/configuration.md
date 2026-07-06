@@ -74,9 +74,14 @@ server:
     port: 42983                            # remote TLS listener (loopback listener is unchanged)
     token_file: ~/.gramaton/remote.token   # shared bearer secret (file/env/inline triplet)
     admin_ops: false                       # open path-taking admin ops to authenticated remotes
+    write_rate: 10                         # sustained remote writes/second (0 = default, negative = off)
+    write_burst: 20                        # token-bucket size for short spikes
+    max_concurrent_writes: 8               # remote writes in flight at once
 ```
 
 The remote listener is TLS-only and requires a bearer token from every caller; loopback clients are unaffected. A server with `enabled: true` refuses to start unless a token resolves and certificate material exists. `admin_ops` opens restore, store carve/add, session archive, and path-mode ingest to authenticated remote callers — off by default because those operations touch host filesystem paths; shutdown and debug endpoints stay loopback-only regardless.
+
+`write_rate`, `write_burst`, and `max_concurrent_writes` bound the write load an authenticated remote caller can put on the server, shielding the engine's single write lock from a flood. Only the write path is limited; reads and loopback callers pass untouched. An over-limit write is rejected with HTTP 429 and a `Retry-After` delay, a retryable error the agent backs off on. For each knob, 0 selects the default (10/s, burst 20, 8 concurrent). A negative `write_rate` or `max_concurrent_writes` turns that limiter off; `write_burst` has no off switch (a non-positive value just selects the default bucket size).
 
 **Pointing this machine at a remote server** (top-level `remote:`, written by `gramaton remote add` from a credentials bundle):
 

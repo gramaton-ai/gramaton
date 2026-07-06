@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -654,3 +655,47 @@ func TestProxyHistory(t *testing.T) {
 }
 
 func floatPtr(v float64) *float64 { return &v }
+
+// TestProxyServerErrSurfacesRetryAfter pins that a 429 with a retry-after
+// delay reaches the agent: proxyServerErr carries retry_after (and the
+// retryable flag) into the MCP StructuredContent so the model can back
+// off by the suggested amount instead of string-parsing the message.
+func TestProxyServerErrSurfacesRetryAfter(t *testing.T) {
+	detail := &server.ErrorDetail{
+		Code:       "too_many_requests",
+		Message:    "write rate limit exceeded",
+		Retryable:  true,
+		RetryAfter: 4,
+	}
+	res, _, err := proxyServerErr(detail)
+	if err != nil {
+		t.Fatalf("proxyServerErr returned err: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected IsError=true")
+	}
+	sc, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent is %T, want map[string]any", res.StructuredContent)
+	}
+	if sc["retryable"] != true {
+		t.Errorf("retryable=%v want true", sc["retryable"])
+	}
+	if sc["retry_after"] != 4 {
+		t.Errorf("retry_after=%v want 4", sc["retry_after"])
+	}
+}
+
+// TestProxyServerErrOmitsRetryAfterWhenZero pins that non-429 errors do
+// not carry a spurious retry_after key.
+func TestProxyServerErrOmitsRetryAfterWhenZero(t *testing.T) {
+	detail := &server.ErrorDetail{Code: "not_found", Message: "nope"}
+	res, _, _ := proxyServerErr(detail)
+	sc, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent is %T, want map[string]any", res.StructuredContent)
+	}
+	if _, present := sc["retry_after"]; present {
+		t.Error("retry_after should be omitted when zero")
+	}
+}

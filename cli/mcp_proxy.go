@@ -75,14 +75,18 @@ func proxyServerErr(err error) (*mcp.CallToolResult, any, error) {
 		if detail.Code != "" {
 			text = detail.Code + ": " + detail.Message
 		}
+		structured := map[string]any{
+			"code":      detail.Code,
+			"message":   detail.Message,
+			"retryable": detail.Retryable,
+		}
+		if detail.RetryAfter > 0 {
+			structured["retry_after"] = detail.RetryAfter
+		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: text}},
-			StructuredContent: map[string]any{
-				"code":      detail.Code,
-				"message":   detail.Message,
-				"retryable": detail.Retryable,
-			},
-			IsError: true,
+			Content:           []mcp.Content{&mcp.TextContent{Text: text}},
+			StructuredContent: structured,
+			IsError:           true,
 		}, nil, nil
 	}
 	return proxyErr(err.Error())

@@ -41,7 +41,13 @@ admin_ops (default false) additionally opens path-taking admin
 operations (restore, store carve/add, session archive, path-mode
 ingest) to authenticated remote callers -- leave it off unless this
 machine is a dedicated appliance and you accept that a stolen token
-then reaches host paths, not just the store.`,
+then reaches host paths, not just the store.
+write_rate, write_burst, and max_concurrent_writes bound the write
+load an authenticated remote caller can impose, shielding the engine
+write lock from a flood (defaults 10/s, burst 20, 8 concurrent; 0
+uses the default; a negative write_rate or max_concurrent_writes
+turns that limiter off, while write_burst has no off switch).
+Loopback callers and reads are never limited.`,
 
 	"remote": `remote: points THIS machine's CLI, hooks, and MCP proxy
 at a Gramaton server on another machine. Populated by
