@@ -244,6 +244,37 @@ func WriteDataDirConfig(storeDir, name string) (string, error) {
 	return cfgPath, nil
 }
 
+// storeRemoteURL reads just the remote.url key from the config.yaml in
+// dir, returning "" when the file is absent, unparseable, or has no
+// remote URL. A remote-client store has this set and NO local data/
+// dir, so it is the marker that makes such a store visible to List and
+// Exists (which otherwise key store-presence on data/). Kept a narrow
+// probe -- no defaults, no global fallback -- so the store package need
+// not depend on the full config loader.
+//
+// This is deliberately permissive (no validation): for LISTING, showing
+// a store with remote.url set as "remote" reflects the user's intent
+// even if the config is otherwise incomplete. The runtime resolvers
+// (cli loadRemoteEndpoint/isRemoteStore) validate via config.Load and
+// fall open to local on a broken config, so a misconfigured remote is
+// shown as remote by `store list` yet reports a clear config error when
+// actually used -- an acceptable, informative divergence.
+func storeRemoteURL(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		return ""
+	}
+	var probe struct {
+		Remote struct {
+			URL string `yaml:"url"`
+		} `yaml:"remote"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil {
+		return ""
+	}
+	return probe.Remote.URL
+}
+
 // repinDataDir rewrites the data_dir key in a store's existing
 // per-store config.yaml to point at <storeDir>/data, preserving every
 // other key. Rename moves a named store's home verbatim, so the moved

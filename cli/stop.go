@@ -50,5 +50,19 @@ func runStop(dir string, keepMCP bool) error {
 			fmt.Fprintf(os.Stderr, "%d mcp %s stopped\n", n, noun)
 		}
 	}
+	// If a local server is actually running, stop it -- even for a store
+	// whose config also points remote. `remote add` refuses to create
+	// that mixed state, so this is belt-and-suspenders against a
+	// hand-edited config, and it never orphans a live server.
+	if isServerRunning(dir) {
+		return stopServer(dir)
+	}
+	// No live local server. For a remote store that is the expected
+	// state: report it and exit 0 rather than the spurious "no running
+	// server found".
+	if isRemoteStore(dir) {
+		fmt.Fprintln(os.Stderr, "no local server to stop (remote store)")
+		return nil
+	}
 	return stopServer(dir)
 }

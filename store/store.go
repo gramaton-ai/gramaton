@@ -56,57 +56,82 @@ type StoreInfo struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
 	Default bool   `json:"default,omitempty"`
+	// Remote is true for a remote-client store (config.yaml with
+	// remote.url and no local data/); RemoteURL carries the server it
+	// points at. A remote store's Path is empty -- its data lives on
+	// another machine.
+	Remote    bool   `json:"remote,omitempty"`
+	RemoteURL string `json:"remote_url,omitempty"`
 }
 
 // List returns all stores (default + named), sorted alphabetically
-// with default first.
+// with default first. A store is included when it has a local data/ dir
+// (local) OR a config.yaml with remote.url (a remote client); a dir with
+// neither is a half-built directory and is skipped. Both the default
+// and named stores can be remote.
 func List(baseDir string) []StoreInfo {
 	var stores []StoreInfo
 
-	// Default store.
+	// Default store: local (owns data/) or a remote client (config with
+	// remote.url and no local data/).
 	if DefaultExists(baseDir) {
 		stores = append(stores, StoreInfo{
 			Name:    "(default)",
 			Path:    filepath.Join(baseDir, "data"),
 			Default: true,
 		})
+	} else if url := storeRemoteURL(baseDir); url != "" {
+		stores = append(stores, StoreInfo{
+			Name:      "(default)",
+			Default:   true,
+			Remote:    true,
+			RemoteURL: url,
+		})
 	}
 
-	// Named stores.
+	// Named stores. Single pass: probe the config only for a dir that
+	// lacks data/ (a remote candidate), so a local store never re-reads
+	// its config here.
 	storesDir := filepath.Join(baseDir, "stores")
 	entries, err := os.ReadDir(storesDir)
 	if err != nil {
 		return stores
 	}
 
-	var names []string
+	type namedStore struct {
+		name string
+		info StoreInfo
+	}
+	var found []namedStore
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		dataDir := filepath.Join(storesDir, e.Name(), "data")
-		if _, err := os.Stat(dataDir); err == nil {
-			names = append(names, e.Name())
+		dir := filepath.Join(storesDir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "data")); err == nil {
+			found = append(found, namedStore{e.Name(), StoreInfo{Name: e.Name(), Path: filepath.Join(dir, "data")}})
+		} else if url := storeRemoteURL(dir); url != "" {
+			found = append(found, namedStore{e.Name(), StoreInfo{Name: e.Name(), Remote: true, RemoteURL: url}})
 		}
 	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		stores = append(stores, StoreInfo{
-			Name: name,
-			Path: filepath.Join(storesDir, name, "data"),
-		})
+	sort.Slice(found, func(i, j int) bool { return found[i].name < found[j].name })
+	for _, f := range found {
+		stores = append(stores, f.info)
 	}
 
 	return stores
 }
 
-// Exists checks if a named store exists (has a data/ directory).
+// Exists checks if a named store exists: a local store has a data/
+// directory; a remote-client store has a config.yaml with remote.url
+// and no data/. Either counts, so a remote store is not silently
+// clobbered by a create/attach that only probes for data/.
 func Exists(baseDir, name string) bool {
 	dir := Resolve(baseDir, name)
-	dataDir := filepath.Join(dir, "data")
-	_, err := os.Stat(dataDir)
-	return err == nil
+	if _, err := os.Stat(filepath.Join(dir, "data")); err == nil {
+		return true
+	}
+	return storeRemoteURL(dir) != ""
 }
 
 // DefaultExists checks if the unnamed default store has data.
@@ -211,6 +236,15 @@ func Rename(baseDir, oldName, newName string) error {
 		oldDir := Resolve(baseDir, oldName)
 		oldData := filepath.Join(oldDir, "data")
 		newData := filepath.Join(baseDir, "data")
+		// A remote-client store has no local data/ to move (Exists now
+		// admits it, so the precondition above passes). Refuse with a
+		// clear message rather than letting os.Rename fail on a missing
+		// dir; making a remote store the default would also clobber the
+		// global config.
+		if _, err := os.Stat(oldData); err != nil {
+			return fmt.Errorf("store %q has no local data to move to the default store "+
+				"(a remote-client store cannot become the default this way; delete it and re-run `gramaton remote add` without --store)", oldName)
+		}
 		if err := os.Rename(oldData, newData); err != nil {
 			return err
 		}
@@ -219,13 +253,19 @@ func Rename(baseDir, oldName, newName string) error {
 
 	default:
 		// named -> named: rename the entire store directory (config.yaml
-		// travels verbatim), then re-pin data_dir -- the moved config
-		// still names the OLD absolute data path.
+		// travels verbatim). Re-pin data_dir only for a LOCAL store --
+		// the moved config still names the OLD absolute data path. A
+		// remote-client store has no local data/ and must not gain a
+		// spurious data_dir (its config carries remote.url, not a data
+		// pin), so skip the repin when there is no data/ dir.
 		storesDir := filepath.Join(baseDir, "stores")
 		oldDir := filepath.Join(storesDir, oldName)
 		newDir := filepath.Join(storesDir, newName)
 		if err := os.Rename(oldDir, newDir); err != nil {
 			return err
+		}
+		if _, err := os.Stat(filepath.Join(newDir, "data")); err != nil {
+			return nil // remote-client store: no data_dir to re-pin
 		}
 		_, err := repinDataDir(newDir, newName)
 		return err

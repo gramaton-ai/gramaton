@@ -40,7 +40,7 @@ func remoteMode() (*remoteEndpoint, error) {
 }
 
 func resolveRemote() (*remoteEndpoint, error) {
-	ep, rt, err := loadRemoteEndpoint(configDir(), baseConfigDir())
+	ep, rt, err := loadRemoteEndpoint(configDir())
 	if err != nil || ep == nil {
 		return ep, err
 	}
@@ -52,13 +52,19 @@ func resolveRemote() (*remoteEndpoint, error) {
 	return ep, nil
 }
 
-// loadRemoteEndpoint is the pure resolution step: it reads the config
-// under dir (+ global fallback) and, when a remote URL is set,
-// returns the endpoint and the RoundTripper to install. It has no
-// global side effects, so it is unit-testable. Returns (nil, nil,
-// nil) for local mode.
-func loadRemoteEndpoint(dir, base string) (*remoteEndpoint, http.RoundTripper, error) {
-	cfg, err := config.LoadWithFallback(filepath.Join(dir, "config.yaml"), filepath.Join(base, "config.yaml"))
+// loadRemoteEndpoint is the pure resolution step: it reads the store's
+// OWN config under dir and, when a remote URL is set, returns the
+// endpoint and the RoundTripper to install. It has no global side
+// effects, so it is unit-testable. Returns (nil, nil, nil) for local
+// mode.
+func loadRemoteEndpoint(dir string) (*remoteEndpoint, http.RoundTripper, error) {
+	// Remote-ness is a PER-STORE property, read from the store's OWN
+	// config -- never the global fallback. base/config.yaml is both the
+	// default store's config AND the fallback every named store merges
+	// over, so a remote DEFAULT store's remote.url would otherwise bleed
+	// into a LOCAL named store that omits its own remote block, silently
+	// routing it to the remote and stranding its local data.
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
 	if err != nil {
 		// Fall open to local mode on a broken config, matching
 		// shouldAutoStart: a config that fails to parse must not
@@ -106,6 +112,23 @@ func (b *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	r2 := req.Clone(req.Context())
 	r2.Header.Set("Authorization", "Bearer "+b.token)
 	return b.next.RoundTrip(r2)
+}
+
+// isRemoteStore reports whether the store rooted at dir is configured
+// as a remote client (remote.url set). It reads the store's OWN config
+// only (no global fallback) rather than going through remoteMode(), so
+// callers on the stop path work regardless of the process-global remote
+// resolution and stay unit-testable. A config that fails to load is
+// treated as local -- the same fall-open posture as loadRemoteEndpoint.
+func isRemoteStore(dir string) bool {
+	// Own config only, matching loadRemoteEndpoint and storeRemoteURL:
+	// remote-ness is per-store and must not be inherited from the global
+	// config (see loadRemoteEndpoint for why the fallback would bleed).
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		return false
+	}
+	return cfg.Remote.URL != ""
 }
 
 // guardLocalStore returns an error when the command needs direct
