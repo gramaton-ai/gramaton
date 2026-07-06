@@ -83,7 +83,31 @@ or GRAMATON_STORE to select a store for other commands.`,
 var storeListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all stores",
-	RunE:  runStoreList,
+	Long: `Prints every registered store as a JSON array, one object per store. Fields
+at their zero value are omitted.
+
+Per-store fields: name; path (the store's data directory); active (the store
+targeted by --store / GRAMATON_STORE, the default store when unset); running
+(whether a server is currently serving it); read_only (resolved live from the
+store's STORE manifest on every list, so the badge matches what the engine
+enforces); and manifest, set to "(manifest unreadable)" when the manifest --
+or the config needed to locate it -- cannot be read. That note is shown
+instead of guessing writable, since a corrupt manifest can hide a frozen
+store.
+
+A remote-client store, whose data lives on another machine, instead reports
+remote and remote_url and carries no local path: its running state and
+read-only badge are resolved from the remote at MCP time and do not apply
+here.
+
+With --harness, each detected AI tool is surveyed (shelling out to the vendor
+CLIs) and every store gains a harness list naming the tools whose MCP entry
+points at it, or a harness_note when the store is registered with none.
+
+Examples:
+  gramaton store list
+  gramaton store list --harness`,
+	RunE: runStoreList,
 }
 
 var storeSyncHarnessCmd = &cobra.Command{
@@ -118,15 +142,56 @@ var storeAddCmd = &cobra.Command{
 var storeDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a named store and all its data",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runStoreDelete,
+	Long: `Removes the named store and everything under it -- records, graph,
+config, and STORE manifest are deleted from disk. This cannot be
+undone; there is no recycle step and no backup unless you made one
+yourself.
+
+Refuses while the store's server is running, since a live engine
+still holds the data open. Stop it first: gramaton --store <name>
+serve --stop. Without --force you must retype the store name at the
+prompt to confirm; --force deletes without asking.
+
+The store's MCP entry (gramaton-<name>) is deregistered from every
+detected AI tool, so no harness is left pointing at a store that no
+longer exists. This is idempotent: a store never registered, or
+created with --no-harness, is a clean no-op.
+
+Examples:
+  gramaton store delete authwork
+  gramaton store delete demo --force`,
+	Args: cobra.ExactArgs(1),
+	RunE: runStoreDelete,
 }
 
 var storeRenameCmd = &cobra.Command{
 	Use:   "rename <old> <new>",
 	Short: "Rename a store (use 'default' for the unnamed store)",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runStoreRename,
+	Long: `Renames a store: moves its data directory to the new location and
+re-pins the per-store config's data_dir there, so the global
+config's data_dir never bleeds through to the renamed store. Use
+'default' for the unnamed store as either argument -- renaming it to
+a name moves data/ out of the base dir into stores/<new>/, and
+renaming a name to 'default' moves data/ back to the base dir.
+
+Refuses while the source store's server is running (a live engine
+holds the data directory open); stop it first: gramaton stop. A
+remote-client store is moved without a data_dir pin -- its config
+carries remote.url, not a local path -- and renaming a remote store
+TO default is refused, since it has no local data to move.
+
+The store's MCP entry is re-pointed across every detected AI tool:
+the new entry (gramaton-<new>, or the bare "gramaton" for the
+default store) is registered first, then the old entry removed, so a
+mid-run failure still leaves the agent reachable through the new
+entry.
+
+Examples:
+  gramaton store rename authwork auth
+  gramaton store rename default archive
+  gramaton store rename scratch default`,
+	Args: cobra.ExactArgs(2),
+	RunE: runStoreRename,
 }
 
 var storeFreezeCmd = &cobra.Command{
