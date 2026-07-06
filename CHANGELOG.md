@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Remote setup is now first-class in the store lifecycle.**
+  `gramaton remote add` registers the store's MCP entry
+  (`gramaton-<name>`) with every detected AI tool, so a named remote
+  store is reachable by agents immediately instead of needing a manual
+  `claude mcp add` (`--no-harness` skips it). New `gramaton remote
+  disable` turns off the remote listener (keeping token/certificate
+  material so `remote enable` can turn it back on without re-issuing a
+  bundle; `--purge` deletes them). `gramaton store list` now shows
+  remote-client stores (with their `remote_url`) -- both named and the
+  default -- previously a remote-only store, which has a config but no
+  local `data/` directory, was invisible to the listing. `remote add`
+  refuses to point a store that owns local data at a remote (that would
+  strand the local data), steering you to a fresh `--store <name>`
+  instead.
+
 - **Optional remote access** (#96). A store can now serve other
   machines on your network. `gramaton remote enable` on the host
   turns on a separate TLS-only listener (default port 42983; the
@@ -91,6 +106,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleted.
 
 ### Fixed
+
+- **A store's `remote.url` is now resolved from its own config, never
+  inherited.** The base config that a remote *default* store writes is
+  also the global fallback every named store merges over, so a local
+  named store that didn't set its own `remote.url` used to inherit the
+  default's -- silently routing its traffic to the remote and stranding
+  its local data. Remote-ness is now a strictly per-store property
+  (own-config only), so a local store under a remote default stays
+  local.
+
+- **`gramaton stop` on a remote store exits 0 instead of erroring.**
+  A remote-client store has no local server, so `stop` reaped the MCP
+  proxies and then failed with "no running server found" (exit 1),
+  which read as an error when nothing was wrong. It now reports that
+  there is no local server to stop and exits cleanly.
 
 - **`gramaton store rename` no longer corrupts a store's data_dir
   pin.** A renamed store's per-store `config.yaml` pins an absolute

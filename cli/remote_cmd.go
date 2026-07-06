@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/internal/setup"
 	"github.com/gramaton-ai/gramaton/internal/tlscert"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +45,7 @@ var (
 	remoteEnablePort     int
 	remoteEnableHosts    []string
 	remoteAddBundleFile  string
+	remoteDisablePurge   bool
 )
 
 var remoteCmd = &cobra.Command{
@@ -69,13 +71,28 @@ before new ones are written.`,
 	RunE: runRemoteEnable,
 }
 
+var remoteDisableCmd = &cobra.Command{
+	Use:   "disable",
+	Short: "Turn off remote access on this host",
+	Long: `Disables the remote listener in this store's config (the plain
+loopback listener is unaffected). Token and certificate material are
+kept by default so 'gramaton remote enable' can turn it back on without
+re-issuing a bundle; pass --purge to delete them too.`,
+	RunE: runRemoteDisable,
+}
+
 var remoteAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Point this machine at a remote Gramaton server",
 	Long: `Consumes a credentials bundle (from 'gramaton remote enable' on the
 host), verifies the server's identity against the pinned certificate,
 and writes this machine's remote config so every command dials the
-remote server.`,
+remote server.
+
+The store's MCP entry is also registered with every detected AI tool
+(the proxy transparently dials the remote at runtime), so an agent can
+use the store right away. Pass --no-harness to skip that. Use --store
+<name> to attach the remote as a named store alongside a local one.`,
 	RunE: runRemoteAdd,
 }
 
@@ -87,8 +104,11 @@ func init() {
 	remoteEnableCmd.Flags().StringSliceVar(&remoteEnableHosts, "host", nil, "hostname/IP clients will use to reach this server (repeatable; used as certificate SANs and bundle URLs)")
 
 	remoteAddCmd.Flags().StringVar(&remoteAddBundleFile, "bundle", "", "read the credentials bundle from a file (- for stdin) instead of the interactive prompt")
+	remoteAddCmd.Flags().BoolVar(&storeNoHarness, "no-harness", false, "skip registering the store's MCP entry with detected AI tools")
+	remoteDisableCmd.Flags().BoolVar(&remoteDisablePurge, "purge", false, "also delete the token and certificate material")
 
 	remoteCmd.AddCommand(remoteEnableCmd)
+	remoteCmd.AddCommand(remoteDisableCmd)
 	remoteCmd.AddCommand(remoteAddCmd)
 	rootCmd.AddCommand(remoteCmd)
 }
@@ -156,10 +176,60 @@ func runRemoteEnable(cmd *cobra.Command, args []string) error {
 	if len(certRes.BackedUp) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Backed up prior certificate material: %s\n", strings.Join(certRes.BackedUp, ", "))
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "\nRestart the server for this to take effect: gramaton stop && gramaton serve")
+	fmt.Fprintf(cmd.OutOrStdout(), "\nRestart the server for this to take effect: %s\n", restartHint())
 	fmt.Fprintln(cmd.OutOrStdout(), "Run it as a managed service (launchd/systemd); remote-serving disables idle auto-shutdown.")
 	fmt.Fprintln(cmd.OutOrStdout(), "\nShare this bundle with each client machine (out of band -- e.g. a password manager):")
 	fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n\nOn the client run: gramaton remote add\n", encoded)
+	return nil
+}
+
+// runRemoteDisable turns off the remote listener in this store's
+// config. The plain loopback listener is unaffected. Token and cert
+// material are kept by default (so a later `remote enable` reuses them
+// and clients keep the same pin); --purge deletes them.
+func runRemoteDisable(cmd *cobra.Command, args []string) error {
+	if ep, err := remoteMode(); err != nil {
+		return err
+	} else if ep != nil {
+		return fmt.Errorf("this machine is a remote client of %s; there is no remote host to disable here", ep.url)
+	}
+
+	dir := configDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if !cfg.Server.Remote.Enabled && !remoteDisablePurge {
+		fmt.Fprintln(cmd.OutOrStdout(), "Remote access is already disabled.")
+		return nil
+	}
+
+	// Capture the configured token path before clearing it, so --purge
+	// deletes the token where it actually lives, not a hardcoded default.
+	tokenFile := cfg.Server.Remote.TokenFile
+	cfg.Server.Remote.Enabled = false
+	if remoteDisablePurge {
+		cfg.Server.Remote.TokenFile = ""
+		cfg.Server.Remote.BindAddr = ""
+		cfg.Server.Remote.Port = 0
+		cfg.Server.Remote.AdminOps = false
+	}
+	if err := config.Save(cfg, cfgPath); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	if remoteDisablePurge {
+		if tokenFile == "" {
+			tokenFile = filepath.Join(dir, remoteTokenFileName)
+		}
+		_ = os.Remove(tokenFile)
+		_ = os.RemoveAll(remoteTLSDir(dir))
+		fmt.Fprintln(cmd.OutOrStdout(), "Remote access disabled; token and certificate removed.")
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "Remote access disabled (token and certificate kept; pass --purge to remove them).")
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Restart the server for this to take effect: %s\n", restartHint())
 	return nil
 }
 
@@ -176,6 +246,23 @@ func runRemoteAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("bundle carries no server URL; regenerate it with `gramaton remote enable --host <address>`")
 	}
 
+	dir := configDir()
+	// Refuse to point a store that owns local data at a remote: the
+	// remote pointer would take over at runtime and the local data would
+	// be silently stranded. A store is either local (owns data/) or a
+	// remote client, never both. Re-pointing an existing remote store
+	// (remote.url set, no data/) is still allowed -- data/ is the guard,
+	// not remote.url. Checked before the network probe so it fails fast.
+	if _, err := os.Stat(filepath.Join(dir, "data")); err == nil {
+		display := "(default)"
+		if n := activeStoreName(); n != "" {
+			display = n
+		}
+		return fmt.Errorf("store %s has local data at %s; pointing it at a remote would leave that data unreachable. "+
+			"To use a remote store alongside a local one, create it under a fresh name: gramaton --store <name> remote add",
+			display, filepath.Join(dir, "data"))
+	}
+
 	// Verify the server BEFORE writing config: a pin-checked,
 	// authenticated health probe proves the bundle points at the real
 	// server and the token is accepted.
@@ -184,7 +271,6 @@ func runRemoteAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dir := configDir()
 	tokenPath := filepath.Join(dir, remoteTokenFileName)
 	if _, err := writeSecretFile(tokenPath, bundle.Token, true, time.Now().UTC()); err != nil {
 		return err
@@ -208,6 +294,16 @@ func runRemoteAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Connected to %s. This machine now uses the remote store.\n", url)
+
+	// Register the store's MCP entry with detected AI tools so an agent
+	// can reach the remote store immediately. The entry runs `gramaton
+	// [--store <name>] mcp`, whose proxy transparently dials the remote
+	// (cli/client.go serverURL -> remoteMode), so the same registration
+	// works for a local or remote store. --no-harness skips it.
+	if !storeNoHarness {
+		rep := setup.SyncStoreHarness(cmd.Context(), storeHarnessBackend, activeStoreName(), setup.EntryPresent)
+		printHarnessSummary(cmd.OutOrStdout(), rep)
+	}
 	return nil
 }
 
@@ -248,6 +344,16 @@ func verifyRemote(bundle credentialBundle) (string, error) {
 		lastErr = fmt.Errorf("server at %s returned HTTP %d", url, resp.StatusCode)
 	}
 	return "", fmt.Errorf("could not reach the server on any bundle URL: %w", lastErr)
+}
+
+// restartHint is the "restart the server" command line, qualified with
+// --store for a named store so the user restarts the store they just
+// changed rather than the default store's server.
+func restartHint() string {
+	if name := activeStoreName(); name != "" {
+		return fmt.Sprintf("gramaton --store %s stop && gramaton --store %s serve", name, name)
+	}
+	return "gramaton stop && gramaton serve"
 }
 
 // newToken returns a fresh URL-safe random bearer secret.

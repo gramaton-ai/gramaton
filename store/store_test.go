@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -351,6 +352,130 @@ func TestRenameDefaultToNamedWritesDataDirConfig(t *testing.T) {
 	wantData := filepath.Join(base, "stores", "work", "data")
 	if gotData != wantData {
 		t.Errorf("data_dir = %q, want %q", gotData, wantData)
+	}
+}
+
+func TestListExistsRecognizeRemoteStore(t *testing.T) {
+	base := t.TempDir()
+	// A remote-client store: config.yaml with remote.url, no data/ dir.
+	dir := filepath.Join(base, "stores", "team")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "config.yaml"), "remote:\n  url: https://lab.local:7420\n")
+
+	if !Exists(base, "team") {
+		t.Error("Exists should recognize a remote-only store (no data/ dir)")
+	}
+	var found *StoreInfo
+	for i, s := range List(base) {
+		if s.Name == "team" {
+			found = &List(base)[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("List should include the remote store")
+	}
+	if !found.Remote || found.RemoteURL != "https://lab.local:7420" {
+		t.Errorf("remote store = %+v, want Remote=true with the URL", *found)
+	}
+	if found.Path != "" {
+		t.Errorf("remote store Path = %q, want empty (data is on another machine)", found.Path)
+	}
+}
+
+func TestListShowsRemoteDefaultStore(t *testing.T) {
+	// A remote default store: base/config.yaml with remote.url, no
+	// base/data. Previously invisible because the default branch only
+	// checked base/data.
+	base := t.TempDir()
+	writeFile(t, filepath.Join(base, "config.yaml"), "remote:\n  url: https://lab.local:7420\n")
+
+	stores := List(base)
+	if len(stores) != 1 {
+		t.Fatalf("want 1 store, got %d: %+v", len(stores), stores)
+	}
+	s := stores[0]
+	if !s.Default || !s.Remote || s.RemoteURL != "https://lab.local:7420" {
+		t.Errorf("default store = %+v, want Default+Remote with the URL", s)
+	}
+	if s.Path != "" {
+		t.Errorf("remote default Path = %q, want empty", s.Path)
+	}
+}
+
+func TestListSkipsHalfBuiltDir(t *testing.T) {
+	// A dir with neither data/ nor remote.url is half-built and must not
+	// be treated as an existing store.
+	base := t.TempDir()
+	dir := filepath.Join(base, "stores", "junk")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "config.yaml"), "author:\n  name: x\n")
+	if Exists(base, "junk") {
+		t.Error("a dir with no data/ and no remote.url must not Exist")
+	}
+	for _, s := range List(base) {
+		if s.Name == "junk" {
+			t.Error("half-built dir should be skipped by List")
+		}
+	}
+}
+
+func TestRenameRemoteNamedStore(t *testing.T) {
+	// Renaming a remote-client store moves its config + token but must
+	// NOT add a data_dir pin (it has no local data).
+	base := t.TempDir()
+	oldDir := filepath.Join(base, "stores", "team")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(oldDir, "config.yaml"), "remote:\n  url: https://lab.local:7420\n")
+	writeFile(t, filepath.Join(oldDir, "remote.token"), "tok")
+
+	if err := Rename(base, "team", "crew"); err != nil {
+		t.Fatalf("rename remote store: %v", err)
+	}
+	if Exists(base, "team") {
+		t.Error("old remote store should be gone")
+	}
+	if !Exists(base, "crew") {
+		t.Error("renamed remote store should exist")
+	}
+	raw, err := os.ReadFile(filepath.Join(base, "stores", "crew", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "data_dir") {
+		t.Errorf("remote store rename must not add a data_dir pin:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "lab.local:7420") {
+		t.Errorf("remote.url should survive the rename:\n%s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(base, "stores", "crew", "remote.token")); err != nil {
+		t.Error("remote.token should move with the store")
+	}
+}
+
+func TestRenameRemoteStoreToDefaultRefused(t *testing.T) {
+	// A remote-client store has no local data to move to the default
+	// store; renaming it to default must refuse with a clear message,
+	// not a raw os.Rename "no such file" error.
+	base := t.TempDir()
+	dir := filepath.Join(base, "stores", "team")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "config.yaml"), "remote:\n  url: https://lab.local:7420\n")
+
+	err := Rename(base, "team", "default")
+	if err == nil || !strings.Contains(err.Error(), "no local data") {
+		t.Fatalf("renaming a remote store to default should refuse clearly, got: %v", err)
+	}
+	// The remote store is left intact (no data lost, config untouched).
+	if !Exists(base, "team") {
+		t.Error("refused rename must leave the remote store intact")
 	}
 }
 

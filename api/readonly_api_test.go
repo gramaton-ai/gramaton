@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/backup"
@@ -150,6 +151,14 @@ func TestReadOnlyAPIRejectsWrites(t *testing.T) {
 		if apiErr.Code != "forbidden" {
 			t.Errorf("%s on a frozen store: code = %q, want \"forbidden\" (message: %s)",
 				tc.op, apiErr.Code, apiErr.Message)
+		}
+		// The rejection must name the read-only condition, not just
+		// return an opaque "forbidden": an agent (local or through the
+		// remote proxy, which surfaces this message verbatim) needs to
+		// learn WHY the write failed so it can adapt.
+		if !strings.Contains(apiErr.Message, "read-only") {
+			t.Errorf("%s on a frozen store: message = %q, want it to name the read-only condition",
+				tc.op, apiErr.Message)
 		}
 	}
 }

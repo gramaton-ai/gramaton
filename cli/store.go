@@ -272,7 +272,7 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 
 	type storeEntry struct {
 		Name    string `json:"name"`
-		Path    string `json:"path"`
+		Path    string `json:"path,omitempty"`
 		Active  bool   `json:"active,omitempty"`
 		Running bool   `json:"running,omitempty"`
 		// ReadOnly is derived live from the store's STORE manifest on
@@ -292,6 +292,11 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 		// entry registered anywhere, so the gap is legible rather than
 		// an absent field.
 		HarnessNote string `json:"harness_note,omitempty"`
+		// Remote/RemoteURL mark a remote-client store: its data lives on
+		// another machine, so Path, Running, and the read-only badge
+		// (resolved live from the remote at MCP time) do not apply.
+		Remote    bool   `json:"remote,omitempty"`
+		RemoteURL string `json:"remote_url,omitempty"`
 	}
 
 	// With --harness, survey each detected tool's registered entries once
@@ -304,16 +309,17 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 	var entries []storeEntry
 	for _, s := range stores {
 		isActive := (s.Default && active == "") || (!s.Default && s.Name == active)
-		dir := store.Resolve(base, nameForResolve(s))
-		running := isServerRunning(dir)
-		readOnly, manifestNote := storeReadOnlyBadge(dir)
-		e := storeEntry{
-			Name:     s.Name,
-			Path:     s.Path,
-			Active:   isActive,
-			Running:  running,
-			ReadOnly: readOnly,
-			Manifest: manifestNote,
+		e := storeEntry{Name: s.Name, Active: isActive}
+		if s.Remote {
+			// A remote store has no local data/server/manifest; its
+			// read-only state is resolved from the remote at MCP time.
+			e.Remote = true
+			e.RemoteURL = s.RemoteURL
+		} else {
+			dir := store.Resolve(base, nameForResolve(s))
+			e.Path = s.Path
+			e.Running = isServerRunning(dir)
+			e.ReadOnly, e.Manifest = storeReadOnlyBadge(dir)
 		}
 		if storeListHarness {
 			if h := regs[setup.StoreEntryName(nameForResolve(s))]; len(h) > 0 {
