@@ -300,21 +300,22 @@ func (w *Wizard) registerStoreMCP(ctx context.Context, clients []DetectedClient,
 		return nil
 	}
 
-	var registered []string
-	for _, c := range clients {
-		already, regErr := w.mcpBackend.RegisterStore(ctx, c, name)
-		if regErr != nil {
-			w.writer.Warn(fmt.Sprintf("%s: %v", c.Name, regErr))
-			continue
+	// Delegate the per-client registration to the shared primitive so
+	// this route and the non-interactive CLI store commands run one
+	// loop; the wizard only owns the interactive framing (prompt +
+	// per-client narration) around it.
+	rep := syncClients(ctx, w.mcpBackend, clients, name, EntryPresent)
+	for _, c := range rep.Clients {
+		switch c.Action {
+		case SyncFailed:
+			w.writer.Warn(fmt.Sprintf("%s: %v", c.Client, c.Err))
+		case SyncAlreadyRegistered:
+			w.writer.Check(fmt.Sprintf("%s already registered with %s (no change)", entry, c.Client))
+		case SyncRegistered:
+			w.writer.Check(fmt.Sprintf("Added %s to %s", entry, c.Client))
 		}
-		if already {
-			w.writer.Check(fmt.Sprintf("%s already registered with %s (no change)", entry, c.Name))
-		} else {
-			w.writer.Check(fmt.Sprintf("Added %s to %s", entry, c.Name))
-		}
-		registered = append(registered, c.Name)
 	}
-	return registered
+	return rep.Registered()
 }
 
 // installReadOnlyGuidance offers the read-only agent-guidance

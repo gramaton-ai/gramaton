@@ -2,16 +2,19 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
+	"github.com/gramaton-ai/gramaton/internal/setup"
 	"github.com/gramaton-ai/gramaton/server"
 	"github.com/gramaton-ai/gramaton/store"
 	"github.com/spf13/cobra"
@@ -22,7 +25,52 @@ var (
 	storeDeleteForce          bool
 	storeAttachName           string
 	storeAttachFreezeOriginal bool
+	storeNoHarness            bool
+	storeListHarness          bool
+	storeSyncPrune            bool
 )
+
+// storeHarnessBackend is the MCP backend that store-lifecycle commands
+// use to keep each store's harness registration in sync with its
+// lifecycle (create/attach/rename/delete). A package var so tests
+// inject a no-op fake: the production DefaultMCPBackend shells out to
+// the real vendor CLIs (claude/codex) and edits ~/.cursor/mcp.json, so
+// an un-injected test run would mutate the developer's actual harness
+// config. cli's TestMain points it at a fake.
+var storeHarnessBackend setup.MCPBackend = setup.DefaultMCPBackend{}
+
+// syncStoreEntry reconciles a store's MCP entry across detected
+// harnesses toward want (present on create/attach, absent on delete),
+// folds the structured result into out under "harness", and prints a
+// human summary to stderr. storeName is "" for the default store.
+// Never returns an error: the on-disk store op already committed, so a
+// harness hiccup is a warning, not a command failure.
+func syncStoreEntry(ctx context.Context, out map[string]any, storeName string, want setup.EntryState) {
+	rep := setup.SyncStoreHarness(ctx, storeHarnessBackend, storeName, want)
+	out["harness"] = rep.JSON()
+	printHarnessSummary(os.Stderr, rep)
+}
+
+// printHarnessSummary narrates a harness sync to w (stderr), so the
+// machine-parseable JSON stays on stdout. Mirrors printCarveSummary's
+// stderr-summary convention.
+func printHarnessSummary(w io.Writer, rep *setup.SyncReport) {
+	if len(rep.Clients) == 0 {
+		fmt.Fprintln(w, "No supported AI tools detected; the store works via the CLI. "+
+			"After installing one, run: gramaton store sync-harness")
+		return
+	}
+	if reg := rep.Registered(); len(reg) > 0 {
+		fmt.Fprintf(w, "MCP entry %s registered with %s. Restart your AI client(s) to pick it up.\n",
+			rep.Entry, strings.Join(reg, ", "))
+	}
+	if rm := rep.Removed(); len(rm) > 0 {
+		fmt.Fprintf(w, "MCP entry %s removed from %s.\n", rep.Entry, strings.Join(rm, ", "))
+	}
+	for _, f := range rep.Failures() {
+		fmt.Fprintf(w, "warning: could not update %s: %v\n", f.Client, f.Err)
+	}
+}
 
 var storeCmd = &cobra.Command{
 	Use:   "store",
@@ -36,6 +84,21 @@ var storeListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all stores",
 	RunE:  runStoreList,
+}
+
+var storeSyncHarnessCmd = &cobra.Command{
+	Use:   "sync-harness",
+	Short: "Reconcile every store's MCP entry with your AI tools",
+	Long: `Re-registers each store's MCP entry (gramaton for the default store,
+gramaton-<name> for a named one) with every detected AI tool. Idempotent:
+run it after installing a new AI tool, or to repair wiring that drifted.
+
+With --prune, MCP entries for named stores that no longer exist are also
+removed (the default gramaton entry is never pruned).
+
+Only MCP entries are touched -- session-capture hooks and agent guidance
+are owned by 'gramaton init' / 'gramaton uninstall'.`,
+	RunE: runStoreSyncHarness,
 }
 
 var storeCreateCmd = &cobra.Command{
@@ -117,9 +180,10 @@ Reach the attached store with --store or GRAMATON_STORE:
 
   gramaton --store <name> search "<query>" --top 5
 
-To let an AI harness search it, add a second MCP entry running
-'gramaton --store <name> mcp' (for example:
-claude mcp add --scope user gramaton-<name> gramaton -- --store <name> mcp).`,
+The store's MCP entry (gramaton-<name>, running 'gramaton --store
+<name> mcp') is registered with every detected AI tool so an agent can
+search it right away; only read tools surface against the frozen copy.
+Pass --no-harness to skip that and wire the entry yourself.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runStoreAttach,
 }
@@ -179,11 +243,19 @@ Examples:
   gramaton store add shared --from-collection tasks
   gramaton store add shared --keywords auth --dry-run`
 	storeDeleteCmd.Flags().BoolVar(&storeDeleteForce, "force", false, "skip confirmation prompt")
+	storeCreateCmd.Flags().BoolVar(&storeNoHarness, "no-harness", false,
+		"skip registering the store's MCP entry with detected AI tools")
 	storeAttachCmd.Flags().StringVar(&storeAttachName, "name", "",
 		"local name for the attached store (default: derived from the directory name)")
 	storeAttachCmd.Flags().BoolVar(&storeAttachFreezeOriginal, "freeze-original", false,
 		"also freeze the source directory when it is writable on disk (owner: the configured author)")
-	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeAddCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd)
+	storeAttachCmd.Flags().BoolVar(&storeNoHarness, "no-harness", false,
+		"skip registering the store's MCP entry with detected AI tools")
+	storeListCmd.Flags().BoolVar(&storeListHarness, "harness", false,
+		"also report which AI tools each store's MCP entry is registered with")
+	storeSyncHarnessCmd.Flags().BoolVar(&storeSyncPrune, "prune", false,
+		"also remove MCP entries for named stores that no longer exist")
+	storeCmd.AddCommand(storeListCmd, storeCreateCmd, storeAddCmd, storeDeleteCmd, storeRenameCmd, storeFreezeCmd, storeThawCmd, storeAttachCmd, storeSyncHarnessCmd)
 	rootCmd.AddCommand(storeCmd)
 }
 
@@ -212,24 +284,96 @@ func runStoreList(cmd *cobra.Command, args []string) error {
 		// instead of guessing writable: a corrupted manifest may hide
 		// a frozen store.
 		Manifest string `json:"manifest,omitempty"`
+		// Harness, populated only with --harness, names the AI tools
+		// whose MCP entry points at this store; empty means the store
+		// is not registered with any detected tool.
+		Harness []string `json:"harness,omitempty"`
+		// HarnessNote is set with --harness when a store has no MCP
+		// entry registered anywhere, so the gap is legible rather than
+		// an absent field.
+		HarnessNote string `json:"harness_note,omitempty"`
 	}
+
+	// With --harness, survey each detected tool's registered entries once
+	// (shells out to the vendor CLIs), then cross-check per store.
+	var regs map[string][]string
+	if storeListHarness {
+		regs = setup.HarnessRegistrations(cmd.Context(), storeHarnessBackend)
+	}
+
 	var entries []storeEntry
 	for _, s := range stores {
 		isActive := (s.Default && active == "") || (!s.Default && s.Name == active)
 		dir := store.Resolve(base, nameForResolve(s))
 		running := isServerRunning(dir)
 		readOnly, manifestNote := storeReadOnlyBadge(dir)
-		entries = append(entries, storeEntry{
+		e := storeEntry{
 			Name:     s.Name,
 			Path:     s.Path,
 			Active:   isActive,
 			Running:  running,
 			ReadOnly: readOnly,
 			Manifest: manifestNote,
-		})
+		}
+		if storeListHarness {
+			if h := regs[setup.StoreEntryName(nameForResolve(s))]; len(h) > 0 {
+				e.Harness = h
+			} else {
+				e.HarnessNote = "not registered with any AI tool (run: gramaton store sync-harness)"
+			}
+		}
+		entries = append(entries, e)
 	}
 
 	return printJSON(entries)
+}
+
+// runStoreSyncHarness reconciles every store's MCP entry with the
+// detected AI tools: re-register each existing store's entry
+// (idempotent repair), and with --prune remove entries for named stores
+// that no longer exist. Only MCP entries are touched; hooks and guidance
+// stay owned by init/uninstall.
+func runStoreSyncHarness(cmd *cobra.Command, args []string) error {
+	base := baseConfigDir()
+	stores := store.List(base)
+
+	out := map[string]any{}
+	synced := make([]map[string]any, 0, len(stores))
+	existing := map[string]bool{}
+	for _, s := range stores {
+		name := nameForResolve(s)
+		existing[setup.StoreEntryName(name)] = true
+		rep := setup.SyncStoreHarness(cmd.Context(), storeHarnessBackend, name, setup.EntryPresent)
+		synced = append(synced, map[string]any{"store": s.Name, "harness": rep.JSON()})
+	}
+	out["synced"] = synced
+
+	if storeSyncPrune {
+		regs := setup.HarnessRegistrations(cmd.Context(), storeHarnessBackend)
+		orphans := make([]string, 0)
+		for entry := range regs {
+			// Never prune the default "gramaton" entry, and keep entries
+			// backing a live store. A degenerate "gramaton-" entry strips
+			// to an empty store name, which resolves back to the default
+			// entry -- guard it too so a hand-added "gramaton-" can never
+			// take the default entry down (gramaton never creates one, as
+			// ValidateName rejects empty names).
+			if entry == "gramaton" || strings.TrimPrefix(entry, "gramaton-") == "" || existing[entry] {
+				continue
+			}
+			orphans = append(orphans, entry)
+		}
+		sort.Strings(orphans)
+		pruned := make([]map[string]any, 0, len(orphans))
+		for _, entry := range orphans {
+			storeName := strings.TrimPrefix(entry, "gramaton-")
+			rep := setup.SyncStoreHarness(cmd.Context(), storeHarnessBackend, storeName, setup.EntryAbsent)
+			pruned = append(pruned, map[string]any{"entry": entry, "harness": rep.JSON()})
+		}
+		out["pruned"] = pruned
+	}
+
+	return printJSON(out)
 }
 
 // addStoreCreateFlags registers every flag `store create` accepts. Kept
@@ -388,6 +532,14 @@ func runStoreCreate(cmd *cobra.Command, args []string) error {
 		out["note"] = storeFrozenNote
 	}
 
+	// Register the new store's MCP entry with every detected harness so
+	// it is reachable by agents immediately, not after a manual step.
+	// The frozen-manifest read-only surface (for --read-only) is applied
+	// at MCP-process startup, so the entry is identical either way.
+	if !storeNoHarness {
+		syncStoreEntry(cmd.Context(), out, name, setup.EntryPresent)
+	}
+
 	return printJSON(out)
 }
 
@@ -422,6 +574,13 @@ func runStoreCarve(cmd *cobra.Command, name string) error {
 		var cr api.CarveOutResponse
 		if json.Unmarshal(raw, &cr) == nil {
 			printCarveSummary(os.Stderr, name, req.DestDataDir, cr)
+			// A committed carve materialized a new named store; register
+			// its MCP entry (a dry run wrote nothing, so there is nothing
+			// to wire).
+			if !cr.DryRun && !storeNoHarness {
+				rep := setup.SyncStoreHarness(cmd.Context(), storeHarnessBackend, name, setup.EntryPresent)
+				printHarnessSummary(os.Stderr, rep)
+			}
 		}
 	}
 	return printEnvelope(resp)
@@ -602,7 +761,13 @@ func runStoreDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return printJSON(map[string]any{"deleted": name})
+	// Drop the deleted store's MCP entry so no harness is left pointing
+	// at a store that no longer exists. Idempotent: a store that was
+	// never registered (or created with --no-harness) is a clean no-op.
+	out := map[string]any{"deleted": name}
+	syncStoreEntry(cmd.Context(), out, name, setup.EntryAbsent)
+
+	return printJSON(out)
 }
 
 func runStoreRename(cmd *cobra.Command, args []string) error {
@@ -624,10 +789,59 @@ func runStoreRename(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return printJSON(map[string]any{
+	out := map[string]any{
 		"renamed": oldName,
 		"to":      newName,
-	})
+	}
+
+	// Re-point harness registration: register the new entry, then remove
+	// the old one (RenameStoreHarness orders it so a mid-run failure
+	// leaves the agent reachable through the new entry). "default" is the
+	// CLI alias for the unnamed store, whose entry is the bare
+	// "gramaton" -- map it to the empty store name the setup layer keys
+	// its default-entry logic on.
+	newRep, oldRep := setup.RenameStoreHarness(cmd.Context(), storeHarnessBackend,
+		harnessStoreName(oldName), harnessStoreName(newName))
+	h := map[string]any{"new_entry": newRep.Entry, "old_entry": oldRep.Entry}
+	if reg := newRep.Registered(); len(reg) > 0 {
+		h["registered"] = reg
+	}
+	if rm := oldRep.Removed(); len(rm) > 0 {
+		h["removed"] = rm
+	}
+	if failed := append(newRep.Failures(), oldRep.Failures()...); len(failed) > 0 {
+		fm := map[string]string{}
+		for _, f := range failed {
+			// newRep (the new-entry registration) is appended first;
+			// keep its message on a same-client collision -- a failed
+			// registration (store unreachable) matters more than a
+			// failed removal (a stale orphan entry).
+			if _, seen := fm[f.Client]; !seen {
+				fm[f.Client] = fmt.Sprintf("%v", f.Err)
+			}
+		}
+		h["failed"] = fm
+	}
+	out["harness"] = h
+	printHarnessSummary(os.Stderr, newRep)
+	// Only narrate the removal leg when it acted on a harness; otherwise
+	// the two reports share the "no AI tools detected" short-circuit and
+	// would print it twice.
+	if len(oldRep.Clients) > 0 {
+		printHarnessSummary(os.Stderr, oldRep)
+	}
+
+	return printJSON(out)
+}
+
+// harnessStoreName maps the CLI's "default" store alias to the empty
+// store name the setup layer uses for the bare "gramaton" MCP entry;
+// any other name passes through unchanged.
+func harnessStoreName(name string) string {
+	if name == "default" {
+		return ""
+	}
+	return name
 }
 
 // storeFrozenNote is the freeze confirmation's semantics reminder.
@@ -790,9 +1004,17 @@ func runStoreAttach(cmd *cobra.Command, args []string) error {
 	out["note"] = "the data was copied and the copy's STORE manifest frozen; " +
 		sourceNote + " Reads and search work in full; all writes are rejected."
 	out["access"] = fmt.Sprintf("gramaton --store %s <command>  (or set GRAMATON_STORE=%s)", res.Name, res.Name)
-	out["mcp"] = fmt.Sprintf("to let an AI harness search it, add a second MCP entry running: gramaton --store %s mcp "+
-		"(e.g. claude mcp add --scope user gramaton-%s gramaton -- --store %s mcp); "+
-		"only read tools are registered against a frozen store", res.Name, res.Name, res.Name)
+	// Register the attached store's MCP entry with every detected harness
+	// so an agent can search it immediately. Only read tools surface --
+	// the copy's frozen manifest is resolved at MCP-process startup. With
+	// --no-harness we fall back to printing the manual entry instead.
+	if storeNoHarness {
+		out["mcp"] = fmt.Sprintf("to let an AI harness search it, add an MCP entry running: gramaton --store %s mcp "+
+			"(e.g. claude mcp add --scope user gramaton-%s gramaton -- --store %s mcp); "+
+			"only read tools are registered against a frozen store", res.Name, res.Name, res.Name)
+	} else {
+		syncStoreEntry(cmd.Context(), out, res.Name, setup.EntryPresent)
+	}
 	if res.Manifest.Owner != "" {
 		out["owner"] = res.Manifest.Owner
 	}

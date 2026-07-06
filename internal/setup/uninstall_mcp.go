@@ -57,6 +57,42 @@ func isGramatonMCPEntryName(name string) bool {
 	return name == "gramaton" || strings.HasPrefix(name, "gramaton-")
 }
 
+// removeStoreEntry removes a single gramaton-owned MCP entry from one
+// harness, the store-scoped counterpart to the machine-wide removal in
+// reportMCP (uninstall.go). It enumerates by convention first
+// (h.ListMCPEntries) and removes only when the target entry is actually
+// present, so an already-absent entry is a clean no-op (removed=false,
+// err=nil) -- which is what makes SyncStoreHarness's delete/rename paths
+// idempotent -- and a foreign entry that happens to share the name is
+// never touched (the enumeration's own ownership check gates it). A
+// harness without enumeration/removal strategies (none today, but the
+// registry allows nil) reports it cannot remove rather than silently
+// succeeding.
+func removeStoreEntry(ctx context.Context, h *Harness, bin, entry string) (bool, error) {
+	if h.ListMCPEntries == nil || h.RemoveMCPEntries == nil {
+		return false, fmt.Errorf("%s: MCP entry removal not supported", h.Name)
+	}
+	entries, err := h.ListMCPEntries(ctx, bin)
+	if err != nil {
+		return false, err
+	}
+	present := false
+	for _, e := range entries {
+		if e == entry {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return false, nil
+	}
+	removed, _, err := h.RemoveMCPEntries(ctx, bin, []string{entry})
+	if err != nil {
+		return false, err
+	}
+	return len(removed) > 0, nil
+}
+
 // dedupeSortedEntries dedupes and sorts an entry-name list so
 // removal order (and test assertions) are deterministic regardless
 // of vendor list-output ordering.

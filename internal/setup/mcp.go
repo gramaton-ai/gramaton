@@ -113,6 +113,21 @@ type MCPBackend interface {
 	// `gramaton --store <storeName> mcp`. Same result semantics as
 	// Register. Used by the wizard's read-only attach route.
 	RegisterStore(ctx context.Context, client DetectedClient, storeName string) (alreadyRegistered bool, err error)
+
+	// RemoveStore removes a store's MCP entry from the client's config:
+	// the default "gramaton" entry when storeName is empty, else the
+	// "gramaton-<storeName>" entry. It enumerates by naming convention
+	// first, so a foreign entry is never removed and an already-absent
+	// entry is a no-op: removed=false, err=nil. The store-scoped
+	// counterpart to Register/RegisterStore, used by SyncStoreHarness.
+	RemoveStore(ctx context.Context, client DetectedClient, storeName string) (removed bool, err error)
+
+	// ListEntries returns the gramaton-owned MCP entry names currently
+	// registered with the client, enumerated by naming convention
+	// ("gramaton" + "gramaton-<store>"). Used to report registration
+	// state (store list) and find orphaned entries (store
+	// sync-harness). Empty when the client has none.
+	ListEntries(ctx context.Context, client DetectedClient) ([]string, error)
 }
 
 // DefaultMCPBackend is the production implementation. Uses exec to
@@ -152,6 +167,34 @@ func (DefaultMCPBackend) RegisterStore(ctx context.Context, client DetectedClien
 		return false, fmt.Errorf("unknown MCP client: %s", client.Name)
 	}
 	return h.RegisterMCPStore(ctx, client.Binary, storeName)
+}
+
+// RemoveStore removes the store's MCP entry from the client's config,
+// reusing uninstall's enumerate-by-convention-then-remove machinery
+// scoped to a single entry (removeStoreEntry). client.Binary is the
+// path Detect resolved (empty for dir-detected Cursor, whose
+// list/remove strategies ignore it).
+func (DefaultMCPBackend) RemoveStore(ctx context.Context, client DetectedClient, storeName string) (bool, error) {
+	h := harnessByName(client.Name)
+	if h == nil {
+		return false, fmt.Errorf("unknown MCP client: %s", client.Name)
+	}
+	return removeStoreEntry(ctx, h, client.Binary, storeEntryName(storeName))
+}
+
+// ListEntries dispatches to the harness's enumeration strategy. A
+// harness without one (the registry allows nil) reports no entries
+// rather than erroring, so a survey never fails on an un-enumerable
+// harness.
+func (DefaultMCPBackend) ListEntries(ctx context.Context, client DetectedClient) ([]string, error) {
+	h := harnessByName(client.Name)
+	if h == nil {
+		return nil, fmt.Errorf("unknown MCP client: %s", client.Name)
+	}
+	if h.ListMCPEntries == nil {
+		return nil, nil
+	}
+	return h.ListMCPEntries(ctx, client.Binary)
 }
 
 // registerWithClaudeCode invokes `claude mcp add` to register Gramaton

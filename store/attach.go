@@ -11,6 +11,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 // Attaching a shared read-only store.
@@ -238,6 +239,42 @@ func WriteDataDirConfig(storeDir, name string) (string, error) {
 			"data_dir: %q\n",
 		name, dataDir)
 	if err := core.AtomicWriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		return "", fmt.Errorf("write per-store config: %w", err)
+	}
+	return cfgPath, nil
+}
+
+// repinDataDir rewrites the data_dir key in a store's existing
+// per-store config.yaml to point at <storeDir>/data, preserving every
+// other key. Rename moves a named store's home verbatim, so the moved
+// config.yaml still pins the OLD absolute data path (WriteDataDirConfig
+// writes it absolute); this re-points it at the new home, closing the
+// same global-data_dir-bleed-through gap WriteDataDirConfig guards
+// against. Any keys a user added to the per-store config (an llm or
+// author override) survive the rewrite. A missing config is created
+// fresh. Returns the config path.
+func repinDataDir(storeDir, name string) (string, error) {
+	cfgPath := filepath.Join(storeDir, "config.yaml")
+	raw, err := os.ReadFile(cfgPath)
+	if os.IsNotExist(err) {
+		return WriteDataDirConfig(storeDir, name)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read per-store config: %w", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return "", fmt.Errorf("parse per-store config %s: %w", cfgPath, err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	doc["data_dir"] = filepath.Join(storeDir, "data")
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("serialize per-store config: %w", err)
+	}
+	if err := core.AtomicWriteFile(cfgPath, out, 0o600); err != nil {
 		return "", fmt.Errorf("write per-store config: %w", err)
 	}
 	return cfgPath, nil

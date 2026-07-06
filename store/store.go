@@ -185,17 +185,29 @@ func Rename(baseDir, oldName, newName string) error {
 
 	switch {
 	case oldName == "default":
-		// default -> named: move data/ from base to stores/<new>/
+		// default -> named: move data/ from base to stores/<new>/, then
+		// pin the new named store's own data_dir. The default store read
+		// the GLOBAL config.yaml (which stays at base) and had no
+		// per-store config of its own, so without a fresh pin the
+		// config-less named store would let the global data_dir bleed
+		// through -- the exact footgun WriteDataDirConfig guards against.
 		newDir := Resolve(baseDir, newName)
 		if err := os.MkdirAll(newDir, 0o700); err != nil {
 			return err
 		}
 		oldData := filepath.Join(baseDir, "data")
 		newData := filepath.Join(newDir, "data")
-		return os.Rename(oldData, newData)
+		if err := os.Rename(oldData, newData); err != nil {
+			return err
+		}
+		_, err := WriteDataDirConfig(newDir, newName)
+		return err
 
 	case newName == "default":
-		// named -> default: move data/ from stores/<old>/ to base
+		// named -> default: move data/ from stores/<old>/ to base, then
+		// drop the old store home. Its per-store config.yaml (pinning the
+		// old absolute path) goes with it; the default store resolves
+		// <base>/data through the global config, so no new pin is needed.
 		oldDir := Resolve(baseDir, oldName)
 		oldData := filepath.Join(oldDir, "data")
 		newData := filepath.Join(baseDir, "data")
@@ -206,10 +218,16 @@ func Rename(baseDir, oldName, newName string) error {
 		return os.RemoveAll(oldDir)
 
 	default:
-		// named -> named: rename the entire store directory.
+		// named -> named: rename the entire store directory (config.yaml
+		// travels verbatim), then re-pin data_dir -- the moved config
+		// still names the OLD absolute data path.
 		storesDir := filepath.Join(baseDir, "stores")
 		oldDir := filepath.Join(storesDir, oldName)
 		newDir := filepath.Join(storesDir, newName)
-		return os.Rename(oldDir, newDir)
+		if err := os.Rename(oldDir, newDir); err != nil {
+			return err
+		}
+		_, err := repinDataDir(newDir, newName)
+		return err
 	}
 }

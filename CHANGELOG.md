@@ -57,6 +57,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   key is request-level). The token is stored as an indexed
   `client_token` property on the record.
 
+- **Store lifecycle now keeps AI-tool registration in sync.**
+  `gramaton store create`, `store attach`, `store rename`, and `store
+  delete` now register, re-point, or remove the store's MCP entry
+  (`gramaton` for the default store, `gramaton-<name>` for a named
+  one) with every detected AI tool, so a store is reachable by agents
+  the moment it exists and never leaves a stale or orphaned entry
+  behind. Previously only `gramaton init` registered and `gramaton
+  uninstall` removed, so a created store was invisible until wired by
+  hand and a renamed or deleted store left the tool pointing at a name
+  that no longer resolved. `--no-harness` on create/attach skips the
+  step for scripted use. New `gramaton store sync-harness` re-registers
+  every store's entry (idempotent repair; `--prune` also removes
+  entries for named stores that no longer exist), and `gramaton store
+  list --harness` reports which AI tools each store is registered with.
+  Only MCP entries are touched -- session-capture hooks and agent
+  guidance remain owned by init/uninstall.
+
 ### Changed
 
 - **The save duplicate scan runs outside the engine write lock.**
@@ -72,6 +89,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the backstop); in `dedup.action: reject` mode the duplicate is now
   refused before the node is created rather than inserted and
   deleted.
+
+### Fixed
+
+- **`gramaton store rename` no longer corrupts a store's data_dir
+  pin.** A renamed store's per-store `config.yaml` pins an absolute
+  `data_dir`; a `named -> named` rename moved the config verbatim, so
+  it kept naming the old (now-nonexistent) path, and a `default ->
+  named` rename wrote no per-store config at all, letting the global
+  `data_dir` bleed through and open a different store's data. Rename
+  now re-pins the data_dir to the new location (preserving any other
+  keys in the per-store config) and writes a fresh pin when promoting
+  the default store to a named one.
 
 ## [0.3.0-alpha.5] - 2026-07-04
 

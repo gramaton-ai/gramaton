@@ -4,7 +4,27 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+// readStoreDataDir parses a per-store config.yaml and returns its
+// data_dir value. Parsing (rather than a raw substring match) is what
+// makes the data_dir assertions cross-platform: on Windows the pinned
+// path is written with escaped backslashes, so a filepath.Join'd
+// expected path is not a literal substring of the file bytes.
+func readStoreDataDir(t *testing.T, cfgPath string) (dataDir string, doc map[string]any) {
+	t.Helper()
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config %s: %v", cfgPath, err)
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse config %s: %v", cfgPath, err)
+	}
+	dataDir, _ = doc["data_dir"].(string)
+	return dataDir, doc
+}
 
 func TestValidateName(t *testing.T) {
 	valid := []string{"work", "personal", "my-store", "store_1", "A", "a1b2c3"}
@@ -261,6 +281,76 @@ func TestRenameNamedToDefault(t *testing.T) {
 	}
 	if string(data) != "def456" {
 		t.Fatalf("HEAD content mismatch")
+	}
+}
+
+// TestRenameNamedToNamedRepinsDataDir pins the data_dir corruption bug:
+// a named->named rename moves the store home (config.yaml included)
+// verbatim, so the pinned ABSOLUTE data_dir would keep naming the OLD
+// path unless Rename re-pins it. A user-added key must survive the
+// rewrite. Fails against the pre-fix bare os.Rename.
+func TestRenameNamedToNamedRepinsDataDir(t *testing.T) {
+	base := t.TempDir()
+	if err := Create(base, "old"); err != nil {
+		t.Fatal(err)
+	}
+	oldDir := filepath.Join(base, "stores", "old")
+	if _, err := WriteDataDirConfig(oldDir, "old"); err != nil {
+		t.Fatal(err)
+	}
+	// A hand-added override the repin must preserve.
+	cfgPath := filepath.Join(oldDir, "config.yaml")
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("log_level: debug\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if err := Rename(base, "old", "new"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	gotData, doc := readStoreDataDir(t, filepath.Join(base, "stores", "new", "config.yaml"))
+	newData := filepath.Join(base, "stores", "new", "data")
+	if gotData != newData {
+		t.Errorf("data_dir = %q, want it re-pinned to the new path %q", gotData, newData)
+	}
+	oldData := filepath.Join(base, "stores", "old", "data")
+	if gotData == oldData {
+		t.Errorf("data_dir still names the OLD data path %q", oldData)
+	}
+	if _, ok := doc["log_level"]; !ok {
+		t.Errorf("a user-added key was lost in the repin: %v", doc)
+	}
+}
+
+// TestRenameDefaultToNamedWritesDataDirConfig pins the other half of
+// the bug: renaming the default store to a named one moves only data/
+// and previously wrote NO per-store config, so the named store had no
+// data_dir pin and the global data_dir would bleed through. Fails
+// against the pre-fix code (no config written).
+func TestRenameDefaultToNamedWritesDataDirConfig(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(base, "data", "HEAD"), "abc123")
+
+	if err := Rename(base, "default", "work"); err != nil {
+		t.Fatalf("Rename default->work: %v", err)
+	}
+
+	cfgPath := filepath.Join(base, "stores", "work", "config.yaml")
+	if _, err := os.Stat(cfgPath); err != nil {
+		t.Fatalf("default->named must write a per-store config pinning data_dir: %v", err)
+	}
+	gotData, _ := readStoreDataDir(t, cfgPath)
+	wantData := filepath.Join(base, "stores", "work", "data")
+	if gotData != wantData {
+		t.Errorf("data_dir = %q, want %q", gotData, wantData)
 	}
 }
 
