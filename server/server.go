@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/version"
 	"github.com/gramaton-ai/gramaton/llm"
+	xrate "golang.org/x/time/rate"
 )
 
 // Config holds server configuration.
@@ -58,6 +60,17 @@ type RemoteRuntime struct {
 	CertFile string // resolved cert path; required when Enabled
 	KeyFile  string // resolved key path; required when Enabled
 	AdminOps bool   // open path-taking admin ops to authenticated remotes
+
+	// WriteRate, WriteBurst, and MaxConcurrentWrites are the resolved
+	// admission-control limits for the remote write path (see
+	// config.RemoteServerConfig.ResolvedWriteLimits). A non-positive
+	// value disables that gate. All three zero -- the zero
+	// RemoteRuntime, i.e. remote access disabled -- means no admission
+	// control, which is correct because only loopback callers reach a
+	// loopback-only server and loopback is always exempt.
+	WriteRate           float64
+	WriteBurst          int
+	MaxConcurrentWrites int
 }
 
 // DefaultConfig returns server config with sensible defaults.
@@ -118,6 +131,14 @@ type Server struct {
 	// buggy client retrying a panic-trigger floods the log with
 	// kilobyte stack dumps every request.
 	panicDedup *panicLogDedup
+
+	// writeLimiter and writeSlots implement admission control for the
+	// remote write path; both are nil unless remote access is enabled
+	// with the corresponding limit configured. writeLimiter is a token
+	// bucket over write arrivals; writeSlots is a bounded in-flight
+	// gate. Loopback callers and reads bypass both. See admitWrites.
+	writeLimiter *xrate.Limiter
+	writeSlots   chan struct{}
 }
 
 // panicLogDedup tracks recently-logged panic fingerprints so the
@@ -375,13 +396,17 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	// AND cannot reach path-taking tools unless admin_ops is set.
 	mux.Handle("/mcp", s.MCPHandler())
 
+	s.buildWriteLimiter()
+
 	// Middleware order (outermost first): securityHeaders records
 	// activity + recovers panics for EVERY request including auth
 	// failures; authenticate then classifies loopback vs remote and
-	// enforces the token. /mcp passes through both.
+	// enforces the token; admitWrites then rate-limits and caps the
+	// remote write path (loopback and reads pass untouched). /mcp
+	// passes through all three.
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port),
-		Handler:           s.securityHeaders(s.authenticate(mux)),
+		Handler:           s.securityHeaders(s.authenticate(s.admitWrites(mux))),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second, // embedding and bulk ops can be slow
@@ -390,6 +415,23 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 	}
 
 	return s, nil
+}
+
+// buildWriteLimiter constructs the remote write-path admission control
+// from the resolved runtime config. Each gate is left nil when its knob
+// is non-positive -- including the zero RemoteRuntime of a loopback-only
+// server -- and admitWrites then skips it.
+func (s *Server) buildWriteLimiter() {
+	if s.cfg.Remote.WriteRate > 0 {
+		burst := s.cfg.Remote.WriteBurst
+		if burst < 1 {
+			burst = 1
+		}
+		s.writeLimiter = xrate.NewLimiter(xrate.Limit(s.cfg.Remote.WriteRate), burst)
+	}
+	if s.cfg.Remote.MaxConcurrentWrites > 0 {
+		s.writeSlots = make(chan struct{}, s.cfg.Remote.MaxConcurrentWrites)
+	}
 }
 
 // Run starts the server and blocks until shutdown. It handles
@@ -1143,6 +1185,35 @@ func (s *Server) writeBareError(w http.ResponseWriter, status int, code, message
 	enc.Encode(ErrorResponse{Error: ErrorDetail{Code: code, Message: message, Retryable: false}})
 }
 
+// writeTooMany rejects an over-limit remote write with 429. It sets the
+// standard Retry-After header (whole seconds) for HTTP clients and
+// mirrors the same value into the envelope's retry_after so the MCP
+// proxy -- which surfaces the body but drops response headers -- still
+// carries the delay to the agent. The error is always retryable: the
+// caller should back off and retry the same request unchanged.
+//
+// Like the auth 401 (writeBareError), the response omits the curation /
+// store-state envelope: a shed request must not cost a curationStatus()
+// engine RLock on every rejection under a flood.
+func (s *Server) writeTooMany(w http.ResponseWriter, message string, retryAfter int) {
+	if retryAfter < 1 {
+		retryAfter = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(http.StatusTooManyRequests)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(ErrorResponse{Error: ErrorDetail{
+		Code:       "too_many_requests",
+		Message:    message,
+		Retryable:  true,
+		RetryAfter: retryAfter,
+	}})
+}
+
 // ResponseEnvelope is the standard response wrapper.
 type ResponseEnvelope struct {
 	Data     any            `json:"data"`
@@ -1194,6 +1265,11 @@ type ErrorDetail struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
+	// RetryAfter is the suggested wait in seconds before retrying, set
+	// only on 429 responses. It mirrors the Retry-After HTTP header for
+	// transports (notably the CLI proxy) that surface the body but drop
+	// response headers, so the agent still learns how long to back off.
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 // Error makes ErrorDetail satisfy the error interface so CLI clients can

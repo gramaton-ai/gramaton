@@ -1020,3 +1020,48 @@ func TestLoadRejectsInvariantViolation(t *testing.T) {
 		t.Fatalf("error should name the offending key; got %q", err.Error())
 	}
 }
+
+func TestResolvedWriteLimits(t *testing.T) {
+	cases := []struct {
+		name           string
+		in             RemoteServerConfig
+		rate           float64
+		burst, maxConc int
+	}{
+		{"defaults", RemoteServerConfig{}, DefaultRemoteWriteRate, DefaultRemoteWriteBurst, DefaultRemoteMaxConcurrentWrites},
+		{"explicit", RemoteServerConfig{WriteRate: 5, WriteBurst: 15, MaxConcurrentWrites: 4}, 5, 15, 4},
+		{"rate disabled", RemoteServerConfig{WriteRate: -1}, -1, 0, DefaultRemoteMaxConcurrentWrites},
+		{"concurrency disabled", RemoteServerConfig{MaxConcurrentWrites: -1}, DefaultRemoteWriteRate, DefaultRemoteWriteBurst, -1},
+		{"rate on, burst zero -> default", RemoteServerConfig{WriteRate: 7, WriteBurst: 0}, 7, DefaultRemoteWriteBurst, DefaultRemoteMaxConcurrentWrites},
+		{"rate on, burst negative -> default (no disable for a bucket size)", RemoteServerConfig{WriteRate: 7, WriteBurst: -5}, 7, DefaultRemoteWriteBurst, DefaultRemoteMaxConcurrentWrites},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, b, m := tc.in.ResolvedWriteLimits()
+			if r != tc.rate || b != tc.burst || m != tc.maxConc {
+				t.Errorf("got (rate=%v burst=%d maxConc=%d) want (rate=%v burst=%d maxConc=%d)",
+					r, b, m, tc.rate, tc.burst, tc.maxConc)
+			}
+		})
+	}
+}
+
+// TestLoadDecodesWriteLimitKnobs pins that the server.remote write-limit
+// yaml tags decode onto the struct (a typo'd tag would silently leave
+// the field at zero, disabling the knob without warning).
+func TestLoadDecodesWriteLimitKnobs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("server:\n  remote:\n    write_rate: 3\n    write_burst: 6\n    max_concurrent_writes: 2\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rc := cfg.Server.Remote
+	if rc.WriteRate != 3 || rc.WriteBurst != 6 || rc.MaxConcurrentWrites != 2 {
+		t.Fatalf("decoded %+v; want write_rate=3 write_burst=6 max_concurrent_writes=2", rc)
+	}
+}

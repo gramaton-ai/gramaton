@@ -136,6 +136,16 @@ type ServerConfig struct {
 // 42982 so the two sockets never contend even under wildcard binds.
 const DefaultRemotePort = 42983
 
+// Default admission-control limits for the remote write path, applied
+// when the matching server.remote knob is 0. They shield the engine's
+// single write lock from a remote flood while staying well clear of any
+// single user's real write rate. Loopback callers are never limited.
+const (
+	DefaultRemoteWriteRate           = 10.0 // sustained writes/second
+	DefaultRemoteWriteBurst          = 20   // token-bucket size
+	DefaultRemoteMaxConcurrentWrites = 8    // writes in flight at once
+)
+
 // RemoteServerConfig exposes the store to other machines through a
 // separate TLS-only listener. The plain loopback listener is
 // unaffected. A server with Enabled true refuses to start unless a
@@ -170,6 +180,66 @@ type RemoteServerConfig struct {
 	// store compromise. Shutdown and debug endpoints stay
 	// loopback-only regardless.
 	AdminOps bool `yaml:"admin_ops"`
+
+	// WriteRate, WriteBurst, and MaxConcurrentWrites bound the write
+	// load an authenticated remote caller can put on this server,
+	// shielding the engine's single write lock from a remote flood.
+	// Loopback callers (the local CLI, hooks, and MCP proxy) and reads
+	// are never limited. A positive value sets the limit and 0 selects
+	// the built-in default. A negative WriteRate or MaxConcurrentWrites
+	// turns that limiter off entirely (no rate cap / no concurrency
+	// cap); WriteBurst has no off state -- a non-positive WriteBurst
+	// selects the default bucket size.
+	//
+	// WriteRate is the sustained write-REQUEST rate per second (each
+	// HTTP write request costs one token, so a batch write counts as
+	// one regardless of how many records it carries); WriteBurst is the
+	// bucket size (a short spike up to this many requests is admitted
+	// before the rate bites). MaxConcurrentWrites caps write requests
+	// in flight at once -- the batch-size-independent backstop that
+	// bounds concurrent load on the engine write lock. Over-limit
+	// writes are rejected with HTTP 429 + Retry-After, a retryable
+	// error the agent backs off on. Defaults: 10/s, burst 20, 8
+	// concurrent. Resolved by ResolvedWriteLimits.
+	WriteRate           float64 `yaml:"write_rate,omitempty"`
+	WriteBurst          int     `yaml:"write_burst,omitempty"`
+	MaxConcurrentWrites int     `yaml:"max_concurrent_writes,omitempty"`
+}
+
+// ResolvedWriteLimits resolves the raw write-admission knobs into the
+// concrete parameters server.New consumes. A positive value is used
+// as-is and 0 selects the default. A negative WriteRate or
+// MaxConcurrentWrites disables that limiter (returned non-positive; the
+// server builds no gate). WriteBurst is only meaningful when the rate
+// limiter is active: it is 0 when the rate is disabled, and a
+// non-positive WriteBurst with the rate on selects the default bucket
+// size (a bucket size has no coherent "disabled" value -- zero would
+// reject every write).
+func (rc RemoteServerConfig) ResolvedWriteLimits() (rate float64, burst, maxConc int) {
+	switch {
+	case rc.WriteRate < 0:
+		rate = -1
+	case rc.WriteRate == 0:
+		rate = DefaultRemoteWriteRate
+	default:
+		rate = rc.WriteRate
+	}
+	if rate > 0 {
+		if rc.WriteBurst > 0 {
+			burst = rc.WriteBurst
+		} else {
+			burst = DefaultRemoteWriteBurst
+		}
+	}
+	switch {
+	case rc.MaxConcurrentWrites < 0:
+		maxConc = -1
+	case rc.MaxConcurrentWrites == 0:
+		maxConc = DefaultRemoteMaxConcurrentWrites
+	default:
+		maxConc = rc.MaxConcurrentWrites
+	}
+	return
 }
 
 // RemoteConfig (top-level `remote:`) points THIS machine's CLI,

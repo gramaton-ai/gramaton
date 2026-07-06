@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Write admission control for remote callers.** The remote listener
+  now bounds the write load an authenticated caller can put on the
+  server, shielding the engine's single write lock from a flood (a
+  runaway agent loop or a stolen token). Writes pass through a
+  token-bucket rate limiter and a bounded in-flight gate; an over-limit
+  write is rejected with HTTP 429 and a `Retry-After` delay, a retryable
+  error the agent backs off on. Reads and loopback callers are never
+  limited. Tunable under `server.remote` (`write_rate`, `write_burst`,
+  `max_concurrent_writes`; defaults 10/s, burst 20, 8 concurrent; a
+  negative `write_rate` or `max_concurrent_writes` disables that
+  limiter).
+
 - **Remote setup is now first-class in the store lifecycle.**
   `gramaton remote add` registers the store's MCP entry
   (`gramaton-<name>`) with every detected AI tool, so a named remote

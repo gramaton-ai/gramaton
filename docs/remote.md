@@ -139,6 +139,24 @@ and process control (shutdown, debug) stay **loopback-only** unless the host
 was enabled with `--admin-ops`. A bearer token proves identity, not that a
 path is safe, so path-taking operations are gated separately.
 
+## Write rate limits
+
+The remote listener caps the write load an authenticated caller can put on
+the host, so a runaway agent loop or a stolen token cannot overwhelm the
+store's write path. Writes pass through a token-bucket rate limiter and a
+bounded in-flight gate; a write over either limit gets an HTTP 429 with a
+`Retry-After` delay, which the agent treats as a retryable error and backs
+off on. Reads are never limited, and loopback callers (anything on the host
+itself) are exempt.
+
+The defaults (10 write requests/second, bursts up to 20, 8 in flight) sit
+well above a single user's real write rate, so you are unlikely to meet them
+in normal use. The rate limit counts write *requests*, so a batch write
+(many records in one request) costs one unit; the concurrent-writes cap is
+what bounds how much write work runs at once regardless of batch size. Tune
+or disable them under `server.remote` — see
+[docs/configuration.md](configuration.md#remote-access).
+
 ## Troubleshooting
 
 **"could not reach the server on any bundle URL"** — the host is not running,
