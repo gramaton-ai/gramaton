@@ -9,6 +9,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The LLM reranker now sees record lifecycle metadata.** Each
+  candidate line in the rerank prompt carries a compact epistemic
+  prefix (lifecycle state, epistemic status, temporality, confidence,
+  created date) plus guidance to use it as a relevance tiebreaker.
+  Previously the reranker judged bare content snippets, and because the
+  reranked order replaces the score order, superseded or expired
+  records could be promoted over their current replacements. Correcting
+  and superseding records still rank well on status/history queries,
+  where they are often the right answer.
+
 - **Auto-supersession is removed; near-duplicate saves are refused
   instead (breaking).** Records are now mutable and knowledge evolves
   by updating the record that holds it, not by saving a successor
