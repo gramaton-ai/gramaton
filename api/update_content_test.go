@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 )
@@ -34,6 +36,11 @@ func TestUpdateContentReplace(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("save: %v", apiErr)
 	}
+	eng.RLock()
+	pre, _ := eng.Graph().GetNode(saved.ID)
+	preVec, _ := pre.Properties.GetVector("embedding_full")
+	preVec = append([]float32(nil), preVec...)
+	eng.RUnlock()
 
 	resp, apiErr := a.Update(ctx, UpdateRequest{ID: saved.ID, Content: after})
 	if apiErr != nil {
@@ -58,8 +65,76 @@ func TestUpdateContentReplace(t *testing.T) {
 	if _, ok := n.Properties.GetTimestamp("updated_at"); !ok {
 		t.Error("updated_at not stamped on content change")
 	}
-	if _, ok := n.Properties.GetVector("embedding_full"); !ok {
+	postVec, ok := n.Properties.GetVector("embedding_full")
+	if !ok {
 		t.Error("content change without summary must re-embed")
+	} else if slices.Equal(postVec, preVec) {
+		// The save-time vector satisfies a mere presence check; the
+		// deterministic embedder guarantees different text embeds
+		// differently, so an unchanged vector means no re-embed ran.
+		t.Error("embedding unchanged after content replace; update must re-embed")
+	}
+}
+
+// TestUpdateInvalidFieldAppliesNothing pins the no-partial-mutation
+// contract: a request mixing a content rewrite with an invalid
+// metadata field is rejected as a whole -- the content (and its
+// conflict edges) must be untouched, because phase 3 has no rollback.
+func TestUpdateInvalidFieldAppliesNothing(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	const before = "content that must survive a rejected mixed update"
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: before})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+
+	_, apiErr = a.Update(ctx, UpdateRequest{
+		ID:         saved.ID,
+		Content:    "replacement that must not land",
+		ValidUntil: "not-a-date",
+	})
+	if apiErr == nil {
+		t.Fatal("expected ErrInvalid for the malformed valid_until")
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(saved.ID)
+	if c, _ := n.Properties.GetString("content_full"); c != before {
+		t.Fatalf("content_full = %q after rejected update, want original", c)
+	}
+	if _, ok := n.Properties.GetTimestamp("updated_at"); ok {
+		t.Error("updated_at stamped by a rejected update")
+	}
+}
+
+// TestUpdateAppendTotalCap pins that the rebased append is bounded by
+// the content cap: the per-field check alone would let repeated
+// appends grow a record without limit.
+func TestUpdateAppendTotalCap(t *testing.T) {
+	a, eng := setupSaveAPI(t, func(cfg *config.Config) {
+		cfg.Limits.MaxContentLength = 200
+	})
+	ctx := context.Background()
+
+	base := strings.Repeat("x", 150)
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: base})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+
+	_, apiErr = a.Update(ctx, UpdateRequest{ID: saved.ID, ContentAppend: strings.Repeat("y", 100)})
+	if apiErr == nil {
+		t.Fatal("append past the content cap must be rejected")
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(saved.ID)
+	if c, _ := n.Properties.GetString("content_full"); c != base {
+		t.Fatalf("content mutated by a rejected append: %d bytes", len(c))
 	}
 }
 

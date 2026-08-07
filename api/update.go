@@ -110,6 +110,31 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 	if err := validateUpdateRequest(&req); err != nil {
 		return UpdateResponse{}, ErrInvalid(err.Error())
 	}
+	// Everything that can fail on input is checked BEFORE the write
+	// phase: phase 3 mutates the in-memory graph without rollback, so
+	// an input-triggered error past the version gate would leave
+	// uncommitted partial state for the next unrelated commit to
+	// persist.
+	var validUntil, assertedAsOf time.Time
+	if req.ValidUntil != "" && req.ValidUntil != "clear" {
+		t, err := parseDateArg(req.ValidUntil)
+		if err != nil {
+			return UpdateResponse{}, ErrInvalid("invalid valid_until date")
+		}
+		validUntil = t
+	}
+	if req.AssertedAsOf != "" {
+		t, err := parseDateArg(req.AssertedAsOf)
+		if err != nil {
+			return UpdateResponse{}, ErrInvalid("invalid asserted_as_of date")
+		}
+		assertedAsOf = t
+	}
+	if len(req.Meta) > 0 {
+		if err := validateMeta(req.Meta); err != nil {
+			return UpdateResponse{}, ErrInvalid(err.Error())
+		}
+	}
 	contentChanging := req.Content != "" || req.ContentAppend != ""
 
 	// Phase 1: snapshot under read lock -- enough to decide what to
@@ -192,12 +217,35 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}, nil
 	}
 
+	// The rebased append is checked against the content cap before any
+	// mutation: the per-field cap in phase 0 bounds the increment, not
+	// the sum, and repeated appends must not grow a record past the
+	// limit save enforces.
+	if maxContent > 0 && req.ContentAppend != "" &&
+		len(currentContent)+len(contentAppendSeparator)+len(req.ContentAppend) > maxContent {
+		return UpdateResponse{}, ErrInvalid("content_append would grow the record past the maximum content length; consolidate with a content rewrite instead")
+	}
+
+	// The embedding applies first for the same no-rollback reason the
+	// input checks moved to phase 0: after the first content mutation,
+	// nothing may fail except the commit itself.
+	if newVec != nil {
+		pre := &preEmbeddedVectors{
+			vectors: map[string][]float32{"embedding_full": newVec},
+			model:   embedModel,
+		}
+		if err := a.applyPreEmbedded(req.ID, pre); err != nil {
+			return UpdateResponse{}, ErrInternal("failed to apply embedding")
+		}
+	}
+
 	updated := false
 	var notes []string
 	previousContent := ""
+	newFull := ""
 
 	if contentChanging {
-		newFull := req.Content
+		newFull = req.Content
 		if req.ContentAppend != "" {
 			// Rebase the append onto the live content -- the phase-1
 			// snapshot may be stale, and append semantics are "add to
@@ -207,15 +255,6 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		previousContent = currentContent
 		a.engine.SetProp(req.ID, "content_full", graph.StringProperty(newFull))
 		a.engine.SetProp(req.ID, "updated_at", graph.TimestampProperty(time.Now().UTC()))
-
-		// Re-index BM25 from the new content plus the record's stored
-		// meta values (mirrors save's indexing input).
-		a.engine.BM25Full().Remove(req.ID)
-		bm25Text := newFull
-		if metaText := metaBM25TextFromNode(n); metaText != "" {
-			bm25Text += " " + metaText
-		}
-		a.engine.IndexNode(req.ID, bm25Text, nil)
 
 		// A content change reopens any recorded conflict: drop the
 		// record's contradicts edges (the pair re-enters the
@@ -275,15 +314,6 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}
 		updated = true
 	}
-	if newVec != nil {
-		pre := &preEmbeddedVectors{
-			vectors: map[string][]float32{"embedding_full": newVec},
-			model:   embedModel,
-		}
-		if err := a.applyPreEmbedded(req.ID, pre); err != nil {
-			return UpdateResponse{}, ErrInternal("failed to apply embedding")
-		}
-	}
 	if req.Confidence != nil {
 		a.engine.SetProp(req.ID, "confidence", graph.Float64Property(*req.Confidence))
 		updated = true
@@ -318,28 +348,34 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 			}
 			updated = true
 		} else {
-			t, err := parseDateArg(req.ValidUntil)
-			if err != nil {
-				return UpdateResponse{}, ErrInvalid("invalid valid_until date")
-			}
-			a.engine.SetProp(req.ID, "valid_until", graph.TimestampProperty(t))
+			a.engine.SetProp(req.ID, "valid_until", graph.TimestampProperty(validUntil))
 			updated = true
 		}
 	}
 	if req.AssertedAsOf != "" {
-		t, err := parseDateArg(req.AssertedAsOf)
-		if err != nil {
-			return UpdateResponse{}, ErrInvalid("invalid asserted_as_of date")
-		}
-		a.engine.SetProp(req.ID, "asserted_as_of", graph.TimestampProperty(t))
+		a.engine.SetProp(req.ID, "asserted_as_of", graph.TimestampProperty(assertedAsOf))
 		updated = true
 	}
 	if len(req.Meta) > 0 {
-		if err := validateMeta(req.Meta); err != nil {
-			return UpdateResponse{}, ErrInvalid(err.Error())
-		}
 		a.setMetaProps(req.ID, req.Meta)
 		updated = true
+	}
+
+	// BM25 re-indexes last so the text reflects every applied change:
+	// the new content, the stored (possibly just-replaced) keywords,
+	// and post-update meta values. Mirrors save's indexing input.
+	if contentChanging {
+		a.engine.BM25Full().Remove(req.ID)
+		bm25Text := newFull
+		if fresh, ok := a.engine.Graph().GetNode(req.ID); ok {
+			if kws, ok := fresh.Properties.GetStringList("content_keywords"); ok && len(kws) > 0 {
+				bm25Text += " " + strings.Join(kws, " ")
+			}
+			if metaText := metaBM25TextFromNode(fresh); metaText != "" {
+				bm25Text += " " + metaText
+			}
+		}
+		a.engine.IndexNode(req.ID, bm25Text, nil)
 	}
 
 	if updated {
@@ -437,15 +473,31 @@ func (a *API) observationChildren(recordID string) []string {
 
 // metaBM25TextFromNode rebuilds the "key:value" BM25 text from a
 // node's stored meta.* properties, mirroring metaBM25Text's output
-// for the original save.
+// for the original save across every stored meta type (string,
+// number, bool, string list).
 func metaBM25TextFromNode(n *graph.Node) string {
 	var parts []string
 	for key := range n.Properties {
 		if !strings.HasPrefix(key, "meta.") {
 			continue
 		}
+		name := strings.TrimPrefix(key, "meta.")
 		if s, ok := n.Properties.GetString(key); ok {
-			parts = append(parts, strings.TrimPrefix(key, "meta.")+":"+s)
+			parts = append(parts, name+":"+s)
+			continue
+		}
+		if f, ok := n.Properties.GetFloat64(key); ok {
+			parts = append(parts, fmt.Sprintf("%s:%g", name, f))
+			continue
+		}
+		if b, ok := n.Properties.GetBool(key); ok {
+			parts = append(parts, fmt.Sprintf("%s:%t", name, b))
+			continue
+		}
+		if ss, ok := n.Properties.GetStringList(key); ok {
+			for _, s := range ss {
+				parts = append(parts, name+":"+s)
+			}
 		}
 	}
 	if len(parts) == 0 {
