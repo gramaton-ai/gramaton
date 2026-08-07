@@ -4,6 +4,8 @@
 package core
 
 import (
+	"fmt"
+
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 	bolt "go.etcd.io/bbolt"
@@ -96,4 +98,28 @@ func (ws *WriteSession) IndexNode(nodeID, content string, vec []float32) {
 		return
 	}
 	ws.indexes.applyToNodeSession(ws, n, content, vec)
+}
+
+// DeleteNode hard-deletes a node: every index entry, the cascading
+// edges, and the node itself, all via the session's tx + caches.
+// Mirrors the plain-lock GC deletion pattern for batched callers --
+// the non-Tx variants open their own bbolt transactions and would
+// self-deadlock inside the session's shared one.
+func (ws *WriteSession) DeleteNode(id string) error {
+	n, ok := ws.engine.graph.GetNode(id)
+	if !ok {
+		return fmt.Errorf("core: node %s: %w", id, graph.ErrNotFound)
+	}
+	ws.indexes.propIdx.RemoveNodeTx(ws.tx, id, n.Properties)
+	ws.indexes.bm25Full.RemoveTx(ws.tx, ws.bm25, id)
+	ws.indexes.vecIdx.Remove(id)
+	if ws.indexes.secIdx != nil {
+		ws.indexes.secIdx.RemoveNodeTx(ws.tx, id)
+	}
+	return ws.engine.graph.DeleteNodeTx(ws.tx, ws.edges, id)
+}
+
+// DeleteEdge removes an edge via the session's tx + edge batch.
+func (ws *WriteSession) DeleteEdge(id string) error {
+	return ws.engine.graph.DeleteEdgeTx(ws.tx, ws.edges, id)
 }

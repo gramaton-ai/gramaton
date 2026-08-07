@@ -3,6 +3,8 @@ package graph
 import (
 	"fmt"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/gramaton-ai/gramaton/storage"
 )
 
@@ -206,6 +208,42 @@ func (g *Graph) DeleteNode(id string) error {
 		g.deleteEdge(eid)
 	}
 
+	g.removeNodeEntry(id)
+	return nil
+}
+
+// DeleteNodeTx removes a node and cascades its edges via the caller's
+// tx + optional *EdgeBatch. The plain DeleteNode's edge cascade opens
+// its own bbolt Update per edge, which self-deadlocks inside a shared
+// write transaction (WithWriteBatch); this variant routes the cascade
+// through DeleteTx so batched mass deletions (the collapse migration)
+// stay in one transaction.
+func (g *Graph) DeleteNodeTx(tx *bolt.Tx, batch *EdgeBatch, id string) error {
+	if _, ok := g.GetNode(id); !ok {
+		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)
+	}
+
+	edgeSet := make(map[string]struct{})
+	for _, e := range g.edgeStore.From(id) {
+		edgeSet[e.ID] = struct{}{}
+	}
+	for _, e := range g.edgeStore.To(id) {
+		edgeSet[e.ID] = struct{}{}
+	}
+	for eid := range edgeSet {
+		g.edgeStore.DeleteTx(tx, batch, eid)
+		delete(g.dirtyEdges, eid)
+		g.deletedEdges[eid] = struct{}{}
+	}
+
+	g.removeNodeEntry(id)
+	return nil
+}
+
+// removeNodeEntry drops a node from the in-memory maps and marks it
+// deleted for the next commit. Shared tail of DeleteNode and
+// DeleteNodeTx; the edge cascade must already have run.
+func (g *Graph) removeNodeEntry(id string) {
 	g.cacheMu.Lock()
 	delete(g.nodes, id)
 	delete(g.dirtyNodes, id)
@@ -215,7 +253,6 @@ func (g *Graph) DeleteNode(id string) error {
 		g.lru.removeID(id)
 	}
 	g.cacheMu.Unlock()
-	return nil
 }
 
 // NodeCount returns the number of nodes in the graph. In lazy mode,
