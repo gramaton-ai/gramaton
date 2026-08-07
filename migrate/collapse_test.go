@@ -1,6 +1,9 @@
 package migrate
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +266,162 @@ func TestBuildPlanForkCensusLiveOnly(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("fork census missed the live twin pair: %+v", plan.ForkPairs)
+	}
+}
+
+// TestApplyCollapsesAndArchives drives the full apply: the victim is
+// archived then deleted with its indexes cleaned, provenance
+// re-points to the successor, the observation child cascades, and
+// the survivor is untouched.
+func TestApplyCollapsesAndArchives(t *testing.T) {
+	eng := testutil.NewEngine(t)
+
+	succ := addRecord(t, eng, "successor", false)
+	victim := addRecord(t, eng, "victim", true)
+	eng.Lock()
+	seg := eng.Graph().AddNode(graph.Properties{
+		"knowledge_type": graph.StringProperty("segment"),
+		"captured_as":    graph.StringProperty(victim),
+	})
+	obs := eng.Graph().AddNode(graph.Properties{
+		"node_type":    graph.StringProperty("observation"),
+		"content_full": graph.StringProperty("derived observation"),
+	})
+	if _, err := eng.Graph().AddEdge(seg.ID, victim, "extracted_as", 1.0, nil); err != nil {
+		eng.Unlock()
+		t.Fatalf("AddEdge extracted_as: %v", err)
+	}
+	if _, err := eng.Graph().AddEdge(obs.ID, victim, "observation_of", 1.0, nil); err != nil {
+		eng.Unlock()
+		t.Fatalf("AddEdge observation_of: %v", err)
+	}
+	eng.Unlock()
+	addSupersedes(t, eng, succ, victim, 0.95)
+	save(t, eng)
+
+	plan := BuildPlan(eng, DefaultPlanOptions())
+	if len(plan.Victims) != 1 {
+		t.Fatalf("plan victims = %+v, want one", plan.Victims)
+	}
+
+	archive := filepath.Join(t.TempDir(), "collapse-archive.jsonl")
+	res, err := Apply(eng, plan, archive)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.VictimsDeleted != 1 || res.VictimsSkipped != 0 {
+		t.Fatalf("result = %+v, want 1 deleted / 0 skipped", res)
+	}
+	if res.SegmentsRepointed != 1 || res.ObservationsDeleted != 1 {
+		t.Fatalf("result = %+v, want 1 segment repointed / 1 observation deleted", res)
+	}
+
+	// Archive content.
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	var rec ArchiveRecord
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec); err != nil {
+		t.Fatalf("parse archive line: %v", err)
+	}
+	if rec.VictimID != victim || rec.SuccessorID != succ {
+		t.Fatalf("archive record = %+v, want victim %s successor %s", rec, victim, succ)
+	}
+	if rec.Properties["content_full"] != "victim full content" {
+		t.Fatalf("archive lost content_full: %v", rec.Properties)
+	}
+	if rec.Properties["resolution"] != "superseded" {
+		t.Fatalf("archive lost resolution: %v", rec.Properties)
+	}
+
+	// Graph state.
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(victim); ok {
+		t.Fatal("victim survived apply")
+	}
+	if _, ok := eng.Graph().GetNode(obs.ID); ok {
+		t.Fatal("observation child survived the cascade")
+	}
+	if _, ok := eng.Graph().GetNode(succ); !ok {
+		t.Fatal("successor was deleted")
+	}
+	if ids := eng.PropIdx().Lookup("resolution", graph.StringProperty("superseded")); len(ids) != 0 {
+		t.Fatalf("property index still lists the victim: %v", ids)
+	}
+	segNode, ok := eng.Graph().GetNode(seg.ID)
+	if !ok {
+		t.Fatal("segment was deleted; segments are append-only")
+	}
+	if captured, _ := segNode.Properties.GetString("captured_as"); captured != succ {
+		t.Fatalf("segment captured_as = %s, want successor %s", captured, succ)
+	}
+	var repointed bool
+	for _, e := range eng.Graph().EdgesFrom(seg.ID) {
+		if e.Type == "extracted_as" && e.TargetID == succ {
+			repointed = true
+		}
+		if e.Type == "extracted_as" && e.TargetID == victim {
+			t.Fatal("stale extracted_as edge to the deleted victim survived")
+		}
+	}
+	if !repointed {
+		t.Fatal("segment provenance not re-pointed to the successor")
+	}
+}
+
+// TestApplyRefusesExistingArchive pins the forever-insurance rule:
+// an existing file at the archive path aborts before any mutation.
+func TestApplyRefusesExistingArchive(t *testing.T) {
+	eng := testutil.NewEngine(t)
+	succ := addRecord(t, eng, "successor", false)
+	victim := addRecord(t, eng, "victim", true)
+	addSupersedes(t, eng, succ, victim, 0.95)
+	save(t, eng)
+
+	archive := filepath.Join(t.TempDir(), "existing.jsonl")
+	if err := os.WriteFile(archive, []byte("occupied\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := BuildPlan(eng, DefaultPlanOptions())
+	if _, err := Apply(eng, plan, archive); err == nil {
+		t.Fatal("Apply overwrote an existing archive")
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(victim); !ok {
+		t.Fatal("victim deleted despite the archive refusal")
+	}
+}
+
+// TestApplySkipsChangedVictim pins the stale-evidence guard: a
+// victim whose resolution changed between plan and apply is skipped,
+// never deleted.
+func TestApplySkipsChangedVictim(t *testing.T) {
+	eng := testutil.NewEngine(t)
+	succ := addRecord(t, eng, "successor", false)
+	victim := addRecord(t, eng, "victim", true)
+	addSupersedes(t, eng, succ, victim, 0.95)
+	save(t, eng)
+
+	plan := BuildPlan(eng, DefaultPlanOptions())
+
+	eng.Lock()
+	eng.SetProp(victim, "resolution", graph.StringProperty("completed"))
+	eng.Unlock()
+
+	archive := filepath.Join(t.TempDir(), "skip.jsonl")
+	res, err := Apply(eng, plan, archive)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.VictimsDeleted != 0 || res.VictimsSkipped != 1 {
+		t.Fatalf("result = %+v, want 0 deleted / 1 skipped", res)
+	}
+	eng.RLock()
+	defer eng.RUnlock()
+	if _, ok := eng.Graph().GetNode(victim); !ok {
+		t.Fatal("re-resolved victim was deleted on stale plan evidence")
 	}
 }
