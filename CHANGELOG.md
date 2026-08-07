@@ -113,9 +113,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never swept. Victims are archived to a JSONL file next to the
   store before deletion, session-segment provenance re-points to the
   surviving successor, observation children cascade, and everything
-  lands in one labeled commit. Chains with below-floor edge weights
-  (`--min-weight`, default 0.92) and victims in collections their
-  successor does not share defer to manual review; a report-only
+  lands in one labeled commit. Eligibility is per record: one whose
+  selection edge sits below `--min-weight` (default 0.92) or that
+  belongs to a collection its successor does not share defers to
+  manual review while the rest of its chain proceeds; a report-only
   census lists live near-duplicate pairs and orphaned superseded
   records. Plan-by-default; `--apply` takes a store backup first and
   prints its path. Offline command — stop the server first.

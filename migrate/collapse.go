@@ -112,8 +112,9 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 	// Selection is a conjunction (never valid_until alone): an
 	// inbound supersedes edge AND resolution=superseded AND a
 	// valid_until stamp. An edge whose target fails the prop check is
-	// a lineage edge on a current record -- the manual vocabulary
-	// D-A keeps -- and is reported, never deleted.
+	// a lineage edge on a current record -- the manual vocabulary the
+	// mutable-records design deliberately keeps -- and is reported,
+	// never deleted.
 	var selected []selEdge
 	victimSet := map[string]bool{}
 	for _, e := range g.EdgesByType("supersedes") {
@@ -161,7 +162,7 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 			plan.Anomalies = append(plan.Anomalies, Anomaly{
 				Kind:   "superseded_props_no_edge",
 				NodeID: n.ID,
-				Detail: "resolution=superseded with valid_until but no inbound supersedes edge; props-keyed follow-up candidate",
+				Detail: "resolution=superseded with valid_until but no inbound supersedes edge -- either a manual resolve (legitimate; leave it) or a stranded tail from an earlier collapse; review before any follow-up",
 			})
 		}
 	}
@@ -204,8 +205,13 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 
 	// Successor resolution walks max-weight inbound edges up the
 	// chain until it reaches a node that will remain live: a
-	// non-victim, or a victim already deferred (it survives this
-	// run, so provenance may point at it).
+	// non-victim, or a victim deferred for a STABLE reason (weight or
+	// collections -- it survives this run as a coherent record, so
+	// provenance may point at it). Broken-chain deferrals are walked
+	// THROUGH, not stopped at: without this, the second member of a
+	// supersedes cycle would "resolve" to the first (deferred) member
+	// and collapse into the cycle instead of deferring with it.
+	brokenChain := map[string]bool{}
 	liveSuccessor := func(victimID string) (string, bool) {
 		cur := victimID
 		for range len(selected) + 1 {
@@ -217,7 +223,7 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 			if !victimSet[next] {
 				return next, true
 			}
-			if _, def := deferredVictims[next]; def {
+			if _, def := deferredVictims[next]; def && !brokenChain[next] {
 				return next, true
 			}
 			cur = next
@@ -245,6 +251,7 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 			succID, ok := liveSuccessor(victimID)
 			if !ok {
 				deferredVictims[victimID] = "no live successor reachable (broken or cyclic chain head)"
+				brokenChain[victimID] = true
 				changed = true
 				continue
 			}

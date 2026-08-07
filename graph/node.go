@@ -218,6 +218,11 @@ func (g *Graph) DeleteNode(id string) error {
 // write transaction (WithWriteBatch); this variant routes the cascade
 // through DeleteTx so batched mass deletions (the collapse migration)
 // stay in one transaction.
+//
+// The cascade set comes from the COMMITTED adjacency lists: an edge
+// added through the same batch's EdgeBatch cache is invisible here
+// and would dangle. Do not add an edge and delete one of its
+// endpoints in the same batch.
 func (g *Graph) DeleteNodeTx(tx *bolt.Tx, batch *EdgeBatch, id string) error {
 	if _, ok := g.GetNode(id); !ok {
 		return fmt.Errorf("graph: node %s: %w", id, ErrNotFound)

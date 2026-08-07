@@ -29,10 +29,13 @@ observation children are cascaded.
 
 Selection is deliberately narrow -- an inbound supersedes edge AND
 resolution=superseded AND valid_until, all three. Manual supersedes
-edges on current records are reported and kept. Chains containing a
-below-floor edge weight (see --min-weight) or records in collections
-their successor does not share are deferred to manual review. The
-command reports what remains; it never certifies the store clean.
+edges on current records are reported and kept. Eligibility is per
+record: one whose own selection edge sits below --min-weight, or
+that belongs to a collection its successor does not share, defers
+to manual review while the rest of its chain proceeds (a deferred
+tail whose selection edge the collapse removes is reported for
+follow-up). The command reports what remains; it never certifies
+the store clean.
 
 Without --apply this prints the plan and changes nothing. With
 --apply, a store backup is taken first and its path printed; restore
@@ -49,13 +52,16 @@ func init() {
 	backfillCollapseCmd.Flags().BoolVar(&backfillCollapseApply, "apply", false,
 		"execute the plan (default is a dry-run print)")
 	backfillCollapseCmd.Flags().Float64Var(&backfillCollapseMinWeight, "min-weight", 0.92,
-		"per-edge weight floor; a chain containing any edge below it is deferred to manual review")
+		"selection-edge weight floor; a record whose own edge sits below it is deferred to manual review")
 	backfillCmd.AddCommand(backfillCollapseCmd)
 }
 
 func runBackfillCollapse(cmd *cobra.Command, args []string) error {
 	if err := guardLocalStore("backfill"); err != nil {
 		return err
+	}
+	if backfillCollapseMinWeight <= 0 || backfillCollapseMinWeight > 1 {
+		return fmt.Errorf("--min-weight must be in (0, 1], got %.3f", backfillCollapseMinWeight)
 	}
 	dir := configDir()
 
@@ -67,6 +73,7 @@ func runBackfillCollapse(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load engine: %w", err)
 	}
+	defer eng.Close()
 
 	opts := migrate.DefaultPlanOptions()
 	opts.MinWeight = backfillCollapseMinWeight

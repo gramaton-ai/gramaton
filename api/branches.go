@@ -118,12 +118,12 @@ func (a *API) BranchCreate(ctx context.Context, req BranchCreateRequest) (Branch
 // BranchCheckout loads the branch's committed graph state.
 // Three-phase lock discipline:
 //  1. RLock: read the target ref hash, release.
-//  2. No lock: parse the committed graph into a fresh *graph.Graph
-//     that SHARES the engine's BboltEdgeStore -- otherwise edges
-//     added on the new branch silently bypass bbolt persistence.
+//  2. No lock: stage the committed graph via graph.LoadStaged
+//     (memory-backed edges, always loaded from the commit's tree).
 //  3. Lock: write HEAD + active branch FIRST (so a partial failure
-//     leaves no in-memory/on-disk divergence), then SwapGraph,
-//     then rebuild indexes.
+//     leaves no in-memory/on-disk divergence), then AdoptGraph
+//     (staged edges replace the shared bbolt store's contents and
+//     the store transfers to the new graph), then rebuild indexes.
 func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutResponse, *APIError) {
 	// Checkout doesn't change knowledge content but rewrites HEAD and
 	// BRANCH in the data dir and swaps the live graph -- mutations of

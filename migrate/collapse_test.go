@@ -124,8 +124,8 @@ func TestBuildPlanChainWalksToLiveHead(t *testing.T) {
 	}
 }
 
-// TestBuildPlanMixedWeightPerVictim pins the F5 disposition the real
-// stores demanded: eligibility is per victim (its own selection-edge
+// TestBuildPlanMixedWeightPerVictim pins the per-victim eligibility
+// the real stores demanded: eligibility is per victim (its own selection-edge
 // weight), a below-floor victim defers, and the tail whose selection
 // edge the collapse will cascade away is recorded as a stranded_tail
 // anomaly for the props-keyed follow-up -- never silently dropped.
@@ -160,9 +160,9 @@ func TestBuildPlanMixedWeightPerVictim(t *testing.T) {
 	}
 }
 
-// TestBuildPlanCollectionMismatchDefers pins F19: a victim belonging
-// to a collection the successor does not share defers to manual
-// review; a co-member victim collapses.
+// TestBuildPlanCollectionMismatchDefers pins the membership guard: a
+// victim belonging to a collection the successor does not share
+// defers to manual review; a co-member victim collapses.
 func TestBuildPlanCollectionMismatchDefers(t *testing.T) {
 	eng := testutil.NewEngine(t)
 
@@ -432,5 +432,31 @@ func TestApplySkipsChangedVictim(t *testing.T) {
 	defer eng.RUnlock()
 	if _, ok := eng.Graph().GetNode(victim); !ok {
 		t.Fatal("re-resolved victim was deleted on stale plan evidence")
+	}
+}
+
+// TestBuildPlanCycleDefers pins the cycle guard: two records that
+// supersede each other (both carrying selection props) have no live
+// chain head, so both defer instead of deleting each other.
+func TestBuildPlanCycleDefers(t *testing.T) {
+	eng := testutil.NewEngine(t)
+
+	x := addRecord(t, eng, "cycle member one", true)
+	y := addRecord(t, eng, "cycle member two", true)
+	addSupersedes(t, eng, x, y, 0.95)
+	addSupersedes(t, eng, y, x, 0.95)
+	save(t, eng)
+
+	plan := BuildPlan(eng, DefaultPlanOptions())
+	if len(plan.Victims) != 0 {
+		t.Fatalf("victims = %+v, want none for a supersedes cycle", plan.Victims)
+	}
+	if len(plan.Deferred) != 2 {
+		t.Fatalf("deferred = %+v, want both cycle members", plan.Deferred)
+	}
+	for _, d := range plan.Deferred {
+		if !strings.Contains(d.Reason, "no live successor") {
+			t.Errorf("deferral reason %q does not name the missing live head", d.Reason)
+		}
 	}
 }

@@ -109,11 +109,16 @@ func Apply(eng *core.Engine, plan *Plan, archivePath string) (*ApplyResult, erro
 
 	// Mutation phase: one batched commit. Re-pointing happens before
 	// the victim's deletion cascades the old provenance edge away;
-	// each victim's selection props are re-verified so nothing is
-	// deleted on stale plan evidence.
+	// each victim's resolution and valid_until re-verify under the
+	// write lock so nothing is deleted on stale plan evidence.
 	res := &ApplyResult{ArchivePath: archivePath}
 	err = eng.WithWriteBatch("backfill collapse-superseded", func(ws *core.WriteSession) (bool, error) {
 		g := ws.Graph()
+		// Edges added earlier in this batch are invisible to the
+		// committed-state EdgesFrom scan below; track them here so a
+		// segment shared by two victims with the same successor does
+		// not get a duplicate provenance edge.
+		addedEdge := map[string]bool{}
 		for _, v := range plan.Victims {
 			if !archived[v.ID] {
 				res.VictimsSkipped++
@@ -128,29 +133,43 @@ func Apply(eng *core.Engine, plan *Plan, archivePath string) (*ApplyResult, erro
 				res.VictimsSkipped++
 				continue
 			}
+			if _, hasVU := n.Properties.GetTimestamp("valid_until"); !hasVU {
+				res.VictimsSkipped++
+				continue
+			}
 			if _, ok := g.GetNode(v.SuccessorID); !ok {
 				res.VictimsSkipped++
 				continue
 			}
 
 			for _, segID := range v.SegmentIDs {
-				if _, ok := g.GetNode(segID); !ok {
+				seg, ok := g.GetNode(segID)
+				if !ok {
 					continue
 				}
-				already := false
-				for _, e := range g.EdgesFrom(segID) {
-					if e.Type == "extracted_as" && e.TargetID == v.SuccessorID {
-						already = true
-						break
+				pairKey := segID + "\x00" + v.SuccessorID
+				already := addedEdge[pairKey]
+				if !already {
+					for _, e := range g.EdgesFrom(segID) {
+						if e.Type == "extracted_as" && e.TargetID == v.SuccessorID {
+							already = true
+							break
+						}
 					}
 				}
 				if !already {
 					if _, err := ws.AddEdge(segID, v.SuccessorID, "extracted_as", 1.0, nil); err != nil {
 						return false, fmt.Errorf("re-point segment %s: %w", segID, err)
 					}
+					addedEdge[pairKey] = true
+					res.SegmentsRepointed++
 				}
-				ws.SetProp(segID, "captured_as", graph.StringProperty(v.SuccessorID))
-				res.SegmentsRepointed++
+				// captured_as may legitimately point at a different
+				// still-live record; only redirect it away from the
+				// victim being deleted.
+				if captured, _ := seg.Properties.GetString("captured_as"); captured == v.ID {
+					ws.SetProp(segID, "captured_as", graph.StringProperty(v.SuccessorID))
+				}
 			}
 
 			for _, obsID := range v.ObservationIDs {

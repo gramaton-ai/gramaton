@@ -540,6 +540,16 @@ func LoadStaged(s *storage.Store, commitHash string) (*Graph, *Commit, error) {
 // hold the engine write lock, and the previous live graph must not
 // be used afterwards (its store contents were just replaced).
 func (g *Graph) MigrateEdgesTo(dst EdgeStore) {
+	if bbes, ok := dst.(*BboltEdgeStore); ok {
+		// Single-transaction replace: the per-edge Put fallback costs
+		// an fsynced bbolt Update each, which under the engine write
+		// lock stalls every reader for the duration.
+		if err := bbes.ReplaceAll(g.edgeStore); err != nil {
+			slog.Error("edge store migrate: single-tx replace failed", "component", "graph", "err", err)
+		}
+		g.edgeStore = dst
+		return
+	}
 	dst.Clear()
 	g.edgeStore.ForEach(func(e *Edge) {
 		dst.Put(e)
