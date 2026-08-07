@@ -182,3 +182,52 @@ func (c *BboltChangelog) RetractCommits(commits map[string]bool) error {
 		return nil
 	})
 }
+
+// AppendBatch records many commits' worth of entries (per node,
+// oldest-first, already logical-version-verified) and one marker in
+// a single transaction. The offline backfill uses it to amortize
+// fsync cost across hundreds of commits; per-commit Append would
+// pay one synced transaction per commit on a million-commit chain.
+func (c *BboltChangelog) AppendBatch(perNode map[string][]ChangelogEntry, marker string) error {
+	if len(perNode) == 0 && marker == "" {
+		return nil
+	}
+	return c.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(changelogBucket)
+		for nodeID, add := range perNode {
+			var list []ChangelogEntry
+			if raw := b.Get([]byte(nodeID)); raw != nil {
+				if err := json.Unmarshal(raw, &list); err != nil {
+					list = nil
+				}
+			}
+			have := make(map[string]bool, len(list))
+			for _, e := range list {
+				have[e.Commit] = true
+			}
+			changed := false
+			for _, e := range add {
+				if have[e.Commit] {
+					continue
+				}
+				list = append(list, e)
+				have[e.Commit] = true
+				changed = true
+			}
+			if !changed {
+				continue
+			}
+			data, err := json.Marshal(list)
+			if err != nil {
+				return err
+			}
+			if err := b.Put([]byte(nodeID), data); err != nil {
+				return err
+			}
+		}
+		if marker != "" {
+			return tx.Bucket(changelogMetaBucket).Put(markerKey, []byte(marker))
+		}
+		return nil
+	})
+}

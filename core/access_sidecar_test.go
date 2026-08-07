@@ -243,3 +243,61 @@ func TestChangelogGapWalkRepairsDrift(t *testing.T) {
 		t.Fatalf("versions after gap walk = %+v, want both (replay must not duplicate the first)", versions)
 	}
 }
+
+// TestBackfillChangelogIndexesHistory pins the offline walk: a store
+// with pre-changelog history (marker wiped to simulate it) re-indexes
+// every logical version, skips a bookkeeping-only commit, and a
+// second run adds nothing.
+func TestBackfillChangelogIndexesHistory(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("v1"),
+	})
+	if _, err := eng.Save("create"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 1: %v", err)
+	}
+	eng.SetContentProp(n.ID, "content_full", "v2")
+	if _, err := eng.Save("revise"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 2: %v", err)
+	}
+	eng.SetProp(n.ID, "embedding_model", graph.StringProperty("swept"))
+	if _, err := eng.Save("reembed sweep"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 3: %v", err)
+	}
+	eng.Unlock()
+
+	// Simulate a pre-changelog store: wipe coverage.
+	if err := eng.Changelog().SetMarker(""); err != nil {
+		t.Fatalf("SetMarker: %v", err)
+	}
+
+	indexed, err := eng.BackfillChangelog(nil)
+	if err != nil {
+		t.Fatalf("BackfillChangelog: %v", err)
+	}
+	if indexed == 0 {
+		t.Fatal("backfill indexed nothing")
+	}
+	versions := eng.Changelog().Versions(n.ID)
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d (%+v), want 2 (bookkeeping commit must not mint)", len(versions), versions)
+	}
+	if eng.Changelog().Marker() != eng.HeadHash() {
+		t.Fatal("marker did not land on HEAD")
+	}
+
+	again, err := eng.BackfillChangelog(nil)
+	if err != nil {
+		t.Fatalf("second BackfillChangelog: %v", err)
+	}
+	_ = again
+	if got := len(eng.Changelog().Versions(n.ID)); got != 2 {
+		t.Fatalf("re-run duplicated entries: %d", got)
+	}
+}

@@ -379,3 +379,115 @@ func (e *Engine) IndexCommitDiffByHash(parentHash, commitHash string) {
 	}
 	e.indexCommitDiff(parent, commit)
 }
+
+// BackfillChangelog walks the ENTIRE commit chain root-to-HEAD and
+// indexes every logical version -- the offline migration for stores
+// whose history predates the changelog. Commits labeled access_flush
+// are skipped outright (they persisted only the retired read-churn
+// bookkeeping; the next pair diffs against them as baseline, so the
+// churn is never nominated). Every hash-diff-nominated pair still
+// passes the masked blob comparison, which is what keeps pre-sidecar
+// history honest: access churn rode INSIDE logical commits, and a
+// label-only backfill would mint phantom versions at 10-40x on
+// heavily-read stores. Appends batch across commits to amortize
+// fsync; the marker advances per batch, so an interrupted run
+// resumes idempotently. progress is called per batch when non-nil.
+func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) {
+	if e.changelog == nil {
+		return 0, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.headHash == "" {
+		return 0, nil
+	}
+
+	// Collect the chain HEAD-back-to-root, then process in reverse.
+	var chain []*graph.Commit
+	cur := e.headHash
+	for cur != "" {
+		c, err := loadCommit(e.store, cur)
+		if err != nil {
+			return 0, err
+		}
+		chain = append(chain, c)
+		cur = c.Parent
+	}
+
+	const batchCommits = 500
+	total := len(chain)
+	indexed := 0
+	batch := make(map[string][]index.ChangelogEntry)
+	var batchMarker string
+	flush := func() error {
+		if err := e.changelog.AppendBatch(batch, batchMarker); err != nil {
+			return err
+		}
+		batch = make(map[string][]index.ChangelogEntry)
+		return nil
+	}
+
+	for i := len(chain) - 1; i >= 0; i-- {
+		c := chain[i]
+		batchMarker = c.Hash
+		done := total - i
+		if strings.HasPrefix(c.Message, "access_flush") {
+			if done%batchCommits == 0 {
+				if err := flush(); err != nil {
+					return indexed, err
+				}
+				if progress != nil {
+					progress(done, total)
+				}
+			}
+			continue
+		}
+		var parent *graph.Commit
+		if c.Parent != "" {
+			if p, err := loadCommit(e.store, c.Parent); err == nil {
+				parent = p
+			}
+		}
+		diff, err := graph.DiffCommits(e.store, parent, c)
+		if err != nil {
+			return indexed, err
+		}
+		oldHash := make(map[string]string, len(diff.Removed))
+		for _, entry := range diff.Removed {
+			oldHash[entry.Key] = entry.Value
+		}
+		seen := make(map[string]bool)
+		for _, entry := range diff.Added {
+			seen[entry.Key] = true
+			if e.blobLogicalChange(oldHash[entry.Key], entry.Value) {
+				batch[entry.Key] = append(batch[entry.Key], index.ChangelogEntry{
+					Commit: c.Hash, NodeHash: entry.Value, Timestamp: c.Timestamp,
+				})
+				indexed++
+			}
+		}
+		for _, entry := range diff.Removed {
+			if !seen[entry.Key] {
+				batch[entry.Key] = append(batch[entry.Key], index.ChangelogEntry{
+					Commit: c.Hash, Timestamp: c.Timestamp,
+				})
+				indexed++
+			}
+		}
+		if done%batchCommits == 0 {
+			if err := flush(); err != nil {
+				return indexed, err
+			}
+			if progress != nil {
+				progress(done, total)
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return indexed, err
+	}
+	if progress != nil {
+		progress(total, total)
+	}
+	return indexed, nil
+}
