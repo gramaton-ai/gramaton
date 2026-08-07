@@ -1137,6 +1137,12 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			bm25Text += " " + strings.Join(seg.Keywords, " ")
 		}
 		a.engine.IndexNode(memNode.ID, bm25Text, vec)
+		if vec != nil {
+			// Feed the save-guard delta re-scan ring: a concurrent
+			// save whose off-lock scan predates this commit must
+			// still see the promoted record under its write lock.
+			a.engine.NoteRecentWrite(memNode.ID, vec)
+		}
 
 		// Mark the embedding model on success so gramaton_reembed
 		// doesn't re-pay for this record on every invocation. IndexNode
@@ -1422,6 +1428,12 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 				bm25Text += " " + strings.Join(w.meta.Keywords, " ")
 			}
 			a.engine.IndexNode(memNode.ID, bm25Text, w.vec)
+			if w.vec != nil {
+				// Same ring registration as the SessionSave promotion
+				// path: the record must be delta-visible to concurrent
+				// saves the moment it commits.
+				a.engine.NoteRecentWrite(memNode.ID, w.vec)
+			}
 			if w.vec != nil && a.engine.Embedder() != nil {
 				a.engine.SetProp(memNode.ID, "embedding_model", graph.StringProperty(a.engine.Embedder().ModelID()))
 			}

@@ -255,6 +255,10 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		}
 		if len(res.vectors) > 0 {
 			a.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
+			// The record just became similarity-visible; register it in
+			// the delta re-scan ring so a save whose off-lock scan
+			// predates this commit still sees it under the write lock.
+			a.engine.NoteRecentWrite(res.target.nodeID, res.vectors[len(res.vectors)-1])
 		}
 
 		modelProp := graph.StringProperty(currentModel)

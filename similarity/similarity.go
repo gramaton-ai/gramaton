@@ -35,6 +35,12 @@ const JaccardMin = 0.3
 // structural-false-positive problem that Jaccard was added to catch.
 const jaccardSkipCharLimit = 200
 
+// scanCandidates is how many nearest neighbors the save-guard scan
+// pulls from the vector index. Only the single best hold and best
+// advisory survive, but a wider candidate pull tolerates exclusions
+// (concepts, observations, collection items) occupying top slots.
+const scanCandidates = 10
+
 // embeddingKeys lists the property keys to consult for a node's
 // stored embedding, in priority order. Most nodes use embedding_full;
 // the medium/short/keywords variants exist for chunked or curated
@@ -94,7 +100,7 @@ func Scan(g *graph.Graph, vecIdx index.VectorIndex, cfg config.SaveGuardConfig, 
 	if cfg.SimilarHoldThreshold <= 0 {
 		return out
 	}
-	results := vecIdx.Search(vec, 10, nil)
+	results := vecIdx.Search(vec, scanCandidates, nil)
 	for _, r := range results {
 		if selfID != "" && r.NodeID == selfID {
 			continue

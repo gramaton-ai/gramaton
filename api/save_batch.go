@@ -483,6 +483,9 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 		var itemWarnings []string
 		if itemEmbedErrs[i] != nil {
 			itemWarnings = append(itemWarnings, fmt.Sprintf("embedding failed: %s", itemEmbedErrs[i]))
+			// The save-guard scan never ran for this item; mark it so
+			// reembed re-runs the check when the vector arrives.
+			a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 		} else if itemVecs[i] != nil {
 			pre := &preEmbeddedVectors{
 				vectors: map[string][]float32{"embedding_full": itemVecs[i]},
@@ -490,6 +493,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			}
 			if err := a.applyPreEmbedded(n.ID, pre); err != nil {
 				itemWarnings = append(itemWarnings, fmt.Sprintf("embedding failed: %s", err))
+				a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 			}
 		}
 

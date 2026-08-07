@@ -214,9 +214,8 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 
 	// Idempotent replay: a prior save with this token already
 	// committed. The same body returns the existing record; a
-	// different body is token misuse. Checked before the dedup-reject
-	// branch so a replay in reject mode is not mistaken for a
-	// duplicate of the very record it created.
+	// different body is token misuse. Checked before the hold gate so
+	// a replay is not held against the very record it created.
 	if req.ClientToken != "" {
 		// Unlike the batch path's tenant-scoped FindByClientToken,
 		// this lookup has no tenant predicate -- records carry no
@@ -232,6 +231,14 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 				return SaveResponse{ID: prior.ID}, nil
 			}
 		}
+	}
+
+	// An acknowledged scan hold is already judged -- clear it before
+	// the delta merge so a hold-grade record that committed in the
+	// scan-to-lock window still surfaces instead of being shadowed by
+	// the acked (and typically more similar) match.
+	if outcome.Hold != nil && ackContains(req.AllowSimilar, outcome.Hold.NodeID) {
+		outcome.Hold = nil
 	}
 
 	// Delta re-scan: records that committed between the off-lock scan

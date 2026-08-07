@@ -181,6 +181,9 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 	var warnings []string
 	if err := s.applyPreEmbedded(n.ID, preEmbedded); err != nil {
 		warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
+		// The save-guard scan never ran; mark the record so reembed
+		// re-runs it when the deferred embedding arrives.
+		s.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 	}
 
 	// Advisory: attach the non-blocking notice when the best
