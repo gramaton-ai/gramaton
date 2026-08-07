@@ -171,10 +171,14 @@ func (a *API) Logger() *slog.Logger { return a.log }
 // files and similar artifacts live).
 func (a *API) ConfigDir() string { return a.configDir }
 
-// SetHistorySearchSnapshotHook installs a channel that HistorySearch
-// closes after its phase-1 scope snapshot returns (before the
-// off-lock blob matching starts). Tests use this to prove the match
-// phase does not hold the engine lock. Pass nil to clear.
+// SetHistorySearchSnapshotHook installs a two-way handshake channel
+// fired between HistorySearch's phase-1 snapshot (read lock
+// released) and the off-lock blob matching: the operation SENDS one
+// value, then RECEIVES one before proceeding. A test receives, takes
+// the engine write lock, sends, and joins the search while still
+// holding the lock -- if the match phase touched any engine lock it
+// would deadlock into the test's watchdog instead of passing by
+// luck. Pass nil to clear.
 func (a *API) SetHistorySearchSnapshotHook(ch chan struct{}) {
 	a.hooksMu.Lock()
 	defer a.hooksMu.Unlock()
@@ -186,7 +190,8 @@ func (a *API) fireHistorySearchSnapshotHook() {
 	ch := a.testHookHistorySearchSnapshotted
 	a.hooksMu.Unlock()
 	if ch != nil {
-		close(ch)
+		ch <- struct{}{}
+		<-ch
 		a.hooksMu.Lock()
 		if a.testHookHistorySearchSnapshotted == ch {
 			a.testHookHistorySearchSnapshotted = nil

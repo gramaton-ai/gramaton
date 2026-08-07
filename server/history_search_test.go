@@ -221,9 +221,12 @@ func TestHistorySearchInputErrors(t *testing.T) {
 }
 
 // TestHistorySearchMatchPhaseHoldsNoLock proves the blob-matching
-// phase runs without any engine lock: the test holds the WRITE lock
-// for the whole of phase 2 (a no-hit query skips the phase-3 live
-// lookup) and the search must still complete.
+// phase runs without any engine lock. The snapshot hook is a two-way
+// handshake: the search blocks between phase 1 and the match phase
+// until this test has ACQUIRED the write lock, so the entire match
+// phase deterministically runs while the write lock is held (a
+// no-hit query skips the phase-3 live lookup). Any engine-lock
+// acquisition in the match phase deadlocks into the watchdog.
 func TestHistorySearchMatchPhaseHoldsNoLock(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	id := addRecord(t, eng, "content for the lock discipline pin")
@@ -240,8 +243,9 @@ func TestHistorySearchMatchPhaseHoldsNoLock(t *testing.T) {
 		done <- apiErr
 	}()
 
-	<-hook
+	<-hook // phase 1 complete, search parked before matching
 	eng.Lock()
+	hook <- struct{}{} // release the match phase under our write lock
 	select {
 	case apiErr := <-done:
 		if apiErr != nil {

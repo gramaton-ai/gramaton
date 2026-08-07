@@ -26,7 +26,7 @@ type HistorySearchRequest struct {
 	Text   string `json:"text" jsonschema:"lexical query matched against version content and change_notes (case-insensitive substring)"`
 	ID     string `json:"id,omitempty" jsonschema:"scan only this record's versions (fastest scope)"`
 	Scope  string `json:"scope,omitempty" jsonschema:"'candidates' (default: retrieval nominates records, then their histories are scanned) or 'store' (budgeted scan of every logical version; slow on large stores but finds knowledge revised away entirely)"`
-	Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan in store scope (default 20000, max 200000)"`
+	Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan per call, any scope (default 20000, max 200000)"`
 	Since  string `json:"since,omitempty" jsonschema:"only match versions on or after this date (YYYY-MM-DD or RFC3339)"`
 	Until  string `json:"until,omitempty" jsonschema:"only match versions up to this date (YYYY-MM-DD or RFC3339)"`
 }
@@ -149,7 +149,7 @@ func (a *API) HistorySearch(ctx context.Context, req HistorySearchRequest) (Hist
 	// node materialization for hit context waits for phase 3, so a
 	// store-wide scan never lazy-loads the whole graph under lock.
 	a.engine.RLock()
-	targets, totalVersions, apiErr := a.historyScanTargets(ctx, scope, req.ID, needle, queryVec)
+	targets, totalVersions, snapshotCapped, apiErr := a.historyScanTargets(ctx, scope, req.ID, req.Text, budget, queryVec)
 	a.engine.RUnlock()
 	if apiErr != nil {
 		return HistorySearchResponse{}, apiErr
@@ -174,20 +174,20 @@ func (a *API) HistorySearch(ctx context.Context, req HistorySearchRequest) (Hist
 	}
 
 	scanned := 0
-	truncated := false
+	dateExcluded := 0
+	budgetTruncated := snapshotCapped
 	var hits []HistorySearchHit
 scan:
 	for _, tgt := range targets {
 		last := len(tgt.entries) - 1
 		for vi, entry := range tgt.entries {
-			if since != nil && entry.Timestamp.Before(*since) {
-				continue
-			}
-			if until != nil && entry.Timestamp.After(*until) {
+			if (since != nil && entry.Timestamp.Before(*since)) ||
+				(until != nil && entry.Timestamp.After(*until)) {
+				dateExcluded++
 				continue
 			}
 			if scanned >= budget {
-				truncated = true
+				budgetTruncated = true
 				break scan
 			}
 			scanned++
@@ -231,9 +231,10 @@ scan:
 
 	// Newest first, then bounded for a prompt-sized response.
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Timestamp > hits[j].Timestamp })
+	hitsCapped := false
 	if len(hits) > MaxHistorySearchHits {
 		hits = hits[:MaxHistorySearchHits]
-		truncated = true
+		hitsCapped = true
 	}
 
 	// Phase 3: live-state contrast for hit records only.
@@ -272,8 +273,14 @@ scan:
 		hits = []HistorySearchHit{}
 	}
 	coverage := fmt.Sprintf("scanned %d of %d versions in scope", scanned, totalVersions)
-	if truncated {
+	if dateExcluded > 0 {
+		coverage += fmt.Sprintf(" (%d outside date window)", dateExcluded)
+	}
+	if budgetTruncated {
 		coverage += "; truncated at budget -- raise budget or narrow with since/until for full coverage"
+	}
+	if hitsCapped {
+		coverage += fmt.Sprintf("; showing top %d matches -- narrow with since/until or a more specific query", MaxHistorySearchHits)
 	}
 	if totalVersions == 0 {
 		coverage = "no indexed versions in scope; if this store predates the changelog index, run 'gramaton backfill changelog'"
@@ -282,35 +289,46 @@ scan:
 		Hits:      hits,
 		Scope:     scope,
 		Coverage:  coverage,
-		Truncated: truncated,
+		Truncated: budgetTruncated || hitsCapped,
 		Semantics: "past_versions",
 	}, nil
 }
 
 // historyScanTargets resolves the scope into per-record version
-// lists. Caller holds the read lock.
-func (a *API) historyScanTargets(ctx context.Context, scope, id, needle string, queryVec []float32) ([]historyScanTarget, int, *APIError) {
+// lists. Caller holds the read lock. The returned capped flag marks
+// a store-scope snapshot that stopped retaining entries at the scan
+// budget (the count still covers everything), so the caller reports
+// truncation even though the match loop never hits its own budget
+// break.
+func (a *API) historyScanTargets(ctx context.Context, scope, id, text string, budget int, queryVec []float32) ([]historyScanTarget, int, bool, *APIError) {
 	cl := a.engine.Changelog()
 	if cl == nil {
-		return nil, 0, ErrUnavailable("version history index is not available on this store")
+		return nil, 0, false, ErrUnavailable("version history index is not available on this store")
 	}
 	switch scope {
 	case "id":
 		entries := cl.Versions(id)
 		if len(entries) == 0 {
-			if _, ok := a.engine.Graph().GetNode(id); !ok {
-				return nil, 0, ErrNotFound("record not found and no version history for it")
+			n, ok := a.engine.Graph().GetNode(id)
+			if !ok {
+				return nil, 0, false, ErrNotFound("record not found and no version history for it")
 			}
-			return nil, 0, nil
+			if graph.IsConcept(n.Properties) {
+				return nil, 0, false, ErrInvalid("concept nodes are derived data regenerated by curation and carry no version history; search the member records instead")
+			}
+			return nil, 0, false, nil
 		}
-		return []historyScanTarget{{id: id, entries: entries}}, len(entries), nil
+		return []historyScanTarget{{id: id, entries: entries}}, len(entries), false, nil
 
 	case "candidates":
-		q := search.Query{Text: needle, Top: HistorySearchCandidates, ExcludeConcepts: true}
+		// SkipRerank: nomination runs under the engine read lock, and
+		// the rerank stage is an LLM network call -- top-K nomination
+		// gains nothing from it.
+		q := search.Query{Text: text, Top: HistorySearchCandidates, ExcludeConcepts: true, SkipRerank: true}
 		results, err := a.engine.Searcher().ExecuteWithVector(ctx, q, queryVec)
 		if err != nil {
 			a.log.Warn("history search: candidate nomination failed", "component", "history", "err", err)
-			return nil, 0, ErrInternal("candidate nomination failed")
+			return nil, 0, false, ErrInternal("candidate nomination failed")
 		}
 		var targets []historyScanTarget
 		total := 0
@@ -322,17 +340,28 @@ func (a *API) historyScanTargets(ctx context.Context, scope, id, needle string, 
 			targets = append(targets, historyScanTarget{id: r.ID, entries: entries})
 			total += len(entries)
 		}
-		return targets, total, nil
+		return targets, total, false, nil
 
 	default: // "store"
+		// Count every version for honest coverage, but stop RETAINING
+		// entry lists once the scan budget is covered -- on a large
+		// store the full snapshot would be hundreds of MB held under
+		// the read lock for a scan that visits a fraction of it.
 		var targets []historyScanTarget
 		total := 0
+		retained := 0
+		capped := false
 		_ = cl.ForEach(func(nodeID string, entries []index.ChangelogEntry) error {
-			targets = append(targets, historyScanTarget{id: nodeID, entries: entries})
 			total += len(entries)
+			if retained >= budget {
+				capped = true
+				return nil
+			}
+			targets = append(targets, historyScanTarget{id: nodeID, entries: entries})
+			retained += len(entries)
 			return nil
 		})
-		return targets, total, nil
+		return targets, total, capped, nil
 	}
 }
 
@@ -362,9 +391,19 @@ func matchVersionBlob(store interface{ Read(string) ([]byte, error) }, nodeHash,
 	if content == "" {
 		return false, ""
 	}
-	idx := strings.Index(strings.ToLower(content), needle)
+	lower := strings.ToLower(content)
+	idx := strings.Index(lower, needle)
 	if idx < 0 {
 		return false, ""
+	}
+	// The match offset is a byte index into the LOWERED string, and
+	// ToLower changes byte length for some Unicode characters --
+	// applying it to the original can point past the end (a panic in
+	// the window walk) or at the wrong region. When lengths match
+	// (the common, exact case) snippet the original; otherwise
+	// snippet the lowered string, where the offset is valid.
+	if len(lower) != len(content) {
+		content = lower
 	}
 	return true, snippetAround(content, idx, len(needle))
 }

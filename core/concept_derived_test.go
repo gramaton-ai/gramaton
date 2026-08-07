@@ -98,3 +98,44 @@ func TestConceptOutOfPrimaryIndexesOnRebuild(t *testing.T) {
 		t.Fatal("concept node lost across reopen")
 	}
 }
+
+// TestConceptLiveIndexPathsSkipBM25 pins the two LIVE write paths
+// (concept emergence via a write session's IndexNode, synthesis
+// rewrite via SetContentProp): neither may land concept text in
+// BM25. The rebuild-path pin above wouldn't catch a regression here
+// -- these gates run long before any reopen.
+func TestConceptLiveIndexPathsSkipBM25(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	// Emergence path: the curation write batch indexes the template.
+	var conceptID string
+	err := eng.WithWriteBatch("curation: concept emerge", func(ws *WriteSession) (bool, error) {
+		n := ws.AddNode(graph.Properties{
+			"content_full":    graph.StringProperty("Concept: durability with emergencetermalpha"),
+			"node_type":       graph.StringProperty("concept"),
+			"concept_keyword": graph.StringProperty("durability"),
+		})
+		conceptID = n.ID
+		ws.IndexNode(n.ID, "Concept: durability with emergencetermalpha", nil)
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch: %v", err)
+	}
+	if hits := eng.BM25Full().Search([]string{"emergencetermalpha"}, 5, nil); len(hits) != 0 {
+		t.Fatalf("emergence path landed concept text in BM25: %+v", hits)
+	}
+
+	// Synthesis-rewrite path: SetContentProp on content_full.
+	eng.Lock()
+	eng.SetContentProp(conceptID, "content_full", "The synthesized theme with synthesistermbeta.")
+	if _, err := eng.Save("curation: enrich concepts"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+	if hits := eng.BM25Full().Search([]string{"synthesistermbeta"}, 5, nil); len(hits) != 0 {
+		t.Fatalf("synthesis rewrite landed concept text in BM25: %+v", hits)
+	}
+}

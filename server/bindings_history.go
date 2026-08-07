@@ -116,7 +116,7 @@ func (s *Server) registerHistoryMCPTools(mcpServer *mcp.Server) {
 		Text   string `json:"text" jsonschema:"lexical query matched against version content and change_notes (case-insensitive substring)"`
 		ID     string `json:"id,omitempty" jsonschema:"scan only this record's versions (fastest scope)"`
 		Scope  string `json:"scope,omitempty" jsonschema:"'candidates' (default: retrieval nominates records, then their histories are scanned) or 'store' (budgeted scan of every logical version; slow on large stores but finds knowledge revised away entirely)"`
-		Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan in store scope (default 20000, max 200000)"`
+		Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan per call, any scope (default 20000, max 200000)"`
 		Since  string `json:"since,omitempty" jsonschema:"only match versions on or after this date (YYYY-MM-DD or RFC3339)"`
 		Until  string `json:"until,omitempty" jsonschema:"only match versions up to this date (YYYY-MM-DD or RFC3339)"`
 	}

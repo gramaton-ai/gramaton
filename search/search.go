@@ -149,6 +149,7 @@ type Query struct {
 	Sort            string            // field to sort by (default: effective_score)
 	Order           string            // "asc" or "desc" (default: "desc")
 	Random          bool              // return random results (ignores sort/score)
+	SkipRerank      bool              // skip the LLM rerank stage (internal nomination queries that run under the engine lock)
 	Meta            map[string]string // meta.* property filters (key -> value, exact match)
 	Store           string            // store filter: "memory", "sessions", or "all" (default: "all")
 }
@@ -242,7 +243,7 @@ type Result struct {
 	ParentID            string   `json:"parent_id,omitempty"`             // non-empty for observations (D14)
 	ParentSummary       string   `json:"parent_summary,omitempty"`        // parent's content_short (D14 rev)
 	ParentContentLength int      `json:"parent_content_length,omitempty"` // parent's content_full byte length (D14 rev)
-	MatchedBy           string   `json:"matched_by,omitempty"`            // "vector", "bm25", or "both" (D14)
+	MatchedBy           string   `json:"matched_by,omitempty"`            // "vector", "bm25", "both" (D14), or "concept_scan"
 	Keywords            []string `json:"keywords,omitempty"`
 	SummaryShort        string   `json:"summary_short,omitempty"`
 	MetadataSummary     string   `json:"metadata_summary"`
@@ -389,6 +390,12 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			threshold = 0.7
 		}
 		for _, cm := range ScanConceptMatches(t.graph, queryVec, threshold) {
+			// The scan bypasses the index path, so metadata filters
+			// applied at candidate-set construction must be honored
+			// here -- membership is the filter verdict.
+			if _, ok := candidateSet[cm.ID]; !ok {
+				continue
+			}
 			if _, exists := similarities[cm.ID]; exists {
 				continue
 			}
@@ -495,7 +502,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	// Step 4b: LLM reranking (optional). Send top-N candidates to
 	// the LLM for relevance scoring. Only runs for text queries when
 	// reranking is enabled and an LLM is available.
-	if q.Text != "" && t.reranker != nil && t.cfg.LLM.Rerank.Enabled {
+	if q.Text != "" && !q.SkipRerank && t.reranker != nil && t.cfg.LLM.Rerank.Enabled {
 		rerankN := t.cfg.LLM.Rerank.Candidates
 		if rerankN <= 0 {
 			rerankN = 50

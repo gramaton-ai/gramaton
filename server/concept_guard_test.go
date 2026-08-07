@@ -33,9 +33,10 @@ func addConcept(t *testing.T, eng *core.Engine, keyword string) string {
 	return n.ID
 }
 
-// TestConceptMachineOwnedGuards pins D-K's write boundary: manual
-// update/classify/resolve/link on a concept are refused with a
-// redirecting error; the member records remain the editable surface.
+// TestConceptMachineOwnedGuards pins the machine-owned write
+// boundary: manual update/classify/resolve/link on a concept are
+// refused with a redirecting error; the member records remain the
+// editable surface.
 func TestConceptMachineOwnedGuards(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	ctx := context.Background()
@@ -68,6 +69,13 @@ func TestConceptMachineOwnedGuards(t *testing.T) {
 	// The member record itself stays fully editable.
 	if _, apiErr := srv.api.Classify(ctx, api.ClassifyRequest{ID: recordID, Confidence: &conf}); apiErr != nil {
 		t.Fatalf("classify on a record: %v", apiErr)
+	}
+
+	// History search on a concept id redirects instead of suggesting a
+	// backfill that could never index it.
+	_, hsErr := srv.api.HistorySearch(ctx, api.HistorySearchRequest{Text: "anything", ID: conceptID})
+	if hsErr == nil || hsErr.Code != "input_error" || !strings.Contains(hsErr.Message, "derived data") {
+		t.Fatalf("history search on concept = %+v, want a derived-data redirect", hsErr)
 	}
 }
 
