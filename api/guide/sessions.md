@@ -76,8 +76,9 @@ Resolve with `gramaton_session_resolve_held`, per segment:
 - `action: "allow_similar"` -- the two are genuinely distinct;
   create the Memory record now.
 
-Bulk `allow_similar` also exists on `session_save` itself for
-re-sends that acknowledge specific held record IDs.
+`session_save` also accepts `allow_similar: true` to disable
+promotion holds for a whole commit -- a bulk-ingestion escape
+(benchmark or migration imports), never a standing default.
 
 ## Data Model
 
