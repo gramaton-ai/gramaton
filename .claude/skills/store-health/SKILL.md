@@ -1,6 +1,6 @@
 ---
 name: store-health
-description: Use to diagnose the health of a Gramaton knowledge store. Aggregates the standard health probes into a single report — pending classification, orphans, duplicates, stale-temporal, refuted, expiring, ephemeral survivors. Identifies when piggyback curation should run and when dedup is worth attempting. Triggers include "check store health", "is my store healthy", "audit the knowledge store", "what does the store look like", "store status". Works against any Gramaton instance (the dev's dogfood store or a user's production store).
+description: Use to diagnose the health of a Gramaton knowledge store. Aggregates the standard health probes into a single report — pending classification, orphans, duplicates, stale-temporal, refuted, expiring, ephemeral survivors. Identifies when piggyback curation should run and when duplicate consolidation is worth attempting. Triggers include "check store health", "is my store healthy", "audit the knowledge store", "what does the store look like", "store status". Works against any Gramaton instance (the dev's dogfood store or a user's production store).
 ---
 
 # store-health
@@ -9,7 +9,7 @@ description: Use to diagnose the health of a Gramaton knowledge store. Aggregate
 
 Single-call diagnostic audit of a Gramaton knowledge store. Bundles seven probes — total stats, pending classification, orphans, duplicates, stale temporal records, refuted/expiring records, heavily-connected concept candidates — into one structured report with actionable recommendations.
 
-The value over running `gramaton_stats` plus a few ad-hoc searches is the **cross-probe synthesis**: pending count interpreted against autonomous-curation availability ("pending > 0 AND autonomous: false → run curation-sweep"); orphan count interpreted against age ("many AGED orphans → capture pipeline isn't linking, investigate"); duplicate clusters interpreted against the auto-supersession threshold ("pre-existing pre-0.92 duplicates → optional dedup pass with consent"). Raw probe output gives you numbers; this skill gives you what to do.
+The value over running `gramaton_stats` plus a few ad-hoc searches is the **cross-probe synthesis**: pending count interpreted against autonomous-curation availability ("pending > 0 AND autonomous: false → run curation-sweep"); orphan count interpreted against age ("many AGED orphans → capture pipeline isn't linking, investigate"); duplicate clusters interpreted against the save-guard hold threshold ("pre-guard legacy duplicates → optional consolidation pass with consent"). Raw probe output gives you numbers; this skill gives you what to do.
 
 When NOT to use:
 - You only need one stat (use `gramaton_stats` directly).
@@ -60,7 +60,7 @@ Records with zero edges. Some are legitimate (brand-new captures not yet linked 
 gramaton_duplicates(threshold=0.92)
 ```
 
-Auto-supersession handles >= 0.92 on new captures, but pre-existing duplicates from before that feature landed still exist. Report the top 5 clusters. If the user wants them resolved, chain into a dedup pass (see "Remediation" below).
+The save guard holds new near-verbatim saves (default >= 0.94 cosine), so fresh duplicates should be rare. Anything this probe finds is pre-guard legacy or a pair that embedded below the hold threshold. Report the top 5 clusters. If the user wants them consolidated, chain into the consolidation pass (see "Remediation" below).
 
 ### 5. Stale temporal records
 
@@ -68,7 +68,7 @@ Auto-supersession handles >= 0.92 on new captures, but pre-existing duplicates f
 gramaton_search(temporality="temporal", sort="staleness", order="desc", top=10)
 ```
 
-Temporal records that haven't been verified in a long time. These are candidates for re-verification or supersession. Don't delete — that violates tenet 8. Surface the list for the user to review.
+Temporal records that haven't been verified in a long time. These are candidates for re-verification, a `gramaton_update` to the current state, or resolution if they concluded. Don't delete — that violates tenet 8. Surface the list for the user to review.
 
 ### 6. Refuted or expiring
 
@@ -112,20 +112,20 @@ Use `[OK]` / `[ATTENTION]` / `[ACTION]` as severity markers. `[ACTION]` means th
 ## Common recommendations
 
 - Pending > 0 AND autonomous = false → `curation-sweep` skill
-- Large duplicate clusters → offer a dedup pass (section below)
+- Large duplicate clusters → offer a consolidation pass (section below)
 - Many aged orphans → investigate whether capture-flow is running `gramaton_link`
 - Refuted records high-ranking in searches → report to user; may need embedding re-visit
 - No recent captures → check whether session extraction is firing
 
-## Optional dedup remediation
+## Optional duplicate consolidation
 
-If the user wants duplicates resolved (not automatic — destructive changes require consent):
+If the user wants duplicates consolidated (not automatic — destructive changes require consent):
 
 For each duplicate cluster from step 4:
 1. `gramaton_inspect` each record in the cluster.
 2. Pick the canonical record (highest confidence, most edges, most recent asserted_as_of).
-3. Propose: set `valid_until` on the non-canonical records (marks as historical), add `supersedes` edges from canonical → others.
-4. Present the plan to the user. On approval, apply with `gramaton_update` + `gramaton_link`. Never `gramaton_delete` for dedup — use supersession.
+3. Propose: fold any distinct material from the others into the canonical record (`gramaton_update` with `content` or `content_append`, passing `expected_version`), then `gramaton_resolve(resolution="superseded")` the non-canonical records. Add a `supersedes` edge from canonical → resolved only when the lineage itself is worth navigating.
+4. Present the plan to the user, then apply on approval. Never `gramaton_delete` for consolidation — resolved records stay in the graph and their history stays in the commit log (tenet 8).
 
 ## Fallback
 

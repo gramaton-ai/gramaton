@@ -87,17 +87,21 @@ For each related record with high relevance:
 gramaton_link(
     id=<id>,
     target_id=<related_id>,
-    edge_type=<type>,       # related_to, supersedes, refutes, elaborates, etc.
+    edge_type=<type>,       # related_to, refutes, elaborates, etc.
     edge_weight=<0.0-1.0>,
 )
 ```
 
 Pick edge type based on actual relationship, not defaulting to `related_to`:
-- `supersedes` — this record replaces the other
 - `refutes` — this record contradicts the other
 - `elaborates` — this record is a deeper treatment of the other
 - `derived_from` — this record was extracted from the other
 - `related_to` — genuinely just related, no stronger relationship
+- `supersedes` — this record replaces the other. Rare under mutable
+  records: a revision should be folded into the existing record with
+  `gramaton_update`, not saved beside it. Reserve this edge for when
+  the lineage itself is knowledge (a decision formally reversing an
+  earlier one).
 
 Skip linking if nothing is actually related — a sparse graph beats a noisy one.
 
