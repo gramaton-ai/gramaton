@@ -19,8 +19,9 @@ cosine-similar (default 0.92) and reports up to --max-pairs of them (default
 50), ranked by similarity. A high score means two records likely carry the
 same knowledge.
 
-Read-only diagnostic: it surfaces consolidation candidates for you or
-curation to merge, link, or supersede, and never writes anything itself.
+Read-only diagnostic: it surfaces consolidation candidates and never
+writes anything itself. Consolidate a confirmed pair by folding the
+content into one record (gramaton update) and resolving the other.
 Lower the threshold to widen the net (more, looser candidates); raise it to
 narrow to near-identical pairs.
 

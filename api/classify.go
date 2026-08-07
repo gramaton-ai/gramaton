@@ -17,7 +17,7 @@ type ClassifyRequest struct {
 	EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 	Importance      *float64 `json:"importance,omitempty" jsonschema:"number between 0.0 and 1.0"`
 	Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+	SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 }
 
 // ClassifyResponse confirms the record was promoted.

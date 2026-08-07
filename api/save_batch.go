@@ -147,9 +147,9 @@ const SaveBatchDescription = `Store up to 500 knowledge records in a single call
 
 Use this when the caller has already collected a batch (migration, file import, conversation extraction). For a single record use gramaton_save; for tasks/checklists use gramaton_collection_add_batch.
 
-client_token + an exact-match request body returns the prior job_id idempotently (safe to retry on transport failure). A different body with the same token is rejected with conflict. skip_supersession=true disables auto-dedup for migration imports.
+client_token + an exact-match request body returns the prior job_id idempotently (safe to retry on transport failure). A different body with the same token is rejected with conflict.
 
-Per-item failures land in the response's failed[] array (the batch keeps going); the only request-level errors are validation (item count, byte budget) and client_token reuse with a different body.`
+Items that closely match an existing record (or an earlier item in the same batch) are HELD rather than created and land in the response's held[] array with the similar record's details -- update that record instead, or re-send with allow_similar naming the acknowledged record IDs. Per-item failures land in failed[] (the batch keeps going); the only request-level errors are validation (item count, byte budget) and client_token reuse with a different body.`
 
 // SaveBatch dispatches to either the synchronous core or the
 // async runner based on req.Wait. Both paths share envelope

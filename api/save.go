@@ -26,7 +26,7 @@ type SaveRequest struct {
 	EpistemicStatus        string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 	Importance             *float64       `json:"importance,omitempty" jsonschema:"number between 0.0 and 1.0"`
 	Keywords               []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings for search"`
-	SummaryShort           string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+	SummaryShort           string         `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 	SourceRef              string         `json:"source_ref,omitempty" jsonschema:"source URL or path"`
 	SourceCredibility      *float64       `json:"source_credibility,omitempty" jsonschema:"number between 0.0 and 1.0"`
 	TestimonyHops          *int64         `json:"testimony_hops,omitempty" jsonschema:"how many people removed from the first-hand source (0=first-hand, 1=heard from someone who was there, etc.)"`

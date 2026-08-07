@@ -89,7 +89,7 @@ See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step pro
 
 `LoadEngine` / `LoadEngineWithOptions` are the public constructors. Options support dependency injection for tests (`WithEmbedder`, `WithLLM`, `WithVectorIndex`).
 
-The Engine never knows about the transports or the api/ layer. It exposes primitives (`Graph()`, `VecIdx()`, `PropIdx()`, `CheckDedup()`, `IndexNode()`, `Save()`, `Lock()`/`Unlock()`) that `api/` methods compose into operations.
+The Engine never knows about the transports or the api/ layer. It exposes primitives (`Graph()`, `VecIdx()`, `PropIdx()`, `ScanSimilarVec()`, `IndexNode()`, `Save()`, `Lock()`/`Unlock()`) that `api/` methods compose into operations.
 
 ### 4. Data layer (`graph/`, `index/`, `storage/`)
 
@@ -120,8 +120,8 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 |---------|---------|
 | `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
 | `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
-| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, dedup, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. Per-collection eligibility is gated by orthogonal behavior knobs on the collection node (`curation`, `supersession`, `contradictions`, `clear_mode`); `EffectiveCurationFor(record)` resolves the effective level by walking `member_of` edges. New ad-hoc collections default to `curation=none`; the standard templates (`backlog`, `todo`, `reading-list`, `journal`, `references`) opt in to `curation=standard` and declare a `content_fields` list naming the fields the LLM treats as the item's content. |
-| `dedup/` | Near-duplicate detection via vector similarity + Jaccard guard. |
+| `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. Per-collection eligibility is gated by orthogonal behavior knobs on the collection node (`curation`, `contradictions`, `clear_mode`); `EffectiveCurationFor(record)` resolves the effective level by walking `member_of` edges. New ad-hoc collections default to `curation=none`; the standard templates (`backlog`, `todo`, `reading-list`, `journal`, `references`) opt in to `curation=standard` and declare a `content_fields` list naming the fields the LLM treats as the item's content. |
+| `similarity/` | Save-guard similar-record detection: vector scan + Jaccard verification powering the hold and advisory bands. |
 | `chunking/` | Long-content splitting before embedding. |
 
 ### Providers
@@ -197,16 +197,28 @@ The `OpenFiles` body, in order: format-version check, bbolt open, index set cons
 Client → POST /v1/records → api.Save
   1. Validate request (content length, enums, meta shape)
   2. Pre-embed content_short outside the lock (via a.engine.Embedder())
-  3. engine.Lock()
-  4. Create node with properties (content_full, processing_status, context_*, meta.*, timestamps)
-  5. IndexNode for BM25 + any meta text
-  6. Attach pre-computed embedding via applyPreEmbedded; pick best vector for the search index
-  7. CheckDedup: if cosine ≥ threshold and action = reject → rollback node, return ErrConflict
-                 if action = supersede → mark older record historical, create supersedes edge
-  8. Save incremental prolly update
-  9. engine.Unlock()
-  10. Serialize CaptureResponse (id, warnings, superseded[])
+  3. Save-guard scan off-lock (under RLock): capture WriteSeq, ScanSimilarVec
+     → Outcome{Hold, Advisory}
+  4. engine.Lock()
+  5. Delta re-scan: re-check records committed since the captured WriteSeq
+     (recent-writes ring) so a similar record that landed between scan and
+     lock still holds
+  6. Hold (unless acknowledged via allow_similar): nothing is created —
+     return the held_similar response (existing record's id, content,
+     similarity, version token) with HTTP 409
+  7. Create node with properties (content_full, processing_status, context_*, meta.*, timestamps)
+  8. IndexNode for BM25 + any meta text
+  9. Attach pre-computed embedding via applyPreEmbedded; note the write in
+     the recent-writes ring; pick best vector for the search index
+  10. Save incremental prolly update
+  11. engine.Unlock()
+  12. Serialize SaveResponse (id, warnings, optional advisory naming the
+      most similar record in the band below the hold threshold)
 ```
+
+Embed failure fails open: the record commits with a
+`similar_check_pending` warning and the deferred check runs at
+re-embed time.
 
 ### Save batch (sync)
 
@@ -290,13 +302,16 @@ Client → POST /v1/sessions/{id}/save → api.SessionSave
   2. For each segment:
      a. Pre-embed summary_short outside the lock
      b. engine.Lock()
-     c. Create a Session segment node (BM25-indexed)
-     d. If promote_to_memory (default true): create a linked Memory record with the same content,
-        check dedup, run auto-supersession against prior Memory records
-     e. Link the Session segment to the Memory record via extracted_as edge
-     f. engine.Unlock()
+     c. Create a Session segment node (BM25-indexed) — the segment always lands
+     d. If promote_to_memory (default true): save-guard check against prior
+        Memory records. Clear → create the linked Memory record + extracted_as
+        edge. Hold (unless acknowledged via allow_similar) → persist the hold
+        state on the segment instead; no Memory record is created
+     e. engine.Unlock()
   3. Single final Save for the batch
-  4. Return per-segment IDs and any supersession records
+  4. Return per-segment IDs plus held_promotions; unresolved holds are
+     re-presented by the next prepare and resolved via
+     gramaton_session_resolve_held
 ```
 
 ## Concurrency model

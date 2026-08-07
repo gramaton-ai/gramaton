@@ -341,7 +341,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		EpistemicStatus string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64       `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration (YYYY-MM-DD or RFC3339); 'clear' removes."`
 		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata"`
@@ -375,7 +375,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_classify",

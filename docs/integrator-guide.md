@@ -77,8 +77,8 @@ If the answer is ambiguous, start with Memory. It's easier to escalate a Memory 
 - Trivial exchanges, greetings, confirmation messages
 - Information already in the codebase or git history ("file X exists", "function Y is called from Z")
 - Temporary debugging state
-- Intermediate reasoning that got superseded inside the same session
-- Near-duplicates of existing records (the server auto-supersedes at ≥0.92 cosine — don't pre-check)
+- Intermediate reasoning that got overtaken inside the same session
+- Near-duplicates of existing records — don't pre-check for them either; the server holds a near-verbatim save (default ≥0.94 cosine) and returns the existing record so the agent can update it instead
 
 ### Save raw content, not summaries
 
@@ -240,9 +240,8 @@ Each name must reference a declared `type=string` field; non-string types are re
 
 ### Adding, listing, updating, moving
 
-- `gramaton_collection_create` — create a collection. Optional `schema` for field types and required fields (with optional `content_fields` declaration; see above), optional `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`, `journal`, `references`) to seed schema + behavior fields, optional behavior fields. The four orthogonal knobs:
+- `gramaton_collection_create` — create a collection. Optional `schema` for field types and required fields (with optional `content_fields` declaration; see above), optional `template` (one of `backlog`, `todo`, `reading-list`, `shopping-list`, `packing-list`, `journal`, `references`) to seed schema + behavior fields, optional behavior fields. The three orthogonal knobs:
   - `curation` — `none` (skip the LLM pipeline; default for ad-hoc collections) or `standard` (classify, summarize, observation_extract, concept synthesis on items; requires `content_fields`).
-  - `supersession` — `off` (no auto-supersede), `on` (auto-supersede within the collection at ≥0.92 cosine), `store` (auto-supersede against the whole store).
   - `contradictions` — `off` or `on` (gate this collection's items into the LLM contradiction-detection pipeline).
   - `clear_mode` — `resolve` (default; `gramaton_resolve` flips item status) or `unlink` (item is removed from the collection rather than resolved; useful for transient lists).
 - `gramaton_collection_add` — validates fields against schema, creates an item node, returns its ID.

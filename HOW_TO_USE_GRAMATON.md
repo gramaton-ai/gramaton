@@ -255,9 +255,8 @@ template by name ("create a backlog template called X"). For unique
 shapes, describe the fields and the agent builds the schema.
 
 Templates also preset the collection's behavior knobs: whether items
-get LLM curation (classification, summary, contradiction detection),
-whether duplicate items get auto-superseded, and what "close item"
-means for that shape. Most active-tracking templates (backlog, todo,
+get LLM curation (classification, summary, contradiction detection)
+and what "close item" means for that shape. Most active-tracking templates (backlog, todo,
 reading-list, journal, references) opt in to curation; transient
 shapes (shopping-list, packing-list) skip it. You don't normally
 think about these — the template handles them.
@@ -348,12 +347,14 @@ See above — sessions don't close tickets. Close them explicitly.
 
 **"There are duplicates of the same decision."**
 
-Gramaton auto-supersedes when a new save is very similar (cosine
->= 0.92) to an existing record — the older one gets `valid_until`
-and a `supersedes` edge. If you're seeing duplicates anyway, the
-two phrasings probably embedded too far apart for the threshold.
-Ask the agent to run `gramaton_duplicates(threshold=0.85)` to find
-near-misses, then merge or supersede manually.
+Gramaton refuses a save that is near-verbatim (cosine >= 0.94) of
+an existing record — the agent is handed the existing record and
+told to update it instead. If you're seeing duplicates anyway, the
+two phrasings probably embedded too far apart for that threshold,
+or the records predate the guard. Ask the agent to run
+`gramaton_duplicates(threshold=0.85)` to find near-misses, then
+consolidate: fold the content into one record with
+`gramaton_update` and resolve the other.
 
 **"I asked for a summary and got pre-digested content back."**
 
@@ -375,10 +376,10 @@ plus the record's edges. You don't need to know the tool name.
 
 Memory records have a temporality. `durable` records (most
 decisions) decay slowly over years. If something stale keeps
-surfacing, the right move is usually to save the *new* state
-explicitly — auto-supersession will retire the old one. Don't try
-to "fix" search ranking by tweaking config; the freshness signal
-works.
+surfacing, the right move is to update the record to the *new*
+state — or, if it genuinely concluded, have the agent resolve it
+so it sinks in the ranking. Don't try to "fix" search ranking by
+tweaking config; the freshness signal works.
 
 **"The agent keeps saying it's stuck on classification."**
 

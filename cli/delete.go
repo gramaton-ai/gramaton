@@ -16,7 +16,8 @@ var deleteCmd = &cobra.Command{
 Recoverable via gramaton revert.
 
 This is a repair tool, not a knowledge management tool. Normal
-practice is to supersede, not delete (tenet 8).`,
+practice is to update a record whose knowledge changed, or resolve
+one that concluded — not delete it (tenet 8).`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runDelete,
 }
