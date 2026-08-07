@@ -105,6 +105,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton backfill collapse`** migrates stores that predate
+  mutable records: it folds auto-supersession's chains out of the
+  live graph, one live record per fact. Selection is a strict
+  conjunction (inbound `supersedes` edge AND `resolution=superseded`
+  AND `valid_until`), so manual lineage edges are reported and kept,
+  never swept. Victims are archived to a JSONL file next to the
+  store before deletion, session-segment provenance re-points to the
+  surviving successor, observation children cascade, and everything
+  lands in one labeled commit. Chains with below-floor edge weights
+  (`--min-weight`, default 0.92) and victims in collections their
+  successor does not share defer to manual review; a report-only
+  census lists live near-duplicate pairs and orphaned superseded
+  records. Plan-by-default; `--apply` takes a store backup first and
+  prints its path. Offline command — stop the server first.
+
 - **`gramaton_session_resolve_held`** resolves held session Memory
   promotions: `update_target` wires the segment's `extracted_as`
   provenance to the record you already revised (no new record);
@@ -113,6 +128,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on the segment and are re-presented by every
   `gramaton_session_prepare`. `gramaton_session_save` accepts
   `allow_similar: true` as a whole-commit bulk-ingestion escape.
+
+### Fixed
+
+- **Revert, branch checkout, and merge no longer corrupt edges.**
+  All three loaded the target commit into a graph sharing the
+  populated bbolt edge store, which makes the loader skip edge
+  reload entirely: the target's nodes arrived under the CURRENT edge
+  set, so a revert did not restore deleted edges, a checked-out
+  branch showed edges from the branch it replaced, and reverted-away
+  nodes resurrected with their edges missing. State-changing loads
+  now stage the commit into a fresh graph (edges always from the
+  commit's tree) and adopt it by rewriting the shared store's
+  contents under the write lock.
 
 ## [0.3.0-alpha.6] - 2026-07-06
 

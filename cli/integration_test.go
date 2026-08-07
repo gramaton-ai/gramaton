@@ -67,6 +67,10 @@ func TestMain(m *testing.M) {
 	os.MkdirAll(cfg.DataDir, 0o755)
 	cfg.Embedding.Provider = ""
 	cfg.LLM.Provider = ""
+	// The scheduler would otherwise write a real archive into the
+	// user's global backup dir (Backup.Dir defaults empty, which
+	// resolves to ~/.gramaton/backups even for a temp-dir store).
+	cfg.Backup.Enabled = false
 	config.Save(cfg, dir+"/config.yaml")
 
 	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{

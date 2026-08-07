@@ -124,10 +124,12 @@ func TestBuildPlanChainWalksToLiveHead(t *testing.T) {
 	}
 }
 
-// TestBuildPlanMixedWeightDefersWholeComponent pins F5: one
-// below-floor edge defers the entire chain, not just its own pair --
-// partial collapse must not strand the tail's selection marker.
-func TestBuildPlanMixedWeightDefersWholeComponent(t *testing.T) {
+// TestBuildPlanMixedWeightPerVictim pins the F5 disposition the real
+// stores demanded: eligibility is per victim (its own selection-edge
+// weight), a below-floor victim defers, and the tail whose selection
+// edge the collapse will cascade away is recorded as a stranded_tail
+// anomaly for the props-keyed follow-up -- never silently dropped.
+func TestBuildPlanMixedWeightPerVictim(t *testing.T) {
 	eng := testutil.NewEngine(t)
 
 	a := addRecord(t, eng, "head", false)
@@ -138,16 +140,23 @@ func TestBuildPlanMixedWeightDefersWholeComponent(t *testing.T) {
 	save(t, eng)
 
 	plan := BuildPlan(eng, DefaultPlanOptions())
-	if len(plan.Victims) != 0 {
-		t.Fatalf("victims = %+v, want none (mixed-weight component defers whole)", plan.Victims)
+	if len(plan.Victims) != 1 || plan.Victims[0].ID != b {
+		t.Fatalf("victims = %+v, want only the strong-edge victim %s", plan.Victims, b)
 	}
-	if len(plan.Deferred) != 2 {
-		t.Fatalf("deferred = %+v, want both chain victims", plan.Deferred)
+	if len(plan.Deferred) != 1 || plan.Deferred[0].VictimID != c {
+		t.Fatalf("deferred = %+v, want the weak-edge victim %s", plan.Deferred, c)
 	}
-	for _, d := range plan.Deferred {
-		if !strings.Contains(d.Reason, "below the 0.92 floor") {
-			t.Errorf("deferral reason %q does not name the weight floor", d.Reason)
+	if !strings.Contains(plan.Deferred[0].Reason, "below the 0.92 floor") {
+		t.Errorf("deferral reason %q does not name the weight floor", plan.Deferred[0].Reason)
+	}
+	var stranded bool
+	for _, an := range plan.Anomalies {
+		if an.Kind == "stranded_tail" && an.NodeID == c {
+			stranded = true
 		}
+	}
+	if !stranded {
+		t.Fatalf("deleting %s cascades %s's selection edge; expected a stranded_tail anomaly, got %+v", b, c, plan.Anomalies)
 	}
 }
 

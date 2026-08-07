@@ -17,13 +17,15 @@ import (
 
 // PlanOptions tunes plan construction.
 type PlanOptions struct {
-	// MinWeight is the per-edge floor for auto-collapse. Supersedes
-	// edges written by the retired auto-supersession path carry the
-	// pair's cosine similarity (>= 0.92 by construction); edges from
-	// the retired LLM contradiction verdict carry the model's
-	// confidence instead and can sit lower. A component containing
-	// any edge below the floor is deferred whole to manual review --
-	// per-edge skipping could strand chain tails.
+	// MinWeight is the selection-edge floor for auto-collapse.
+	// Supersedes edges written by the retired auto-supersession path
+	// carry the pair's cosine similarity (>= 0.92 by construction);
+	// edges from the retired LLM contradiction verdict carry the
+	// model's confidence instead and can sit lower. A victim whose
+	// best inbound edge is below the floor defers to manual review;
+	// a tail whose selection edge a deletion will cascade away is
+	// recorded as a stranded_tail anomaly for the props-keyed
+	// follow-up.
 	MinWeight float64
 	// ForkCensusThreshold is the similarity floor for the report-only
 	// census of live near-duplicate pairs (the co-current class the
@@ -73,7 +75,12 @@ type Deferred struct {
 
 // Anomaly is a store artifact the plan reports but never touches.
 type Anomaly struct {
-	Kind   string `json:"kind"` // lineage_edge_on_current | superseded_props_no_edge
+	// Kind: lineage_edge_on_current (manual supersedes edge, target
+	// not superseded), superseded_props_no_edge (selection props but
+	// no inbound edge), stranded_tail (a deletion this run will
+	// cascade the tail's selection edge away; its props re-select it
+	// in the next run's props-keyed census).
+	Kind   string `json:"kind"`
 	EdgeID string `json:"edge_id,omitempty"`
 	NodeID string `json:"node_id"`
 	Detail string `json:"detail"`
@@ -160,60 +167,28 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 	}
 	it.Close()
 
-	// Chains plan as edge-connected components over the selected
-	// edges, so a mixed-weight or cyclic chain defers WHOLE -- a
-	// partial collapse must not destroy a tail's selection marker.
-	parent := map[string]string{}
-	var find func(string) string
-	find = func(x string) string {
-		if parent[x] == "" || parent[x] == x {
-			parent[x] = x
-			return x
-		}
-		root := find(parent[x])
-		parent[x] = root
-		return root
-	}
-	union := func(a, b string) { parent[find(a)] = find(b) }
-	for _, se := range selected {
-		union(se.edge.SourceID, se.edge.TargetID)
-	}
-	componentEdges := map[string][]selEdge{}
-	for _, se := range selected {
-		root := find(se.victim)
-		componentEdges[root] = append(componentEdges[root], se)
-	}
-
-	deferredVictims := map[string]string{} // victim -> reason
-	for _, edges := range componentEdges {
-		var reason string
-		for _, se := range edges {
-			if se.edge.Weight < opts.MinWeight {
-				reason = fmt.Sprintf("component contains edge %s at weight %.3f below the %.2f floor", se.edge.ID, se.edge.Weight, opts.MinWeight)
-				break
-			}
-		}
-		if reason == "" && componentHasCycle(edges) {
-			reason = "supersedes cycle in component"
-		}
-		if reason != "" {
-			for _, se := range edges {
-				if _, dup := deferredVictims[se.victim]; !dup {
-					deferredVictims[se.victim] = reason
-				}
-			}
-		}
-	}
-
-	// Collection co-membership (per victim): the successor must share
-	// every collection the victim belongs to, or the pair defers --
-	// deleting the victim would silently shrink a collection the
-	// successor never joined.
+	// Eligibility is per victim, keyed on its best (max-weight)
+	// inbound selection edge -- the one that defines its successor.
+	// Mixed-weight CHAINS are not deferred whole: on real stores the
+	// retired LLM-confidence edges (weights ~0.7) glue hundreds of
+	// records into mega-components, and component-level deferral
+	// collapses almost nothing. Instead, a victim whose own edge sits
+	// below the floor defers, and any tail whose selection marker a
+	// deletion would cascade away is recorded in the anomaly list for
+	// the props-keyed follow-up (its resolution+valid_until props
+	// survive and re-select it there).
 	bestInbound := map[string]*graph.Edge{}
 	for _, se := range selected {
 		cur := bestInbound[se.victim]
 		if cur == nil || se.edge.Weight > cur.Weight {
 			bestInbound[se.victim] = se.edge
+		}
+	}
+
+	deferredVictims := map[string]string{} // victim -> reason
+	for victimID, e := range bestInbound {
+		if e.Weight < opts.MinWeight {
+			deferredVictims[victimID] = fmt.Sprintf("selection edge weight %.3f below the %.2f floor", e.Weight, opts.MinWeight)
 		}
 	}
 	memberOf := func(id string) []string {
@@ -250,45 +225,73 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 		return "", false
 	}
 
-	for victimID := range victimSet {
-		if reason, def := deferredVictims[victimID]; def {
-			plan.Deferred = append(plan.Deferred, Deferred{VictimID: victimID, Reason: reason})
-			continue
+	// Decision pass, iterated to a fixpoint: a deferral changes which
+	// record is the nearest LIVE successor for victims below it in
+	// the chain (deferred victims survive this run and become valid
+	// provenance targets), and the re-walked successor can in turn
+	// fail the collection check. Victim counts are small; each pass
+	// either defers at least one more victim or stabilizes.
+	successorOf := map[string]string{}
+	for {
+		changed := false
+		successorOf = map[string]string{}
+		for victimID := range victimSet {
+			if _, def := deferredVictims[victimID]; def {
+				continue
+			}
+			if _, ok := g.GetNode(victimID); !ok {
+				continue
+			}
+			succID, ok := liveSuccessor(victimID)
+			if !ok {
+				deferredVictims[victimID] = "no live successor reachable (broken or cyclic chain head)"
+				changed = true
+				continue
+			}
+			vCols := memberOf(victimID)
+			if len(vCols) > 0 {
+				sCols := map[string]bool{}
+				for _, c := range memberOf(succID) {
+					sCols[c] = true
+				}
+				for _, c := range vCols {
+					if !sCols[c] {
+						deferredVictims[victimID] = fmt.Sprintf("collections not shared by successor %s", succID)
+						changed = true
+						break
+					}
+				}
+				if _, def := deferredVictims[victimID]; def {
+					continue
+				}
+			}
+			successorOf[victimID] = succID
 		}
+		if !changed {
+			break
+		}
+	}
+	for victimID, reason := range deferredVictims {
+		plan.Deferred = append(plan.Deferred, Deferred{VictimID: victimID, Reason: reason})
+	}
+
+	// Build pass: victim entries plus stranded-tail anomalies. When
+	// deleting V cascades an outbound supersedes edge onto a
+	// non-collapsing record that carries superseded props, that
+	// record's edge-keyed selection marker dies with V -- record it
+	// so the props-keyed follow-up (the superseded_props_no_edge
+	// census on the next run) is a documented hand-off, not silent
+	// data drift.
+	for victimID, succID := range successorOf {
 		n, ok := g.GetNode(victimID)
 		if !ok {
 			continue
 		}
-		succID, ok := liveSuccessor(victimID)
-		if !ok {
-			plan.Deferred = append(plan.Deferred, Deferred{VictimID: victimID, Reason: "no live successor reachable (broken chain head)"})
-			continue
-		}
-
-		vCols := memberOf(victimID)
-		if len(vCols) > 0 {
-			sCols := map[string]bool{}
-			for _, c := range memberOf(succID) {
-				sCols[c] = true
-			}
-			shared := true
-			for _, c := range vCols {
-				if !sCols[c] {
-					shared = false
-					break
-				}
-			}
-			if !shared {
-				plan.Deferred = append(plan.Deferred, Deferred{VictimID: victimID, Reason: fmt.Sprintf("collections not shared by successor %s", succID)})
-				continue
-			}
-		}
-
 		v := Victim{
 			ID:          victimID,
 			SuccessorID: succID,
 			EdgeWeight:  bestInbound[victimID].Weight,
-			Collections: vCols,
+			Collections: memberOf(victimID),
 		}
 		v.ContentShort, _ = n.Properties.GetString("content_short")
 		v.Resolution, _ = n.Properties.GetString("resolution")
@@ -305,6 +308,26 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 					if nt, _ := child.Properties.GetString("node_type"); nt == "observation" {
 						v.ObservationIDs = append(v.ObservationIDs, e.SourceID)
 					}
+				}
+			}
+		}
+		for _, e := range g.EdgesFrom(victimID) {
+			if e.Type != "supersedes" {
+				continue
+			}
+			if _, collapsing := successorOf[e.TargetID]; collapsing {
+				continue
+			}
+			if tail, ok := g.GetNode(e.TargetID); ok {
+				res, _ := tail.Properties.GetString("resolution")
+				_, hasVU := tail.Properties.GetTimestamp("valid_until")
+				if res == "superseded" && hasVU {
+					plan.Anomalies = append(plan.Anomalies, Anomaly{
+						Kind:   "stranded_tail",
+						EdgeID: e.ID,
+						NodeID: e.TargetID,
+						Detail: fmt.Sprintf("deleting %s cascades this tail's selection edge; its superseded props survive for the props-keyed follow-up", victimID),
+					})
 				}
 			}
 		}
@@ -335,46 +358,6 @@ func BuildPlan(eng *core.Engine, opts PlanOptions) *Plan {
 type selEdge struct {
 	edge   *graph.Edge
 	victim string
-}
-
-// componentHasCycle detects a cycle in one component's selected
-// supersedes edges (successor -> victim direction).
-func componentHasCycle(edges []selEdge) bool {
-	adj := map[string][]string{}
-	nodes := map[string]bool{}
-	for _, se := range edges {
-		adj[se.edge.SourceID] = append(adj[se.edge.SourceID], se.edge.TargetID)
-		nodes[se.edge.SourceID] = true
-		nodes[se.edge.TargetID] = true
-	}
-	const (
-		white = 0
-		gray  = 1
-		black = 2
-	)
-	color := map[string]int{}
-	var visit func(string) bool
-	visit = func(u string) bool {
-		color[u] = gray
-		for _, v := range adj[u] {
-			switch color[v] {
-			case gray:
-				return true
-			case white:
-				if visit(v) {
-					return true
-				}
-			}
-		}
-		color[u] = black
-		return false
-	}
-	for u := range nodes {
-		if color[u] == white && visit(u) {
-			return true
-		}
-	}
-	return false
 }
 
 // isLive reports whether a record carries no valid_until (current
