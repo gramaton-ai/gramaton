@@ -1154,6 +1154,13 @@ func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 	r.Staleness = ComputeStaleness(n, now, t.cfg.Decay)
 
 	r.MetadataSummary = buildMetadataSummary(n.Properties, now)
+	// Conflict visibility (Tenet 12): a record with contradicts edges
+	// must announce the conflict wherever an agent reads it -- two
+	// conflicting records otherwise both present as plain "Current."
+	// at full score.
+	if conflicts := ConflictingRecordIDs(t.graph, n.ID); len(conflicts) > 0 {
+		r.MetadataSummary += ". CONFLICTS with record(s): " + strings.Join(conflicts, ", ") + " -- present both sides or resolve via update"
+	}
 
 	// Infer store origin from knowledge_type.
 	if r.KnowledgeType == "segment" {
@@ -1191,6 +1198,32 @@ func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 
 // buildMetadataSummary generates a one-line LLM-readable summary.
 // Format: "Current. Durable, high-confidence (0.85), well-established. Last accessed 3 days ago."
+// ConflictingRecordIDs returns the IDs a record has contradicts
+// edges with (either direction), deduplicated and capped at 5 -- the
+// metadata_summary consumer needs the signal and a pointer, not an
+// exhaustive list. Callers hold at least a read lock.
+func ConflictingRecordIDs(g graph.NodeReader, id string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(peer string) {
+		if _, dup := seen[peer]; !dup && len(out) < 5 {
+			seen[peer] = struct{}{}
+			out = append(out, peer)
+		}
+	}
+	for _, e := range g.EdgesFrom(id) {
+		if e.Type == "contradicts" {
+			add(e.TargetID)
+		}
+	}
+	for _, e := range g.EdgesTo(id) {
+		if e.Type == "contradicts" {
+			add(e.SourceID)
+		}
+	}
+	return out
+}
+
 func buildMetadataSummary(props graph.Properties, now time.Time) string {
 	var parts []string
 

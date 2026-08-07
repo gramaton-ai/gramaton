@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 // InspectRequest identifies the record to inspect and whether to
@@ -101,6 +103,10 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		ID:              n.ID,
 		Properties:      props,
 		MetadataSummary: inspectMetadataSummary(n.Properties),
+	}
+	// Conflict visibility (Tenet 12): mirror the search renderer.
+	if conflicts := search.ConflictingRecordIDs(a.engine.Graph(), n.ID); len(conflicts) > 0 {
+		out.MetadataSummary += ". CONFLICTS with record(s): " + strings.Join(conflicts, ", ") + " -- present both sides or resolve via update"
 	}
 
 	if isRecordNode(n) {

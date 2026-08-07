@@ -8,6 +8,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
+	"github.com/gramaton-ai/gramaton/search"
 )
 
 // contentAppendSeparator joins existing content and appended text.
@@ -216,6 +217,13 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}
 		a.engine.IndexNode(req.ID, bm25Text, nil)
 
+		// A content change reopens any recorded conflict: drop the
+		// record's contradicts edges (the pair re-enters the
+		// contradiction-detection window) and the contested status
+		// they justified -- on this record, and on each peer left
+		// with no other conflict.
+		a.reopenConflicts(req.ID)
+
 		// Observation children assert the OLD content verbatim at full
 		// score; delete them so curation re-extracts from the current
 		// content. (DeleteNode's edge cascade is safe here: plain
@@ -359,6 +367,54 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 			joinCollectionNames(colls))
 	}
 	return resp, nil
+}
+
+// reopenConflicts removes recordID's contradicts edges (both
+// directions) and its contested status, plus the contested status of
+// any peer left with no remaining conflicts. Called on content
+// change: the revision reopens the question, and with the edges gone
+// the pair re-enters the contradiction-detection window naturally.
+// Caller must hold the engine write lock.
+func (a *API) reopenConflicts(recordID string) {
+	peers := map[string]struct{}{}
+	var edgeIDs []string
+	for _, e := range a.engine.Graph().EdgesFrom(recordID) {
+		if e.Type == "contradicts" {
+			edgeIDs = append(edgeIDs, e.ID)
+			peers[e.TargetID] = struct{}{}
+		}
+	}
+	for _, e := range a.engine.Graph().EdgesTo(recordID) {
+		if e.Type == "contradicts" {
+			edgeIDs = append(edgeIDs, e.ID)
+			peers[e.SourceID] = struct{}{}
+		}
+	}
+	if len(edgeIDs) == 0 {
+		return
+	}
+	for _, id := range edgeIDs {
+		if err := a.engine.Graph().DeleteEdge(id); err != nil {
+			a.log.Warn("reopen conflicts: delete edge failed",
+				"component", "update", "record", recordID, "edge", id, "err", err)
+		}
+	}
+	clearContested := func(id string) {
+		if n, ok := a.engine.Graph().GetNode(id); ok {
+			if es, _ := n.Properties.GetString("epistemic_status"); es == "contested" {
+				if old, has := n.Properties["epistemic_status"]; has {
+					a.engine.PropIdx().Remove(id, "epistemic_status", old)
+					a.engine.Graph().RemoveNodeProperty(id, "epistemic_status")
+				}
+			}
+		}
+	}
+	clearContested(recordID)
+	for peer := range peers {
+		if len(search.ConflictingRecordIDs(a.engine.Graph(), peer)) == 0 {
+			clearContested(peer)
+		}
+	}
 }
 
 // observationChildren returns the observation nodes extracted from

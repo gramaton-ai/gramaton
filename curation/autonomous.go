@@ -2154,6 +2154,20 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 				logger.Error("failed to add contradicts edge (reverse)",
 					"component", "curation", "from", f.idB, "to", f.idA, "err", err)
 			}
+			// Conflict visibility: both records carry contested so
+			// retrieval presents both sides -- EXCEPT records the user
+			// deliberately marked well_established; an LLM verdict
+			// never downgrades a deliberate classification. Contested
+			// clears when either record's content is updated (the
+			// change reopens the question) or manually.
+			for _, id := range []string{f.idA, f.idB} {
+				if node, ok := e.Graph().GetNode(id); ok {
+					es, _ := node.Properties.GetString("epistemic_status")
+					if es != "well_established" && es != "contested" {
+						e.SetProp(id, "epistemic_status", graph.StringProperty("contested"))
+					}
+				}
+			}
 			result.ContradictionsDetected++
 
 		}
