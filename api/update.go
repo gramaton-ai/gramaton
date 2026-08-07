@@ -3,47 +3,95 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
+// contentAppendSeparator joins existing content and appended text.
+const contentAppendSeparator = "\n\n"
+
+// summaryRefreshAppendRatio: when cumulative appended bytes since the
+// last summary_short write exceed this fraction of the content, the
+// record is flagged summary_refresh_pending (the summary is the
+// primary vector anchor, so a summary that no longer represents the
+// content makes the appended knowledge invisible to semantic search).
+// Deliberately a constant, not config, until real use argues for
+// tuning it.
+const summaryRefreshAppendRatio = 0.25
+
+// appendSizeNudgeBytes: an append that grows a record past this size
+// earns a response note suggesting a consolidating rewrite -- append
+// is for additive facts, and unbounded accretion turns a record into
+// an unstructured log.
+const appendSizeNudgeBytes = 8 * 1024
+
 // UpdateRequest is the input to the update operation. ID is set by
 // the transport from the URL path / tool args and is not part of the
 // HTTP request body.
 type UpdateRequest struct {
 	ID              string         `json:"-" jsonschema:"-"` // transport-set
+	Content         string         `json:"content,omitempty" jsonschema:"replaces the record's full content. Compose from the record's CURRENT full content (inspect first); the response echoes the prior content. Re-embeds and re-indexes. Mutually exclusive with content_append."`
+	ContentAppend   string         `json:"content_append,omitempty" jsonschema:"appends to the record's content. For ADDITIVE facts only -- corrections and reversals must use content (replace): appending a correction creates a record that disagrees with itself. Mutually exclusive with content."`
+	ExpectedVersion string         `json:"expected_version,omitempty" jsonschema:"version token from a hold response or inspect. When set, the update applies only if the record's content is unchanged since; on mismatch the response carries version_conflict with the current content, and nothing is applied."`
 	Confidence      *float64       `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
 	Temporality     string         `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
 	KnowledgeType   string         `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
 	EpistemicStatus string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 	Importance      *float64       `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 	Keywords        []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-	SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+	SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding). Provide alongside content rewrites so the anchor tracks the new content."`
 	ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical. Use 'clear' to remove."`
 	AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 	Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata (e.g. {assignee: Sarah, status: done})"`
 }
 
+// VersionConflict reports an expected_version mismatch: the record's
+// content changed since the caller last read it. Nothing was applied;
+// re-judge against the current content and retry with its version.
+type VersionConflict struct {
+	CurrentVersion string `json:"current_version"`
+	CurrentContent string `json:"current_content"`
+	Note           string `json:"note"`
+}
+
 // UpdateResponse carries the id that was updated, whether any field
-// actually changed, and an optional warning when updating a record
-// that's a collection member.
+// actually changed, the prior content when content changed (immediate
+// self-correction safety), the record's post-update version token,
+// and advisory notes.
 type UpdateResponse struct {
-	ID                string `json:"id"`
-	Updated           bool   `json:"updated"`
-	CollectionWarning string `json:"collection_warning,omitempty"`
+	ID                string           `json:"id"`
+	Updated           bool             `json:"updated"`
+	Version           string           `json:"version,omitempty"`
+	PreviousContent   string           `json:"previous_content,omitempty"`
+	VersionConflict   *VersionConflict `json:"version_conflict,omitempty"`
+	Notes             []string         `json:"notes,omitempty"`
+	CollectionWarning string           `json:"collection_warning,omitempty"`
 }
 
 // UpdateDescription is the MCP tool description for gramaton_update.
-const UpdateDescription = "Update metadata on a Memory record. For collection item fields, use gramaton_collection_update instead."
+const UpdateDescription = `Update a Memory record in place -- metadata AND content. This is how knowledge EVOLVES: when new information revises, corrects, or extends something already stored, update the existing record rather than saving a near-duplicate.
 
-// Update sets metadata fields on an existing record. Empty / nil
-// fields leave the existing property unchanged. Setting valid_until
-// to "clear" removes the valid_until + resolution + resolved_at
-// triple (undoes supersession or resolution). Returns ErrInvalid for
-// any unknown enum value or out-of-range numeric. Refuses to update
-// Session segments (append-only per D19).
+content replaces the full content (compose from the record's current full content -- inspect first; the prior content is echoed back). content_append adds text for additive facts only; corrections must replace. Content changes re-embed and re-index the record. Pass expected_version (from a hold response or inspect) so a concurrent revision surfaces as version_conflict instead of a silent overwrite.
+
+For collection item fields, use gramaton_collection_update instead.`
+
+// Update mutates an existing record. Empty / nil fields leave the
+// existing property unchanged. Setting valid_until to "clear" removes
+// the valid_until + resolution + resolved_at triple (reopens a
+// resolved record). Returns ErrInvalid for any unknown enum value or
+// out-of-range numeric. Refuses to update Session segments
+// (append-only per D19).
+//
+// Content changes follow the three-phase pattern: snapshot under
+// RLock, embed off-lock, verify + apply under Lock in one commit.
+// Embedding failure fails the update -- content and vectors move
+// together, always (a present-but-stale embedding would never be
+// re-selected by reembed's gate). The record's observation children
+// are deleted on content change; curation re-extracts from the
+// current content.
 func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *APIError) {
 	if apiErr := a.rejectIfReadOnly("update"); apiErr != nil {
 		return UpdateResponse{}, apiErr
@@ -51,22 +99,183 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 	if req.ID == "" {
 		return UpdateResponse{}, ErrMissing("id is required")
 	}
+	if req.Content != "" && req.ContentAppend != "" {
+		return UpdateResponse{}, ErrInvalid("content and content_append are mutually exclusive")
+	}
+	maxContent := a.engine.Config().Limits.MaxContentLength
+	if maxContent > 0 && (len(req.Content) > maxContent || len(req.ContentAppend) > maxContent) {
+		return UpdateResponse{}, ErrInvalid("content exceeds maximum length")
+	}
 	if err := validateUpdateRequest(&req); err != nil {
 		return UpdateResponse{}, ErrInvalid(err.Error())
 	}
+	contentChanging := req.Content != "" || req.ContentAppend != ""
 
-	a.engine.Lock()
-	defer a.engine.Unlock()
-
+	// Phase 1: snapshot under read lock -- enough to decide what to
+	// embed off-lock. The authoritative content read and version check
+	// happen again under the write lock; this snapshot only shapes the
+	// embed input (appends don't move the summary-anchored vector, so
+	// a concurrent content change between phases cannot invalidate it).
+	var existingSummary string
+	a.engine.RLock()
 	n, ok := a.engine.Graph().GetNode(req.ID)
+	if ok {
+		existingSummary, _ = n.Properties.GetString("content_short")
+		if kt, _ := n.Properties.GetString("knowledge_type"); kt == "segment" {
+			a.engine.RUnlock()
+			return UpdateResponse{}, ErrInvalid("session segments are append-only; use gramaton_session_save to update capture status")
+		}
+	}
+	priorSnapshot := ""
+	if ok && contentChanging {
+		priorSnapshot, _ = n.Properties.GetString("content_full")
+	}
+	a.engine.RUnlock()
 	if !ok {
 		return UpdateResponse{}, ErrNotFound("record not found")
 	}
-	if kt, _ := n.Properties.GetString("knowledge_type"); kt == "segment" {
-		return UpdateResponse{}, ErrInvalid("session segments are append-only; use gramaton_session_save to update capture status")
+
+	// Decide the embed input. The primary vector is anchored to
+	// summary_short: a new summary always re-embeds; content changes
+	// re-embed only when no summary exists (the vector is then
+	// content-derived). A content change that leaves an existing
+	// summary in place keeps the vector and instead flags the summary
+	// for refresh below.
+	embedText := ""
+	switch {
+	case req.SummaryShort != "":
+		embedText = req.SummaryShort
+	case contentChanging && existingSummary == "":
+		newFull := req.Content
+		if req.ContentAppend != "" {
+			newFull = priorSnapshot + contentAppendSeparator + req.ContentAppend
+		}
+		embedText = newFull
+		if cap := MaxSummaryShort(); len(embedText) > cap {
+			embedText = embedText[:cap]
+		}
+	}
+
+	// Phase 2: embed off-lock. Failure fails the update when the
+	// change needed a new vector.
+	var newVec []float32
+	embedModel := ""
+	if embedText != "" && a.engine.Embedder() != nil {
+		vecs, err := a.engine.Embedder().Embed(ctx, []string{embedText})
+		if err != nil {
+			a.log.Warn("update embed failed", "component", "update", "id", req.ID, "err", err)
+			return UpdateResponse{}, ErrUnavailable("embedding failed; update not applied (content and vectors move together)")
+		}
+		newVec = vecs[0]
+		embedModel = a.engine.Embedder().ModelID()
+	}
+
+	// Phase 3: verify and apply under the write lock, one commit.
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	n, ok = a.engine.Graph().GetNode(req.ID)
+	if !ok {
+		return UpdateResponse{}, ErrNotFound("record not found")
+	}
+	currentContent, _ := n.Properties.GetString("content_full")
+	currentToken := recordVersionToken(n)
+	if req.ExpectedVersion != "" && req.ExpectedVersion != currentToken {
+		return UpdateResponse{
+			ID: req.ID,
+			VersionConflict: &VersionConflict{
+				CurrentVersion: currentToken,
+				CurrentContent: currentContent,
+				Note:           "The record's content changed since you read it. Nothing was applied. Re-judge against current_content and retry with expected_version=current_version.",
+			},
+		}, nil
 	}
 
 	updated := false
+	var notes []string
+	previousContent := ""
+
+	if contentChanging {
+		newFull := req.Content
+		if req.ContentAppend != "" {
+			// Rebase the append onto the live content -- the phase-1
+			// snapshot may be stale, and append semantics are "add to
+			// whatever is there".
+			newFull = currentContent + contentAppendSeparator + req.ContentAppend
+		}
+		previousContent = currentContent
+		a.engine.SetProp(req.ID, "content_full", graph.StringProperty(newFull))
+		a.engine.SetProp(req.ID, "updated_at", graph.TimestampProperty(time.Now().UTC()))
+
+		// Re-index BM25 from the new content plus the record's stored
+		// meta values (mirrors save's indexing input).
+		a.engine.BM25Full().Remove(req.ID)
+		bm25Text := newFull
+		if metaText := metaBM25TextFromNode(n); metaText != "" {
+			bm25Text += " " + metaText
+		}
+		a.engine.IndexNode(req.ID, bm25Text, nil)
+
+		// Observation children assert the OLD content verbatim at full
+		// score; delete them so curation re-extracts from the current
+		// content. (DeleteNode's edge cascade is safe here: plain
+		// engine lock, not a shared write-batch transaction.)
+		for _, childID := range a.observationChildren(req.ID) {
+			if child, ok := a.engine.Graph().GetNode(childID); ok {
+				a.engine.PropIdx().RemoveNode(childID, child.Properties)
+				a.engine.VecIdx().Remove(childID)
+				a.engine.BM25Full().Remove(childID)
+				a.engine.Graph().DeleteNode(childID)
+			}
+		}
+
+		// Summary-refresh bookkeeping: the summary is the vector
+		// anchor, so content that drifts from it makes the new
+		// knowledge semantically invisible.
+		if req.SummaryShort == "" && existingSummary != "" {
+			if req.ContentAppend != "" {
+				var appended int64
+				if v, ok := n.Properties.GetInt64("appended_since_summary"); ok {
+					appended = v
+				}
+				appended += int64(len(req.ContentAppend))
+				a.engine.SetProp(req.ID, "appended_since_summary", graph.Int64Property(appended))
+				if float64(appended) > summaryRefreshAppendRatio*float64(len(newFull)) {
+					a.engine.SetProp(req.ID, "summary_refresh_pending", graph.BoolProperty(true))
+					notes = append(notes, "Appended content now exceeds the summary-refresh threshold; the record is flagged for summary regeneration (appended text is BM25-findable but not vector-findable until then). Consider providing an updated summary_short.")
+				}
+			} else {
+				// Full replace with a stale summary: flag immediately.
+				a.engine.SetProp(req.ID, "summary_refresh_pending", graph.BoolProperty(true))
+				notes = append(notes, "Content was replaced but summary_short was not; the record is flagged for summary regeneration. Prefer providing an updated summary_short with content rewrites.")
+			}
+		}
+		if req.ContentAppend != "" && len(newFull) > appendSizeNudgeBytes {
+			notes = append(notes, fmt.Sprintf("This record has grown to %d bytes through appends; consider a consolidating rewrite (content replace).", len(newFull)))
+		}
+		updated = true
+	}
+
+	if req.SummaryShort != "" {
+		a.engine.SetProp(req.ID, "content_short", graph.StringProperty(req.SummaryShort))
+		// A fresh summary resets the refresh bookkeeping.
+		for _, key := range []string{"appended_since_summary", "summary_refresh_pending"} {
+			if old, has := n.Properties[key]; has {
+				a.engine.PropIdx().Remove(req.ID, key, old)
+				a.engine.Graph().RemoveNodeProperty(req.ID, key)
+			}
+		}
+		updated = true
+	}
+	if newVec != nil {
+		pre := &preEmbeddedVectors{
+			vectors: map[string][]float32{"embedding_full": newVec},
+			model:   embedModel,
+		}
+		if err := a.applyPreEmbedded(req.ID, pre); err != nil {
+			return UpdateResponse{}, ErrInternal("failed to apply embedding")
+		}
+	}
 	if req.Confidence != nil {
 		a.engine.SetProp(req.ID, "confidence", graph.Float64Property(*req.Confidence))
 		updated = true
@@ -91,13 +300,8 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		a.engine.SetProp(req.ID, "content_keywords", graph.StringListProperty(req.Keywords))
 		updated = true
 	}
-	if req.SummaryShort != "" {
-		a.engine.SetProp(req.ID, "content_short", graph.StringProperty(req.SummaryShort))
-		updated = true
-	}
 	if req.ValidUntil != "" {
 		if req.ValidUntil == "clear" {
-			n, _ := a.engine.Graph().GetNode(req.ID)
 			for _, key := range []string{"valid_until", "resolution", "resolved_at"} {
 				if old, has := n.Properties[key]; has {
 					a.engine.PropIdx().Remove(req.ID, key, old)
@@ -138,13 +342,60 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}
 	}
 
-	resp := UpdateResponse{ID: req.ID, Updated: updated}
+	version := currentToken
+	if fresh, ok := a.engine.Graph().GetNode(req.ID); ok {
+		version = recordVersionToken(fresh)
+	}
+	resp := UpdateResponse{
+		ID:              req.ID,
+		Updated:         updated,
+		Version:         version,
+		PreviousContent: previousContent,
+		Notes:           notes,
+	}
 	if colls := a.nodeCollectionNames(req.ID); len(colls) > 0 {
 		resp.CollectionWarning = fmt.Sprintf(
 			"This record is a member of collection(s): %s. Use gramaton_collection_update to modify collection item fields.",
 			joinCollectionNames(colls))
 	}
 	return resp, nil
+}
+
+// observationChildren returns the observation nodes extracted from
+// recordID (inbound observation_of edges). Caller must hold at least
+// a read lock.
+func (a *API) observationChildren(recordID string) []string {
+	var out []string
+	for _, e := range a.engine.Graph().EdgesTo(recordID) {
+		if e.Type != "observation_of" {
+			continue
+		}
+		if child, ok := a.engine.Graph().GetNode(e.SourceID); ok {
+			if nt, _ := child.Properties.GetString("node_type"); nt == "observation" {
+				out = append(out, child.ID)
+			}
+		}
+	}
+	return out
+}
+
+// metaBM25TextFromNode rebuilds the "key:value" BM25 text from a
+// node's stored meta.* properties, mirroring metaBM25Text's output
+// for the original save.
+func metaBM25TextFromNode(n *graph.Node) string {
+	var parts []string
+	for key := range n.Properties {
+		if !strings.HasPrefix(key, "meta.") {
+			continue
+		}
+		if s, ok := n.Properties.GetString(key); ok {
+			parts = append(parts, strings.TrimPrefix(key, "meta.")+":"+s)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
 }
 
 func validateUpdateRequest(r *UpdateRequest) error {
@@ -173,7 +424,3 @@ func validateUpdateRequest(r *UpdateRequest) error {
 	}
 	return nil
 }
-
-// used is a compile-time reference so the unused-function linter
-// doesn't complain about helpers that become live as more ops migrate.
-var _ = time.Now

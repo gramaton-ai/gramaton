@@ -122,6 +122,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		}
 		req.ID = r.PathValue("id")
 		resp, apiErr := s.api.Update(r.Context(), req)
+		if apiErr == nil && resp.VersionConflict != nil {
+			// Nothing was applied: 409 with the structured conflict
+			// body (current content + version for the re-judge).
+			s.writeJSON(w, http.StatusConflict, resp)
+			return
+		}
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return

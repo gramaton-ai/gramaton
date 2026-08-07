@@ -20,6 +20,7 @@ type ResolveRequest struct {
 	ID                        string `json:"-" jsonschema:"-"`
 	Resolution                string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
 	ResolutionNote            string `json:"resolution_note,omitempty" jsonschema:"free-form note about why/how"`
+	ExpectedVersion           string `json:"expected_version,omitempty" jsonschema:"version token from a hold response or inspect. When set, the resolve applies only if the record's content is unchanged since; on mismatch nothing is applied and version_conflict carries the current content."`
 	AutoCloseCollectionStatus *bool  `json:"auto_close_collection_status,omitempty" jsonschema:"default true; when false, skip flipping the collection item's status field even if the schema has one"`
 }
 
@@ -33,6 +34,7 @@ type ResolveRequest struct {
 type ResolveResponse struct {
 	ID                string            `json:"id"`
 	Resolved          bool              `json:"resolved"`
+	VersionConflict   *VersionConflict  `json:"version_conflict,omitempty"`
 	AutoClosedStatus  map[string]string `json:"auto_closed_status,omitempty"`
 	CollectionWarning string            `json:"collection_warning,omitempty"`
 }
@@ -132,8 +134,22 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
-	if _, ok := a.engine.Graph().GetNode(req.ID); !ok {
+	target, ok := a.engine.Graph().GetNode(req.ID)
+	if !ok {
 		return ResolveResponse{}, ErrNotFound("record not found")
+	}
+	if req.ExpectedVersion != "" {
+		if currentToken := recordVersionToken(target); req.ExpectedVersion != currentToken {
+			currentContent, _ := target.Properties.GetString("content_full")
+			return ResolveResponse{
+				ID: req.ID,
+				VersionConflict: &VersionConflict{
+					CurrentVersion: currentToken,
+					CurrentContent: currentContent,
+					Note:           "The record's content changed since you read it. Nothing was applied. Re-judge against current_content and retry with expected_version=current_version.",
+				},
+			}, nil
+		}
 	}
 
 	now := time.Now().UTC()
