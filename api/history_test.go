@@ -233,3 +233,55 @@ func TestHistorySinceAfterUntilRejected(t *testing.T) {
 		t.Fatalf("expected input_error for since > until, got %+v", apiErr)
 	}
 }
+
+// TestHistoryVersionTimeline pins the timeline surface: logical
+// versions newest-first with author, change_note, and the masked
+// field diff; a deletion entry closes the history.
+func TestHistoryVersionTimeline(t *testing.T) {
+	a, _ := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: "timeline subject v1"})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+	conf := 0.9
+	if _, apiErr := a.Update(ctx, UpdateRequest{
+		ID:         saved.ID,
+		Content:    "timeline subject v2 with a substantive revision",
+		Confidence: &conf,
+		ChangeNote: "vendor confirmed the revised numbers",
+	}); apiErr != nil {
+		t.Fatalf("update: %v", apiErr)
+	}
+
+	resp, apiErr := a.History(ctx, HistoryRequest{ID: saved.ID})
+	if apiErr != nil {
+		t.Fatalf("history: %v", apiErr)
+	}
+	if len(resp.Versions) != 2 {
+		t.Fatalf("versions = %d (%+v), want 2", len(resp.Versions), resp.Versions)
+	}
+	latest := resp.Versions[0]
+	if latest.ChangeNote != "vendor confirmed the revised numbers" {
+		t.Fatalf("latest change_note = %q", latest.ChangeNote)
+	}
+	var hasContent, hasConfidence bool
+	for _, f := range latest.FieldsChanged {
+		if f == "content_full" {
+			hasContent = true
+		}
+		if f == "confidence" {
+			hasConfidence = true
+		}
+		if f == "embedding_model" || f == "last_accessed" {
+			t.Fatalf("bookkeeping field %q leaked into the version diff", f)
+		}
+	}
+	if !hasContent || !hasConfidence {
+		t.Fatalf("fields_changed = %v, want content_full and confidence", latest.FieldsChanged)
+	}
+	if resp.VersionCoverage != "" {
+		t.Fatalf("unexpected coverage caveat: %q", resp.VersionCoverage)
+	}
+}

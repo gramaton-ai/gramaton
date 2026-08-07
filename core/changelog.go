@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -490,4 +491,67 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 		progress(total, total)
 	}
 	return indexed, nil
+}
+
+// DiffVersionFields lists the property names that differ between two
+// stored node blobs, bookkeeping fields masked -- the timeline's
+// mechanical per-version diff. Removed fields are suffixed
+// "(removed)". An empty prevHash (the record's first indexed
+// version) reports every non-bookkeeping field, i.e. the creation
+// shape. Sorted for stable output.
+func (e *Engine) DiffVersionFields(prevHash, curHash string) []string {
+	loadProps := func(h string) graph.Properties {
+		if h == "" {
+			return nil
+		}
+		data, err := e.store.Read(h)
+		if err != nil {
+			return nil
+		}
+		n, err := graph.UnmarshalNode(data)
+		if err != nil {
+			return nil
+		}
+		return n.Properties
+	}
+	prev := loadProps(prevHash)
+	cur := loadProps(curHash)
+	if cur == nil {
+		return nil
+	}
+
+	var out []string
+	for k, v := range cur {
+		if isBookkeepingProp(k) {
+			continue
+		}
+		pv, had := prev[k]
+		if !had {
+			out = append(out, k)
+			continue
+		}
+		if !bytes.Equal(propBytes(v), propBytes(pv)) {
+			out = append(out, k)
+		}
+	}
+	for k := range prev {
+		if isBookkeepingProp(k) {
+			continue
+		}
+		if _, still := cur[k]; !still {
+			out = append(out, k+" (removed)")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// propBytes canonicalizes one property value for comparison.
+func propBytes(p graph.Property) []byte {
+	n := &graph.Node{ID: "x", Properties: graph.Properties{"v": p}}
+	data, err := graph.MarshalNode(n)
+	if err != nil {
+		return nil
+	}
+	return data
 }

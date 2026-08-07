@@ -25,15 +25,33 @@ type HistoryChange struct {
 	Action    string `json:"action"`
 }
 
+// VersionEntry is one logical version in the record's timeline:
+// what changed, when, by whom, and why (when a change_note was
+// given). FieldsChanged is the mechanical diff against the previous
+// version with bookkeeping fields masked -- always computed; the
+// note is color on top.
+type VersionEntry struct {
+	Commit        string   `json:"commit"`
+	Timestamp     string   `json:"timestamp"`
+	Author        string   `json:"author,omitempty"`
+	ChangeNote    string   `json:"change_note,omitempty"`
+	Deleted       bool     `json:"deleted,omitempty"`
+	FieldsChanged []string `json:"fields_changed,omitempty"`
+}
+
 // HistoryResponse lists the changes in reverse-chronological order
-// (most recent first).
+// (most recent first). Versions is the logical-version timeline from
+// the changelog index; VersionCoverage carries a caveat when the
+// index cannot vouch for the record's full history.
 type HistoryResponse struct {
-	ID      string          `json:"id"`
-	Changes []HistoryChange `json:"changes"`
+	ID              string          `json:"id"`
+	Changes         []HistoryChange `json:"changes"`
+	Versions        []VersionEntry  `json:"versions,omitempty"`
+	VersionCoverage string          `json:"version_coverage,omitempty"`
 }
 
 // HistoryDescription is the MCP tool description for gramaton_history.
-const HistoryDescription = "View the change history for a specific record, walking commit metadata backwards from HEAD."
+const HistoryDescription = "View a record's change history. The versions list is the logical-version timeline: one entry per real knowledge change (bookkeeping like re-embeds never mints a version), newest first, each with its author, optional change_note, and the mechanical field diff against the previous version. version_coverage carries a caveat when history may predate the changelog index. The changes list is the raw commit walk (message-level)."
 
 // History walks the commit chain back from HEAD looking for commits
 // where the record's serialized property hash changed. Without
@@ -130,5 +148,59 @@ func (a *API) History(ctx context.Context, req HistoryRequest) (HistoryResponse,
 		hash = commit.Parent
 	}
 
+	a.attachVersionTimeline(&out, req.ID, limit)
 	return out, nil
+}
+
+// attachVersionTimeline populates the logical-version list from the
+// changelog index, newest first, with per-version attribution and
+// masked field diffs. Caller must hold at least the read lock.
+func (a *API) attachVersionTimeline(out *HistoryResponse, id string, limit int) {
+	chlog := a.engine.Changelog()
+	if chlog == nil {
+		return
+	}
+	if chlog.Marker() == "" {
+		out.VersionCoverage = "changelog not initialized on this store; run 'gramaton backfill changelog' to index history"
+		return
+	}
+	entries := chlog.Versions(id)
+	if len(entries) == 0 {
+		out.VersionCoverage = "no indexed versions; the record's history may predate changelog coverage (run 'gramaton backfill changelog')"
+		return
+	}
+
+	store := a.engine.Store()
+	for i := len(entries) - 1; i >= 0 && len(out.Versions) < limit; i-- {
+		e := entries[i]
+		v := VersionEntry{
+			Commit:    truncHash(e.Commit),
+			Timestamp: e.Timestamp.UTC().Format("2006-01-02T15:04:05Z"),
+			Deleted:   e.NodeHash == "",
+		}
+		if commit, err := loadCommitMeta(store, e.Commit); err == nil {
+			v.Author = commit.Author
+			for _, act := range commit.Actions {
+				if act.RecordID == id && act.Note != "" {
+					v.ChangeNote = act.Note
+					break
+				}
+			}
+		}
+		if !v.Deleted {
+			prevHash := ""
+			if i > 0 {
+				prevHash = entries[i-1].NodeHash
+			}
+			v.FieldsChanged = a.engine.DiffVersionFields(prevHash, e.NodeHash)
+		}
+		out.Versions = append(out.Versions, v)
+	}
+}
+
+func truncHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
 }
