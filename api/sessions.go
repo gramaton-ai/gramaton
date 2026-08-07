@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
-	"github.com/gramaton-ai/gramaton/curation"
+	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
@@ -241,6 +241,18 @@ func (a *API) buildSessionResponse(sessionID string, session *graph.Node, leanPr
 			}
 			if ct, ok := seg.Properties.GetTimestamp("captured_at"); ok {
 				segResp["captured_at"] = ct.Format(time.RFC3339)
+			}
+			// Unresolved held promotion: surfaced so every prepare
+			// re-presents it until the agent resolves it.
+			if held, _ := seg.Properties.GetBool("promotion_held"); held {
+				heldInfo := map[string]any{}
+				if target, ok := seg.Properties.GetString("promotion_hold_target"); ok {
+					heldInfo["similar_to"] = target
+				}
+				if sim, ok := seg.Properties.GetFloat64("promotion_hold_similarity"); ok {
+					heldInfo["similarity"] = sim
+				}
+				segResp["promotion_held"] = heldInfo
 			}
 			if hasCreated {
 				segResp["created_at"] = segCreated.Format(time.RFC3339)
@@ -628,6 +640,7 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 	}
 	sessionState := a.buildSessionResponse(sessionID, session, true)
 	clientSessionID, _ := session.Properties.GetString("client_session_id")
+	heldPromotions := a.heldPromotionsForSession(sessionID)
 	a.engine.RUnlock()
 
 	// Set prepared flag (protected by mu since preparedSessions is not engine-locked).
@@ -699,11 +712,49 @@ func (a *API) SessionPrepare(ctx context.Context, sessionID string) (map[string]
 			"count", nudge.Count, "archive_path", nudge.ArchivePath)
 	}
 
+	// Re-present unresolved held promotions on every prepare: a
+	// context-poor agent at hold time can defer without silent loss,
+	// because the next prepare keeps asking until each hold is
+	// resolved via gramaton_session_resolve_held.
+	if len(heldPromotions) > 0 {
+		resp["held_promotions"] = heldPromotions
+		notes = append(notes, fmt.Sprintf(
+			"NOTE: %d earlier segment(s) have HELD Memory promotions -- each closely matched an existing record and was not promoted (see held_promotions). Resolve each via gramaton_session_resolve_held: if the segment revises the similar record, gramaton_update that record first, then resolve with action=update_target; if genuinely distinct, resolve with action=allow_similar to promote it.",
+			len(heldPromotions)))
+	}
+
 	if len(notes) > 0 {
 		resp["instructions"] = strings.Join(notes, "\n\n") + "\n\n" + prompt
 	}
 
 	return resp, nil
+}
+
+// heldPromotionsForSession lists segments of this session whose
+// Memory promotion is still held. Caller must hold at least a read
+// lock.
+func (a *API) heldPromotionsForSession(sessionID string) []map[string]any {
+	var out []map[string]any
+	for _, t := range a.sessionTopics(sessionID) {
+		topicName, _ := t.Properties.GetString("topic_name")
+		for _, seg := range a.topicSegments(t.ID) {
+			if held, _ := seg.Properties.GetBool("promotion_held"); !held {
+				continue
+			}
+			entry := map[string]any{
+				"segment_id": seg.ID,
+				"topic":      topicName,
+			}
+			if target, ok := seg.Properties.GetString("promotion_hold_target"); ok {
+				entry["similar_to"] = target
+			}
+			if sim, ok := seg.Properties.GetFloat64("promotion_hold_similarity"); ok {
+				entry["similarity"] = sim
+			}
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // SaveSegment is a single segment submitted via session_save.
@@ -741,7 +792,10 @@ func (c SaveSegment) shouldPromote() bool {
 // SessionSave appends extracted segments to the session.
 // Validates that prepare was called first. Creates new topics as needed.
 // Phase 2: stores in Session only (no Memory records, no embedding).
-func (a *API) SessionSave(ctx context.Context, sessionID string, segments []SaveSegment) (SessionSaveResponse, *APIError) {
+// allowSimilar disables the save-guard promotion holds for the whole
+// commit -- the bulk-ingestion escape (benchmark loads, migrations);
+// never a standing default for interactive extraction.
+func (a *API) SessionSave(ctx context.Context, sessionID string, segments []SaveSegment, allowSimilar bool) (SessionSaveResponse, *APIError) {
 	if apiErr := a.rejectIfReadOnly("session_save"); apiErr != nil {
 		return SessionSaveResponse{}, apiErr
 	}
@@ -845,6 +899,45 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	}
 	embedDur := time.Since(start)
 
+	// Save-guard scans off-lock for promoted segments: store scan per
+	// segment plus the within-commit sibling pass (two similar
+	// segments in one commit are invisible to the index scan; the
+	// LATER one's promotion holds, naming the earlier one's Memory
+	// record). The write-seq snapshot anchors the under-lock delta
+	// re-scan. Skipped wholesale under allowSimilar (bulk ingestion).
+	segStoreHold := make(map[int]*similarity.Match)
+	segSiblingOf := make(map[int]int)
+	var scanSeq uint64
+	if !allowSimilar && len(embedVecs) > 0 {
+		guardCfg := a.engine.Config().SaveGuard
+		a.engine.RLock()
+		scanSeq = a.engine.WriteSeq()
+		for i, seg := range segments {
+			if vec, ok := embedVecs[i]; ok && seg.shouldPromote() {
+				if out := a.engine.ScanSimilarVec(vec, seg.Content); out.Hold != nil {
+					segStoreHold[i] = out.Hold
+				}
+			}
+		}
+		a.engine.RUnlock()
+		for i := range segments {
+			if _, held := segStoreHold[i]; held || embedVecs[i] == nil || !segments[i].shouldPromote() {
+				continue
+			}
+			for j := 0; j < i; j++ {
+				if _, heldJ := segStoreHold[j]; heldJ || embedVecs[j] == nil || !segments[j].shouldPromote() {
+					continue
+				}
+				if _, holds := similarity.SiblingMatch(guardCfg,
+					embedVecs[i], segments[i].Content,
+					embedVecs[j], segments[j].Content); holds {
+					segSiblingOf[i] = j
+					break
+				}
+			}
+		}
+	}
+
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -865,15 +958,16 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	sessionOnlySegments := 0
 	memoryRecordsCreated := 0
 	edgesCreated := 0
-	var superseded []map[string]any
+	var heldPromotions []SessionHeldPromotion
 
 	// Author attribution: composed once for the whole commit; stamped
 	// on topic, segment, and promoted Memory nodes below (see
 	// api/save.go for the stamping contract).
 	author := a.engine.Config().Author.String()
 
-	// Track IDs created in this batch for auto-supersession exclusion.
-	batchIDs := make(map[string]struct{}, len(segments))
+	// Memory record created per segment index, for sibling-hold
+	// resolution (a later similar segment holds naming this record).
+	promotedByIdx := make(map[int]string, len(segments))
 
 	for i, seg := range segments {
 		// Find or create the topic.
@@ -947,6 +1041,60 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			continue
 		}
 
+		// Save-guard hold on the Memory promotion. The segment above
+		// always lands (Sessions is append-only); only the Memory
+		// record is withheld. Hold state persists on the segment node
+		// so the next session_prepare re-presents it until resolved
+		// via gramaton_session_resolve_held -- the extraction agent at
+		// its lowest-context moment can defer without silent loss.
+		if !allowSimilar {
+			hold := segStoreHold[i]
+			if hold == nil {
+				if vec, ok := embedVecs[i]; ok {
+					if m, found, _ := a.engine.SimilarInDelta(scanSeq, vec, seg.Content); found {
+						held := m
+						hold = &held
+					}
+				}
+			}
+			if hold == nil {
+				if j, ok := segSiblingOf[i]; ok && promotedByIdx[j] != "" {
+					sim, _ := similarity.SiblingMatch(a.engine.Config().SaveGuard,
+						embedVecs[i], seg.Content, embedVecs[j], segments[j].Content)
+					hold = &similarity.Match{NodeID: promotedByIdx[j], Similarity: sim}
+				}
+			}
+			if hold != nil {
+				if hs := a.buildHeldSimilar(hold); hs != nil {
+					holdMeta, merr := json.Marshal(sessionHoldMeta{
+						Temporality:     seg.Temporality,
+						Confidence:      seg.Confidence,
+						KnowledgeType:   seg.KnowledgeType,
+						EpistemicStatus: seg.EpistemicStatus,
+						Keywords:        seg.Keywords,
+						SummaryShort:    seg.SummaryShort,
+					})
+					if merr != nil {
+						holdMeta = []byte("{}")
+					}
+					a.engine.SetProp(segNode.ID, "promotion_held", graph.BoolProperty(true))
+					a.engine.SetProp(segNode.ID, "promotion_hold_target", graph.StringProperty(hs.ID))
+					a.engine.SetProp(segNode.ID, "promotion_hold_similarity", graph.Float64Property(hs.Similarity))
+					a.engine.SetProp(segNode.ID, "promotion_hold_meta", graph.StringProperty(string(holdMeta)))
+					heldPromotions = append(heldPromotions, SessionHeldPromotion{
+						SegmentID: segNode.ID,
+						Topic:     seg.TopicName,
+						Held:      hs,
+					})
+					a.log.Info("session promotion held: similar record",
+						"component", "session", "session_id", sessionID,
+						"segment_id", segNode.ID, "similar_to", hs.ID,
+						"similarity", fmt.Sprintf("%.3f", hs.Similarity))
+					continue
+				}
+			}
+		}
+
 		// 2. Create the Memory record with segment content + metadata.
 		memProps := graph.Properties{
 			"content_full":      graph.StringProperty(seg.Content),
@@ -1000,7 +1148,7 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			a.engine.SetProp(memNode.ID, "embedding_model", graph.StringProperty(a.engine.Embedder().ModelID()))
 		}
 
-		batchIDs[memNode.ID] = struct{}{}
+		promotedByIdx[i] = memNode.ID
 		memoryRecordsCreated++
 
 		a.log.Info("memory record created", "component", "session",
@@ -1021,50 +1169,6 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 		// 5. Update segment captured_as with Memory record ID.
 		a.engine.SetProp(segNode.ID, "captured_as", graph.StringProperty(memNode.ID))
 		a.engine.SetProp(segNode.ID, "captured_at", graph.TimestampProperty(now))
-
-		// 6. Auto-supersession on the Memory record (skip within-batch).
-		if dupID, sim := a.engine.CheckDedup(memNode.ID); dupID != "" {
-			if _, inBatch := batchIDs[dupID]; inBatch {
-				a.log.Debug("auto-supersession skipped: within-commit batch",
-					"component", "session", "new_id", memNode.ID, "dup_id", dupID)
-				continue
-			}
-			if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
-				a.log.Debug("auto-supersession skipped: opt-out",
-					"component", "session", "new_id", memNode.ID, "dup_id", dupID,
-					"similarity", fmt.Sprintf("%.3f", sim))
-				continue
-			}
-			cfg := a.engine.Config()
-			// Default "supersede" semantics: mark the older record historical
-			// and link the new record via a supersedes edge. See D37.
-			// Session commit does not honor "reject" -- each segment is a
-			// deliberate commit, not a capture the caller can cancel.
-			if cfg.Dedup.Action != "reject" {
-				oldNode, _ := a.engine.Graph().GetNode(dupID)
-				if oldNode != nil {
-					_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
-					if !alreadyHistorical {
-						a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-						a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-						a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-						if e, err := a.engine.Graph().AddEdge(memNode.ID, dupID, "supersedes", sim, nil); err == nil {
-							summary := ""
-							if v, ok := oldNode.Properties.GetString("content_short"); ok {
-								summary = v
-							}
-							superseded = append(superseded, map[string]any{
-								"id": dupID, "summary": summary,
-								"similarity": sim, "edge_id": e.ID,
-							})
-							a.log.Info("auto-supersession triggered", "component", "session",
-								"new_record_id", memNode.ID, "superseded_id", dupID,
-								"similarity", fmt.Sprintf("%.3f", sim))
-						}
-					}
-				}
-			}
-		}
 	}
 
 	// Advance the watermark on the session node. Written inside the
@@ -1102,10 +1206,254 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			SessionID: sessionID,
 		},
 	}
-	if len(superseded) > 0 {
-		resp.Superseded = superseded
+	if len(heldPromotions) > 0 {
+		resp.Held = heldPromotions
 	}
 	return resp, nil
+}
+
+// sessionHoldMeta is the promotion metadata persisted (JSON-encoded)
+// on a segment whose Memory promotion was held, so a later
+// gramaton_session_resolve_held can build the Memory record
+// faithfully. The segment node itself carries content and
+// content_short; this carries the rest of the SaveSegment shape.
+type sessionHoldMeta struct {
+	Temporality     string   `json:"temporality,omitempty"`
+	Confidence      *float64 `json:"confidence,omitempty"`
+	KnowledgeType   string   `json:"knowledge_type,omitempty"`
+	EpistemicStatus string   `json:"epistemic_status,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	SummaryShort    string   `json:"summary_short,omitempty"`
+}
+
+// HeldResolution is one resolution submitted via
+// gramaton_session_resolve_held.
+type HeldResolution struct {
+	SegmentID string `json:"segment_id" jsonschema:"segment whose held promotion to resolve"`
+	Action    string `json:"action" jsonschema:"update_target (the similar record has been revised with this segment's knowledge -- wire the segment's provenance to it; no new record) or allow_similar (the segment is genuinely distinct -- promote it now)"`
+	TargetID  string `json:"target_id,omitempty" jsonschema:"for update_target: the revised record; defaults to the record the hold named"`
+}
+
+// HeldResolutionResult reports one applied resolution.
+type HeldResolutionResult struct {
+	SegmentID      string `json:"segment_id"`
+	Action         string `json:"action"`
+	MemoryRecordID string `json:"memory_record_id,omitempty"`
+	TargetID       string `json:"target_id,omitempty"`
+}
+
+// SessionResolveHeldResponse is the output of SessionResolveHeld.
+type SessionResolveHeldResponse struct {
+	SessionID string                 `json:"session_id"`
+	Resolved  []HeldResolutionResult `json:"resolved"`
+}
+
+// SessionResolveHeldDescription is shared by HTTP, MCP, and CLI proxy.
+const SessionResolveHeldDescription = `Resolve held Memory promotions from an earlier gramaton_session_save. A hold means a segment closely matched an existing record and was not promoted; the segment itself is safely stored. Two actions per segment: update_target -- you have ALREADY revised the similar record (gramaton_update) with this segment's knowledge; the server wires the segment's provenance to that record and no new record is created. allow_similar -- the segment is genuinely distinct; it is promoted to a Memory record now. Unresolved holds are re-presented by every gramaton_session_prepare.`
+
+// SessionResolveHeld applies resolutions for held promotions. All
+// resolutions are validated before any mutation; the whole call
+// commits atomically or returns an error having changed nothing.
+func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resolutions []HeldResolution) (SessionResolveHeldResponse, *APIError) {
+	if apiErr := a.rejectIfReadOnly("session_resolve_held"); apiErr != nil {
+		return SessionResolveHeldResponse{}, apiErr
+	}
+	if sessionID == "" {
+		return SessionResolveHeldResponse{}, ErrMissing("session_id is required")
+	}
+	if len(resolutions) == 0 {
+		return SessionResolveHeldResponse{}, ErrMissing("resolutions is required and must not be empty")
+	}
+	if len(resolutions) > MaxHeldResolutions {
+		return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("at most %d resolutions per call", MaxHeldResolutions))
+	}
+	for i, r := range resolutions {
+		if r.SegmentID == "" {
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment_id is required", i))
+		}
+		if r.Action != "update_target" && r.Action != "allow_similar" {
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: action must be update_target or allow_similar", i))
+		}
+	}
+
+	// Phase 1: snapshot held segments under RLock; collect embed
+	// texts for the allow_similar promotions.
+	type pending struct {
+		res     HeldResolution
+		content string
+		meta    sessionHoldMeta
+		target  string // resolved update_target destination
+		vec     []float32
+	}
+	work := make([]pending, len(resolutions))
+	a.engine.RLock()
+	if _, svcErr := a.isSession(sessionID); svcErr != nil {
+		a.engine.RUnlock()
+		return SessionResolveHeldResponse{}, svcErr
+	}
+	for i, r := range resolutions {
+		seg, ok := a.engine.Graph().GetNode(r.SegmentID)
+		if !ok {
+			a.engine.RUnlock()
+			return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("segment %s not found", r.SegmentID))
+		}
+		if held, _ := seg.Properties.GetBool("promotion_held"); !held {
+			a.engine.RUnlock()
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("segment %s has no held promotion", r.SegmentID))
+		}
+		content, _ := seg.Properties.GetString("content")
+		var meta sessionHoldMeta
+		if raw, ok := seg.Properties.GetString("promotion_hold_meta"); ok {
+			_ = json.Unmarshal([]byte(raw), &meta)
+		}
+		target := r.TargetID
+		if target == "" {
+			target, _ = seg.Properties.GetString("promotion_hold_target")
+		}
+		if r.Action == "update_target" {
+			if target == "" {
+				a.engine.RUnlock()
+				return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: no target_id and the hold recorded none", i))
+			}
+			if _, ok := a.engine.Graph().GetNode(target); !ok {
+				a.engine.RUnlock()
+				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s not found", target))
+			}
+		}
+		work[i] = pending{res: r, content: content, meta: meta, target: target}
+	}
+	a.engine.RUnlock()
+
+	// Phase 2: embed allow_similar promotions off-lock. Embedding
+	// failure degrades like session_save promotion: the record is
+	// created BM25-only and reembed backfills the vector later.
+	if a.engine.Embedder() != nil {
+		var idxs []int
+		var texts []string
+		for i := range work {
+			if work[i].res.Action != "allow_similar" {
+				continue
+			}
+			text := work[i].meta.SummaryShort
+			if text == "" {
+				text = work[i].content
+				if cap := MaxSummaryShort(); len(text) > cap {
+					text = text[:cap]
+				}
+			}
+			idxs = append(idxs, i)
+			texts = append(texts, text)
+		}
+		if len(texts) > 0 {
+			if vecs, err := a.engine.Embedder().Embed(ctx, texts); err != nil {
+				a.log.Warn("session resolve_held: embedding failed, promoting without vectors",
+					"component", "session", "session_id", sessionID, "err", err)
+			} else {
+				for j, i := range idxs {
+					work[i].vec = vecs[j]
+				}
+			}
+		}
+	}
+
+	// Phase 3: re-verify and apply under the write lock, one commit.
+	a.engine.Lock()
+	defer a.engine.Unlock()
+
+	results := make([]HeldResolutionResult, 0, len(work))
+	actions := []graph.CommitAction{{Kind: graph.ActionSessionSave, RecordID: sessionID}}
+	now := time.Now().UTC()
+	author := a.engine.Config().Author.String()
+	for _, w := range work {
+		seg, ok := a.engine.Graph().GetNode(w.res.SegmentID)
+		if !ok {
+			return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("segment %s vanished", w.res.SegmentID))
+		}
+		if held, _ := seg.Properties.GetBool("promotion_held"); !held {
+			return SessionResolveHeldResponse{}, ErrConflict(fmt.Sprintf("segment %s was resolved concurrently", w.res.SegmentID))
+		}
+
+		var result HeldResolutionResult
+		switch w.res.Action {
+		case "update_target":
+			if _, ok := a.engine.Graph().GetNode(w.target); !ok {
+				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s vanished", w.target))
+			}
+			if _, err := a.engine.Graph().AddEdge(w.res.SegmentID, w.target, "extracted_as", 1.0, nil); err != nil {
+				a.log.Warn("resolve_held: extracted_as edge failed", "component", "session",
+					"segment_id", w.res.SegmentID, "target", w.target, "err", err)
+			}
+			a.engine.SetProp(w.res.SegmentID, "captured_as", graph.StringProperty(w.target))
+			a.engine.SetProp(w.res.SegmentID, "captured_at", graph.TimestampProperty(now))
+			result = HeldResolutionResult{SegmentID: w.res.SegmentID, Action: w.res.Action, TargetID: w.target}
+		case "allow_similar":
+			memProps := graph.Properties{
+				"content_full":      graph.StringProperty(w.content),
+				"processing_status": graph.StringProperty("processed"),
+				"created_at":        graph.TimestampProperty(now),
+				"access_count":      graph.Int64Property(0),
+			}
+			if author != "" {
+				memProps["author"] = graph.StringProperty(author)
+			}
+			if w.meta.Temporality != "" {
+				memProps["temporality"] = graph.StringProperty(w.meta.Temporality)
+			}
+			if w.meta.Confidence != nil {
+				memProps["confidence"] = graph.Float64Property(*w.meta.Confidence)
+			}
+			if w.meta.KnowledgeType != "" {
+				memProps["knowledge_type"] = graph.StringProperty(w.meta.KnowledgeType)
+			} else {
+				memProps["knowledge_type"] = graph.StringProperty("episodic")
+			}
+			if w.meta.EpistemicStatus != "" {
+				memProps["epistemic_status"] = graph.StringProperty(w.meta.EpistemicStatus)
+			}
+			if len(w.meta.Keywords) > 0 {
+				memProps["content_keywords"] = graph.StringListProperty(w.meta.Keywords)
+			}
+			if w.meta.SummaryShort != "" {
+				memProps["content_short"] = graph.StringProperty(w.meta.SummaryShort)
+			}
+			memNode := a.engine.Graph().AddNode(memProps)
+			bm25Text := w.content
+			if len(w.meta.Keywords) > 0 {
+				bm25Text += " " + strings.Join(w.meta.Keywords, " ")
+			}
+			a.engine.IndexNode(memNode.ID, bm25Text, w.vec)
+			if w.vec != nil && a.engine.Embedder() != nil {
+				a.engine.SetProp(memNode.ID, "embedding_model", graph.StringProperty(a.engine.Embedder().ModelID()))
+			}
+			if _, err := a.engine.Graph().AddEdge(w.res.SegmentID, memNode.ID, "extracted_as", 1.0, nil); err != nil {
+				a.log.Warn("resolve_held: extracted_as edge failed", "component", "session",
+					"segment_id", w.res.SegmentID, "memory_id", memNode.ID, "err", err)
+			}
+			a.engine.SetProp(w.res.SegmentID, "captured_as", graph.StringProperty(memNode.ID))
+			a.engine.SetProp(w.res.SegmentID, "captured_at", graph.TimestampProperty(now))
+			actions = append(actions, graph.CommitAction{Kind: graph.ActionSave, RecordID: memNode.ID})
+			result = HeldResolutionResult{SegmentID: w.res.SegmentID, Action: w.res.Action, MemoryRecordID: memNode.ID}
+		}
+
+		// Clear the persisted hold state either way.
+		for _, key := range []string{"promotion_held", "promotion_hold_target", "promotion_hold_similarity", "promotion_hold_meta"} {
+			if old, has := seg.Properties[key]; has {
+				a.engine.PropIdx().Remove(w.res.SegmentID, key, old)
+				a.engine.Graph().RemoveNodeProperty(w.res.SegmentID, key)
+			}
+		}
+		results = append(results, result)
+	}
+
+	if _, err := a.engine.Save("session_resolve_held", actions...); err != nil {
+		a.log.Warn("session resolve_held save failed", "component", "session",
+			"session_id", sessionID, "err", err)
+		return SessionResolveHeldResponse{}, ErrInternal("failed to save held-promotion resolutions")
+	}
+
+	a.log.Info("session held promotions resolved", "component", "session",
+		"session_id", sessionID, "count", len(results))
+	return SessionResolveHeldResponse{SessionID: sessionID, Resolved: results}, nil
 }
 
 // SessionArchive compresses a conversation transcript and stores it

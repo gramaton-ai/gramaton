@@ -166,6 +166,7 @@ func TestProxyToolRegistry(t *testing.T) {
 		"gramaton_session_get",
 		"gramaton_session_prepare",
 		"gramaton_session_save",
+		"gramaton_session_resolve_held",
 		"gramaton_session_start",
 		"gramaton_stats",
 		"gramaton_status",

@@ -97,6 +97,7 @@ func TestMCPToolRegistry(t *testing.T) {
 		"gramaton_resolve",
 		"gramaton_search",
 		"gramaton_session_save",
+		"gramaton_session_resolve_held",
 		"gramaton_session_get",
 		"gramaton_session_prepare",
 		"gramaton_session_start",

@@ -105,6 +105,11 @@ const (
 	MaxMetaKeyLen      = 64
 	MaxMetaValueLen    = 1024
 	MaxReembedBatch    = 500
+	// MaxHeldResolutions caps one gramaton_session_resolve_held call.
+	// Each allow_similar resolution creates a record under the write
+	// lock; holds accumulate per session in small numbers, so this is
+	// generous headroom, not a throughput knob.
+	MaxHeldResolutions = 100
 	// MaxCollectionBatchSize caps how many items a single bulk add
 	// can commit. Bigger batches would tie up the engine write lock
 	// for an extended period and potentially exceed provider

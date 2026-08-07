@@ -112,10 +112,11 @@ var mcpToolAccess = map[string]string{
 
 	// Sessions cluster. Prepare is the entry to the two-phase write
 	// flow (SessionPrepare is guardWrite).
-	"gramaton_session_start":   MCPToolWrite,
-	"gramaton_session_get":     MCPToolRead,
-	"gramaton_session_prepare": MCPToolWrite,
-	"gramaton_session_save":    MCPToolWrite,
+	"gramaton_session_start":        MCPToolWrite,
+	"gramaton_session_get":          MCPToolRead,
+	"gramaton_session_prepare":      MCPToolWrite,
+	"gramaton_session_save":         MCPToolWrite,
+	"gramaton_session_resolve_held": MCPToolWrite,
 
 	// Guide cluster.
 	"gramaton_guide": MCPToolRead,

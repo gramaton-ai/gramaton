@@ -205,7 +205,7 @@ func TestSessionFlowStampsAuthor(t *testing.T) {
 	}
 	if _, apiErr := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{TopicName: "author-topic", Content: "decided to stamp authors on every create path"},
-	}); apiErr != nil {
+	}, false); apiErr != nil {
 		t.Fatalf("SessionSave: %v", apiErr)
 	}
 

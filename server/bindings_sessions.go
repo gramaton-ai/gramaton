@@ -52,14 +52,32 @@ func (s *Server) registerSessionsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sessions/{id}/save", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
-			SessionID string            `json:"session_id"`
-			Segments  []api.SaveSegment `json:"segments"`
+			SessionID    string            `json:"session_id"`
+			Segments     []api.SaveSegment `json:"segments"`
+			AllowSimilar bool              `json:"allow_similar"`
 		}
 		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
 			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
 			return
 		}
-		result, apiErr := s.api.SessionSave(r.Context(), id, req.Segments)
+		result, apiErr := s.api.SessionSave(r.Context(), id, req.Segments, req.AllowSimilar)
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/sessions/{id}/resolve-held", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req struct {
+			Resolutions []api.HeldResolution `json:"resolutions"`
+		}
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.SessionResolveHeld(r.Context(), id, req.Resolutions)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -154,8 +172,9 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	})
 
 	type sessionCommitArgs struct {
-		SessionID string            `json:"session_id" jsonschema:"session ID to commit segments to"`
-		Segments  []api.SaveSegment `json:"segments" jsonschema:"array of extracted knowledge segments"`
+		SessionID    string            `json:"session_id" jsonschema:"session ID to commit segments to"`
+		Segments     []api.SaveSegment `json:"segments" jsonschema:"array of extracted knowledge segments"`
+		AllowSimilar bool              `json:"allow_similar,omitempty" jsonschema:"disable similar-record promotion holds for this whole commit. Bulk-ingestion escape only; never a standing default"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_save",
@@ -164,7 +183,24 @@ func (s *Server) registerSessionsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_session_save")
 		defer done(nil)
-		result, apiErr := s.api.SessionSave(ctx, args.SessionID, args.Segments)
+		result, apiErr := s.api.SessionSave(ctx, args.SessionID, args.Segments, args.AllowSimilar)
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
+	type sessionResolveHeldArgs struct {
+		SessionID   string               `json:"session_id" jsonschema:"session whose held promotions to resolve"`
+		Resolutions []api.HeldResolution `json:"resolutions" jsonschema:"resolutions to apply"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_session_resolve_held",
+		Description: api.SessionResolveHeldDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionResolveHeldArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_session_resolve_held")
+		defer done(nil)
+		result, apiErr := s.api.SessionResolveHeld(ctx, args.SessionID, args.Resolutions)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}

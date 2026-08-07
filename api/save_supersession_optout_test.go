@@ -78,25 +78,24 @@ func TestSaveBatchHoldNeverMutatesCandidate(t *testing.T) {
 	}
 }
 
-// TestSessionSaveHonorsSupersessionOptOut: the session save path
-// runs its own auto-supersession against the Memory record created
-// from each segment. It must also honor opt-out on the older
-// candidate. Setup mirrors TestSaveHonorsSupersessionOptOut but
-// the trigger is a session segment whose content matches the seed.
-func TestSessionSaveHonorsSupersessionOptOut(t *testing.T) {
+// TestSessionSaveHoldsPromotion: a segment closely matching an
+// existing record has its Memory PROMOTION held -- the segment itself
+// still lands in the append-only Sessions tier, the matched record is
+// never mutated, and the hold is returned (and persisted on the
+// segment for re-presentation at the next prepare).
+func TestSessionSaveHoldsPromotion(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 	ctx := context.Background()
 
-	const text = "session save path must also honor supersession=none on the older candidate record"
+	const text = "session promotion hold must protect the older candidate record"
 	seed, apiErr := a.Save(ctx, SaveRequest{Content: text})
 	if apiErr != nil {
 		t.Fatalf("seed Save: %v", apiErr)
 	}
-	addToOptOutCollection(t, a, seed.ID)
 
-	result, svcErr := a.SessionStart(ctx, "optout-session", "")
+	result, svcErr := a.SessionStart(ctx, "hold-session", "")
 	if svcErr != nil {
 		t.Fatalf("SessionStart: %v", svcErr)
 	}
@@ -106,18 +105,41 @@ func TestSessionSaveHonorsSupersessionOptOut(t *testing.T) {
 	}
 	resp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: text, TopicName: "dup topic"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("SessionSave: %v", err)
 	}
-	if len(resp.Superseded) != 0 {
-		t.Errorf("opt-out record superseded by session segment: %+v", resp.Superseded)
+	if resp.SegmentsAdded != 1 {
+		t.Fatalf("segment must land in Sessions regardless of hold, got %d", resp.SegmentsAdded)
+	}
+	if resp.MemoryRecordsCreated != 0 {
+		t.Fatalf("held promotion must not create a Memory record, got %d", resp.MemoryRecordsCreated)
+	}
+	if len(resp.Held) != 1 {
+		t.Fatalf("expected 1 held promotion, got %+v", resp.Held)
+	}
+	h := resp.Held[0]
+	if h.Held == nil || h.Held.ID != seed.ID {
+		t.Fatalf("held against %+v, want %s", h.Held, seed.ID)
+	}
+	if h.SegmentID == "" {
+		t.Fatal("held promotion must name its segment")
 	}
 
 	eng.RLock()
 	defer eng.RUnlock()
 	old, _ := eng.Graph().GetNode(seed.ID)
 	if _, hist := old.Properties.GetTimestamp("valid_until"); hist {
-		t.Error("opt-out record has valid_until set after session save")
+		t.Error("held-against record has valid_until set; holds must never mutate")
+	}
+	seg, _ := eng.Graph().GetNode(h.SegmentID)
+	if seg == nil {
+		t.Fatal("held segment node missing")
+	}
+	if held, _ := seg.Properties.GetBool("promotion_held"); !held {
+		t.Error("segment missing persisted promotion_held state")
+	}
+	if target, _ := seg.Properties.GetString("promotion_hold_target"); target != seed.ID {
+		t.Errorf("promotion_hold_target = %q, want %s", target, seed.ID)
 	}
 }
