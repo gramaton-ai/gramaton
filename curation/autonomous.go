@@ -1572,7 +1572,10 @@ func enrichConceptSyntheses(ctx context.Context, e *core.Engine, llmProv llm.Pro
 						vec := vecs[ti]
 						e.SetProp(a.id, "embedding_full", graph.VectorProperty(vec))
 						e.SetProp(a.id, "embedding_model", graph.StringProperty(modelID))
-						e.VecIdx().Add(a.id, vec)
+						// No VecIdx registration: concepts stay out of
+						// the primary vector index; include_concepts
+						// retrieval reads embedding_full directly via
+						// the concept-side cosine scan.
 						break
 					}
 				}

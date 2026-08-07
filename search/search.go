@@ -377,6 +377,26 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	simDur := time.Since(step2)
 	slog.Debug("search step 2: similarity", "component", "search", "matches", len(similarities), "ms", simDur.Milliseconds())
 
+	// Step 2b: concept retrieval. Concepts are absent from the primary
+	// indexes (derived-layer contract), so the opt-in include path
+	// retrieves them here: a cosine scan over concept nodes'
+	// embedding_full, injected as ordinary candidates on the same
+	// [0,1] similarity scale. The existence check keeps a legacy
+	// index entry (pre-exclusion store) from double-counting.
+	if !q.ExcludeConcepts && len(queryVec) > 0 {
+		threshold := t.cfg.Telemetry.ConceptMatchThreshold
+		if threshold <= 0 {
+			threshold = 0.7
+		}
+		for _, cm := range ScanConceptMatches(t.graph, queryVec, threshold) {
+			if _, exists := similarities[cm.ID]; exists {
+				continue
+			}
+			similarities[cm.ID] = cm.Cosine
+			matchSources[cm.ID] = "concept_scan"
+		}
+	}
+
 	// Step 3: Score candidates. When we have a text query, only score
 	// nodes that appeared in vector or BM25 results -- not all 151K
 	// candidates. For filter-only queries (no text), score every member

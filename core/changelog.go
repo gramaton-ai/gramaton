@@ -100,6 +100,12 @@ func (e *Engine) appendChangelog(commit *graph.Commit, dirty, deleted []string, 
 		if !ok {
 			continue
 		}
+		// Concept churn (synthesis rewrites, alias merges, evidence
+		// counts) is curation regenerating derived data, not knowledge
+		// history -- concepts mint no versions.
+		if graph.IsConcept(n.Properties) {
+			continue
+		}
 		if !e.logicalChange(prevHash[id], n) {
 			continue
 		}
@@ -110,6 +116,9 @@ func (e *Engine) appendChangelog(commit *graph.Commit, dirty, deleted []string, 
 		}
 	}
 	for _, id := range deleted {
+		if e.blobIsConcept(prevHash[id]) {
+			continue
+		}
 		entries[id] = index.ChangelogEntry{
 			Commit:    commit.Hash,
 			Timestamp: commit.Timestamp,
@@ -205,6 +214,9 @@ func (e *Engine) indexCommitDiff(parent, commit *graph.Commit) {
 	seen := make(map[string]bool)
 	for _, entry := range diff.Added {
 		seen[entry.Key] = true
+		if e.blobIsConcept(entry.Value) {
+			continue
+		}
 		if e.blobLogicalChange(oldHash[entry.Key], entry.Value) {
 			entries[entry.Key] = index.ChangelogEntry{
 				Commit:    commit.Hash,
@@ -214,7 +226,7 @@ func (e *Engine) indexCommitDiff(parent, commit *graph.Commit) {
 		}
 	}
 	for _, entry := range diff.Removed {
-		if !seen[entry.Key] {
+		if !seen[entry.Key] && !e.blobIsConcept(entry.Value) {
 			entries[entry.Key] = index.ChangelogEntry{
 				Commit:    commit.Hash,
 				Timestamp: commit.Timestamp,
@@ -225,6 +237,24 @@ func (e *Engine) indexCommitDiff(parent, commit *graph.Commit) {
 		slog.Error("changelog: append failed during walk", "component", "engine",
 			"commit", trunc12(commit.Hash), "err", err)
 	}
+}
+
+// blobIsConcept reports whether the blob at hash is a concept node.
+// Unreadable or empty hashes report false (the record path stays the
+// default).
+func (e *Engine) blobIsConcept(hash string) bool {
+	if hash == "" {
+		return false
+	}
+	data, err := e.store.Read(hash)
+	if err != nil {
+		return false
+	}
+	n, err := graph.UnmarshalNode(data)
+	if err != nil {
+		return false
+	}
+	return graph.IsConcept(n.Properties)
 }
 
 // blobLogicalChange is logicalChange over two stored blobs (the
@@ -487,6 +517,9 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 		seen := make(map[string]bool)
 		for _, entry := range diff.Added {
 			seen[entry.Key] = true
+			if e.blobIsConcept(entry.Value) {
+				continue
+			}
 			if e.blobLogicalChange(oldHash[entry.Key], entry.Value) {
 				batch[entry.Key] = append(batch[entry.Key], index.ChangelogEntry{
 					Commit: c.Hash, NodeHash: entry.Value, Timestamp: c.Timestamp,
@@ -495,7 +528,7 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 			}
 		}
 		for _, entry := range diff.Removed {
-			if !seen[entry.Key] {
+			if !seen[entry.Key] && !e.blobIsConcept(entry.Value) {
 				batch[entry.Key] = append(batch[entry.Key], index.ChangelogEntry{
 					Commit: c.Hash, Timestamp: c.Timestamp,
 				})

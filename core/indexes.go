@@ -128,10 +128,16 @@ func (s *indexSet) applyToNode(n *graph.Node, content string, vec []float32) {
 			s.secIdx.SetFieldExists(k, n.ID)
 		}
 	}
-	if content != "" {
+	// Concepts are derived summaries-of-many-records: they stay out
+	// of the primary retrieval indexes (BM25 + vector) so they never
+	// compete with their member records for top-N slots. The opt-in
+	// include_concepts path retrieves them via the concept-side
+	// cosine scan over their embedding_full property instead.
+	concept := graph.IsConcept(n.Properties)
+	if content != "" && !concept {
 		s.bm25Full.Add(n.ID, content)
 	}
-	if vec != nil {
+	if vec != nil && !concept {
 		s.vecIdx.Add(n.ID, vec)
 	}
 	if s.secIdx != nil {
@@ -177,6 +183,12 @@ func (s *indexSet) setContentProp(g *graph.Graph, nodeID, key, content string) {
 	s.setProp(g, nodeID, key, graph.StringProperty(content))
 	if key == "content_full" {
 		s.bm25Full.Remove(nodeID)
+		// A concept's synthesis rewrite must not re-enter BM25 (the
+		// Remove above also clears any entry a pre-exclusion store
+		// left behind).
+		if n, ok := g.GetNode(nodeID); ok && graph.IsConcept(n.Properties) {
+			return
+		}
 		s.bm25Full.Add(nodeID, content)
 	}
 }
@@ -190,10 +202,13 @@ func (s *indexSet) applyToNodeSession(ws *WriteSession, n *graph.Node, content s
 			s.secIdx.SetFieldExistsTx(ws.tx, k, n.ID)
 		}
 	}
-	if content != "" {
+	// Same concept exclusion as applyToNode: derived nodes stay out
+	// of BM25 + vector.
+	concept := graph.IsConcept(n.Properties)
+	if content != "" && !concept {
 		s.bm25Full.AddTx(ws.tx, ws.bm25, n.ID, content)
 	}
-	if vec != nil {
+	if vec != nil && !concept {
 		s.vecIdx.Add(n.ID, vec)
 	}
 	if s.secIdx != nil {
@@ -383,6 +398,12 @@ func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex
 			n := it.Node()
 			for k, v := range n.Properties {
 				propIdx.AddTx(tx, n.ID, k, v)
+			}
+			// Concepts stay out of BM25 + vector (derived-layer
+			// contract); rebuild is also how legacy stores shed their
+			// pre-exclusion concept entries.
+			if graph.IsConcept(n.Properties) {
+				continue
 			}
 			if !vecLoaded {
 				for _, embKey := range []string{"embedding_full", "embedding_medium", "embedding_short", "embedding_keywords"} {

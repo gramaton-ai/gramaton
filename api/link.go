@@ -54,11 +54,16 @@ func (a *API) Link(ctx context.Context, req LinkRequest) (LinkResponse, *APIErro
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
-	if _, ok := a.engine.Graph().GetNode(req.SourceID); !ok {
+	src, ok := a.engine.Graph().GetNode(req.SourceID)
+	if !ok {
 		return LinkResponse{}, ErrNotFound("source record not found")
 	}
-	if _, ok := a.engine.Graph().GetNode(req.TargetID); !ok {
+	tgt, ok := a.engine.Graph().GetNode(req.TargetID)
+	if !ok {
 		return LinkResponse{}, ErrNotFound("target record not found")
+	}
+	if graph.IsConcept(src.Properties) || graph.IsConcept(tgt.Properties) {
+		return LinkResponse{}, ErrInvalid("concept nodes are machine-owned derived summaries; curation manages their edges (instance_of membership) -- link the member records instead")
 	}
 
 	weight := 0.5

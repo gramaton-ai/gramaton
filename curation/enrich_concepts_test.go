@@ -86,12 +86,11 @@ func TestEnrichConceptsSkipsRedundantUpdates(t *testing.T) {
 }
 
 // TestEnrichConceptSynthesesEmbedsConcept pins the inline-embed
-// fix: concept nodes were created during emergence with nil
-// vectors and only got embeddings when `gramaton reembed` caught
-// up. Concept telemetry and PRF were blind for any concept the
-// reembed pipeline had not yet processed. The synthesis flow
-// now embeds each completed concept inline and registers it in
-// the vec index.
+// fix plus the derived-layer boundary: synthesis embeds each
+// completed concept inline (concept retrieval and telemetry read
+// embedding_full directly), but the concept is NOT registered in
+// the primary vector index -- concepts must never compete with
+// their member records in ranked retrieval.
 func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 	emb := &configurableObsEmbedder{dim: 3}
 
@@ -167,8 +166,8 @@ func TestEnrichConceptSynthesesEmbedsConcept(t *testing.T) {
 	if model != "configurable-obs-embedder" {
 		t.Errorf("embedding_model = %q, want configurable-obs-embedder", model)
 	}
-	if eng.VecIdx().Len() == 0 {
-		t.Error("vec index empty after enrichment; concept not registered")
+	if eng.VecIdx().Len() != 0 {
+		t.Error("concept entered the primary vector index; derived nodes must stay out of ranked retrieval")
 	}
 }
 

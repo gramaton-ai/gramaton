@@ -80,6 +80,12 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 		if isLegacyChunk(g, n.ID) {
 			continue
 		}
+		// Concepts are summaries-of-many-records -- high similarity to
+		// their own members is their function, not duplication (the
+		// historical false-supersession misfire shape).
+		if graph.IsConcept(n.Properties) {
+			continue
+		}
 		if v, ok := n.Properties["embedding_full"]; ok {
 			nodes = append(nodes, embedded{id: n.ID, vec: v.Vector()})
 		}
@@ -103,6 +109,11 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 				continue
 			}
 			if float64(r.Similarity) < threshold {
+				continue
+			}
+			// The found side can be a concept when a legacy store's
+			// vector index still carries pre-exclusion entries.
+			if fn, ok := g.GetNode(r.NodeID); ok && graph.IsConcept(fn.Properties) {
 				continue
 			}
 

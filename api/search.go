@@ -25,7 +25,7 @@ type SearchRequest struct {
 	ConfidenceMax      *float64          `json:"confidence_max,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMin      *float64          `json:"importance_min,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMax      *float64          `json:"importance_max,omitempty" jsonschema:"0.0-1.0"`
-	IncludeConcepts    bool              `json:"include_concepts,omitempty" jsonschema:"include synthesized concept nodes (node_type=concept) in results. Default false: concepts are derivative cross-record summaries and compete with their member records for top-N slots, so they're filtered out of default search. Set true when you specifically want concepts (e.g. browsing what patterns have crystallized)."`
+	IncludeConcepts    bool              `json:"include_concepts,omitempty" jsonschema:"include synthesized concept nodes (node_type=concept) in results. Default false: concepts are derived cross-record summaries kept out of the primary retrieval indexes. Set true when you specifically want concepts (e.g. browsing what patterns have crystallized); they are matched by semantic similarity to the query, so text-only matching (no embedding provider) will not surface them."`
 	Since              string            `json:"since,omitempty" jsonschema:"filter: created after date (YYYY-MM-DD or RFC3339)"`
 	Missing            []string          `json:"missing,omitempty" jsonschema:"array of field names that must be unset (e.g. [temporality, confidence])"`
 	Keywords           []string          `json:"keywords,omitempty" jsonschema:"array of keywords that must all be present on the record (exact match)"`

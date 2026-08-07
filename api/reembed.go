@@ -253,7 +253,10 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 			a.engine.Graph().SetNodeProperty(res.target.nodeID, res.target.keys[i], prop)
 			a.engine.PropIdx().Add(res.target.nodeID, res.target.keys[i], prop)
 		}
-		if len(res.vectors) > 0 {
+		// Concepts keep their embedding_full fresh (the include_concepts
+		// cosine scan reads it) but stay out of the primary vector
+		// index and the save-guard delta ring.
+		if len(res.vectors) > 0 && !graph.IsConcept(n.Properties) {
 			a.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
 			// The record just became similarity-visible; register it in
 			// the delta re-scan ring so a save whose off-lock scan
