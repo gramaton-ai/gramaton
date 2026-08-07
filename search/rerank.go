@@ -15,12 +15,12 @@ import (
 
 // candidateMeta renders the compact epistemic-metadata prefix for one
 // candidate line in the rerank prompt: lifecycle state, then any of
-// epistemic status, temporality, confidence, and created date. The
-// reranked order replaces the composite-score order outright, so this
-// prefix is the only channel through which record lifecycle can still
-// influence the final ordering.
-func candidateMeta(props graph.Properties, now time.Time) string {
-	parts := make([]string, 0, 5)
+// epistemic status, temporality, confidence, date, and a live-conflict
+// marker. The reranked order replaces the composite-score order
+// outright, so this prefix is the only channel through which record
+// lifecycle can still influence the final ordering.
+func candidateMeta(props graph.Properties, now time.Time, conflicts int) string {
+	parts := make([]string, 0, 6)
 	state := "current"
 	if res, ok := props.GetString("resolution"); ok && res != "" {
 		state = res
@@ -37,8 +37,16 @@ func candidateMeta(props graph.Properties, now time.Time) string {
 	if c, ok := props.GetFloat64("confidence"); ok {
 		parts = append(parts, fmt.Sprintf("conf %.1f", c))
 	}
-	if created, ok := props.GetTimestamp("created_at"); ok {
+	// The revision date, when present, IS the record's recency -- a
+	// revised record must not read as old just because it was created
+	// long ago (mirrors the scoring freshness anchor).
+	if upd, ok := props.GetTimestamp("updated_at"); ok {
+		parts = append(parts, "updated "+upd.UTC().Format("2006-01-02"))
+	} else if created, ok := props.GetTimestamp("created_at"); ok {
 		parts = append(parts, created.UTC().Format("2006-01-02"))
+	}
+	if conflicts > 0 {
+		parts = append(parts, fmt.Sprintf("in conflict with %d record(s)", conflicts))
 	}
 	return "(" + strings.Join(parts, "; ") + ")"
 }
@@ -85,7 +93,8 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 		if summary == "" {
 			continue
 		}
-		cands = append(cands, candidate{idx: i, id: sr.id, meta: candidateMeta(n.Properties, now), summary: summary})
+		conflicts := len(ConflictingRecordIDs(t.graph, sr.id))
+		cands = append(cands, candidate{idx: i, id: sr.id, meta: candidateMeta(n.Properties, now, conflicts), summary: summary})
 	}
 
 	if len(cands) == 0 {
@@ -95,11 +104,12 @@ func (t *Tool) rerankWithLLM(query string, candidates []scored) []scored {
 	// Build the prompt.
 	var b strings.Builder
 	b.WriteString("Given the search query and numbered candidate results below, return the numbers of the most relevant results in order of relevance (most relevant first). Return ONLY a JSON array of numbers, nothing else.\n\n")
-	b.WriteString("Each candidate starts with epistemic metadata: (lifecycle state; epistemic status; temporality; confidence; created date). Relevance to the query is the primary criterion; use the metadata as a tiebreaker:\n" +
+	b.WriteString("Each candidate starts with epistemic metadata: (lifecycle state; epistemic status; temporality; confidence; date; conflict marker). Relevance to the query is the primary criterion; use the metadata as a tiebreaker:\n" +
 		"- Prefer current records over superseded, historical, completed, abandoned, or obsolete ones when they cover the same ground.\n" +
 		"- When the query asks about status, history, or what changed, a superseding or correcting record is often the best answer even if not current.\n" +
 		"- Never rank refuted records as if their claim were true; they matter only when the query is about the refuted claim itself.\n" +
-		"- On time-sensitive topics, prefer recent high-confidence records over old low-confidence ones.\n\n")
+		"- On time-sensitive topics, prefer recent high-confidence records over old low-confidence ones. A date labeled 'updated' is a revision date -- treat it, not the record's age, as its recency.\n" +
+		"- 'in conflict with N record(s)' marks a live unresolved contradiction: when both sides of a conflict match the query, rank both highly rather than suppressing either side.\n\n")
 	b.WriteString(fmt.Sprintf("Query: %s\n\nCandidates:\n", query))
 	for i, c := range cands {
 		// Truncate summary to keep prompt size reasonable.
