@@ -176,6 +176,9 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 	}
 	a.engine.AdoptGraph(newGraph)
 	a.engine.RebuildAllIndexes()
+	// Re-scope the changelog to the new lineage: retract the
+	// abandoned branch's entries, replay the new branch's.
+	a.engine.RebuildChangelogFor(hash)
 
 	return BranchCheckoutResponse{
 		Name:       name,
@@ -237,6 +240,7 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 	a.engine.AdoptGraph(newGraph)
 	a.engine.RebuildAllIndexes()
 
+	preMerge := a.engine.HeadHashLocked()
 	commit, err := a.engine.Save(fmt.Sprintf("merge branch %q", name), graph.CommitAction{
 		Kind: graph.ActionMerge,
 	})
@@ -244,6 +248,10 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 		a.log.Warn("branch merge: save failed", "component", "branch", "name", name, "err", err)
 		return BranchMergeResponse{}, ErrInternal("failed to save merge")
 	}
+	// The adopted graph carries no dirty nodes, so Save's changelog
+	// append saw an empty mutation set; derive the merge commit's
+	// logical versions from its tree diff instead.
+	a.engine.IndexCommitDiffByHash(preMerge, commit.Hash)
 	if err := core.WriteRef(dataDir, "main", commit.Hash); err != nil {
 		a.log.Warn("branch merge: write main ref failed", "component", "branch", "name", name, "err", err)
 		return BranchMergeResponse{}, ErrInternal("failed to update main ref")

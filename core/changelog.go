@@ -257,3 +257,125 @@ func trunc12(h string) string {
 	}
 	return h
 }
+
+// RebuildChangelogFor re-scopes the changelog when HEAD moves to a
+// different lineage (branch checkout/merge adoption): entries minted
+// by commits exclusive to the abandoned lineage are retracted, and
+// commits exclusive to the new lineage are replayed -- O(divergence)
+// from the merge-base, never O(chain). Caller must hold the write
+// lock. An uninitialized changelog stays uninitialized; a marker
+// whose lineage cannot be reconciled within the walk bound resets
+// coverage to the new head with a pointer at the offline backfill.
+func (e *Engine) RebuildChangelogFor(newHead string) {
+	if e.changelog == nil || newHead == "" {
+		return
+	}
+	marker := e.changelog.Marker()
+	if marker == "" || marker == newHead {
+		return
+	}
+
+	const maxWalk = 100000
+
+	// Ancestor set + order of the new lineage.
+	newAncestors := map[string]bool{}
+	var newChain []*graph.Commit
+	cur := newHead
+	for range maxWalk {
+		c, err := loadCommit(e.store, cur)
+		if err != nil {
+			break
+		}
+		newAncestors[c.Hash] = true
+		newChain = append(newChain, c)
+		if c.Parent == "" {
+			break
+		}
+		cur = c.Parent
+	}
+
+	// Walk the old lineage from the marker until it joins the new
+	// ancestry; everything before the join is old-exclusive.
+	oldExclusive := map[string]bool{}
+	base := ""
+	cur = marker
+	for range maxWalk {
+		if newAncestors[cur] {
+			base = cur
+			break
+		}
+		c, err := loadCommit(e.store, cur)
+		if err != nil {
+			break
+		}
+		oldExclusive[c.Hash] = true
+		if c.Parent == "" {
+			break
+		}
+		cur = c.Parent
+	}
+	if base == "" {
+		slog.Warn("changelog rebuild: no merge-base with the new lineage; resetting coverage (run 'gramaton backfill changelog' to re-index history)",
+			"component", "engine", "marker", trunc12(marker), "new_head", trunc12(newHead))
+		if err := e.changelog.SetMarker(newHead); err != nil {
+			slog.Error("changelog marker reset failed", "component", "engine", "err", err)
+		}
+		return
+	}
+
+	if err := e.changelog.RetractCommits(oldExclusive); err != nil {
+		slog.Error("changelog rebuild: retract failed", "component", "engine", "err", err)
+	}
+
+	// Replay the new-exclusive commits oldest-first; each Append
+	// advances the marker, so a crash mid-replay resumes cleanly.
+	// base is in newAncestors, so the scan always finds it; commits
+	// below its index are the new-exclusive set (empty when the
+	// checkout is a pure rewind to an ancestor).
+	replayFrom := -1
+	for i, c := range newChain {
+		if c.Hash == base {
+			replayFrom = i - 1
+			break
+		}
+	}
+	if err := e.changelog.SetMarker(base); err != nil {
+		slog.Error("changelog rebuild: marker set failed", "component", "engine", "err", err)
+	}
+	for i := replayFrom; i >= 0; i-- {
+		c := newChain[i]
+		var parent *graph.Commit
+		if c.Parent != "" {
+			if p, err := loadCommit(e.store, c.Parent); err == nil {
+				parent = p
+			}
+		}
+		e.indexCommitDiff(parent, c)
+	}
+}
+
+// IndexCommitDiffByHash appends one commit's logical versions from
+// its tree diff against an explicit parent. Used after adopting a
+// staged graph (revert, merge): the adopted graph carries no dirty
+// nodes, so the Save-time append sees an empty mutation set even
+// though the commit's tree may differ wholesale from its parent's.
+// Idempotent per node (a commit already at a node's list tail is
+// skipped). Caller must hold the write lock.
+func (e *Engine) IndexCommitDiffByHash(parentHash, commitHash string) {
+	if e.changelog == nil || commitHash == "" {
+		return
+	}
+	commit, err := loadCommit(e.store, commitHash)
+	if err != nil {
+		slog.Error("changelog: load commit for diff failed", "component", "engine",
+			"commit", trunc12(commitHash), "err", err)
+		return
+	}
+	var parent *graph.Commit
+	if parentHash != "" {
+		if p, err := loadCommit(e.store, parentHash); err == nil {
+			parent = p
+		}
+	}
+	e.indexCommitDiff(parent, commit)
+}

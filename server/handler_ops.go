@@ -76,6 +76,7 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	s.engine.AdoptGraph(staged)
 
 	s.engine.RebuildAllIndexes()
+	preRevert := s.engine.HeadHashLocked()
 
 	commit, err := s.engine.Save(fmt.Sprintf("revert to %s", core.TruncHash(fullHash)), graph.CommitAction{
 		Kind: graph.ActionRevert,
@@ -84,6 +85,10 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
 		return
 	}
+	// The adopted graph carries no dirty nodes, so Save's changelog
+	// append saw an empty mutation set; derive the revert commit's
+	// logical versions from its tree diff instead.
+	s.engine.IndexCommitDiffByHash(preRevert, commit.Hash)
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"reverted_to": core.TruncHash(fullHash),
