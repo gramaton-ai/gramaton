@@ -164,7 +164,7 @@ tasks: which tier each LLM call site uses. Unset entries fall
 	"llm.models.tasks.summarization": `summarization: generate content_short (the embedded semantic
   anchor) for each new record. High volume, easy.`,
 
-	"llm.models.tasks.contradiction": `contradiction: detect supersession + conflicts between similar
+	"llm.models.tasks.contradiction": `contradiction: detect conflicts between similar
   records. Subtle reasoning; matters for store correctness.`,
 
 	"llm.models.tasks.concept": `concept: synthesize concept nodes from clusters of related
@@ -267,8 +267,7 @@ generic concepts, runaway cost).`,
   records through the condensed prompt (~60% smaller).`,
 
 	"llm.curation.contradiction": `-------------------------------------------------------------
-contradiction: tuning for the contradiction/supersession
-detector.
+contradiction: tuning for the contradiction detector.
 -------------------------------------------------------------`,
 
 	"llm.curation.contradiction.max_checks": `max_checks: candidate pairs examined per cycle.
@@ -278,7 +277,7 @@ detector.
   contradiction candidates. Below = too dissimilar.`,
 
 	"llm.curation.contradiction.max_similarity": `max_similarity: upper bound. Above = near-duplicate
-  handled by auto-supersession instead.`,
+  territory owned by the save-guard hold instead.`,
 
 	"llm.curation.contradiction.batch_size": `batch_size: pairs packed into one LLM call.
   1 = single-pair (legacy). 5-10 = ~Nx call reduction.`,
