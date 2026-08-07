@@ -7,6 +7,106 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-supersession is removed; near-duplicate saves are refused
+  instead (breaking).** Records are now mutable and knowledge evolves
+  by updating the record that holds it, not by saving a successor
+  that retires the old one. A save at or above the hold threshold
+  (`save_guard.similar_hold_threshold`, default 0.94, verified by a
+  word-level Jaccard gate) is **held**: nothing is created, the
+  response carries the similar record's id, full content, similarity,
+  created_at, historical/resolution status, and a version token, and
+  the caller either revises that record via `gramaton_update` or
+  re-sends with `allow_similar` naming the acknowledged record. The
+  band below the hold threshold (`advisory_threshold`, default 0.85)
+  saves successfully with a one-line advisory naming the most similar
+  record. Holds apply uniformly per item on every creation path —
+  save, batch (including same-batch sibling pairs), session Memory
+  promotion, and `/v1/ingest`. The scan runs off-lock; records
+  committed between scan and write lock are re-checked under the lock
+  via a recent-writes ring, and an embedding outage fails open with a
+  `similar_check_pending` warning (checked at re-embed). Wire-level
+  breaks: `SaveResponse` loses `superseded[]` and gains
+  `held`/`advisory` (HTTP 409 on a hold); batch responses gain
+  `held[]`; `skip_supersession` is replaced by `allow_similar`;
+  server-side auto-supersession no longer mutates older records on
+  any path.
+
+- **`gramaton_update` now updates content, not just metadata
+  (breaking in shape, additive in spirit).** `content` replaces the
+  record's text (prior content echoed back as `previous_content`);
+  `content_append` appends without re-sending the full text (rebased
+  on the live content, with a size nudge at 8KB). Content changes
+  re-embed off-lock and fail closed if embedding fails, stamp
+  `updated_at`, delete stale observation children for re-extraction,
+  and flag the stored summary for refresh when it no longer
+  represents the content (immediately on replace with a stale
+  summary; on appends once cumulative growth passes a ratio).
+  `expected_version` (a content-hash version token, returned by holds
+  and updates) makes updates and resolves conditional: on mismatch
+  nothing applies and the response carries the current content as a
+  `version_conflict` (HTTP 409).
+
+- **Search no longer takes `include_historical` (breaking).**
+  Historical records (past `valid_until`) were already included and
+  rank-penalized; the flag suggested a hard filter that did not
+  exist. Filter with `resolution="unresolved"` to exclude them.
+
+- **Collections drop the `supersession` knob (breaking).** Behavior
+  knobs are now `curation`, `contradictions`, `clear_mode`;
+  `effective_curation` resolves to `{curation, contradictions}`.
+  Existing collection nodes with the stored property are unaffected
+  (the property is simply no longer read).
+
+- **Config: `dedup:` section removed, `save_guard:` added
+  (breaking).** `save_guard.similar_hold_threshold` (default 0.94)
+  and `save_guard.advisory_threshold` (default 0.85) replace
+  `dedup.similarity_threshold`/`dedup.action`. Configs still carrying
+  a `dedup:` section fail at load (strict decoding) — delete the
+  section.
+
+- **Curation no longer supersedes or consolidates records.** The
+  deterministic dedup sweep is gone, and the LLM relationship
+  analysis no longer emits a `supersedes` verdict (a newer-version
+  reading maps to `related_to`; contradiction detection is capped at
+  the hold threshold, above which the save guard owns the pair). The
+  manual vocabulary survives: `gramaton_resolve` still accepts
+  `superseded` and `gramaton_link` can still create `supersedes`
+  edges when lineage is itself knowledge.
+
+- **Confirmed contradictions are now visible at retrieval.** A
+  `contradicts` verdict sets `epistemic_status: contested` on both
+  records (never downgrading a deliberate `well_established`), and
+  search/inspect metadata summaries carry a "CONFLICTS with
+  record(s) ..." line. A content update to either record reopens the
+  question: the edges are deleted, contested clears (on the peer too,
+  when no other conflicts remain), and the pair re-enters the
+  detection window.
+
+- **Tenet 8 rewritten.** "Never delete, always supersede" becomes
+  "One live record per fact; history lives in the commit log." The
+  never-destroy spirit is carried by the immutable commit substrate
+  rather than by accumulating superseded records in the live graph.
+
+- **Agent guidance rewritten for the update-first contract
+  (GuidanceVersion 0.3.0).** Installed guidance, guide topics, the
+  extraction prompt, and integration templates now teach: update the
+  existing record when knowledge evolves, act on holds, resolve held
+  session promotions. `summary_short` budgets are advertised as
+  target ~750 / max ~900 (enforced cap unchanged at 1000).
+
+### Added
+
+- **`gramaton_session_resolve_held`** resolves held session Memory
+  promotions: `update_target` wires the segment's `extracted_as`
+  provenance to the record you already revised (no new record);
+  `allow_similar` promotes the genuinely distinct segment now. The
+  segment itself always lands at save time; unresolved holds persist
+  on the segment and are re-presented by every
+  `gramaton_session_prepare`. `gramaton_session_save` accepts
+  `allow_similar: true` as a whole-commit bulk-ingestion escape.
+
 ## [0.3.0-alpha.6] - 2026-07-06
 
 ### Added
