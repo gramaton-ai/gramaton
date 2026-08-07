@@ -1,12 +1,22 @@
-// Package dedup detects near-duplicate nodes in the knowledge graph.
+// Package similarity detects near-duplicate and similar records in
+// the knowledge graph. It powers the save-time hold (a near-verbatim
+// save is refused before creation so the caller can revise the
+// existing record instead) and the advisory band (a successful save
+// carries a notice naming the most similar existing record).
+//
 // Two-stage pipeline: uint8-quantized vector similarity for candidate
 // retrieval, then float32 cosine similarity for threshold decision,
-// then word-level Jaccard verification on the raw content to reject
-// false positives from structurally similar but semantically distinct
-// documents.
-package dedup
+// then -- for hold decisions only -- word-level Jaccard verification
+// on the raw content to reject false positives from structurally
+// similar but semantically distinct documents. Advisory matches skip
+// the Jaccard gate deliberately: genuine revisions share fewer exact
+// words than duplicates, and an advisory is informational, not
+// blocking.
+package similarity
 
 import (
+	"strings"
+
 	"github.com/gramaton-ai/gramaton/config"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
@@ -36,9 +46,126 @@ var embeddingKeys = []string{
 	"embedding_keywords",
 }
 
+// Match is one similar-record result from a scan.
+type Match struct {
+	// NodeID is the existing record.
+	NodeID string
+	// Similarity is the float32-recomputed cosine similarity.
+	Similarity float64
+}
+
+// Outcome is the result of a save-guard Scan.
+type Outcome struct {
+	// Hold, when non-nil, is the best candidate at or above the hold
+	// threshold that also passed Jaccard verification. The save must
+	// not create a record; return the hold to the caller.
+	Hold *Match
+	// Advisory, when non-nil, is the best candidate in the advisory
+	// band [advisory threshold, hold threshold) -- or a candidate at
+	// hold-level cosine that failed Jaccard verification (structurally
+	// similar, unverified). The save proceeds; the response carries
+	// the notice.
+	Advisory *Match
+}
+
+// Scan runs the save-guard candidate scan for a not-yet-inserted
+// record described by its embedding and raw content. selfID is
+// skipped when non-empty (post-insert re-checks).
+//
+// Candidates that are derived or non-knowledge nodes are never
+// eligible: concepts and observations (machine-generated summaries --
+// the exact shape behind historical false-supersession misfires) and
+// collection items (identified by field.* properties; tracked data,
+// not prose knowledge). Candidates with no content at all are
+// likewise skipped.
+//
+// The caller must hold at least a read lock on the engine. The result
+// is advisory with respect to concurrency: a similar record that
+// commits after this scan is caught by the engine's delta re-scan
+// under the write lock (see core.Engine.WritesSince).
+func Scan(g *graph.Graph, vecIdx index.VectorIndex, cfg config.SaveGuardConfig, vec []float32, content string, selfID string) Outcome {
+	var out Outcome
+	if vecIdx.Len() < 1 || vec == nil {
+		return out
+	}
+	results := vecIdx.Search(vec, 10, nil)
+	for _, r := range results {
+		if selfID != "" && r.NodeID == selfID {
+			continue
+		}
+		candidate, ok := g.GetNode(r.NodeID)
+		if !ok || excluded(candidate) {
+			continue
+		}
+		sim := float64(r.Similarity)
+		if candVec := nodeEmbedding(candidate); candVec != nil {
+			sim = float64(index.CosineSimilarity(vec, candVec))
+		}
+		if sim < cfg.AdvisoryThreshold {
+			continue
+		}
+		if sim >= cfg.SimilarHoldThreshold && verifyJaccard(g, content, r.NodeID) {
+			if out.Hold == nil || sim > out.Hold.Similarity {
+				out.Hold = &Match{NodeID: r.NodeID, Similarity: sim}
+			}
+			continue
+		}
+		if out.Advisory == nil || sim > out.Advisory.Similarity {
+			out.Advisory = &Match{NodeID: r.NodeID, Similarity: sim}
+		}
+	}
+	if out.Hold != nil {
+		// A hold supersedes any advisory -- the caller acts on the
+		// hold and the advisory would be noise.
+		out.Advisory = nil
+	}
+	return out
+}
+
+// MatchAgainst evaluates one specific candidate for a hold: cosine
+// against the candidate's stored embedding plus Jaccard verification.
+// Used by the engine's delta re-scan under the write lock, where the
+// candidate set is the handful of records committed since the
+// off-lock Scan. Returns the similarity and whether the pair
+// qualifies as a hold at the configured threshold.
+func MatchAgainst(g *graph.Graph, cfg config.SaveGuardConfig, vec []float32, content string, candidateID string) (float64, bool) {
+	candidate, ok := g.GetNode(candidateID)
+	if !ok || excluded(candidate) {
+		return 0, false
+	}
+	candVec := nodeEmbedding(candidate)
+	if candVec == nil {
+		return 0, false
+	}
+	sim := float64(index.CosineSimilarity(vec, candVec))
+	if sim < cfg.SimilarHoldThreshold {
+		return sim, false
+	}
+	return sim, verifyJaccard(g, content, candidateID)
+}
+
+// excluded reports whether a node is ineligible as a scan candidate:
+// derived nodes (concepts, observations), collection items (field.*
+// properties), and nodes with no content to judge against.
+func excluded(n *graph.Node) bool {
+	if nt, _ := n.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+		return true
+	}
+	for key := range n.Properties {
+		if strings.HasPrefix(key, "field.") {
+			return true
+		}
+	}
+	return nodeContent(n) == ""
+}
+
 // Check reports whether nodeID is a near-duplicate of an existing
 // record. Returns the existing node's ID and the cosine similarity
 // when a duplicate is found, otherwise ("", 0).
+//
+// Deprecated: legacy auto-supersession scan, retained only while the
+// remaining capture-site callers migrate to Scan. Remove with the
+// supersession removal cleanup.
 //
 // The caller must hold at least a read lock on the engine -- this
 // function does no locking of its own. It reads the graph and the
@@ -132,6 +259,14 @@ func verifyJaccard(g *graph.Graph, textA string, candidateID string) bool {
 	tokA := index.Tokenize(textA)
 	tokB := index.Tokenize(textB)
 	return index.JaccardSimilarity(tokA, tokB) >= JaccardMin
+}
+
+// NodeEmbeddingAndContent returns a node's best available embedding
+// (priority order embedding_full > medium > short > keywords) and its
+// raw content (content_full preferred over content_short). Exported
+// for the engine's post-insert re-scan entry point.
+func NodeEmbeddingAndContent(n *graph.Node) ([]float32, string) {
+	return nodeEmbedding(n), nodeContent(n)
 }
 
 // nodeEmbedding returns the first available embedding vector on n

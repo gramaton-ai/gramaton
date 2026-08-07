@@ -20,7 +20,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/chunking"
 	"github.com/gramaton-ai/gramaton/config"
-	"github.com/gramaton-ai/gramaton/dedup"
+	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
@@ -43,6 +43,17 @@ type Engine struct {
 	prov     *providers
 	searcher *searcherSubsystem
 	headHash string
+
+	// recentWrites is a bounded ring of recently committed
+	// embedding-bearing nodes, used by the save-guard delta re-scan
+	// to close the scan-to-lock window (the off-lock similarity scan
+	// cannot see records that commit between the scan and the write
+	// lock). Guarded by mu: appends happen under the write lock at
+	// node-creation sites; reads happen under the write lock in the
+	// delta re-scan. recentSeq is monotonically increasing and never
+	// reused.
+	recentWrites []recentWrite
+	recentSeq    uint64
 
 	// volatile disables durability syncs on every write surface
 	// (blob store, bbolt commits, HEAD/ref updates, jobs store,
@@ -1063,22 +1074,52 @@ func (e *Engine) SearchSnapshots() *SnapshotStore {
 }
 
 // CheckDedup checks if a node's embedding is too similar to existing
-// records. Delegates to dedup.Check; the Engine method exists to
+// records. Delegates to similarity.Check; the Engine method exists to
 // provide the natural entry point and preserve the historical API.
 // Caller must hold at least a read lock.
+//
+// Deprecated: legacy auto-supersession entry point; migrating callers
+// use ScanSimilar. Removed with the supersession removal cleanup.
 func (e *Engine) CheckDedup(nodeID string) (string, float64) {
-	return dedup.Check(e.graph, e.indexes.vecIdx, e.cfg.Dedup, nodeID)
+	return similarity.Check(e.graph, e.indexes.vecIdx, e.cfg.Dedup, nodeID)
 }
 
 // CheckDedupVec checks if a not-yet-inserted record -- described by
 // its embedding vector and raw content -- is a near-duplicate of an
-// existing record. Save runs this under a read lock before acquiring
-// the write lock so the O(N) candidate scan stays out of the write
-// critical section. The result is advisory (see dedup.CheckVec):
-// the caller must re-verify the candidate under the write lock.
-// Caller must hold at least a read lock.
+// existing record.
+//
+// Deprecated: legacy auto-supersession entry point; migrating callers
+// use ScanSimilarVec. Removed with the supersession removal cleanup.
 func (e *Engine) CheckDedupVec(vec []float32, content string) (string, float64) {
-	return dedup.CheckVec(e.graph, e.indexes.vecIdx, e.cfg.Dedup, vec, content)
+	return similarity.CheckVec(e.graph, e.indexes.vecIdx, e.cfg.Dedup, vec, content)
+}
+
+// ScanSimilarVec runs the save-guard scan (hold + advisory bands) for
+// a not-yet-inserted record described by its embedding and raw
+// content. Save runs this under a read lock before acquiring the
+// write lock so the O(N) candidate scan stays out of the write
+// critical section. The result is advisory with respect to
+// concurrency: pair it with WriteSeq before releasing the read lock
+// and a SimilarInDelta re-check under the write lock to close the
+// scan-to-lock window.
+// Caller must hold at least a read lock.
+func (e *Engine) ScanSimilarVec(vec []float32, content string) similarity.Outcome {
+	return similarity.Scan(e.graph, e.indexes.vecIdx, e.cfg.SaveGuard, vec, content, "")
+}
+
+// ScanSimilar runs the save-guard scan for an already-inserted record
+// (post-insert re-checks: deferred-embedding saves whose vectors
+// arrive via reembed). Caller must hold at least a read lock.
+func (e *Engine) ScanSimilar(nodeID string) similarity.Outcome {
+	n, ok := e.graph.GetNode(nodeID)
+	if !ok {
+		return similarity.Outcome{}
+	}
+	vec, content := similarity.NodeEmbeddingAndContent(n)
+	if vec == nil {
+		return similarity.Outcome{}
+	}
+	return similarity.Scan(e.graph, e.indexes.vecIdx, e.cfg.SaveGuard, vec, content, nodeID)
 }
 
 // PreChunkResult is an alias for chunking.Result, preserved so

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -59,6 +60,7 @@ type Config struct {
 	Chunking   ChunkingConfig   `yaml:"chunking"`
 	Concepts   ConceptsConfig   `yaml:"concepts"`
 	Dedup      DedupConfig      `yaml:"dedup"`
+	SaveGuard  SaveGuardConfig  `yaml:"save_guard"`
 	Graph      GraphConfig      `yaml:"graph"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Merge      MergeConfig      `yaml:"merge"`
@@ -655,9 +657,11 @@ type LLMContradictionConfig struct {
 	// dissimilar to meaningfully contradict.
 	MinSimilarity float64 `yaml:"min_similarity"`
 
-	// MaxSimilarity is the upper bound. Pairs above this are
-	// near-duplicates handled by auto-supersession, not contradiction
-	// detection.
+	// MaxSimilarity is the upper bound, kept contiguous with
+	// save_guard.similar_hold_threshold: pairs at or above the hold
+	// threshold are near-verbatim duplicates surfaced by the
+	// save-time hold and the gramaton_duplicates listing, not
+	// contradiction detection.
 	MaxSimilarity float64 `yaml:"max_similarity"`
 
 	// BatchSize is the number of pairs packed into a single LLM
@@ -1223,6 +1227,31 @@ type DedupConfig struct {
 	Action string `yaml:"action"`
 }
 
+// SaveGuardConfig controls the write-time similarity checks on record
+// creation: the hold (a save at or above the hold threshold is refused
+// before any record is created, returning the similar record's details
+// so the caller can revise it via gramaton_update or re-send
+// acknowledging the match) and the advisory (a successful save in the
+// band below the hold threshold carries a one-line notice naming the
+// most similar existing record).
+type SaveGuardConfig struct {
+	// SimilarHoldThreshold: cosine similarity at or above which a new
+	// save is held. Default 0.94 -- the prior 0.92 calibration
+	// produced frequent false positives in practice. With holds, a
+	// false positive costs one extra round trip rather than data, so
+	// lowering this is a safe experiment.
+	SimilarHoldThreshold float64 `yaml:"similar_hold_threshold"`
+
+	// AdvisoryThreshold: cosine similarity at or above which a
+	// successful save's response includes an advisory naming the most
+	// similar existing record ("if this is a revision, update it
+	// instead"). The advisory band is [AdvisoryThreshold,
+	// SimilarHoldThreshold); setting the two equal disables the band.
+	// Default 0.85 -- genuine revisions tend to embed in this range,
+	// below any sane hold threshold.
+	AdvisoryThreshold float64 `yaml:"advisory_threshold"`
+}
+
 // GraphConfig controls graph traversal behavior.
 type GraphConfig struct {
 	// EdgeWeightTraversalThreshold: minimum edge weight required for
@@ -1354,7 +1383,7 @@ func Defaults() Config {
 				Contradiction: LLMContradictionConfig{
 					MaxChecks:         5,
 					MinSimilarity:     0.5,
-					MaxSimilarity:     0.85,
+					MaxSimilarity:     0.94, // contiguous with save_guard.similar_hold_threshold
 					BatchSize:         5, // batched (~5x call reduction at saturation)
 					CheckReverseEdges: true,
 				},
@@ -1480,6 +1509,11 @@ func Defaults() Config {
 		Dedup: DedupConfig{
 			SimilarityThreshold: 0.92,
 			Action:              "supersede",
+		},
+
+		SaveGuard: SaveGuardConfig{
+			SimilarHoldThreshold: 0.94,
+			AdvisoryThreshold:    0.85,
 		},
 
 		Graph: GraphConfig{
@@ -1808,6 +1842,31 @@ func normalize(cfg *Config) error {
 	}
 	if cfg.Curation.MaxDedupPerRun > 200 {
 		cfg.Curation.MaxDedupPerRun = 200
+	}
+
+	// Save-guard thresholds: zero-fill defaults so a partial yaml
+	// override doesn't disable the checks, then validate ordering.
+	// The hold threshold must not sit below the advisory threshold --
+	// the advisory band is [advisory, hold).
+	if cfg.SaveGuard.SimilarHoldThreshold == 0 {
+		cfg.SaveGuard.SimilarHoldThreshold = 0.94
+	}
+	if cfg.SaveGuard.AdvisoryThreshold == 0 {
+		cfg.SaveGuard.AdvisoryThreshold = 0.85
+	}
+	if cfg.SaveGuard.SimilarHoldThreshold <= 0 || cfg.SaveGuard.SimilarHoldThreshold > 1 ||
+		math.IsNaN(cfg.SaveGuard.SimilarHoldThreshold) {
+		return fmt.Errorf("config: save_guard.similar_hold_threshold %v out of range (0, 1]",
+			cfg.SaveGuard.SimilarHoldThreshold)
+	}
+	if cfg.SaveGuard.AdvisoryThreshold <= 0 || cfg.SaveGuard.AdvisoryThreshold > 1 ||
+		math.IsNaN(cfg.SaveGuard.AdvisoryThreshold) {
+		return fmt.Errorf("config: save_guard.advisory_threshold %v out of range (0, 1]",
+			cfg.SaveGuard.AdvisoryThreshold)
+	}
+	if cfg.SaveGuard.AdvisoryThreshold > cfg.SaveGuard.SimilarHoldThreshold {
+		return fmt.Errorf("config: save_guard.advisory_threshold %v exceeds similar_hold_threshold %v",
+			cfg.SaveGuard.AdvisoryThreshold, cfg.SaveGuard.SimilarHoldThreshold)
 	}
 
 	// Search pagination: zero-fill defaults so a partial yaml

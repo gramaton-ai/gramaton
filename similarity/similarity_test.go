@@ -1,4 +1,4 @@
-package dedup
+package similarity
 
 import (
 	"strings"
