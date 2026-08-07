@@ -116,6 +116,12 @@ type Commit struct {
 	// deserialize with Actions == nil. Omitempty on write keeps
 	// pre-D3 consumers readable and bounds commit JSON size.
 	Actions []CommitAction `json:"actions,omitempty"`
+	// Author is the identity the commit is attributed to: the
+	// operator's composed author config for user-driven writes, the
+	// curation identity for curation cycles. Optional; pre-existing
+	// commits deserialize with Author == "" and the timeline reports
+	// them unattributed.
+	Author string `json:"author,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.

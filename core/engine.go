@@ -638,6 +638,25 @@ func (e *Engine) Lock() { e.mu.Lock() }
 // Unlock releases the write lock.
 func (e *Engine) Unlock() { e.mu.Unlock() }
 
+// CurationAuthor is the commit and node attribution identity for
+// writes the curation subsystem makes on its own initiative.
+// curation.NodeAuthor aliases it so node-level and commit-level
+// attribution can never drift apart.
+const CurationAuthor = "curation"
+
+// commitAuthor resolves the identity a commit is attributed to.
+// Curation cycles label their commits with the "curation:" message
+// prefix (the same convention gramaton_log's exclude_curation
+// filters on); everything else is the operator's composed author
+// config -- empty when unconfigured, and Author is omitempty on the
+// wire, matching the record-level attribution behavior.
+func (e *Engine) commitAuthor(message string) string {
+	if strings.HasPrefix(message, "curation:") {
+		return CurationAuthor
+	}
+	return e.cfg.Author.String()
+}
+
 // Save commits the current graph state and updates HEAD and the
 // active branch ref. Caller must hold the write lock. Clears the
 // accessDirty flag since all in-memory state is now persisted.
@@ -738,6 +757,7 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	commit.VecRoot = vecRoot
 	commit.PropRoot = propRoot
 	commit.EdgeAdjRoot = edgeAdjRoot
+	commit.Author = e.commitAuthor(message)
 	commit, err = e.graph.WriteCommit(e.store, commit)
 	if err != nil {
 		return nil, fmt.Errorf("write commit: %w", err)
