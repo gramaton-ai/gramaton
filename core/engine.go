@@ -95,6 +95,10 @@ type Engine struct {
 	// replaces committed read churn on a timer).
 	sidecarDB *bolt.DB
 	accessIdx *index.BboltAccessIndex
+	// changelog is the per-node logical-version index (also in
+	// sidecar.db). Appended at Save after the HEAD write; drift is
+	// repaired by the boot gap walk.
+	changelog *index.BboltChangelog
 
 	// searchSnapshots caches paginated search result sets so cursor
 	// calls slice into a stable matched-set without re-running the
@@ -333,8 +337,13 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	if err != nil {
 		return err
 	}
+	changelog, err := index.NewBboltChangelog(sidecarDB)
+	if err != nil {
+		return err
+	}
 	e.sidecarDB = sidecarDB
 	e.accessIdx = accessIdx
+	e.changelog = changelog
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
 	// Installed before Load so eagerly-loaded nodes overlay too.
@@ -359,6 +368,11 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.indexes = idx
 	e.graph = g
 	e.headHash = headHash
+
+	// Repair changelog marker drift now that HEAD is known -- a
+	// crash between a commit's HEAD write and its changelog append
+	// left the marker behind; the walk re-derives what's missing.
+	e.changelogGapWalk()
 
 	// Apply options before creating the vector index. This lets
 	// WithVectorIndex inject an in-memory index for tests, avoiding
@@ -730,6 +744,10 @@ func (e *Engine) SetEmbedAttempts(nodeID string, attempts int64) {
 // AccessIdx exposes the access sidecar (deletion cleanup, tests).
 func (e *Engine) AccessIdx() *index.BboltAccessIndex { return e.accessIdx }
 
+// Changelog exposes the per-node logical-version index (timeline,
+// as_of resolution, backfill).
+func (e *Engine) Changelog() *index.BboltChangelog { return e.changelog }
+
 // CurationAuthor is the commit and node attribution identity for
 // writes the curation subsystem makes on its own initiative.
 // curation.NodeAuthor aliases it so node-level and commit-level
@@ -823,6 +841,11 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	// the single chunk write in WriteCommit -- this avoids the
 	// per-save orphan chunk that the prior write+rewrite flow
 	// produced.
+	// Snapshot the mutation set BEFORE PrepareCommit rebuilds the
+	// hash caches: the changelog's logical-version comparison needs
+	// each changed node's PRE-commit blob pointer.
+	clDirty, clDeleted, clPrevHash := e.graph.PendingChanges()
+
 	commit, err := e.graph.PrepareCommit(e.store, e.headHash, message, actions, storage.ProllyConfig{
 		TargetChunkSize: e.cfg.Storage.ProllyTargetChunkSize,
 		SplitBits:       e.cfg.Storage.ProllySplitBits,
@@ -876,6 +899,11 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	}
 
 	e.headHash = commit.Hash
+
+	// Changelog append is ordered after the HEAD write per the
+	// durability contract; a crash before it leaves marker != HEAD
+	// for the boot gap walk.
+	e.appendChangelog(commit, clDirty, clDeleted, clPrevHash)
 	return commit, nil
 }
 
@@ -1100,6 +1128,7 @@ func (e *Engine) CloseFiles() error {
 		}
 		e.sidecarDB = nil
 		e.accessIdx = nil
+		e.changelog = nil
 	}
 
 	// Drop in-memory state tied to the now-closed file-backed

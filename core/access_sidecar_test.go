@@ -145,3 +145,101 @@ func TestDeleteNodeCleansAccessSidecar(t *testing.T) {
 		t.Fatal("sidecar entry survived the node's deletion")
 	}
 }
+
+// TestChangelogRecordsLogicalVersions pins the append path: real
+// content changes mint one entry per commit, bookkeeping-only
+// commits (a reembed sweep's embedding writes) mint none, and
+// deletion closes the record's history with an empty-hash entry.
+func TestChangelogRecordsLogicalVersions(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("version one"),
+	})
+	if _, err := eng.Save("create"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 1: %v", err)
+	}
+	eng.SetContentProp(n.ID, "content_full", "version two")
+	c2, err := eng.Save("revise")
+	if err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 2: %v", err)
+	}
+	// Bookkeeping-only change: an embedding write must NOT mint a
+	// logical version.
+	eng.SetProp(n.ID, "embedding_model", graph.StringProperty("test-model-v2"))
+	if _, err := eng.Save("reembed sweep"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 3: %v", err)
+	}
+	eng.Unlock()
+
+	versions := eng.Changelog().Versions(n.ID)
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d (%+v), want 2 (create + revise; the bookkeeping commit must not count)", len(versions), versions)
+	}
+	if versions[1].Commit != c2.Hash {
+		t.Fatalf("second version commit = %s, want the revise commit %s", versions[1].Commit, c2.Hash)
+	}
+	if eng.Changelog().Marker() != eng.HeadHash() {
+		t.Fatalf("marker %s != HEAD %s after saves", eng.Changelog().Marker(), eng.HeadHash())
+	}
+
+	// Deletion closes the history.
+	err = eng.WithWriteBatch("delete", func(ws *WriteSession) (bool, error) {
+		return true, ws.DeleteNode(n.ID)
+	})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	versions = eng.Changelog().Versions(n.ID)
+	if len(versions) != 3 || versions[2].NodeHash != "" {
+		t.Fatalf("versions after delete = %+v, want a trailing empty-hash deletion entry", versions)
+	}
+}
+
+// TestChangelogGapWalkRepairsDrift pins the durability contract: a
+// marker left behind (simulating a crash between the HEAD write and
+// the changelog append) is repaired at the next open by re-deriving
+// the missing commits' entries from the chain.
+func TestChangelogGapWalkRepairsDrift(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("v1"),
+	})
+	c1, err := eng.Save("create")
+	if err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 1: %v", err)
+	}
+	eng.SetContentProp(n.ID, "content_full", "v2")
+	if _, err := eng.Save("revise"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 2: %v", err)
+	}
+	eng.Unlock()
+
+	// Simulate the crash: rewind the marker to the first commit as
+	// if the second commit's append never ran.
+	if err := eng.Changelog().SetMarker(c1.Hash); err != nil {
+		t.Fatalf("SetMarker: %v", err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	eng2 := openReadOnlyTestEngine(t, dir)
+	if eng2.Changelog().Marker() != eng2.HeadHash() {
+		t.Fatalf("gap walk did not advance the marker to HEAD")
+	}
+	versions := eng2.Changelog().Versions(n.ID)
+	if len(versions) != 2 {
+		t.Fatalf("versions after gap walk = %+v, want both (replay must not duplicate the first)", versions)
+	}
+}
