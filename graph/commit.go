@@ -515,6 +515,38 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 	return &commit, nil
 }
 
+// LoadStaged parses a commit into a fresh graph backed by a
+// MemoryEdgeStore. Because the populated-store shortcut in Load only
+// applies to BboltEdgeStore, edges ALWAYS load from the commit's
+// tree here -- this is the correct way to materialize a commit whose
+// state differs from what the shared bbolt edge store mirrors
+// (revert, branch checkout, merge). Adopt the result into an engine
+// via Engine.AdoptGraph, which migrates the staged edges into the
+// shared persistent store.
+func LoadStaged(s *storage.Store, commitHash string) (*Graph, *Commit, error) {
+	g := NewWithCapacity(DefaultCacheCapacity)
+	c, err := g.Load(s, commitHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return g, c, nil
+}
+
+// MigrateEdgesTo repopulates dst with this graph's current edge set
+// and adopts dst as the graph's edge store. dst is cleared first, so
+// after the call it mirrors exactly this graph's edges. Used when a
+// staged graph (memory-backed edges) becomes the live graph and must
+// take over the engine's persistent bbolt store; the caller must
+// hold the engine write lock, and the previous live graph must not
+// be used afterwards (its store contents were just replaced).
+func (g *Graph) MigrateEdgesTo(dst EdgeStore) {
+	dst.Clear()
+	g.edgeStore.ForEach(func(e *Edge) {
+		dst.Put(e)
+	})
+	g.edgeStore = dst
+}
+
 // NodeIDsInCommit returns all node IDs in a commit without loading
 // the full graph. Uses the prolly tree for v1 commits, falls back
 // to reading all chunks for v0 commits.

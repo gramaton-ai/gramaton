@@ -144,21 +144,24 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 		return BranchCheckoutResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
-	// Phase 2: parse graph off-lock into a fresh instance backed by
-	// the engine's persistent edge store. Without WithEdgeStore the
-	// new graph would install a MemoryEdgeStore and AddEdge writes
-	// after checkout would silently bypass bbolt.
-	newGraph := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(a.engine.EdgeStore()))
-	if _, err := newGraph.Load(a.engine.Store(), hash); err != nil {
+	// Phase 2: parse the target commit off-lock into a STAGED graph
+	// (memory-backed edges). Loading straight into a graph that
+	// shares the engine's populated bbolt edge store would make Load
+	// skip edge reload entirely and keep the OLD branch's edges under
+	// the new branch's nodes.
+	newGraph, _, err := graph.LoadStaged(a.engine.Store(), hash)
+	if err != nil {
 		a.log.Warn("branch checkout: graph load failed", "component", "branch", "name", name, "err", err)
 		return BranchCheckoutResponse{}, ErrInternal("failed to load branch state")
 	}
 
-	// Phase 3: persist on-disk pointers FIRST, then swap in the new
+	// Phase 3: persist on-disk pointers FIRST, then adopt the staged
 	// graph. If HEAD or active-branch writes fail, we abort without
 	// touching the in-memory engine state -- the user's view is the
-	// pre-checkout branch and a retry is idempotent. Once the disk
-	// pointers are in place, the swap is the cheap last step.
+	// pre-checkout branch and a retry is idempotent. AdoptGraph then
+	// replaces the shared edge store's contents with the staged edge
+	// set and hands the store to the new graph so post-checkout edge
+	// writes persist.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -171,7 +174,7 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 		a.log.Warn("branch checkout: set active failed", "component", "branch", "name", name, "err", err)
 		return BranchCheckoutResponse{}, ErrInternal("failed to set active branch")
 	}
-	a.engine.SwapGraph(newGraph)
+	a.engine.AdoptGraph(newGraph)
 	a.engine.RebuildAllIndexes()
 
 	return BranchCheckoutResponse{
@@ -212,15 +215,17 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 		return BranchMergeResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
-	// Phase 2: parse branch graph off-lock with shared edge store.
-	newGraph := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(a.engine.EdgeStore()))
-	if _, err := newGraph.Load(a.engine.Store(), branchHash); err != nil {
+	// Phase 2: parse the branch commit off-lock into a STAGED graph
+	// (memory-backed edges) -- same corruption guard as checkout: a
+	// shared populated edge store would short-circuit edge reload.
+	newGraph, _, err := graph.LoadStaged(a.engine.Store(), branchHash)
+	if err != nil {
 		a.log.Warn("branch merge: graph load failed", "component", "branch", "name", name, "err", err)
 		return BranchMergeResponse{}, ErrInternal("failed to load branch state")
 	}
 
 	// Phase 3: switch active branch first (cheap on-disk write),
-	// then swap the graph in, rebuild indexes, and commit the merge.
+	// then adopt the staged graph, rebuild indexes, and commit.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -229,7 +234,7 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 		return BranchMergeResponse{}, ErrInternal("failed to switch to main")
 	}
 
-	a.engine.SwapGraph(newGraph)
+	a.engine.AdoptGraph(newGraph)
 	a.engine.RebuildAllIndexes()
 
 	commit, err := a.engine.Save(fmt.Sprintf("merge branch %q", name), graph.CommitAction{

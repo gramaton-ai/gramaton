@@ -62,12 +62,18 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load the specified commit's state.
-	if _, err := s.engine.Graph().Load(store, fullHash); err != nil {
+	// Load the specified commit's state into a staged graph and adopt
+	// it. An in-place Load on the live graph would see the populated
+	// bbolt edge store and skip edge reload entirely -- reverted-away
+	// nodes would resurrect with their edges missing and since-added
+	// edges would survive the revert.
+	staged, _, err := graph.LoadStaged(store, fullHash)
+	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "load_error",
 			"failed to load commit", false)
 		return
 	}
+	s.engine.AdoptGraph(staged)
 
 	s.engine.RebuildAllIndexes()
 
