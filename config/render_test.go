@@ -39,11 +39,11 @@ func TestSaveProducesComments(t *testing.T) {
 		"WARNING: these values control algorithmic behavior",
 		// Per-task descriptions
 		"classification_short: classify records below long_threshold",
-		"contradiction: detect supersession + conflicts",
+		"contradiction: detect conflicts between similar",
 		"rerank: reorder search candidates by relevance",
 		"decompose: split complex search queries into sub-queries",
 		// Sub-section banners under curation
-		"contradiction: tuning for the contradiction/supersession",
+		"contradiction: tuning for the contradiction detector",
 		"concept: tuning for concept synthesis.",
 		"retries: per-record / per-pair retry caps.",
 	}

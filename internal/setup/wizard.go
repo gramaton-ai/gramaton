@@ -374,7 +374,7 @@ func (w *Wizard) askSetupRoute() (setupRoute, error) {
 		"read-only store that someone shared with you?",
 	)
 	w.writer.Blank()
-	w.writer.Raw("    [1] First time  (or re-running to reconfigure — won't touch your existing data)")
+	w.writer.Raw("    [1] First time or reconfigure  (your existing data will not be overwritten)")
 	w.writer.Raw("    [2] Import a backup from another computer  (replaces data with the archive)")
 	w.writer.Raw("    [3] Attach a shared read-only store  (read-only ONLY: your agent gets no write")
 	w.writer.Raw("        tools on this machine — no personal store, no capture, nothing is ever")
