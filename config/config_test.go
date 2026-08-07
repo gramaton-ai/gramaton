@@ -540,7 +540,6 @@ llm:
     batch_size: 999
 curation:
   max_orphans_per_run: 999
-  max_dedup_per_run: 999
 `), 0o600)
 
 	cfg, err := Load(path)
