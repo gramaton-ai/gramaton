@@ -3262,3 +3262,46 @@ func TestConceptShortSummary(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectContradictionsSetsContested pins conflict visibility: a
+// confirmed contradiction marks both records contested so retrieval
+// presents both sides -- EXCEPT a record the user deliberately
+// classified well_established, which an LLM verdict never downgrades.
+func TestDetectContradictionsSetsContested(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "The service is deployed on Kubernetes", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "The service runs on bare-metal hosts", []float32{0.7, 0.7, 0.0})
+	eng.Lock()
+	eng.SetProp(idA, "epistemic_status", graph.StringProperty("well_established"))
+	eng.SetProp(idB, "epistemic_status", graph.StringProperty("probable"))
+	eng.Unlock()
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"contradicts","confidence":0.9,"explanation":"kubernetes vs bare-metal deployment claims conflict"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("expected 1 contradiction detected, got %d", result.ContradictionsDetected)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	nodeA, _ := eng.Graph().GetNode(idA)
+	if es, _ := nodeA.Properties.GetString("epistemic_status"); es != "well_established" {
+		t.Errorf("well_established record downgraded to %q; LLM verdicts must never override it", es)
+	}
+	nodeB, _ := eng.Graph().GetNode(idB)
+	if es, _ := nodeB.Properties.GetString("epistemic_status"); es != "contested" {
+		t.Errorf("peer record epistemic_status = %q, want contested", es)
+	}
+}

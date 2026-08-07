@@ -135,3 +135,174 @@ func TestSessionSaveHoldsPromotion(t *testing.T) {
 		t.Errorf("promotion_hold_target = %q, want %s", target, seed.ID)
 	}
 }
+
+// TestSaveHoldAgainstHistoricalCandidate: a hold against a resolved
+// record must say so -- Historical plus the recorded resolution --
+// because the right exit differs (reviving a concluded record via
+// update is a deliberate act, not a routine revision).
+func TestSaveHoldAgainstHistoricalCandidate(t *testing.T) {
+	a, _ := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	const text = "the concluded initiative this near-copy would resurrect"
+	seed, apiErr := a.Save(ctx, SaveRequest{Content: text})
+	if apiErr != nil {
+		t.Fatalf("seed save: %v", apiErr)
+	}
+	if _, apiErr := a.Resolve(ctx, ResolveRequest{ID: seed.ID, Resolution: "superseded"}); apiErr != nil {
+		t.Fatalf("resolve: %v", apiErr)
+	}
+
+	resp, apiErr := a.Save(ctx, SaveRequest{Content: text})
+	if apiErr != nil {
+		t.Fatalf("duplicate save: %v", apiErr)
+	}
+	if resp.Held == nil || resp.Held.ID != seed.ID {
+		t.Fatalf("expected a hold against %s, got %+v", seed.ID, resp.Held)
+	}
+	if !resp.Held.Historical {
+		t.Error("hold against a resolved record must set historical")
+	}
+	if resp.Held.Resolution != "superseded" {
+		t.Errorf("hold resolution = %q, want superseded", resp.Held.Resolution)
+	}
+}
+
+// holdSessionFixture seeds a Memory record, then session-saves the
+// same content so the promotion holds. Returns the seed record ID,
+// the session ID, and the held segment ID.
+func holdSessionFixture(t *testing.T, a *API, text string) (seedID, sessionID, segmentID string) {
+	t.Helper()
+	ctx := context.Background()
+	seed, apiErr := a.Save(ctx, SaveRequest{Content: text})
+	if apiErr != nil {
+		t.Fatalf("seed Save: %v", apiErr)
+	}
+	result, svcErr := a.SessionStart(ctx, "resolve-held-session", "")
+	if svcErr != nil {
+		t.Fatalf("SessionStart: %v", svcErr)
+	}
+	sessionID = result["id"].(string)
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("SessionPrepare: %v", err)
+	}
+	resp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: text, TopicName: "held topic"},
+	}, false)
+	if err != nil {
+		t.Fatalf("SessionSave: %v", err)
+	}
+	if len(resp.Held) != 1 || resp.Held[0].SegmentID == "" {
+		t.Fatalf("expected one held promotion with a segment id, got %+v", resp.Held)
+	}
+	return seed.ID, sessionID, resp.Held[0].SegmentID
+}
+
+// TestSessionResolveHeldAllowSimilar: resolving a held promotion with
+// allow_similar promotes the segment now -- Memory record created and
+// provenance-linked, hold state cleared so the next prepare stops
+// re-presenting it (a second resolve of the same segment is invalid).
+func TestSessionResolveHeldAllowSimilar(t *testing.T) {
+	emb := &dedupEmbedder{dim: 16}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	ctx := context.Background()
+
+	const text = "resolve-held promotes this genuinely distinct segment"
+	_, sessionID, segID := holdSessionFixture(t, a, text)
+
+	resp, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: segID, Action: "allow_similar"},
+	})
+	if apiErr != nil {
+		t.Fatalf("SessionResolveHeld: %v", apiErr)
+	}
+	if len(resp.Resolved) != 1 {
+		t.Fatalf("expected 1 resolution, got %+v", resp.Resolved)
+	}
+	memID := resp.Resolved[0].MemoryRecordID
+	if memID == "" {
+		t.Fatal("allow_similar must report the promoted Memory record")
+	}
+
+	eng.RLock()
+	mem, ok := eng.Graph().GetNode(memID)
+	if !ok {
+		t.Fatal("promoted Memory record missing")
+	}
+	if c, _ := mem.Properties.GetString("content_full"); c != text {
+		t.Fatalf("promoted content_full = %q, want the segment content", c)
+	}
+	var linked bool
+	for _, e := range eng.Graph().EdgesFrom(segID) {
+		if e.Type == "extracted_as" && e.TargetID == memID {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Error("missing extracted_as edge from segment to promoted record")
+	}
+	seg, _ := eng.Graph().GetNode(segID)
+	if captured, _ := seg.Properties.GetString("captured_as"); captured != memID {
+		t.Errorf("captured_as = %q, want %s", captured, memID)
+	}
+	if held, _ := seg.Properties.GetBool("promotion_held"); held {
+		t.Error("promotion_held must clear after resolution")
+	}
+	eng.RUnlock()
+
+	if _, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: segID, Action: "allow_similar"},
+	}); apiErr == nil {
+		t.Fatal("re-resolving a cleared hold must fail")
+	}
+}
+
+// TestSessionResolveHeldUpdateTarget: update_target wires the
+// segment's provenance to the existing record -- no new Memory record
+// -- and defaults the target to the record the hold named.
+func TestSessionResolveHeldUpdateTarget(t *testing.T) {
+	emb := &dedupEmbedder{dim: 16}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	ctx := context.Background()
+
+	const text = "resolve-held folds this segment into the existing record"
+	seedID, sessionID, segID := holdSessionFixture(t, a, text)
+	baseline := eng.NodeCount()
+
+	resp, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: segID, Action: "update_target"},
+	})
+	if apiErr != nil {
+		t.Fatalf("SessionResolveHeld: %v", apiErr)
+	}
+	if len(resp.Resolved) != 1 || resp.Resolved[0].TargetID != seedID {
+		t.Fatalf("expected resolution targeting %s, got %+v", seedID, resp.Resolved)
+	}
+	if resp.Resolved[0].MemoryRecordID != "" {
+		t.Fatal("update_target must not create a Memory record")
+	}
+	if got := eng.NodeCount(); got != baseline {
+		t.Fatalf("node count %d after update_target, want unchanged %d", got, baseline)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	var linked bool
+	for _, e := range eng.Graph().EdgesFrom(segID) {
+		if e.Type == "extracted_as" && e.TargetID == seedID {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Error("missing extracted_as edge from segment to target record")
+	}
+	seg, _ := eng.Graph().GetNode(segID)
+	if captured, _ := seg.Properties.GetString("captured_as"); captured != seedID {
+		t.Errorf("captured_as = %q, want %s", captured, seedID)
+	}
+	if held, _ := seg.Properties.GetBool("promotion_held"); held {
+		t.Error("promotion_held must clear after resolution")
+	}
+}

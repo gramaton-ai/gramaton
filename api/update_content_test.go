@@ -234,3 +234,74 @@ func TestUpdateContentDeletesObservationChildren(t *testing.T) {
 		t.Error("observation child survived a content change; must be deleted for re-extraction")
 	}
 }
+
+// TestUpdateContentReopensConflicts pins the conflict-reopening
+// contract: a content change deletes the record's contradicts edges
+// and clears contested on it, clears contested on a peer left with no
+// remaining conflicts, and leaves contested on a peer that still
+// conflicts with a third record.
+func TestUpdateContentReopensConflicts(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	save := func(content string) string {
+		t.Helper()
+		resp, apiErr := a.Save(ctx, SaveRequest{Content: content})
+		if apiErr != nil {
+			t.Fatalf("save %q: %v", content, apiErr)
+		}
+		return resp.ID
+	}
+	idA := save("record A claims the deployment uses blue-green rollout")
+	idB := save("record B claims the deployment is done in place")
+	idC := save("record C claims deployments happen only on Fridays")
+
+	eng.Lock()
+	if _, err := eng.Graph().AddEdge(idA, idB, "contradicts", 1.0, nil); err != nil {
+		eng.Unlock()
+		t.Fatalf("AddEdge A-B: %v", err)
+	}
+	if _, err := eng.Graph().AddEdge(idB, idC, "contradicts", 1.0, nil); err != nil {
+		eng.Unlock()
+		t.Fatalf("AddEdge B-C: %v", err)
+	}
+	for _, id := range []string{idA, idB, idC} {
+		eng.SetProp(id, "epistemic_status", graph.StringProperty("contested"))
+	}
+	if _, err := eng.Save("test seed: contradiction triangle"); err != nil {
+		eng.Unlock()
+		t.Fatalf("engine.Save: %v", err)
+	}
+	eng.Unlock()
+
+	if _, apiErr := a.Update(ctx, UpdateRequest{ID: idA, Content: "record A revised: rollout strategy is now canary"}); apiErr != nil {
+		t.Fatalf("update: %v", apiErr)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, e := range eng.Graph().EdgesFrom(idA) {
+		if e.Type == "contradicts" {
+			t.Error("contradicts edge from A survived the content change")
+		}
+	}
+	for _, e := range eng.Graph().EdgesTo(idA) {
+		if e.Type == "contradicts" {
+			t.Error("contradicts edge to A survived the content change")
+		}
+	}
+	status := func(id string) string {
+		n, _ := eng.Graph().GetNode(id)
+		s, _ := n.Properties.GetString("epistemic_status")
+		return s
+	}
+	if s := status(idA); s == "contested" {
+		t.Error("updated record must shed contested")
+	}
+	if s := status(idB); s != "contested" {
+		t.Errorf("peer B still conflicts with C and must stay contested, got %q", s)
+	}
+	if s := status(idC); s != "contested" {
+		t.Errorf("record C's conflict with B is untouched; contested must survive, got %q", s)
+	}
+}
