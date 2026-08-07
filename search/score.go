@@ -15,6 +15,13 @@ type ScoreInputs struct {
 	Temporality  string  // immutable, durable, temporal, ephemeral
 	Confidence   float64 // 0.0-1.0
 	Importance   float64 // 0.0-1.0
+	// UpdatedAt anchors freshness for revised records: a mutable
+	// record's latest revision is when its knowledge is from, so an
+	// update restores freshness instead of the record aging from its
+	// creation date forever (stale incumbents no longer outrank
+	// their own corrections). valid_from, when set deliberately,
+	// still wins.
+	UpdatedAt time.Time
 	// AccessCount is bookkeeping only -- it plays no scoring role.
 	// The activation term was removed deliberately: a popularity
 	// prior that similarity plus trust metadata outperform, that
@@ -45,7 +52,7 @@ func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 
 	}
 
 	// Step 2: Component scores.
-	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.CreatedAt, now, cfg.Freshness)
+	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.UpdatedAt, inputs.CreatedAt, now, cfg.Freshness)
 
 	if inputs.HasTextQuery {
 		// Text query present: similarity gates the metadata signals.
@@ -108,9 +115,14 @@ func accessRecency(temporality string, lastAccessed, now time.Time, cfg config.D
 }
 
 // knowledgeFreshness computes 1 / (1 + hours/scale)^exponent.
-// Uses valid_from if set, otherwise created_at.
-func knowledgeFreshness(temporality string, validFrom, createdAt, now time.Time, cfg config.FreshnessConfig) float64 {
+// Anchor precedence: valid_from (a deliberate knowledge date) wins;
+// otherwise updated_at (a revised record's knowledge is as fresh as
+// its last revision); otherwise created_at.
+func knowledgeFreshness(temporality string, validFrom, updatedAt, createdAt, now time.Time, cfg config.FreshnessConfig) float64 {
 	knowledgeTime := createdAt
+	if !updatedAt.IsZero() {
+		knowledgeTime = updatedAt
+	}
 	if !validFrom.IsZero() {
 		knowledgeTime = validFrom
 	}

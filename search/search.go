@@ -1060,6 +1060,9 @@ func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	if v, ok := n.Properties.GetTimestamp("valid_from"); ok {
 		inputs.ValidFrom = v
 	}
+	if v, ok := n.Properties.GetTimestamp("updated_at"); ok {
+		inputs.UpdatedAt = v
+	}
 	if v, ok := n.Properties.GetTimestamp("valid_until"); ok {
 		inputs.ValidUntil = v
 	}

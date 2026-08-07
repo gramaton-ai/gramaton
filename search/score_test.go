@@ -22,7 +22,7 @@ func TestFreshnessImmutableAlwaysOne(t *testing.T) {
 	cfg := defaultCfg()
 	now := time.Now().UTC()
 	created := now.Add(-10 * 365 * 24 * time.Hour) // 10 years ago
-	f := knowledgeFreshness("immutable", time.Time{}, created, now, cfg.Freshness)
+	f := knowledgeFreshness("immutable", time.Time{}, time.Time{}, created, now, cfg.Freshness)
 	if f != 1.0 {
 		t.Fatalf("immutable freshness: expected 1.0, got %f", f)
 	}
@@ -32,7 +32,7 @@ func TestFreshnessDurableSixMonths(t *testing.T) {
 	cfg := defaultCfg()
 	now := time.Now().UTC()
 	created := now.Add(-6 * 30 * 24 * time.Hour) // ~6 months
-	f := knowledgeFreshness("durable", time.Time{}, created, now, cfg.Freshness)
+	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, created, now, cfg.Freshness)
 	// ~0.82 per design doc table
 	if !approx(f, 0.82, 0.05) {
 		t.Fatalf("durable 6mo: expected ~0.82, got %f", f)
@@ -44,7 +44,7 @@ func TestFreshnessUsesValidFrom(t *testing.T) {
 	now := time.Now().UTC()
 	created := now.Add(-1 * time.Hour)              // recent creation
 	validFrom := now.Add(-2 * 365 * 24 * time.Hour) // but knowledge is 2 years old
-	f := knowledgeFreshness("durable", validFrom, created, now, cfg.Freshness)
+	f := knowledgeFreshness("durable", validFrom, time.Time{}, created, now, cfg.Freshness)
 	// Should use validFrom, not createdAt.
 	if !approx(f, 0.577, 0.05) {
 		t.Fatalf("durable 2yr via valid_from: expected ~0.577, got %f", f)
@@ -53,7 +53,7 @@ func TestFreshnessUsesValidFrom(t *testing.T) {
 
 func TestFreshnessNoTimestamp(t *testing.T) {
 	cfg := defaultCfg()
-	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, time.Now().UTC(), cfg.Freshness)
+	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, time.Time{}, time.Now().UTC(), cfg.Freshness)
 	if f != 1.0 {
 		t.Fatalf("no timestamp: expected 1.0, got %f", f)
 	}
@@ -227,5 +227,24 @@ func TestComputeScoreMetadataBoostsRelevant(t *testing.T) {
 	scorePoor := ComputeScore(poor, now, cfg)
 	if scoreGood <= scorePoor {
 		t.Fatalf("better metadata should boost score: good=%f, poor=%f", scoreGood, scorePoor)
+	}
+}
+
+func TestFreshnessUpdatedAtRestoresFreshness(t *testing.T) {
+	cfg := defaultCfg()
+	now := time.Now().UTC()
+	oldCreated := now.Add(-2 * 365 * 24 * time.Hour)
+	// An old record freshly revised must score fresher than its
+	// unrevised twin: the revision is when its knowledge is from.
+	stale := knowledgeFreshness("durable", time.Time{}, time.Time{}, oldCreated, now, cfg.Freshness)
+	revised := knowledgeFreshness("durable", time.Time{}, now.Add(-time.Hour), oldCreated, now, cfg.Freshness)
+	if revised <= stale {
+		t.Fatalf("revised freshness %f <= stale %f; updates must restore freshness", revised, stale)
+	}
+	// A deliberate valid_from still wins over updated_at.
+	validFrom := now.Add(-3 * 365 * 24 * time.Hour)
+	anchored := knowledgeFreshness("durable", validFrom, now, oldCreated, now, cfg.Freshness)
+	if anchored >= revised {
+		t.Fatalf("valid_from must anchor freshness even when updated_at is recent: %f >= %f", anchored, revised)
 	}
 }

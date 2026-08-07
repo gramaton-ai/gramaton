@@ -394,13 +394,14 @@ Weights used to combine scoring signals into the composite result score. Should 
 ```yaml
 scoring:
   weight_similarity: 0.55            # vector + BM25 similarity
-  weight_freshness: 0.10             # time-decay by temporality
-  weight_activation: 0.20            # ACT-R access-based signal
-  weight_confidence: 0.15            # record confidence
+  weight_freshness: 0.18             # time-decay by temporality
+  weight_confidence: 0.27            # record confidence
   importance_threshold: 0.7          # records above this resist decay
   importance_floor_ratio: 0.5        # minimum score for high-importance records
   historical_penalty: 0.5            # multiplier for records with valid_until set
 ```
+
+The former activation term is gone: it was a popularity prior that similarity plus trust metadata outperform, it never decayed, and it entrenched stale records against their own corrections. Its 0.20 weight redistributed into freshness and confidence. Freshness anchors to `valid_from` when set, otherwise `updated_at` (a revised record's knowledge is as fresh as its last revision), otherwise `created_at`. Configs still carrying `scoring.weight_activation` or an `activation:` section fail at load — delete the keys.
 
 ### Decay
 
@@ -427,16 +428,6 @@ freshness:
     durable:   0.5                   # gentle power-law
     temporal:  1.0                   # steeper
     ephemeral: 1.0
-```
-
-### Activation
-
-ACT-R spreading-activation parameters.
-
-```yaml
-activation:
-  base_amount: 1.0                   # activation added per access
-  attenuation_factor: 0.5            # decay per hop in spreading activation
 ```
 
 ### Chunking
