@@ -2,11 +2,10 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/similarity"
 )
@@ -256,14 +255,13 @@ func (s *Server) heldSimilarMap(m *similarity.Match) map[string]any {
 		historical = true
 	}
 	resolution, _ := n.Properties.GetString("resolution")
-	sum := sha256.Sum256([]byte(content))
 	out := map[string]any{
 		"id":           n.ID,
 		"content_full": content,
 		"summary":      summary,
 		"similarity":   m.Similarity,
 		"created_at":   created,
-		"version":      hex.EncodeToString(sum[:])[:12],
+		"version":      api.RecordVersionToken(n),
 		"note": "Save held; nothing was created. This closely matches the record above. " +
 			"If this REVISES it: gramaton_update(id, content=..., expected_version=version) composed from its full content. " +
 			"If genuinely distinct: re-send with allow_similar=[\"" + n.ID + "\"].",

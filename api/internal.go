@@ -124,6 +124,14 @@ func recordVersionToken(n *graph.Node) string {
 	return hashCanonical([]byte(content))[:12]
 }
 
+// RecordVersionToken is the exported form for transports that build
+// hold responses outside the api package (the legacy intake path).
+// Every surface must hand out tokens from the same derivation or
+// expected_version round-trips break.
+func RecordVersionToken(n *graph.Node) string {
+	return recordVersionToken(n)
+}
+
 // setMetaProps stores meta.* properties on a node from a meta map.
 // Values are converted to typed graph properties. Caller must hold
 // the engine write lock.

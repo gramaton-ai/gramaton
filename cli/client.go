@@ -251,6 +251,17 @@ func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
 			detail := errResp.Error
 			return nil, &detail
 		}
+		// A 409 whose body is a normal data envelope is a structured
+		// judgment call, not a transport error: a held save or a
+		// version conflict. The payload IS the answer (the similar
+		// record, the two exits, the current content) -- pass it
+		// through so MCP callers see it instead of an opaque error.
+		if resp.StatusCode == http.StatusConflict {
+			var envelope server.ResponseEnvelope
+			if json.Unmarshal(data, &envelope) == nil && envelope.Data != nil {
+				return &envelope, nil
+			}
+		}
 		return nil, fmt.Errorf("server error: HTTP %d", resp.StatusCode)
 	}
 

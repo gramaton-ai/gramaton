@@ -60,6 +60,12 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A held save created nothing: 409 with the hold body, matching
+	// the /v1/records route.
+	if _, held := result["held"]; held {
+		s.writeJSON(w, http.StatusConflict, result)
+		return
+	}
 	s.writeJSON(w, http.StatusCreated, result)
 }
 

@@ -40,7 +40,7 @@ type ResolveResponse struct {
 }
 
 // ResolveDescription is the MCP tool description for gramaton_resolve.
-const ResolveDescription = "Mark a record as resolved (completed/superseded/abandoned/obsolete). Auto-sets valid_until so resolved records deprioritize in search. When the record is a collection item AND the collection's schema has an enum field named `status`, also flips that field to a closed-equivalent value (resolved/done/finished/abandoned/etc; first match in the schema's enum wins). Pass auto_close_collection_status=false to skip the collection-layer write."
+const ResolveDescription = "Mark a record as resolved (completed/superseded/abandoned/obsolete). Auto-sets valid_until so resolved records deprioritize in search. Pass expected_version (from a hold response, update, or inspect) to make the resolve conditional on the content being unchanged since you read it; on mismatch nothing is applied and version_conflict carries the current content. When the record is a collection item AND the collection's schema has an enum field named `status`, also flips that field to a closed-equivalent value (resolved/done/finished/abandoned/etc; first match in the schema's enum wins). Pass auto_close_collection_status=false to skip the collection-layer write."
 
 // closedStatusCandidates returns the ordered list of `status` enum
 // values to consider as the "closed" side for a given resolution
