@@ -9,8 +9,8 @@ import (
 	"github.com/gramaton-ai/gramaton/index"
 )
 
-func dedupCfg() config.DedupConfig {
-	return config.DedupConfig{SimilarityThreshold: 0.92, Action: "supersede"}
+func guardCfg() config.SaveGuardConfig {
+	return config.SaveGuardConfig{SimilarHoldThreshold: 0.92, AdvisoryThreshold: 0.85}
 }
 
 // seedCandidate inserts a node with content and (optionally) a stored
@@ -25,48 +25,50 @@ func seedCandidate(g *graph.Graph, idx *index.FlatIndex, content string, vec []f
 	return n
 }
 
-func TestCheckVecEmptyIndex(t *testing.T) {
+func TestScanEmptyIndex(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
-	if id, sim := CheckVec(g, idx, dedupCfg(), []float32{1, 0, 0}, "content"); id != "" || sim != 0 {
-		t.Fatalf("empty index returned %q/%.3f, want none", id, sim)
+	if out := Scan(g, idx, guardCfg(), []float32{1, 0, 0}, "content", ""); out.Hold != nil || out.Advisory != nil {
+		t.Fatalf("empty index returned %+v, want none", out)
 	}
 }
 
-func TestCheckVecNilVec(t *testing.T) {
+func TestScanNilVec(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	seedCandidate(g, idx, "existing content", []float32{1, 0, 0}, true)
-	if id, sim := CheckVec(g, idx, dedupCfg(), nil, "content"); id != "" || sim != 0 {
-		t.Fatalf("nil vec returned %q/%.3f, want none", id, sim)
+	if out := Scan(g, idx, guardCfg(), nil, "content", ""); out.Hold != nil || out.Advisory != nil {
+		t.Fatalf("nil vec returned %+v, want none", out)
 	}
 }
 
-// TestCheckVecFindsShortDuplicate pins the pre-insert scan against a
-// single existing record: with only one index entry (Check's own
-// Len<2 guard would bail here) the pre-insert variant must still
-// find the duplicate.
-func TestCheckVecFindsShortDuplicate(t *testing.T) {
+// TestScanHoldsShortDuplicate pins the pre-insert scan against a
+// single existing record: with only one index entry the scan must
+// still find and hold the duplicate.
+func TestScanHoldsShortDuplicate(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	vec := []float32{0.5, 0.5, 0.1}
 	seed := seedCandidate(g, idx, "short shared phrase", vec, true)
 
-	id, sim := CheckVec(g, idx, dedupCfg(), vec, "short shared phrase")
-	if id != seed.ID {
-		t.Fatalf("duplicate = %q, want %q", id, seed.ID)
+	out := Scan(g, idx, guardCfg(), vec, "short shared phrase", "")
+	if out.Hold == nil || out.Hold.NodeID != seed.ID {
+		t.Fatalf("hold = %+v, want %q", out.Hold, seed.ID)
 	}
-	if sim < 0.99 {
-		t.Fatalf("similarity %.3f, want ~1.0 for identical vectors", sim)
+	if out.Hold.Similarity < 0.99 {
+		t.Fatalf("similarity %.3f, want ~1.0 for identical vectors", out.Hold.Similarity)
+	}
+	if out.Advisory != nil {
+		t.Fatalf("a hold must suppress the advisory, got %+v", out.Advisory)
 	}
 }
 
-// TestCheckVecJaccardRejectsLongDissimilar pins the textA threading
+// TestScanJaccardRejectsLongDissimilar pins the textA threading
 // through the refactored verifyJaccard: for >=200-char content,
 // cosine-identical vectors with disjoint wording must be rejected by
 // the Jaccard guard, using the CALLER-supplied content (a
 // not-yet-inserted record has no node to read text from).
-func TestCheckVecJaccardRejectsLongDissimilar(t *testing.T) {
+func TestScanJaccardRejectsLongDissimilar(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	vec := []float32{0.5, 0.5, 0.1}
@@ -74,56 +76,63 @@ func TestCheckVecJaccardRejectsLongDissimilar(t *testing.T) {
 	longB := strings.Repeat("india juliett kilo lima mike november oscar papa ", 5)
 	seedCandidate(g, idx, longA, vec, true)
 
-	if id, _ := CheckVec(g, idx, dedupCfg(), vec, longB); id != "" {
-		t.Fatalf("Jaccard guard failed: dissimilar long text matched %q", id)
+	out := Scan(g, idx, guardCfg(), vec, longB, "")
+	if out.Hold != nil {
+		t.Fatalf("Jaccard guard failed: dissimilar long text held against %+v", out.Hold)
+	}
+	// The cosine-identical, Jaccard-failed candidate degrades to an
+	// advisory (structurally similar, unverified) rather than a hold.
+	if out.Advisory == nil {
+		t.Fatal("expected an advisory for a hold-level cosine that failed Jaccard")
 	}
 }
 
-// TestCheckVecJaccardAcceptsLongIdentical is the positive complement:
+// TestScanJaccardAcceptsLongIdentical is the positive complement:
 // the same long text passes the Jaccard guard.
-func TestCheckVecJaccardAcceptsLongIdentical(t *testing.T) {
+func TestScanJaccardAcceptsLongIdentical(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	vec := []float32{0.5, 0.5, 0.1}
 	long := strings.Repeat("alpha bravo charlie delta echo foxtrot golf hotel ", 5)
 	seed := seedCandidate(g, idx, long, vec, true)
 
-	id, _ := CheckVec(g, idx, dedupCfg(), vec, long)
-	if id != seed.ID {
-		t.Fatalf("identical long text = %q, want %q", id, seed.ID)
+	out := Scan(g, idx, guardCfg(), vec, long, "")
+	if out.Hold == nil || out.Hold.NodeID != seed.ID {
+		t.Fatalf("identical long text = %+v, want hold on %q", out.Hold, seed.ID)
 	}
 }
 
-// TestCheckVecQuantizedFallback pins the fallback when the candidate
+// TestScanQuantizedFallback pins the fallback when the candidate
 // has a vector-index entry but no stored float32 embedding (legacy
 // records): similarity comes from the quantized index score.
-func TestCheckVecQuantizedFallback(t *testing.T) {
+func TestScanQuantizedFallback(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	vec := []float32{0.5, 0.5, 0.1}
 	seed := seedCandidate(g, idx, "short legacy content", vec, false)
 
-	id, sim := CheckVec(g, idx, dedupCfg(), vec, "short legacy content")
-	if id != seed.ID {
-		t.Fatalf("legacy candidate = %q, want %q", id, seed.ID)
+	out := Scan(g, idx, guardCfg(), vec, "short legacy content", "")
+	if out.Hold == nil || out.Hold.NodeID != seed.ID {
+		t.Fatalf("legacy candidate = %+v, want hold on %q", out.Hold, seed.ID)
 	}
-	if sim < 0.92 {
-		t.Fatalf("quantized similarity %.3f below threshold; fallback broken", sim)
+	if out.Hold.Similarity < 0.92 {
+		t.Fatalf("quantized similarity %.3f below threshold; fallback broken", out.Hold.Similarity)
 	}
 }
 
-// TestCheckSelfSkipPreserved pins the post-insert variant's semantics
+// TestScanSelfSkipPreserved pins the post-insert variant's semantics
 // through the shared-core refactor: a node must never match itself,
 // and with only itself in the index Check reports no duplicate.
-func TestCheckSelfSkipPreserved(t *testing.T) {
+func TestScanSelfSkipPreserved(t *testing.T) {
 	g := graph.New()
 	idx := index.NewFlatIndex()
 	vec := []float32{0.5, 0.5, 0.1}
 	a := seedCandidate(g, idx, "self skip content", vec, true)
 	b := seedCandidate(g, idx, "self skip content", vec, true)
 
-	id, _ := Check(g, idx, dedupCfg(), a.ID)
-	if id != b.ID {
-		t.Fatalf("Check(a) = %q, want the sibling %q, never self", id, b.ID)
+	vecA, contentA := NodeEmbeddingAndContent(a)
+	out := Scan(g, idx, guardCfg(), vecA, contentA, a.ID)
+	if out.Hold == nil || out.Hold.NodeID != b.ID {
+		t.Fatalf("Scan(a, selfID=a) = %+v, want the sibling %q, never self", out.Hold, b.ID)
 	}
 }

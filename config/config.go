@@ -59,7 +59,6 @@ type Config struct {
 	Activation ActivationConfig `yaml:"activation"`
 	Chunking   ChunkingConfig   `yaml:"chunking"`
 	Concepts   ConceptsConfig   `yaml:"concepts"`
-	Dedup      DedupConfig      `yaml:"dedup"`
 	SaveGuard  SaveGuardConfig  `yaml:"save_guard"`
 	Graph      GraphConfig      `yaml:"graph"`
 	Storage    StorageConfig    `yaml:"storage"`
@@ -419,10 +418,6 @@ type CurationConfig struct {
 	// per cycle. Prevents a massive backlog from blocking a single
 	// cycle.
 	MaxOrphansPerRun int `yaml:"max_orphans_per_run"`
-
-	// MaxDedupPerRun caps how many duplicate-consolidation operations
-	// run per cycle.
-	MaxDedupPerRun int `yaml:"max_dedup_per_run"`
 
 	// SectionLinkMin is the minimum similarity for cross-section
 	// linking. Section nodes below this similarity are not linked
@@ -1206,27 +1201,6 @@ type TelemetryConfig struct {
 	ConceptMatchThreshold float64 `yaml:"concept_match_threshold"`
 }
 
-// DedupConfig controls auto-supersession of near-duplicate records.
-// The similarity threshold is carefully calibrated; changing it can
-// either miss true duplicates or incorrectly supersede distinct records.
-type DedupConfig struct {
-	// SimilarityThreshold: cosine similarity above which a new capture
-	// supersedes an older record. Default 0.92 is calibrated for
-	// bge-small-en-v1.5 embeddings.
-	SimilarityThreshold float64 `yaml:"similarity_threshold"`
-
-	// Action: "supersede" (default) marks the older record historical
-	// (sets valid_until + resolution=superseded + adds a supersedes
-	// edge). "reject" refuses the capture with ErrConflict and rolls
-	// back the new node.
-	//
-	// The previous "flag" value was removed in 2026-04 (see
-	// design-decisions.md D37). Load() silently coerces legacy
-	// `action: flag` configs to "supersede" for one release cycle --
-	// the two values never had distinct behavior.
-	Action string `yaml:"action"`
-}
-
 // SaveGuardConfig controls the write-time similarity checks on record
 // creation: the hold (a save at or above the hold threshold is refused
 // before any record is created, returning the similar record's details
@@ -1335,7 +1309,6 @@ func Defaults() Config {
 			StaleEphemeralScore:         0.95,
 			StaleTemporalScore:          0.99,
 			MaxOrphansPerRun:            20,
-			MaxDedupPerRun:              20,
 			SectionLinkMin:              0.75,
 			MaxSectionLinksPerRun:       30,
 			ObservationBatchSize:        0, // auto: 500 for local providers, 20 for external
@@ -1504,11 +1477,6 @@ func Defaults() Config {
 		Telemetry: TelemetryConfig{
 			ConceptMatchEnabled:   true,
 			ConceptMatchThreshold: 0.7,
-		},
-
-		Dedup: DedupConfig{
-			SimilarityThreshold: 0.92,
-			Action:              "supersede",
 		},
 
 		SaveGuard: SaveGuardConfig{
@@ -1803,21 +1771,6 @@ func normalize(cfg *Config) error {
 	// to run regardless of which error path follows.
 	trimConfigStrings(cfg)
 
-	// Dedup action coercion. See DedupConfig docs + design-decisions.md D37.
-	// "flag" is a legacy alias that never had behavior distinct from
-	// "supersede"; silently coerce for one release cycle. Empty (omitted
-	// in YAML) -> default. Anything else -> error so typos surface.
-	switch cfg.Dedup.Action {
-	case "":
-		cfg.Dedup.Action = "supersede"
-	case "flag":
-		cfg.Dedup.Action = "supersede"
-	case "supersede", "reject":
-		// ok
-	default:
-		return fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
-	}
-
 	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {
 		cfg.LLM.Curation.MaxCallsPerRun = 10000
 	}
@@ -1839,9 +1792,6 @@ func normalize(cfg *Config) error {
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		cfg.Curation.MaxOrphansPerRun = 200
-	}
-	if cfg.Curation.MaxDedupPerRun > 200 {
-		cfg.Curation.MaxDedupPerRun = 200
 	}
 
 	// Save-guard thresholds: zero-fill defaults so a partial yaml

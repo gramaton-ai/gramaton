@@ -136,7 +136,6 @@ type Query struct {
 	NearNode           string     // graph filter: only return nodes within MaxHops of this node
 	MaxHops            int        // max graph distance from NearNode (default 2)
 	Since              *time.Time
-	IncludeHistorical  bool
 	// ExcludeConcepts filters out node_type=concept results. Set by the
 	// api layer for default search to keep concept nodes out of records
 	// retrieval (concepts are derivative summaries; they compete with

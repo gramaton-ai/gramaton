@@ -1073,27 +1073,6 @@ func (e *Engine) SearchSnapshots() *SnapshotStore {
 	return e.searchSnapshots
 }
 
-// CheckDedup checks if a node's embedding is too similar to existing
-// records. Delegates to similarity.Check; the Engine method exists to
-// provide the natural entry point and preserve the historical API.
-// Caller must hold at least a read lock.
-//
-// Deprecated: legacy auto-supersession entry point; migrating callers
-// use ScanSimilar. Removed with the supersession removal cleanup.
-func (e *Engine) CheckDedup(nodeID string) (string, float64) {
-	return similarity.Check(e.graph, e.indexes.vecIdx, e.cfg.Dedup, nodeID)
-}
-
-// CheckDedupVec checks if a not-yet-inserted record -- described by
-// its embedding vector and raw content -- is a near-duplicate of an
-// existing record.
-//
-// Deprecated: legacy auto-supersession entry point; migrating callers
-// use ScanSimilarVec. Removed with the supersession removal cleanup.
-func (e *Engine) CheckDedupVec(vec []float32, content string) (string, float64) {
-	return similarity.CheckVec(e.graph, e.indexes.vecIdx, e.cfg.Dedup, vec, content)
-}
-
 // ScanSimilarVec runs the save-guard scan (hold + advisory bands) for
 // a not-yet-inserted record described by its embedding and raw
 // content. Save runs this under a read lock before acquiring the

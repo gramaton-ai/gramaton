@@ -103,17 +103,15 @@ func TestSaveClientTokenInvalidShape(t *testing.T) {
 	}
 }
 
-// TestSaveClientTokenReplayInRejectMode pins the check ordering: in
-// dedup.action=reject mode, a replay's duplicate scan finds the very
-// record the first attempt created -- the token check must win, so
-// the retry gets the original ID instead of a spurious conflict.
-func TestSaveClientTokenReplayInRejectMode(t *testing.T) {
-	a, _ := setupSaveAPI(t, func(cfg *config.Config) {
-		cfg.Dedup.Action = "reject"
-	})
+// TestSaveClientTokenReplayBeatsHold pins the check ordering: a
+// replay's similarity scan finds the very record the first attempt
+// created -- the token check must win, so the retry gets the original
+// ID instead of a spurious hold against its own record.
+func TestSaveClientTokenReplayBeatsHold(t *testing.T) {
+	a, _ := setupSaveAPI(t, nil)
 
 	first, apiErr := a.Save(context.Background(), SaveRequest{
-		Content:     "reject-mode replay content",
+		Content:     "replay-ordering seed content",
 		ClientToken: testClientToken,
 	})
 	if apiErr != nil {
@@ -121,11 +119,14 @@ func TestSaveClientTokenReplayInRejectMode(t *testing.T) {
 	}
 
 	replay, apiErr := a.Save(context.Background(), SaveRequest{
-		Content:     "reject-mode replay content",
+		Content:     "replay-ordering seed content",
 		ClientToken: testClientToken,
 	})
 	if apiErr != nil {
-		t.Fatalf("replay in reject mode: %v", apiErr)
+		t.Fatalf("replay: %v", apiErr)
+	}
+	if replay.Held != nil {
+		t.Fatalf("replay was held against its own record: %+v", replay.Held)
 	}
 	if replay.ID != first.ID {
 		t.Fatalf("replay returned %s, want original %s", replay.ID, first.ID)

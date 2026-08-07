@@ -74,16 +74,14 @@ func TestServiceCaptureSupersedeSetResolution(t *testing.T) {
 	eng.IndexNode(n2.ID, "the sky is blue on clear days indeed", nil)
 	eng.VecIdx().Add(n2.ID, []float32{1, 0, 0, 0})
 
-	if dupID, sim := eng.CheckDedup(n2.ID); dupID != "" {
-		now := time.Now().UTC()
-		oldNode, _ := eng.Graph().GetNode(dupID)
-		if oldNode != nil {
-			eng.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-			eng.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-			eng.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-			eng.Graph().AddEdge(n2.ID, dupID, "supersedes", sim, nil)
-		}
-	}
+	// Manually mark the older record superseded -- the state a
+	// deliberate gramaton_resolve + gramaton_link produces (the kept
+	// manual vocabulary) -- to pin the downstream property rendering.
+	now := time.Now().UTC()
+	eng.SetProp(oldID, "valid_until", graph.TimestampProperty(now))
+	eng.SetProp(oldID, "resolution", graph.StringProperty("superseded"))
+	eng.SetProp(oldID, "resolved_at", graph.TimestampProperty(now))
+	eng.Graph().AddEdge(n2.ID, oldID, "supersedes", 0.95, nil)
 	eng.Save("test-supersede")
 	eng.Unlock()
 
