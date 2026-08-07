@@ -100,6 +100,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	type inspectArgs struct {
 		ID             string `json:"id" jsonschema:"record ID to inspect"`
 		IncludeContent *bool  `json:"include_content,omitempty" jsonschema:"include content_full in response (default true)"`
+		AsOf           string `json:"as_of,omitempty" jsonschema:"point-in-time view: a date (YYYY-MM-DD or RFC3339) or a FULL commit hash on the current branch. Returns the record's frozen reality then (semantics: point_in_time); the live record may say something else NOW."`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_inspect",
@@ -109,8 +110,15 @@ func registerRecordsProxyTools(s *mcp.Server) {
 			return proxyErr("id is required")
 		}
 		path := fmt.Sprintf("/v1/records/%s", url.PathEscape(args.ID))
+		params := url.Values{}
 		if args.IncludeContent != nil && !*args.IncludeContent {
-			path += "?include_content=false"
+			params.Set("include_content", "false")
+		}
+		if args.AsOf != "" {
+			params.Set("as_of", args.AsOf)
+		}
+		if len(params) > 0 {
+			path += "?" + params.Encode()
 		}
 		return proxyGet(path)
 	})

@@ -1,0 +1,159 @@
+package api
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/storage"
+)
+
+// asOfAncestryBound caps the parent-chain walk that validates a
+// resolved commit's membership in the current branch. The timestamp
+// index is global and branch-agnostic, so without this check a date
+// could resolve to a commit from an abandoned lineage and the read
+// would silently serve another branch's reality.
+const asOfAncestryBound = 100000
+
+// asOfEdgeCap bounds the one-hop edges returned for a historical
+// read (the edge tree at a commit has no adjacency index; the scan
+// is linear and the response should stay prompt-sized).
+const asOfEdgeCap = 50
+
+// inspectAsOf serves the point-in-time read: the record's frozen
+// reality at a resolved commit, semantics named in the response.
+// Never records access -- reading history is not using the live
+// record.
+func (a *API) inspectAsOf(req InspectRequest, includeContent bool) (InspectResponse, *APIError) {
+	a.engine.RLock()
+	defer a.engine.RUnlock()
+	store := a.engine.Store()
+
+	// Resolve: date via the timestamp index, else a full commit hash.
+	commitHash := ""
+	if t, err := parseDateArg(req.AsOf); err == nil {
+		h, ok := a.engine.TSIndex().CommitAt(t)
+		if !ok {
+			return InspectResponse{}, ErrNotFound("no commit at or before that time")
+		}
+		commitHash = h
+	} else {
+		commitHash = req.AsOf
+		if _, err := store.Read(commitHash); err != nil {
+			return InspectResponse{}, ErrNotFound("as_of is neither a parseable date nor a known full commit hash")
+		}
+	}
+
+	// Branch-ancestry validation: the timestamp index spans every
+	// lineage ever committed, so the resolved commit must be walked
+	// back to from the CURRENT head before its contents are trusted.
+	if !a.commitOnCurrentBranch(commitHash) {
+		return InspectResponse{}, ErrInvalid("commit not on current branch; as_of only reads the active lineage's history")
+	}
+
+	nodeHash, found, err := graph.NodeHashInCommit(store, commitHash, req.ID)
+	if err != nil {
+		a.log.Warn("inspect as_of: node lookup failed", "component", "inspect", "err", err)
+		return InspectResponse{}, ErrInternal("failed to resolve record at commit")
+	}
+	if !found {
+		return InspectResponse{}, ErrNotFound("record did not exist at that commit")
+	}
+	data, err := store.Read(nodeHash)
+	if err != nil {
+		return InspectResponse{}, ErrInternal("failed to read record at commit")
+	}
+	n, err := graph.UnmarshalNode(data)
+	if err != nil {
+		return InspectResponse{}, ErrInternal("failed to decode record at commit")
+	}
+
+	props := make(map[string]any, len(n.Properties))
+	for k, v := range n.Properties {
+		if !includeContent && k == "content_full" {
+			continue
+		}
+		props[k] = v.FormatValue()
+	}
+
+	resp := InspectResponse{
+		ID:         req.ID,
+		Properties: props,
+		Related:    a.historicalEdges(commitHash, req.ID),
+		AsOf:       commitHash,
+		Semantics:  "point_in_time",
+	}
+	resp.MetadataSummary = fmt.Sprintf("Point-in-time view at commit %s (%s). The live record may differ; inspect without as_of for the current state.",
+		truncHash(commitHash), commitTimeLabel(store, commitHash))
+	return resp, nil
+}
+
+// commitOnCurrentBranch walks HEAD's parent chain looking for hash.
+func (a *API) commitOnCurrentBranch(hash string) bool {
+	cur := a.engine.HeadHashLocked()
+	for range asOfAncestryBound {
+		if cur == hash {
+			return true
+		}
+		if cur == "" {
+			return false
+		}
+		c, err := loadCommitMeta(a.engine.Store(), cur)
+		if err != nil {
+			return false
+		}
+		cur = c.Parent
+	}
+	return false
+}
+
+// historicalEdges scans the commit's edge tree for edges touching
+// id. Linear (no adjacency at a historical commit) and capped.
+func (a *API) historicalEdges(commitHash, id string) []RelatedEdge {
+	store := a.engine.Store()
+	commit, err := loadCommitMeta(store, commitHash)
+	if err != nil || commit.EdgeTreeRoot == "" {
+		return nil
+	}
+	tree := storage.LoadProllyTree(store, commit.EdgeTreeRoot)
+	entries, err := tree.AllEntries()
+	if err != nil {
+		return nil
+	}
+	var out []RelatedEdge
+	for _, entry := range entries {
+		if len(out) >= asOfEdgeCap {
+			break
+		}
+		data, err := store.Read(entry.Value)
+		if err != nil {
+			continue
+		}
+		e, err := graph.UnmarshalEdge(data)
+		if err != nil {
+			continue
+		}
+		switch id {
+		case e.SourceID:
+			out = append(out, RelatedEdge{
+				ID: e.TargetID, EdgeType: e.Type, EdgeID: e.ID,
+				EdgeWeight: e.Weight, Direction: "outbound",
+			})
+		case e.TargetID:
+			out = append(out, RelatedEdge{
+				ID: e.SourceID, EdgeType: e.Type, EdgeID: e.ID,
+				EdgeWeight: e.Weight, Direction: "inbound",
+			})
+		}
+	}
+	return out
+}
+
+// commitTimeLabel formats a commit's timestamp for the summary line.
+func commitTimeLabel(store interface{ Read(string) ([]byte, error) }, hash string) string {
+	c, err := loadCommitMeta(store, hash)
+	if err != nil {
+		return "unknown time"
+	}
+	return c.Timestamp.UTC().Format(time.RFC3339)
+}

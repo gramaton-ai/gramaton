@@ -285,3 +285,58 @@ func TestHistoryVersionTimeline(t *testing.T) {
 		t.Fatalf("unexpected coverage caveat: %q", resp.VersionCoverage)
 	}
 }
+
+// TestInspectAsOf pins the point-in-time read: the frozen reality at
+// an earlier commit comes back with its semantics named, a commit
+// off the current branch is refused, and a record that did not exist
+// at T is a clean not-found.
+func TestInspectAsOf(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: "the original claim"})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+	eng.RLock()
+	v1commit := eng.HeadHash()
+	eng.RUnlock()
+
+	if _, apiErr := a.Update(ctx, UpdateRequest{ID: saved.ID, Content: "the corrected claim"}); apiErr != nil {
+		t.Fatalf("update: %v", apiErr)
+	}
+
+	resp, apiErr := a.Inspect(ctx, InspectRequest{ID: saved.ID, AsOf: v1commit})
+	if apiErr != nil {
+		t.Fatalf("inspect as_of: %v", apiErr)
+	}
+	if resp.Semantics != "point_in_time" || resp.AsOf != v1commit {
+		t.Fatalf("semantics/as_of = %q/%q", resp.Semantics, resp.AsOf)
+	}
+	if got := resp.Properties["content_full"]; got != "the original claim" {
+		t.Fatalf("historical content = %v, want the original", got)
+	}
+
+	// Live read still returns the correction.
+	live, apiErr := a.Inspect(ctx, InspectRequest{ID: saved.ID})
+	if apiErr != nil {
+		t.Fatalf("live inspect: %v", apiErr)
+	}
+	if got := live.Properties["content_full"]; got != "the corrected claim" {
+		t.Fatalf("live content = %v", got)
+	}
+
+	// A commit hash that is not on the current branch is refused.
+	if _, apiErr := a.Inspect(ctx, InspectRequest{ID: saved.ID, AsOf: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}); apiErr == nil {
+		t.Fatal("unknown/off-branch commit must be refused")
+	}
+
+	// A record that did not exist at T is a clean not-found.
+	second, apiErr := a.Save(ctx, SaveRequest{Content: "a record born after the checkpoint"})
+	if apiErr != nil {
+		t.Fatalf("second save: %v", apiErr)
+	}
+	if _, apiErr := a.Inspect(ctx, InspectRequest{ID: second.ID, AsOf: v1commit}); apiErr == nil {
+		t.Fatal("record absent at T must be not-found")
+	}
+}

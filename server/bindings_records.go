@@ -105,6 +105,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		req := api.InspectRequest{
 			ID:             r.PathValue("id"),
 			IncludeContent: &includeContent,
+			AsOf:           r.URL.Query().Get("as_of"),
 		}
 		resp, apiErr := s.api.Inspect(r.Context(), req)
 		if apiErr != nil {
@@ -321,6 +322,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	type inspectArgs struct {
 		ID             string `json:"id" jsonschema:"record ID to inspect"`
 		IncludeContent *bool  `json:"include_content,omitempty" jsonschema:"include content_full in response (default true)"`
+		AsOf           string `json:"as_of,omitempty" jsonschema:"point-in-time view: a date (YYYY-MM-DD or RFC3339) or a FULL commit hash on the current branch. Returns the record's frozen reality then (semantics: point_in_time); the live record may say something else NOW."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_inspect",
@@ -332,7 +334,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
-		resp, apiErr := s.api.Inspect(ctx, api.InspectRequest{ID: args.ID, IncludeContent: args.IncludeContent})
+		resp, apiErr := s.api.Inspect(ctx, api.InspectRequest{ID: args.ID, IncludeContent: args.IncludeContent, AsOf: args.AsOf})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
