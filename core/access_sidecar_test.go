@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,16 +221,25 @@ func TestChangelogGapWalkRepairsDrift(t *testing.T) {
 		t.Fatalf("Save 1: %v", err)
 	}
 	eng.SetContentProp(n.ID, "content_full", "v2")
-	if _, err := eng.Save("revise"); err != nil {
+	c2, err := eng.Save("revise")
+	if err != nil {
 		eng.Unlock()
 		t.Fatalf("Save 2: %v", err)
 	}
 	eng.Unlock()
 
-	// Simulate the crash: rewind the marker to the first commit as
-	// if the second commit's append never ran.
+	// Simulate the crash: rewind the marker to the first commit AND
+	// delete the second commit's entries, as if its append never ran.
+	// Without the retraction the walk's idempotent tail-skip would
+	// pass this test vacuously -- the entries would already be there.
 	if err := eng.Changelog().SetMarker(c1.Hash); err != nil {
 		t.Fatalf("SetMarker: %v", err)
+	}
+	if err := eng.Changelog().RetractCommits(map[string]bool{c2.Hash: true}); err != nil {
+		t.Fatalf("RetractCommits: %v", err)
+	}
+	if got := eng.Changelog().Versions(n.ID); len(got) != 1 {
+		t.Fatalf("pre-repair versions = %+v, want only the first (retraction must have removed the second)", got)
 	}
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -299,5 +310,89 @@ func TestBackfillChangelogIndexesHistory(t *testing.T) {
 	_ = again
 	if got := len(eng.Changelog().Versions(n.ID)); got != 2 {
 		t.Fatalf("re-run duplicated entries: %d", got)
+	}
+}
+
+// TestAccessOverlayConcurrentLoad pins the load-hook concurrency
+// contract under the race detector: many readers materializing the
+// same uncached record concurrently (each slow-path load runs
+// overlayAccess on its own pre-publication copy, then races to the
+// cache) while writers bump access metadata and commit revisions. A
+// cold reopen forces the same GetNode slow path an LRU eviction
+// would.
+func TestAccessOverlayConcurrentLoad(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("v1"),
+	})
+	if _, err := eng.Save("create"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	// Seed a sidecar entry so the hook takes its overlay branch.
+	eng.RecordAccess(n.ID, time.Now().UTC())
+	eng.Unlock()
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	eng2 := openReadOnlyTestEngine(t, dir)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range 50 {
+				eng2.RLock()
+				if node, ok := eng2.Graph().GetNode(n.ID); ok {
+					_, _ = node.Properties.GetInt64("access_count")
+				}
+				eng2.RUnlock()
+			}
+		}()
+	}
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range 25 {
+				eng2.Lock()
+				eng2.RecordAccess(n.ID, time.Now().UTC())
+				eng2.Unlock()
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := range 10 {
+			eng2.Lock()
+			eng2.SetContentProp(n.ID, "content_full", fmt.Sprintf("rev %d", i))
+			if _, err := eng2.Save("concurrent revise"); err != nil {
+				eng2.Unlock()
+				t.Errorf("Save: %v", err)
+				return
+			}
+			eng2.Unlock()
+		}
+	}()
+	close(start)
+	wg.Wait()
+
+	eng2.RLock()
+	defer eng2.RUnlock()
+	node, ok := eng2.Graph().GetNode(n.ID)
+	if !ok {
+		t.Fatal("record vanished under concurrent load")
+	}
+	if c, _ := node.Properties.GetInt64("access_count"); c < 1 {
+		t.Fatalf("access_count = %d, want the bumps to have landed", c)
 	}
 }

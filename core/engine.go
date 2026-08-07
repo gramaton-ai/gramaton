@@ -99,6 +99,16 @@ type Engine struct {
 	// sidecar.db). Appended at Save after the HEAD write; drift is
 	// repaired by the boot gap walk.
 	changelog *index.BboltChangelog
+	// anc memoizes the current head's ancestor set for as_of branch
+	// validation; invalidated on every head move.
+	anc ancestry
+	// adoptedCommitPending marks that the next Save commits an
+	// adopted staged graph (revert/merge): its mutation set is empty,
+	// so the Save-time changelog append must NOT advance the marker
+	// -- the explicit tree-diff indexing that follows both indexes
+	// and advances, and a crash in between stays repairable by the
+	// boot gap walk instead of silently losing the commit's versions.
+	adoptedCommitPending bool
 
 	// searchSnapshots caches paginated search result sets so cursor
 	// calls slice into a stable matched-set without re-running the
@@ -390,6 +400,7 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	// the flag at their construction below.
 	if e.volatile {
 		boltDB.NoSync = true
+		sidecarDB.NoSync = true
 		e.store.SetNoSync(true)
 	}
 
@@ -557,6 +568,17 @@ func (e *Engine) HeadHashLocked() string {
 	return e.headHash
 }
 
+// SetHeadLocked moves the in-memory HEAD pointer. Branch checkout
+// must call this after writing the HEAD file: leaving the stale
+// value in place made the NEXT save on the checked-out branch parent
+// on the ABANDONED lineage's head, grafting the branches together --
+// and the ancestry-validated features (as_of, changelog rebuild)
+// then walked the corrupted chain. Caller must hold the write lock.
+func (e *Engine) SetHeadLocked(hash string) {
+	e.headHash = hash
+	e.invalidateAncestry()
+}
+
 // Graph returns the underlying graph. Callers must hold the
 // appropriate lock via RLock/RUnlock or Lock/Unlock.
 func (e *Engine) Graph() *graph.Graph { return e.graph }
@@ -597,6 +619,8 @@ func (e *Engine) AdoptGraph(staged *graph.Graph) {
 	// must overlay sidecar access values on every materialization.
 	staged.SetNodeLoadHook(e.overlayAccess)
 	e.graph = staged
+	e.adoptedCommitPending = true
+	e.invalidateAncestry()
 }
 
 // EdgeStore returns the engine's persistent edge store. Mostly
@@ -694,16 +718,43 @@ func (e *Engine) overlayAccess(n *graph.Node) {
 	}
 }
 
-// RecordAccess bumps a record's access bookkeeping: sidecar first
+// RecordAccess bumps one record's access bookkeeping: sidecar first
 // (the durable authority), then the cached in-memory node WITHOUT
-// dirtying it -- reads must never mint commits. The last_accessed
-// time index updates alongside so recency filters stay accurate.
-// Caller must hold the write lock. First access after a migration
-// seeds the sidecar from the blob's legacy values.
+// dirtying it -- reads must never mint commits. Caller must hold the
+// write lock. First access after a migration seeds the sidecar from
+// the blob's legacy values. The last_accessed TIME INDEX is
+// deliberately not updated per read (that would be one indexes.db
+// transaction per read under the write lock); it refreshes at
+// startup rebuild from the overlaid props, matching the staleness
+// the old flush cadence already had. Filters read live node props,
+// which ARE current.
 func (e *Engine) RecordAccess(nodeID string, now time.Time) {
+	if m, ok := e.bumpAccess(nodeID, now); ok {
+		e.accessIdx.Put(nodeID, m)
+	}
+}
+
+// RecordAccessAll bumps many records in ONE sidecar transaction --
+// the search path calls this over a whole result page under the
+// write lock, and per-record fsyncs there would stall every reader
+// for the batch. Caller must hold the write lock.
+func (e *Engine) RecordAccessAll(nodeIDs []string, now time.Time) {
+	batch := make(map[string]index.AccessMeta, len(nodeIDs))
+	for _, id := range nodeIDs {
+		if m, ok := e.bumpAccess(id, now); ok {
+			batch[id] = m
+		}
+	}
+	e.accessIdx.PutBatch(batch)
+}
+
+// bumpAccess applies one access to the cache-visible state (sidecar
+// cache value computed, in-memory props updated without dirtying)
+// and returns the metadata to persist.
+func (e *Engine) bumpAccess(nodeID string, now time.Time) (index.AccessMeta, bool) {
 	n, ok := e.graph.GetNode(nodeID)
 	if !ok {
-		return
+		return index.AccessMeta{}, false
 	}
 	m, has := e.accessIdx.Get(nodeID)
 	if !has {
@@ -716,13 +767,9 @@ func (e *Engine) RecordAccess(nodeID string, now time.Time) {
 	}
 	m.Count++
 	m.LastAccessed = now
-	e.accessIdx.Put(nodeID, m)
-
 	n.Properties["access_count"] = graph.Int64Property(m.Count)
 	n.Properties["last_accessed"] = graph.TimestampProperty(now)
-	if e.indexes.secIdx != nil {
-		e.indexes.secIdx.SetLastAccessed(nodeID, now)
-	}
+	return m, true
 }
 
 // SetEmbedAttempts records reembed retry bookkeeping in the sidecar
@@ -899,6 +946,7 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	}
 
 	e.headHash = commit.Hash
+	e.advanceAncestry(commit.Hash)
 
 	// Changelog append is ordered after the HEAD write per the
 	// durability contract; a crash before it leaves marker != HEAD

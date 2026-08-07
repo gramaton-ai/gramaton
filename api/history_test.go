@@ -339,4 +339,55 @@ func TestInspectAsOf(t *testing.T) {
 	if _, apiErr := a.Inspect(ctx, InspectRequest{ID: second.ID, AsOf: v1commit}); apiErr == nil {
 		t.Fatal("record absent at T must be not-found")
 	}
+
+	// Date-form as_of resolves through the timestamp index to the
+	// same frozen reality.
+	eng.RLock()
+	v1meta, err := loadCommitMeta(eng.Store(), v1commit)
+	eng.RUnlock()
+	if err != nil {
+		t.Fatalf("load v1 commit meta: %v", err)
+	}
+	byDate, apiErr := a.Inspect(ctx, InspectRequest{
+		ID:   saved.ID,
+		AsOf: v1meta.Timestamp.UTC().Format(time.RFC3339Nano),
+	})
+	if apiErr != nil {
+		t.Fatalf("inspect as_of date: %v", apiErr)
+	}
+	if byDate.AsOf != v1commit {
+		t.Fatalf("date resolved to %q, want the v1 commit %q", byDate.AsOf, v1commit)
+	}
+	if got := byDate.Properties["content_full"]; got != "the original claim" {
+		t.Fatalf("date-form historical content = %v, want the original", got)
+	}
+
+	// A commit that EXISTS in the store but sits on an abandoned
+	// lineage is refused by the ancestry gate (the unknown-hash case
+	// above never reaches it). Build one: branch at the current head,
+	// advance the main line, check the branch out -- the advance is
+	// now off-branch.
+	if _, apiErr := a.BranchCreate(ctx, BranchCreateRequest{Name: "asof-side"}); apiErr != nil {
+		t.Fatalf("branch create: %v", apiErr)
+	}
+	if _, apiErr := a.Save(ctx, SaveRequest{Content: "the main line advances past the fork"}); apiErr != nil {
+		t.Fatalf("post-fork save: %v", apiErr)
+	}
+	eng.RLock()
+	offBranch := eng.HeadHash()
+	eng.RUnlock()
+	if _, apiErr := a.BranchCheckout(ctx, "asof-side"); apiErr != nil {
+		t.Fatalf("checkout: %v", apiErr)
+	}
+	if _, apiErr := a.Inspect(ctx, InspectRequest{ID: saved.ID, AsOf: offBranch}); apiErr == nil {
+		t.Fatal("existing off-branch commit must be refused by the ancestry gate")
+	}
+	// Pre-fork history stays readable from the branch.
+	preFork, apiErr := a.Inspect(ctx, InspectRequest{ID: saved.ID, AsOf: v1commit})
+	if apiErr != nil {
+		t.Fatalf("pre-fork as_of on branch: %v", apiErr)
+	}
+	if got := preFork.Properties["content_full"]; got != "the original claim" {
+		t.Fatalf("pre-fork content on branch = %v, want the original", got)
+	}
 }

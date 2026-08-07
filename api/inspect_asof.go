@@ -8,13 +8,6 @@ import (
 	"github.com/gramaton-ai/gramaton/storage"
 )
 
-// asOfAncestryBound caps the parent-chain walk that validates a
-// resolved commit's membership in the current branch. The timestamp
-// index is global and branch-agnostic, so without this check a date
-// could resolve to a commit from an abandoned lineage and the read
-// would silently serve another branch's reality.
-const asOfAncestryBound = 100000
-
 // asOfEdgeCap bounds the one-hop edges returned for a historical
 // read (the edge tree at a commit has no adjacency index; the scan
 // is linear and the response should stay prompt-sized).
@@ -25,6 +18,12 @@ const asOfEdgeCap = 50
 // Never records access -- reading history is not using the live
 // record.
 func (a *API) inspectAsOf(req InspectRequest, includeContent bool) (InspectResponse, *APIError) {
+	// Cheap bound before any lookup, matching the identifier
+	// convention: a full commit hash is 64 hex chars and an RFC3339
+	// date ~35.
+	if len(req.AsOf) > MaxIDArgLen {
+		return InspectResponse{}, ErrInvalid(fmt.Sprintf("as_of exceeds maximum length of %d", MaxIDArgLen))
+	}
 	a.engine.RLock()
 	defer a.engine.RUnlock()
 	store := a.engine.Store()
@@ -88,23 +87,12 @@ func (a *API) inspectAsOf(req InspectRequest, includeContent bool) (InspectRespo
 	return resp, nil
 }
 
-// commitOnCurrentBranch walks HEAD's parent chain looking for hash.
+// commitOnCurrentBranch checks the engine's memoized ancestor set:
+// one bounded chain walk per head move, a map lookup per call
+// afterwards (an as_of on every inspect must not pay a chain walk
+// each time).
 func (a *API) commitOnCurrentBranch(hash string) bool {
-	cur := a.engine.HeadHashLocked()
-	for range asOfAncestryBound {
-		if cur == hash {
-			return true
-		}
-		if cur == "" {
-			return false
-		}
-		c, err := loadCommitMeta(a.engine.Store(), cur)
-		if err != nil {
-			return false
-		}
-		cur = c.Parent
-	}
-	return false
+	return a.engine.OnCurrentBranch(hash)
 }
 
 // historicalEdges scans the commit's edge tree for edges touching

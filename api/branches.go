@@ -175,6 +175,10 @@ func (a *API) BranchCheckout(ctx context.Context, name string) (BranchCheckoutRe
 		return BranchCheckoutResponse{}, ErrInternal("failed to set active branch")
 	}
 	a.engine.AdoptGraph(newGraph)
+	// Move the in-memory HEAD with the on-disk one: leaving it stale
+	// made the next save on this branch parent on the ABANDONED
+	// lineage's head, grafting the branches together.
+	a.engine.SetHeadLocked(hash)
 	a.engine.RebuildAllIndexes()
 	// Re-scope the changelog to the new lineage: retract the
 	// abandoned branch's entries, replay the new branch's.

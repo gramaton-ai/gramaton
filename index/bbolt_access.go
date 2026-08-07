@@ -112,3 +112,34 @@ func (idx *BboltAccessIndex) Len() int {
 	defer idx.mu.RUnlock()
 	return len(idx.cache)
 }
+
+// PutBatch stores many records' access metadata in one transaction:
+// cache first, then a single bucket update. Search bumps every
+// result under the engine write lock, and one fsynced transaction
+// per result would stall all readers for the batch; this pays one.
+func (idx *BboltAccessIndex) PutBatch(batch map[string]AccessMeta) {
+	if len(batch) == 0 {
+		return
+	}
+	idx.mu.Lock()
+	for id, m := range batch {
+		idx.cache[id] = m
+	}
+	idx.mu.Unlock()
+
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(accessBucket)
+		for id, m := range batch {
+			data, err := json.Marshal(m)
+			if err != nil {
+				continue
+			}
+			if err := b.Put([]byte(id), data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		slog.Error("access sidecar: batch persist failed", "component", "index", "records", len(batch), "err", err)
+	}
+}

@@ -427,3 +427,20 @@ func TestUpdateChangeNoteOnCommit(t *testing.T) {
 		t.Fatal("oversized change_note must be rejected")
 	}
 }
+
+// TestResolveChangeNoteCap pins the resolve-side note bound.
+func TestResolveChangeNoteCap(t *testing.T) {
+	a, _ := setupSaveAPI(t, nil)
+	ctx := context.Background()
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: "record to resolve with an oversized note"})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+	if _, apiErr := a.Resolve(ctx, ResolveRequest{
+		ID:         saved.ID,
+		Resolution: "completed",
+		ChangeNote: strings.Repeat("x", MaxChangeNote+1),
+	}); apiErr == nil {
+		t.Fatal("oversized change_note on resolve must be rejected")
+	}
+}

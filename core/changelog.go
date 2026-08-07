@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
@@ -26,6 +27,10 @@ var bookkeepingProps = map[string]bool{
 	"repaired_at":       true,
 	"repair_method":     true,
 	"repair_needed_llm": true,
+	// Reembed retry bookkeeping and the deferred save-guard flag:
+	// both are written by sweeps that must never mint versions.
+	"last_embed_error":      true,
+	"similar_check_pending": true,
 }
 
 func isBookkeepingProp(key string) bool {
@@ -78,6 +83,15 @@ func (e *Engine) logicalChange(prevHash string, cur *graph.Node) bool {
 // gap walk covers them.
 func (e *Engine) appendChangelog(commit *graph.Commit, dirty, deleted []string, prevHash map[string]string) {
 	if e.changelog == nil {
+		return
+	}
+	// An adopted-graph commit (revert/merge) carries no dirty nodes;
+	// advancing the marker here would strand the commit's real
+	// versions if the process dies before the explicit tree-diff
+	// indexing runs -- the gap walk early-returns on marker == HEAD.
+	// Leave the marker behind; IndexCommitDiffByHash advances it.
+	if e.adoptedCommitPending {
+		e.adoptedCommitPending = false
 		return
 	}
 	entries := make(map[string]index.ChangelogEntry)
@@ -278,43 +292,55 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 
 	const maxWalk = 100000
 
-	// Ancestor set + order of the new lineage.
-	newAncestors := map[string]bool{}
-	var newChain []*graph.Commit
-	cur := newHead
-	for range maxWalk {
-		c, err := loadCommit(e.store, cur)
-		if err != nil {
-			break
-		}
-		newAncestors[c.Hash] = true
-		newChain = append(newChain, c)
-		if c.Parent == "" {
-			break
-		}
-		cur = c.Parent
-	}
-
-	// Walk the old lineage from the marker until it joins the new
-	// ancestry; everything before the join is old-exclusive.
-	oldExclusive := map[string]bool{}
+	// Two-frontier interleaved walk: step the old lineage (from the
+	// marker) and the new lineage (from the new head) alternately,
+	// checking each step against the other side's visited set. The
+	// walk stops at the merge-base after O(divergence) steps -- a
+	// single-sided walk would pay O(chain) building the full new
+	// ancestry before ever looking at the divergence, a 100k-commit
+	// disk walk under the write lock on the motivating stores.
+	oldSeen := map[string]bool{}
+	newSeen := map[string]bool{}
+	var newChain []*graph.Commit // newHead -> ... in walk order
+	oldCur, newCur := marker, newHead
 	base := ""
-	cur = marker
 	for range maxWalk {
-		if newAncestors[cur] {
-			base = cur
+		if base != "" || (oldCur == "" && newCur == "") {
 			break
 		}
-		c, err := loadCommit(e.store, cur)
-		if err != nil {
-			break
+		if oldCur != "" {
+			if newSeen[oldCur] {
+				base = oldCur
+				break
+			}
+			oldSeen[oldCur] = true
+			c, err := loadCommit(e.store, oldCur)
+			if err != nil {
+				oldCur = ""
+			} else {
+				oldCur = c.Parent
+			}
 		}
-		oldExclusive[c.Hash] = true
-		if c.Parent == "" {
-			break
+		if newCur != "" {
+			if oldSeen[newCur] {
+				base = newCur
+				break
+			}
+			newSeen[newCur] = true
+			c, err := loadCommit(e.store, newCur)
+			if err != nil {
+				newCur = ""
+			} else {
+				newChain = append(newChain, c)
+				newCur = c.Parent
+			}
 		}
-		cur = c.Parent
 	}
+	// old-exclusive = everything the old walk visited strictly before
+	// the base (the base itself may sit in oldSeen when the new
+	// frontier discovered it there).
+	oldExclusive := oldSeen
+	delete(oldExclusive, base)
 	if base == "" {
 		slog.Warn("changelog rebuild: no merge-base with the new lineage; resetting coverage (run 'gramaton backfill changelog' to re-index history)",
 			"component", "engine", "marker", trunc12(marker), "new_head", trunc12(newHead))
@@ -330,10 +356,11 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 
 	// Replay the new-exclusive commits oldest-first; each Append
 	// advances the marker, so a crash mid-replay resumes cleanly.
-	// base is in newAncestors, so the scan always finds it; commits
-	// below its index are the new-exclusive set (empty when the
-	// checkout is a pure rewind to an ancestor).
-	replayFrom := -1
+	// When the OLD frontier discovered the base, newChain holds only
+	// commits strictly above it (replay all); when the NEW frontier
+	// walked onto it, the base sits in newChain and replay starts
+	// just above its index. A pure rewind replays nothing.
+	replayFrom := len(newChain) - 1
 	for i, c := range newChain {
 		if c.Hash == base {
 			replayFrom = i - 1
@@ -554,4 +581,67 @@ func propBytes(p graph.Property) []byte {
 		return nil
 	}
 	return data
+}
+
+// ancestry is the memoized ancestor set of the current head, built
+// lazily for OnCurrentBranch and invalidated whenever HEAD moves
+// (Save, checkout). Guarded by its own mutex: readers hold the
+// engine RLock, under which engine fields must not be mutated.
+type ancestry struct {
+	mu   sync.Mutex
+	head string
+	set  map[string]bool
+}
+
+// OnCurrentBranch reports whether hash is an ancestor of (or equal
+// to) the current head. The first call after a head move walks the
+// chain once (bounded) and memoizes; subsequent calls are a map
+// lookup. Caller must hold at least the engine read lock.
+func (e *Engine) OnCurrentBranch(hash string) bool {
+	head := e.headHash
+	if head == "" {
+		return false
+	}
+	e.anc.mu.Lock()
+	defer e.anc.mu.Unlock()
+	if e.anc.head != head {
+		set := make(map[string]bool)
+		cur := head
+		const bound = 200000
+		for range bound {
+			if cur == "" {
+				break
+			}
+			set[cur] = true
+			c, err := loadCommit(e.store, cur)
+			if err != nil {
+				break
+			}
+			cur = c.Parent
+		}
+		e.anc.head = head
+		e.anc.set = set
+	}
+	return e.anc.set[hash]
+}
+
+// invalidateAncestry drops the memoized ancestor set (head moved).
+func (e *Engine) invalidateAncestry() {
+	e.anc.mu.Lock()
+	e.anc.head = ""
+	e.anc.set = nil
+	e.anc.mu.Unlock()
+}
+
+// advanceAncestry extends the memoized ancestor set when the head
+// moves by ONE appended commit (every Save). Cheap incremental
+// maintenance -- invalidating instead would re-walk the chain on the
+// next as_of call after every write.
+func (e *Engine) advanceAncestry(newHead string) {
+	e.anc.mu.Lock()
+	if e.anc.set != nil {
+		e.anc.set[newHead] = true
+		e.anc.head = newHead
+	}
+	e.anc.mu.Unlock()
 }

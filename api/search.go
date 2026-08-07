@@ -309,11 +309,12 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	// block -- the read path then never touches the write lock and
 	// the frozen records' access metadata stays byte-identical.
 	if len(results) > 0 && !a.engine.ReadOnly() {
-		a.engine.Lock()
-		now := time.Now().UTC()
-		for _, r := range results {
-			a.engine.RecordAccess(r.ID, now)
+		ids := make([]string, len(results))
+		for i, r := range results {
+			ids[i] = r.ID
 		}
+		a.engine.Lock()
+		a.engine.RecordAccessAll(ids, time.Now().UTC())
 		a.engine.Unlock()
 	}
 
