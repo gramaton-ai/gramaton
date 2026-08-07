@@ -20,7 +20,7 @@ by defaulting.
 | You're asking... | Best store filter |
 |---|---|
 | "What did we decide about X?" | default (both) or `"memory"` |
-| "What's our current position?" | default (supersession edges in Memory handle this) |
+| "What's our current position?" | default -- records update in place, so the live record IS the current position |
 | "Why did we decide Y?" | default, then `gramaton_explore` the match |
 | "What did we try that didn't work?" | `"sessions"` or default -- dead ends captured with `epistemic_status: refuted` |
 | "What's still open?" | `"sessions"` -- open questions stay there as Session-only |
@@ -120,8 +120,11 @@ Use these filters alongside text to weight quality:
 - `confidence_min=0.7`: trust the top-tier results.
 - `epistemic_status="!refuted"`: exclude known-wrong claims.
 - `resolution="unresolved"`: still-open items only.
-- `include_historical=false` (default): superseded records are
-  excluded unless you ask for them.
+
+Historical records (a `valid_until` in the past, set by
+`gramaton_resolve`) are not excluded: they rank lower via a
+validity penalty and their `metadata_summary` leads with
+"Historical." Use `resolution="unresolved"` to drop them entirely.
 
 Agents that don't filter on these end up with refuted and stale
 content competing for top-K slots.

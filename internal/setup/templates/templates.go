@@ -33,7 +33,7 @@ import (
 // should re-read (new/renamed tools, changed routing rules), MAJOR
 // reserved post-1.0. A minor-or-more gap triggers the user-facing
 // "re-run `gramaton init --force`" nudge.
-const GuidanceVersion = "0.2.0"
+const GuidanceVersion = "0.3.0"
 
 // AddendumMarker is the placeholder line in base.md where a
 // harness's addendum is substituted. It sits just after the

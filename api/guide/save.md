@@ -18,7 +18,7 @@ They are NOT nested compressions of the same text.
   Anti-patterns: "We discussed X" (substance lost), "User decided Y"
   (why lost), "The team chose Z" (everything lost).
 
-- **`summary_short`** -- Up to ~750 chars (hard cap 1000). This is
+- **`summary_short`** -- Target ~750 chars, max ~900. This is
   what gets vector-embedded -- the **embedding-ready semantic anchor**
   of the record. Treat as the canonical semantic representation, not
   a tagline. Fill it with substance.
@@ -38,6 +38,30 @@ compress by shortening. Reorganize, restate, and synthesize so the
 record stands alone. Findability metadata is what someone would
 search *for later*, not what was literally said.
 
+## Update, Don't Re-Save
+
+Records are mutable. When knowledge evolves -- a decision is
+refined, a fact changes, new detail lands -- update the existing
+record with `gramaton_update` (metadata, `content`, or
+`content_append`) instead of saving a near-copy. Search stays clean
+because each fact has one live record; the commit log preserves
+every prior version for history queries (`gramaton_history`).
+
+The server enforces this. A save that is near-verbatim of an
+existing record (cosine >= the configured hold threshold, default
+0.94) is refused with a HELD response carrying the existing
+record's ID, content, and version token. Two exits:
+
+- Fold your material into the existing record via
+  `gramaton_update(id=..., expected_version=...)`.
+- If the two are genuinely distinct knowledge, re-send the save
+  with `allow_similar` naming the held record's ID.
+
+Saves in the advisory band below the hold threshold (default
+0.85-0.94) succeed and carry a one-line notice naming the most
+similar existing record -- a nudge to consider updating, not an
+error.
+
 ## User-Initiated Save (`gramaton_save`)
 
 Use ONLY when the user explicitly asks you to remember, save, or
@@ -47,7 +71,7 @@ extraction is the autonomous path.
 Classify deliberately using the question-type-driven heuristics in
 `gramaton_guide(topic="metadata")`. Defaults flatline the
 classification distribution and disable retrieval signals
-(supersession, temporal scoring, epistemic filtering).
+(temporal scoring, epistemic filtering).
 
 ## Session Extraction (`gramaton_session_prepare`/`commit`)
 
@@ -64,7 +88,7 @@ The primary autonomous-save path.
 2. **Commit**: Submit extracted segments. Each becomes a Session
    segment (BM25-indexed). When `promote_to_memory: true` (default
    when omitted) it ALSO becomes a Memory record (vector-embedded,
-   full lifecycle, auto-supersession). Set `promote_to_memory: false`
+   full lifecycle). Set `promote_to_memory: false`
    for exploration, open questions, and dead ends -- they stay
    searchable in Sessions without polluting Memory's vector space.
 

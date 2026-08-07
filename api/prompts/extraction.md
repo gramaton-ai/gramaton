@@ -20,15 +20,19 @@ plus topic is enough to recognise already-covered ground.
 
 Review `session_state` below. Skip re-save of already-covered
 topics unless the conversation added, refined, or reversed them --
-when ideas evolve, save the NEW version (auto-supersession at
-cosine ≥ 0.92 marks older records historical automatically).
+when ideas evolve, save the NEW version. If a segment's Memory
+promotion comes back HELD (near-verbatim of an existing record),
+resolve it with `gramaton_session_resolve_held`: fold the material
+into the existing record as an update, or allow the promotion if
+the two are genuinely distinct knowledge. Unresolved holds
+reappear on the next prepare until you act on them.
 
 Submit segments via `gramaton_session_save`. Each segment needs:
 
 - `content` -- unbounded, self-contained. Include rationale,
   alternatives considered, why-nots, concrete details (paths,
   numbers, names).
-- `summary_short` -- ≤1000 chars (target ~750). This is the
+- `summary_short` -- ≤900 chars (target ~750). This is the
   embedding-ready semantic anchor for vector search.
 - `keywords` -- 3-8 future-search terms a reader would TYPE, not
   literal phrases from the conversation.

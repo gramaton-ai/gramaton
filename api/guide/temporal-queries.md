@@ -83,19 +83,18 @@ the record summaries inline in the log response, no fan-out.
 The CLI (`gramaton log`, `gramaton history`, `gramaton diff`) has
 the same date/action/mutation flags.
 
-## Semantics: point_in_time vs supersede_follow
+## Semantics: point_in_time vs live state
 
-When a tool answers "records from 12 weeks ago," there are three
-possible contracts:
+When a tool answers "records from 12 weeks ago," two contracts
+exist:
 
 - **point_in_time (default)**: records as they existed at the
   commit. Frozen state.
-- **supersede_follow (opt-in via future flag)**: for each record
-  from that window, walk `supersedes` edges forward to find the
-  currently-valid successor. Useful for retrospective impact
-  analysis.
-- **current state of those IDs**: not exposed; too easy to
-  confuse with the point-in-time answer.
+- **live state**: what those records say NOW. Records are mutable
+  -- content evolves in place -- so the two answers genuinely
+  differ. `gramaton_inspect(id)` is the live axis;
+  `gramaton_history(id)` shows the transitions between then and
+  now.
 
 Response shapes name the semantic that produced them so agents
 never have to guess.

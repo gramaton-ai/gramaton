@@ -31,7 +31,7 @@ session file.
 Every committed segment becomes a **Session segment** (BM25-indexed,
 saves the conversation thread). When `promote_to_memory: true`
 (the default when omitted), it ALSO becomes a **Memory record**
-(vector-embedded, full lifecycle, auto-supersession at cosine ≥ 0.92).
+(vector-embedded, full lifecycle).
 
 ### When to promote (true / omit)
 
@@ -56,6 +56,28 @@ Valuable context that shouldn't pollute Memory's vector space:
 Heuristic: **if a future agent searches semantically for this topic,
 would this segment be a useful answer or noise?** Useful -> promote.
 Noise-but-worth-finding-by-keyword -> Session-only.
+
+### Held promotions
+
+The segment always lands. But when a segment's Memory promotion is
+near-verbatim of an existing Memory record (cosine >= the hold
+threshold, default 0.94), the promotion is HELD instead of created:
+the save response lists it under `held_promotions` with the
+existing record's ID, content, and similarity. The hold persists on
+the segment, and unresolved holds are re-presented by the next
+`session_prepare` until acted on.
+
+Resolve with `gramaton_session_resolve_held`, per segment:
+
+- `action: "update_target"` -- you have ALREADY folded the
+  segment's material into the similar record via `gramaton_update`;
+  the server wires the segment's `extracted_as` provenance edge to
+  that record and no new record is created.
+- `action: "allow_similar"` -- the two are genuinely distinct;
+  create the Memory record now.
+
+Bulk `allow_similar` also exists on `session_save` itself for
+re-sends that acknowledge specific held record IDs.
 
 ## Data Model
 
@@ -120,8 +142,9 @@ For "what do we know?" questions, Memory is usually the right source.
 
 ## Key Design Decisions
 
-- Append-only. Segments are never removed. The only mutation is
-  `captured_as` / `captured_at` on a promoted segment.
+- Append-only. Segments are never removed. The only mutations are
+  `captured_as` / `captured_at` on a promoted segment and the
+  persisted hold state on a segment whose promotion was held.
 - No end state. Sessions just stop being updated.
 - Fresh sessions don't auto-link to previous sessions; cross-session
   knowledge continuity goes through search of Memory, not through
@@ -179,6 +202,8 @@ have been compacted away.
   canonical extraction prompt.
 - `gramaton_session_save`: Submit segments (with `promote_to_memory`
   per segment).
+- `gramaton_session_resolve_held`: Resolve held Memory promotions
+  (update the similar existing record, or allow the new one).
 - `gramaton session current` (CLI): Resolve the session_id for this
   working directory.
 - `gramaton_guide(topic="save")`: Field roles, synthesis
