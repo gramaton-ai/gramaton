@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
-	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/similarity"
 )
 
 // setMetaProps stores meta.* properties on a node from a meta map.
@@ -100,8 +102,43 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 	preEmbedded := s.preEmbedContent(ctx, req)
 	embedDur := time.Since(embedStart)
 
+	// Save-guard scan against a read snapshot, before the write lock
+	// (see api/save.go for the full contract; this legacy intake path
+	// mirrors it).
+	var scanVec []float32
+	var scanSeq uint64
+	var outcome similarity.Outcome
+	if preEmbedded != nil && preEmbedded.err == nil {
+		if vec, ok := preEmbedded.vectors["embedding_full"]; ok {
+			scanVec = vec
+			s.engine.RLock()
+			scanSeq = s.engine.WriteSeq()
+			outcome = s.engine.ScanSimilarVec(vec, req.Content)
+			s.engine.RUnlock()
+		}
+	}
+
 	s.engine.Lock()
 	defer s.engine.Unlock()
+
+	// Delta re-scan + hold, pre-insert.
+	if scanVec != nil {
+		if m, found, _ := s.engine.SimilarInDelta(scanSeq, scanVec, req.Content); found {
+			if outcome.Hold == nil || m.Similarity > outcome.Hold.Similarity {
+				held := m
+				outcome.Hold = &held
+				outcome.Advisory = nil
+			}
+		}
+	}
+	if outcome.Hold != nil && !intakeAckContains(req.AllowSimilar, outcome.Hold.NodeID) {
+		if heldResp := s.heldSimilarMap(outcome.Hold); heldResp != nil {
+			s.log.Info("intake held: similar record", "component", "save",
+				"similar_to", outcome.Hold.NodeID,
+				"similarity", fmt.Sprintf("%.3f", outcome.Hold.Similarity))
+			return map[string]any{"held": heldResp}, nil
+		}
+	}
 
 	props := graph.Properties{
 		"content_full": graph.StringProperty(req.Content),
@@ -146,45 +183,17 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 		warnings = append(warnings, fmt.Sprintf("embedding failed: %s", err))
 	}
 
-	var superseded []map[string]any
-	if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
-		cfg := s.engine.Config()
-		if cfg.Dedup.Action == "reject" {
-			msg := fmt.Sprintf("potential duplicate of %s (similarity %.3f)", dupID, sim)
-			s.engine.PropIdx().RemoveNode(n.ID, n.Properties)
-			s.engine.VecIdx().Remove(n.ID)
-			s.engine.Graph().DeleteNode(n.ID)
-			return nil, errConflict(msg)
-		}
-
-		// Default "supersede" semantics (see design-decisions.md D37):
-		// mark the older record historical and link via a supersedes edge.
-		if curation.IsSupersessionOptOut(s.engine.Graph(), dupID) {
-			s.log.Debug("auto-supersession skipped: opt-out",
-				"component", "save", "new_id", n.ID, "dup_id", dupID,
-				"similarity", fmt.Sprintf("%.3f", sim))
-		} else {
-			now := time.Now().UTC()
-			oldNode, _ := s.engine.Graph().GetNode(dupID)
-			if oldNode != nil {
-				_, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until")
-				if !alreadyHistorical {
-					s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-					s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-					s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-					if e, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err == nil {
-						summary := ""
-						if v, ok := oldNode.Properties.GetString("content_short"); ok {
-							summary = v
-						}
-						superseded = append(superseded, map[string]any{
-							"id":         dupID,
-							"summary":    summary,
-							"similarity": sim,
-							"edge_id":    e.ID,
-						})
-					}
-				}
+	// Advisory: attach the non-blocking notice when the best
+	// candidate landed in the advisory band.
+	var advisory map[string]any
+	if outcome.Advisory != nil && !intakeAckContains(req.AllowSimilar, outcome.Advisory.NodeID) {
+		if adv, ok := s.engine.Graph().GetNode(outcome.Advisory.NodeID); ok {
+			summary, _ := adv.Properties.GetString("content_short")
+			advisory = map[string]any{
+				"id":         adv.ID,
+				"summary":    summary,
+				"similarity": outcome.Advisory.Similarity,
+				"note":       "Saved, but this resembles the record above. If it is a revision of that knowledge, prefer gramaton_update on it (inspect first) and consider resolving this record.",
 			}
 		}
 	}
@@ -201,14 +210,66 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 		"content_len", len(req.Content),
 		"embed_ms", embedDur.Milliseconds(),
 		"total_ms", time.Since(saveStart).Milliseconds(),
-		"superseded", len(superseded) > 0)
+		"advisory", advisory != nil)
 
 	resp := map[string]any{
 		"id":       n.ID,
 		"warnings": warnings,
 	}
-	if len(superseded) > 0 {
-		resp["superseded"] = superseded
+	if advisory != nil {
+		resp["advisory"] = advisory
 	}
 	return resp, nil
+}
+
+// intakeAckContains reports whether the caller's allow_similar
+// acknowledgment list names the candidate record.
+func intakeAckContains(acks []string, id string) bool {
+	for _, a := range acks {
+		if a == id {
+			return true
+		}
+	}
+	return false
+}
+
+// heldSimilarMap assembles the hold response material (the map-based
+// twin of api.HeldSimilar) for the legacy intake path. Returns nil
+// when the candidate no longer exists. Caller must hold the engine
+// lock.
+func (s *Server) heldSimilarMap(m *similarity.Match) map[string]any {
+	n, ok := s.engine.Graph().GetNode(m.NodeID)
+	if !ok {
+		return nil
+	}
+	content, _ := n.Properties.GetString("content_full")
+	summary, _ := n.Properties.GetString("content_short")
+	created := ""
+	if ts, ok := n.Properties.GetTimestamp("created_at"); ok {
+		created = ts.UTC().Format(time.RFC3339)
+	}
+	historical := false
+	if vu, ok := n.Properties.GetTimestamp("valid_until"); ok && vu.Before(time.Now().UTC()) {
+		historical = true
+	}
+	resolution, _ := n.Properties.GetString("resolution")
+	sum := sha256.Sum256([]byte(content))
+	out := map[string]any{
+		"id":           n.ID,
+		"content_full": content,
+		"summary":      summary,
+		"similarity":   m.Similarity,
+		"created_at":   created,
+		"version":      hex.EncodeToString(sum[:])[:12],
+		"note": "Save held; nothing was created. This closely matches the record above. " +
+			"If this REVISES it: gramaton_update(id, content=..., expected_version=version) composed from its full content. " +
+			"If genuinely distinct: re-send with allow_similar=[\"" + n.ID + "\"].",
+	}
+	if historical {
+		out["historical"] = true
+	}
+	if resolution != "" {
+		out["resolution"] = resolution
+	}
+	return out
 }

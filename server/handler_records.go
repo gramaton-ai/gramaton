@@ -35,6 +35,7 @@ type saveRequest struct {
 	ValidUntil             string         `json:"valid_until,omitempty"`
 	AssertedAsOf           string         `json:"asserted_as_of,omitempty"`
 	Meta                   map[string]any `json:"meta,omitempty"`
+	AllowSimilar           []string       `json:"allow_similar,omitempty"`
 }
 
 // preEmbeddedVectors holds vectors computed outside the lock.
@@ -149,6 +150,9 @@ func (s *Server) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error 
 	}
 	if bestKey != "" {
 		s.engine.VecIdx().Add(nodeID, pre.vectors[bestKey])
+		// Register in the save-guard delta re-scan ring (see the api
+		// twin in api/internal.go for the contract).
+		s.engine.NoteRecentWrite(nodeID, pre.vectors[bestKey])
 	}
 
 	modelProp := graph.StringProperty(pre.model)

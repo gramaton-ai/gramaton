@@ -39,6 +39,10 @@ type intakeRequest struct {
 	SourceRef    string `json:"source_ref,omitempty"`
 	AssertedAsOf string `json:"asserted_as_of,omitempty"`
 
+	// AllowSimilar carries record IDs from a prior hold response,
+	// acknowledging the new record is genuinely distinct from them.
+	AllowSimilar []string `json:"allow_similar,omitempty"`
+
 	// Structured metadata.
 	Meta map[string]any `json:"meta,omitempty"`
 }
@@ -92,6 +96,7 @@ func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[str
 		ContextReliability:     req.ContextReliability,
 		ContextCaptureReason:   req.ContextCaptureReason,
 		Meta:                   req.Meta,
+		AllowSimilar:           req.AllowSimilar,
 	}
 
 	result, svcErr := s.serviceSave(ctx, capReq)

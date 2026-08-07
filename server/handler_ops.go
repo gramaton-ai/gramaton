@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
-	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/storage"
 )
@@ -20,6 +19,9 @@ type revertRequest struct {
 type ingestRequest struct {
 	Path  string       `json:"path,omitempty"`
 	Files []ingestFile `json:"files,omitempty"`
+	// AllowSimilar disables the similar-record holds for the whole
+	// ingest -- the bulk-import escape.
+	AllowSimilar bool `json:"allow_similar,omitempty"`
 }
 
 type ingestFile struct {
@@ -118,7 +120,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.handleIngestFiles(r.Context(), w, req.Files)
+	s.handleIngestFiles(r.Context(), w, req.Files, req.AllowSimilar)
 }
 
 func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest) {
@@ -128,7 +130,7 @@ func (s *Server) handleIngestLocalPath(w http.ResponseWriter, req ingestRequest)
 		"local path ingestion via API is not yet implemented", false)
 }
 
-func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, files []ingestFile) {
+func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, files []ingestFile, allowSimilar bool) {
 	// Pre-embed all files outside the lock. Observation extraction
 	// happens asynchronously in the curation cycle (D18/D23).
 	type precomputed struct {
@@ -167,7 +169,28 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 	// server/service_records.go for the stamping contract).
 	author := s.engine.Config().Author.String()
 	var ingestActions []graph.CommitAction
+	var held []map[string]any
 	for _, p := range prepared {
+		// Save-guard hold, pre-insert. The scan runs under the write
+		// lock -- parity with the post-insert dedup check it replaces
+		// (ingest is a bulk CLI/REST surface, not a hot path), and it
+		// naturally covers intra-ingest siblings: earlier files'
+		// records are already indexed by the time later files scan.
+		if !allowSimilar && p.embedded != nil && p.embedded.err == nil {
+			if vec, ok := p.embedded.vectors["embedding_full"]; ok {
+				if out := s.engine.ScanSimilarVec(vec, p.file.Content); out.Hold != nil {
+					held = append(held, map[string]any{
+						"filename":   p.file.Filename,
+						"similar_to": out.Hold.NodeID,
+						"similarity": out.Hold.Similarity,
+					})
+					warnings = append(warnings, fmt.Sprintf(
+						"%s: held -- closely matches record %s (similarity %.3f); revise it via gramaton_update or re-run with --allow-similar",
+						p.file.Filename, out.Hold.NodeID, out.Hold.Similarity))
+					continue
+				}
+			}
+		}
 		props := graph.Properties{
 			"content_full":      graph.StringProperty(p.file.Content),
 			"source_ref":        graph.StringProperty(p.file.Filename),
@@ -186,29 +209,6 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
 		}
 
-		// Dedup check: auto-supersede if similar record exists.
-		if dupID, sim := s.engine.CheckDedup(n.ID); dupID != "" {
-			if curation.IsSupersessionOptOut(s.engine.Graph(), dupID) {
-				s.log.Debug("auto-supersession skipped: opt-out",
-					"component", "ingest", "newer", n.ID, "older", dupID,
-					"similarity", fmt.Sprintf("%.3f", sim))
-			} else {
-				oldNode, _ := s.engine.Graph().GetNode(dupID)
-				if oldNode != nil {
-					if _, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until"); !alreadyHistorical {
-						s.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-						s.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-						s.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-						if _, err := s.engine.Graph().AddEdge(n.ID, dupID, "supersedes", sim, nil); err != nil {
-							s.log.Error("failed to add supersedes edge",
-								"component", "ingest", "newer", n.ID, "older", dupID, "err", err)
-						}
-					}
-				}
-				warnings = append(warnings, fmt.Sprintf("%s: superseded existing record %s (similarity %.3f)", p.file.Filename, dupID, sim))
-			}
-		}
-
 		ingested++
 		ingestActions = append(ingestActions, graph.CommitAction{
 			Kind: graph.ActionIngest, RecordID: n.ID,
@@ -224,11 +224,15 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 		}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"ingested": ingested,
 		"skipped":  len(files) - ingested,
 		"warnings": warnings,
-	})
+	}
+	if len(held) > 0 {
+		resp["held"] = held
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // resolveHash resolves a short hash prefix to a full hash.
