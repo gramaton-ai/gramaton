@@ -44,11 +44,20 @@ func (e *stubBatchEmbedder) Embed(_ context.Context, texts []string) ([][]float3
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
 		out[i] = make([]float32, e.dim)
-		// Vary the vector by content length so dedup tests get
-		// distinct geometries without colliding by accident.
-		out[i][0] = float32(len(t)%7+1) * 0.1
-		if e.dim > 1 {
-			out[i][1] = float32(i%3+1) * 0.1
+		// Hash the text into a deterministic vector (same scheme as
+		// dedupEmbedder): identical text -> identical vector (cosine
+		// 1.0, triggers the similarity guard); distinct text ->
+		// decorrelated vectors that stay below the guard thresholds.
+		// The earlier length-based geometry collided for same-length
+		// distinct contents, which the save-guard hold now punishes.
+		var h uint32 = 2166136261
+		for _, c := range []byte(t) {
+			h ^= uint32(c)
+			h *= 16777619
+		}
+		for j := range out[i] {
+			h = h*16777619 + uint32(j)
+			out[i][j] = float32(h%101) / 100.0
 		}
 	}
 	return out, nil
@@ -69,7 +78,11 @@ func (f *stubFaultInjector) Inject(phase string) error { return f.errs[phase] }
 // BERT. Uses setupReembedAPI for the engine wiring.
 func setupBatchAPI(t testing.TB) (*API, *core.Engine, *stubBatchEmbedder) {
 	t.Helper()
-	emb := &stubBatchEmbedder{dim: 4}
+	// dim 16 matches dedupEmbedder: enough dimensions that hashed
+	// vectors for distinct texts stay safely below the save-guard
+	// thresholds (at dim 4, random positive vectors routinely exceed
+	// 0.94 cosine).
+	emb := &stubBatchEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	return a, eng, emb
 }

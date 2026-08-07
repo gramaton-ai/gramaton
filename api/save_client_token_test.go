@@ -50,8 +50,8 @@ func TestSaveClientTokenIdempotentReplay(t *testing.T) {
 	if got := eng.NodeCount(); got != count {
 		t.Fatalf("replay created nodes: count %d, want %d", got, count)
 	}
-	if len(replay.Superseded) != 0 {
-		t.Fatalf("replay reported supersession: %+v", replay.Superseded)
+	if replay.Held != nil || replay.Advisory != nil {
+		t.Fatalf("replay reported similarity-guard output: held=%+v advisory=%+v", replay.Held, replay.Advisory)
 	}
 }
 
@@ -158,42 +158,55 @@ func TestSaveBatchItemClientTokenRejected(t *testing.T) {
 	}
 }
 
-// TestSaveDedupRejectLeavesNoResidue pins the reject path after the
-// off-lock restructure: the duplicate is refused before any node is
-// created, so nothing needs deleting and nothing leaks.
-func TestSaveDedupRejectLeavesNoResidue(t *testing.T) {
-	a, eng := setupSaveAPI(t, func(cfg *config.Config) {
-		cfg.Dedup.Action = "reject"
-	})
+// TestSaveHoldLeavesNoResidue pins that a held save is refused before
+// any node is created: nothing needs deleting and nothing leaks --
+// including the client_token, which must not be indexed by a save
+// that created nothing (a later save reusing the token with different
+// content must not be treated as a replay).
+func TestSaveHoldLeavesNoResidue(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
 
 	if _, apiErr := a.Save(context.Background(), SaveRequest{
-		Content: "the reject-mode seed phrase",
+		Content: "the hold-residue seed phrase",
 	}); apiErr != nil {
 		t.Fatalf("seed save: %v", apiErr)
 	}
 	count := eng.NodeCount()
 	vecCount := eng.VecIdx().Len()
 
-	_, apiErr := a.Save(context.Background(), SaveRequest{
-		Content: "the reject-mode seed phrase",
+	held, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:     "the hold-residue seed phrase",
+		ClientToken: testClientToken,
 	})
-	if apiErr == nil {
-		t.Fatal("expected duplicate conflict, got success")
+	if apiErr != nil {
+		t.Fatalf("duplicate save: %v", apiErr)
 	}
-	if apiErr.Code != "conflict" {
-		t.Fatalf("code = %q, want conflict", apiErr.Code)
-	}
-	if !strings.Contains(apiErr.Message, "potential duplicate") {
-		t.Fatalf("message %q should name the duplicate", apiErr.Message)
+	if held.Held == nil || held.ID != "" {
+		t.Fatalf("expected hold with no record, got %+v", held)
 	}
 	if got := eng.NodeCount(); got != count {
-		t.Fatalf("rejected save left node residue: count %d, want %d", got, count)
+		t.Fatalf("held save left node residue: count %d, want %d", got, count)
 	}
-	// The old implementation inserted then deleted, so NodeCount alone
-	// cannot distinguish clean-reject from insert-and-cleanup; the
-	// vector index catches a leaked entry either way.
+	// The old reject implementation inserted then deleted, so
+	// NodeCount alone cannot distinguish clean-refusal from
+	// insert-and-cleanup; the vector index catches a leaked entry
+	// either way.
 	if got := eng.VecIdx().Len(); got != vecCount {
-		t.Fatalf("rejected save left vector residue: len %d, want %d", got, vecCount)
+		t.Fatalf("held save left vector residue: len %d, want %d", got, vecCount)
+	}
+
+	// The token from the held save must not have been indexed: using
+	// it with unrelated content is a fresh save, not a replay of a
+	// record that was never created.
+	fresh, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:     "completely unrelated follow-up content",
+		ClientToken: testClientToken,
+	})
+	if apiErr != nil {
+		t.Fatalf("follow-up save: %v", apiErr)
+	}
+	if fresh.ID == "" {
+		t.Fatalf("follow-up save with the held token must create a record, got %+v", fresh)
 	}
 }
 
@@ -238,33 +251,79 @@ func TestSaveClientTokenConcurrentSameToken(t *testing.T) {
 	}
 }
 
-// TestSaveDedupSupersedeOffLock pins that auto-supersession survives
-// the off-lock candidate scan: an identical second save still marks
-// the first historical and links it.
-func TestSaveDedupSupersedeOffLock(t *testing.T) {
-	a, _ := setupSaveAPI(t, nil)
+// TestSaveHoldOnSimilar pins hold-then-judge: an identical second
+// save is held -- nothing created -- and the response carries the
+// original record with its full content and a version token; a
+// re-send with allow_similar acknowledging that record creates it.
+func TestSaveHoldOnSimilar(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
 
-	first, apiErr := a.Save(context.Background(), SaveRequest{
-		Content: "the supersession seed phrase",
-	})
+	const seed = "the similarity guard seed phrase"
+	first, apiErr := a.Save(context.Background(), SaveRequest{Content: seed})
 	if apiErr != nil {
 		t.Fatalf("seed save: %v", apiErr)
 	}
+	baseline := eng.NodeCount()
 
-	second, apiErr := a.Save(context.Background(), SaveRequest{
-		Content: "the supersession seed phrase",
-	})
+	second, apiErr := a.Save(context.Background(), SaveRequest{Content: seed})
 	if apiErr != nil {
 		t.Fatalf("duplicate save: %v", apiErr)
 	}
-	if len(second.Superseded) != 1 {
-		t.Fatalf("superseded = %+v, want exactly the seed record", second.Superseded)
+	if second.ID != "" {
+		t.Fatalf("held save must not create a record, got id %s", second.ID)
 	}
-	if second.Superseded[0].ID != first.ID {
-		t.Fatalf("superseded %s, want %s", second.Superseded[0].ID, first.ID)
+	if second.Held == nil {
+		t.Fatal("expected a hold for identical content")
 	}
-	if second.Superseded[0].Similarity < 0.99 {
-		t.Fatalf("similarity %.3f, want ~1.0 for identical text", second.Superseded[0].Similarity)
+	if second.Held.ID != first.ID {
+		t.Fatalf("held against %s, want %s", second.Held.ID, first.ID)
+	}
+	if second.Held.Similarity < 0.99 {
+		t.Fatalf("similarity %.3f, want ~1.0 for identical text", second.Held.Similarity)
+	}
+	if second.Held.ContentFull != seed {
+		t.Fatalf("hold must carry full content, got %q", second.Held.ContentFull)
+	}
+	if second.Held.Version == "" {
+		t.Fatal("hold must carry a version token")
+	}
+	if got := eng.NodeCount(); got != baseline {
+		t.Fatalf("node count %d after hold, want unchanged %d", got, baseline)
+	}
+
+	third, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:      seed,
+		AllowSimilar: []string{first.ID},
+	})
+	if apiErr != nil {
+		t.Fatalf("acknowledged save: %v", apiErr)
+	}
+	if third.ID == "" {
+		t.Fatalf("acknowledged save must create a record, got held=%+v", third.Held)
+	}
+	if got := eng.NodeCount(); got != baseline+1 {
+		t.Fatalf("node count %d after acknowledged save, want %d", got, baseline+1)
+	}
+}
+
+// TestSaveHoldAckWrongID pins allow_similar scoping: acknowledging a
+// DIFFERENT record does not lift a hold against this one.
+func TestSaveHoldAckWrongID(t *testing.T) {
+	a, _ := setupSaveAPI(t, nil)
+
+	const seed = "the scoped acknowledgment seed phrase"
+	if _, apiErr := a.Save(context.Background(), SaveRequest{Content: seed}); apiErr != nil {
+		t.Fatalf("seed save: %v", apiErr)
+	}
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:      seed,
+		AllowSimilar: []string{"01UNRELATEDRECORDIDXXXXXXX"},
+	})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+	if resp.Held == nil {
+		t.Fatal("hold must survive an acknowledgment naming a different record")
 	}
 }
 

@@ -88,6 +88,12 @@ func Scan(g *graph.Graph, vecIdx index.VectorIndex, cfg config.SaveGuardConfig, 
 	if vecIdx.Len() < 1 || vec == nil {
 		return out
 	}
+	// Unconfigured thresholds disable the guard rather than hold
+	// everything: a zero-value SaveGuardConfig (raw struct construction
+	// bypassing config.Load's normalization) must fail open.
+	if cfg.SimilarHoldThreshold <= 0 {
+		return out
+	}
 	results := vecIdx.Search(vec, 10, nil)
 	for _, r := range results {
 		if selfID != "" && r.NodeID == selfID {

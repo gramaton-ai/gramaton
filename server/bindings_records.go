@@ -23,6 +23,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 			s.writeAPIError(w, apiErr)
 			return
 		}
+		// A held save created nothing: 409 with the structured hold
+		// body (the similar record + the two exits), not 201.
+		if resp.Held != nil {
+			s.writeJSON(w, http.StatusConflict, resp)
+			return
+		}
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
