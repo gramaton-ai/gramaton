@@ -80,6 +80,36 @@ response.
 **Still future:** `gramaton_search(as_of=...)` and
 `gramaton_stats(as_of=...)`.
 
+## Axis E — content history search ("did we ever know X?")
+
+**Tool:** `gramaton_history_search(text, id?, scope?, budget?,
+since?, until?)`
+
+Lexical search over PAST VERSIONS -- knowledge that has since been
+revised or deleted. Live search cannot answer "what did we used to
+believe about X?"; this axis can. Matching covers each version's
+content AND its commit's `change_note`, so the reason a revision
+happened is as findable as the revision itself.
+
+Three scopes form a cost ladder -- spend deliberately:
+
+1. **`id` given** -- one record's versions, milliseconds. "What did
+   this record say before?"
+2. **`candidates` (default)** -- live retrieval nominates the top
+   matching records, then their histories are scanned. Sub-second.
+   Finds past versions of records that still exist and still match.
+3. **`scope: "store"`** -- budgeted scan of EVERY logical version.
+   The only scope that finds knowledge revised away entirely
+   (including versions of deleted records). Tens of seconds on
+   large stores; the response reports coverage honestly ("scanned N
+   of M versions; truncated at budget").
+
+Every hit is loudly a past version: labeled `PAST VERSION from
+<date>` (or `CURRENT VERSION`), carrying the version commit ready
+for `gramaton_inspect(as_of=...)`, the record's live summary for
+contrast, and `record_since_deleted` when the record no longer
+exists at HEAD.
+
 ## Anti-patterns
 
 **Don't client-filter by date.** The range params are indexed and

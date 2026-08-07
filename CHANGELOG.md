@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Concepts are now a machine-owned derived layer (breaking for
+  concept writes).** One classification -- `node_type=concept` is
+  derived data -- drives consistent boundaries: concepts stay out of
+  the primary BM25 and vector indexes (`include_concepts=true` now
+  retrieves them via a cosine scan over their `embedding_full`, so
+  they need an embedding provider and never compete with member
+  records for default top-N slots); `gramaton_duplicates` skips them
+  on both sides of a pair; they mint no changelog versions
+  (`gramaton_history` answers with a derived-node statement, and
+  `as_of` carries the same caveat); and `gramaton_update`,
+  `gramaton_classify`, `gramaton_resolve`, and `gramaton_link` refuse
+  them with a redirect to the member records -- curation is their
+  sole writer. Graph citizenship is unchanged: explore traverses
+  them, inspect works, `instance_of` edges stay intact.
+
 - **The LLM reranker now sees record lifecycle metadata.** Each
   candidate line in the rerank prompt carries a compact epistemic
   prefix (lifecycle state, epistemic status, temporality, confidence,
@@ -149,6 +164,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commits read back unattributed.
 
 ### Added
+
+- **`gramaton_history_search`: lexical search over past versions.**
+  Live search answers "what do we know"; this answers "what did we
+  used to know." Matching covers version content and `change_note`s.
+  Three scopes by cost: `id` scans one record's versions
+  (milliseconds); `candidates` (default) lets live retrieval nominate
+  records and scans their histories (sub-second); `scope=store` is a
+  budgeted scan of every logical version -- the only scope that finds
+  knowledge revised away entirely, with coverage reported honestly
+  ("scanned N of M versions; truncated at budget"). Every hit is
+  loudly a past version, with the version commit ready for
+  `gramaton_inspect(as_of=...)`, the record's live summary for
+  contrast, and a `record_since_deleted` marker when the record no
+  longer exists.
 
 - **Per-record version timeline.** `gramaton_history` responses gain
   `versions`: one entry per LOGICAL version — content-based identity

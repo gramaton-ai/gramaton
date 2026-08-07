@@ -35,7 +35,13 @@ records is a deliberate agent action via `gramaton_update` +
   A content update to either record reopens the question: the edges
   are cleared and the pair is re-evaluated.
 - **Concept synthesis**: promote candidates to concept nodes and
-  link evidence.
+  link evidence. Concepts are a machine-owned derived layer:
+  curation is their sole writer (`gramaton_update` / `classify` /
+  `resolve` / `link` refuse them with a redirect to the member
+  records), they stay out of primary retrieval unless
+  `include_concepts=true` (matched by semantic similarity, not
+  text), and they carry no version timeline -- synthesis churn is
+  regeneration, not knowledge history.
 - **Auto-summarization**: generates `content_short` (the embedding-
   ready semantic anchor, ~750 chars) for records missing it, and
   refreshes summaries flagged stale by content updates
