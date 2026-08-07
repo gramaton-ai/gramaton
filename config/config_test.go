@@ -141,7 +141,7 @@ func TestNormalizeSearchPaginationClamps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Defaults()
 			cfg.Search.Pagination = tc.in
-	
+
 			if err := normalize(&cfg); err != nil {
 				t.Fatalf("normalize: %v", err)
 			}

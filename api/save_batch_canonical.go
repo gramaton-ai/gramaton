@@ -10,6 +10,8 @@ import (
 // a SaveBatchRequest for hashing and idempotency comparison.
 //
 // Stripped: Wait (transport-level), ClientToken (idempotency key),
+// per-item AllowSimilar (an acknowledgment, not content -- a retry
+// that acks a hold must replay as the same request), and
 // SourceCredibility's marshaled NaN form (NaN-rejection lives in
 // validation, not here -- if a NaN slipped through, the hash matters
 // less than the validation error).

@@ -47,19 +47,6 @@ type SaveRequest struct {
 	AllowSimilar           []string       `json:"allow_similar,omitempty" jsonschema:"record IDs from a prior hold response, acknowledging the new record is genuinely distinct from them. Only set after a hold; never as a standing default."`
 }
 
-// SupersededRecord describes a record that a capture automatically
-// marked as historical because the new record was a near-duplicate.
-//
-// Deprecated: auto-supersession is removed from the single-save path;
-// the type remains only while the batch/session paths migrate to
-// holds. Removed with the supersession removal cleanup.
-type SupersededRecord struct {
-	ID         string  `json:"id"`
-	Summary    string  `json:"summary,omitempty"`
-	Similarity float64 `json:"similarity"`
-	EdgeID     string  `json:"edge_id"`
-}
-
 // HeldSimilar is the material for the judgment call a held save asks
 // of its caller: the existing record the new content closely matched,
 // with enough context to either revise it (gramaton_update) or re-send
@@ -437,6 +424,14 @@ func validateSaveRequest(r *SaveRequest) error {
 	}
 	if err := validateKeywords(r.Keywords); err != nil {
 		return err
+	}
+	if len(r.AllowSimilar) > MaxAllowSimilar {
+		return fmt.Errorf("allow_similar exceeds maximum of %d entries", MaxAllowSimilar)
+	}
+	for _, id := range r.AllowSimilar {
+		if len(id) > MaxIDArgLen {
+			return fmt.Errorf("allow_similar entry exceeds maximum length of %d", MaxIDArgLen)
+		}
 	}
 	// Sanitize LLM-generated short fields for tool-use-format
 	// leakage (`</summary_short>`, `<parameter name=`, etc.)

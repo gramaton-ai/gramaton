@@ -20,13 +20,13 @@ import (
 
 	"github.com/gramaton-ai/gramaton/chunking"
 	"github.com/gramaton-ai/gramaton/config"
-	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/gramaton-ai/gramaton/embed"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/gramaton-ai/gramaton/llm"
 	"github.com/gramaton-ai/gramaton/search"
+	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/gramaton-ai/gramaton/storage"
 )
 

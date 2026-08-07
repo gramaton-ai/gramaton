@@ -80,9 +80,9 @@ type StoreManifest struct {
 // cycle against an old store can find a large backlog of members that
 // were never linked; the cap keeps the write batch bounded and the
 // remainder drains on subsequent cycles. There is no per-phase config
-// knob for attachments (unlike MaxOrphansPerRun / MaxDedupPerRun), so
-// this is a constant set to the 200 ceiling config validation clamps
-// those knobs to.
+// knob for attachments (unlike MaxOrphansPerRun), so this is a
+// constant set to the 200 ceiling config validation clamps that knob
+// to.
 const maxConceptAttachPerRun = 200
 
 // RunDeterministic performs all deterministic curation tasks.
@@ -1224,7 +1224,6 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 	}
 }
 
-
 // linkSections finds semantically similar sections across different parent
 // documents and creates related_to edges. This is the Mem0-inspired
 // entity resolution pattern: embedding comparison scoped to sections,
@@ -1414,6 +1413,7 @@ func isLikelyProperName(kw string) bool {
 	return true
 }
 
+// isWeakConceptKeyword returns true if a keyword is too short, too
 // generic, or is a meta-term that doesn't represent a real concept.
 func isWeakConceptKeyword(kw string) bool {
 	if len(kw) < 3 {

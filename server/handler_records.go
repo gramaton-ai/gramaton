@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -185,6 +186,14 @@ func validateSaveRequest(req *saveRequest) error {
 	}
 	if err := validateKeywords(req.Keywords); err != nil {
 		return err
+	}
+	if len(req.AllowSimilar) > api.MaxAllowSimilar {
+		return fmt.Errorf("allow_similar exceeds maximum of %d entries", api.MaxAllowSimilar)
+	}
+	for _, id := range req.AllowSimilar {
+		if len(id) > api.MaxIDArgLen {
+			return fmt.Errorf("allow_similar entry exceeds maximum length of %d", api.MaxIDArgLen)
+		}
 	}
 	if len(req.SummaryShort) > getMaxSummaryShort() {
 		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())

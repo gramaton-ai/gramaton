@@ -29,8 +29,8 @@ type AutonomousResult struct {
 	SummariesGenerated     int `json:"summaries_generated"`
 	ConceptsCreated        int `json:"concepts_created"`
 	ContradictionsDetected int `json:"contradictions_detected"`
-	// NoContradictionEdges counts pairs the LLM affirmatively said are not
-	// contradicting/superseding. Each such pair gets a "no_contradiction"
+	// NoContradictionEdges counts pairs the LLM affirmatively said are
+	// not contradicting. Each such pair gets a "no_contradiction"
 	// edge so subsequent cycles don't re-ask. Without this counter (and
 	// its underlying edge) the candidate pool does not drain on negative
 	// results -- see design-decisions.md D38.
@@ -1742,7 +1742,7 @@ func conceptShortSummary(synthesis string, maxRunes int) string {
 }
 
 // detectContradictions finds records with moderate similarity and uses the
-// LLM to determine if they contradict or supersede each other.
+// LLM to determine whether they contradict each other.
 func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 	maxChecks := cfg.LLM.Curation.Contradiction.MaxChecks
@@ -2123,7 +2123,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		return
 	}
 
-	// Write phase: create edges and mark superseded records.
+	// Write phase: create contradicts edges and set contested status.
 	e.Lock()
 	var contradictionActions []graph.CommitAction
 	for _, f := range findings {
@@ -2136,9 +2136,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 		// Every checked pair emits two contradiction_check actions
 		// (one per endpoint) so gramaton_log filtering by either
-		// record finds the commit. The supersedes outcome
-		// additionally emits supersede actions so a filter on
-		// curation:supersede finds LLM-driven supersessions too.
+		// record finds the commit.
 		contradictionActions = append(contradictionActions,
 			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idA},
 			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idB},

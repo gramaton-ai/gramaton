@@ -116,6 +116,12 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 	if req.ID == "" {
 		return ResolveResponse{}, ErrMissing("id is required")
 	}
+	if len(req.ID) > MaxIDArgLen {
+		return ResolveResponse{}, ErrInvalid(fmt.Sprintf("id exceeds maximum length of %d", MaxIDArgLen))
+	}
+	if len(req.ExpectedVersion) > MaxIDArgLen {
+		return ResolveResponse{}, ErrInvalid(fmt.Sprintf("expected_version exceeds maximum length of %d", MaxIDArgLen))
+	}
 	if req.Resolution == "" {
 		return ResolveResponse{}, ErrMissing("resolution is required")
 	}

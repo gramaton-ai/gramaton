@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
-	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
+	"github.com/gramaton-ai/gramaton/similarity"
 )
 
 //go:embed prompts/extraction.md
@@ -1232,6 +1232,28 @@ type sessionHoldMeta struct {
 	SummaryShort    string   `json:"summary_short,omitempty"`
 }
 
+// isKnowledgeRecordNode reports whether a node is a plain Memory
+// knowledge record -- not a session container, segment, topic,
+// derived node (concept, observation), or collection item. Used to
+// gate what an update_target resolution may wire provenance to.
+func isKnowledgeRecordNode(n *graph.Node) bool {
+	if nt, _ := n.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+		return false
+	}
+	if kt, _ := n.Properties.GetString("knowledge_type"); kt == "segment" || kt == "session" || kt == "topic" {
+		return false
+	}
+	for key := range n.Properties {
+		if strings.HasPrefix(key, "field.") {
+			return false
+		}
+	}
+	if _, ok := n.Properties.GetString("content_full"); !ok {
+		return false
+	}
+	return true
+}
+
 // HeldResolution is one resolution submitted via
 // gramaton_session_resolve_held.
 type HeldResolution struct {
@@ -1277,6 +1299,9 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 		if r.SegmentID == "" {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment_id is required", i))
 		}
+		if len(r.SegmentID) > MaxIDArgLen || len(r.TargetID) > MaxIDArgLen {
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: identifier exceeds maximum length of %d", i, MaxIDArgLen))
+		}
 		if r.Action != "update_target" && r.Action != "allow_similar" {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: action must be update_target or allow_similar", i))
 		}
@@ -1321,9 +1346,17 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 				a.engine.RUnlock()
 				return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: no target_id and the hold recorded none", i))
 			}
-			if _, ok := a.engine.Graph().GetNode(target); !ok {
+			tn, ok := a.engine.Graph().GetNode(target)
+			if !ok {
 				a.engine.RUnlock()
 				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s not found", target))
+			}
+			// Provenance must point at a Memory knowledge record --
+			// wiring extracted_as to a container, segment, or derived
+			// node would corrupt the session graph.
+			if !isKnowledgeRecordNode(tn) {
+				a.engine.RUnlock()
+				return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: target %s is not a Memory knowledge record", i, target))
 			}
 		}
 		work[i] = pending{res: r, content: content, meta: meta, target: target}

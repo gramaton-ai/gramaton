@@ -91,7 +91,7 @@ func (b *blockingInjector) Inject(phase string) error {
 
 // dedupEmbedder returns the same vector for identical input text,
 // so a second capture of the same content deterministically triggers
-// auto-supersession via the engine's CheckDedup.
+// the save-guard hold.
 type dedupEmbedder struct {
 	dim int
 }
@@ -118,13 +118,12 @@ func (e *dedupEmbedder) Embed(_ context.Context, texts []string) ([][]float32, e
 func (e *dedupEmbedder) ModelID() string    { return "dedup-embedder" }
 func (e *dedupEmbedder) ContextWindow() int { return 512 }
 
-// --- Deterministic supersession ---
+// --- Deterministic holds ---
 
-// TestSaveBatchSupersessionDeterministic seeds an existing record
-// then captures identical content. With the dedup embedder the
-// vectors collide deterministically and the supersession path runs.
-// Replaces the L3 TestSaveBatchSupersession which was vacuously
-// gated on `if len(Superseded) > 0`.
+// TestSaveBatchHoldsAgainstStore seeds an existing record then
+// batch-captures identical content. With the dedup embedder the
+// vectors collide deterministically and the item is held against the
+// stored record.
 func TestSaveBatchHoldsAgainstStore(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
@@ -671,8 +670,8 @@ func TestSaveBatchAsyncLargerThanSyncCap(t *testing.T) {
 		items[i] = SaveBatchItem{SaveRequest: SaveRequest{Content: fmt.Sprintf("item-%d", i)}}
 	}
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
+		Wait:         &f,
+		Items:        items,
 		AllowSimilar: true,
 	})
 	if apiErr != nil {

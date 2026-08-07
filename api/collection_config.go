@@ -158,7 +158,6 @@ func CollectionClearMode(n *graph.Node) ClearMode {
 	return ClearMode(v)
 }
 
-
 // CollectionCuration returns the collection's curation profile,
 // falling back to DefaultCuration when absent. Legacy values from
 // the pre-redesign 4-level enum are normalized on read so existing

@@ -9,8 +9,9 @@ func TestSaveWithNoEmbedder(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
 	// Without an embedder, capture should still work -- no
-	// similarity scan, no hold, no advisory; just creates the record
-	// (marked for a deferred check when embeddings arrive).
+	// similarity scan, no hold, no advisory; just creates the record.
+	// (similar_check_pending is reserved for embed FAILURES; a
+	// no-embedder store never runs the guard at all.)
 	w := doRequest(t, srv, "POST", "/v1/records", map[string]any{
 		"content":     "No embedder content",
 		"temporality": "durable",

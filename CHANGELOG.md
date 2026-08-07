@@ -63,8 +63,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (breaking).** `save_guard.similar_hold_threshold` (default 0.94)
   and `save_guard.advisory_threshold` (default 0.85) replace
   `dedup.similarity_threshold`/`dedup.action`. Configs still carrying
-  a `dedup:` section fail at load (strict decoding) — delete the
-  section.
+  a `dedup:` section (or `curation.max_dedup_per_run`) fail at load
+  (strict decoding) — delete the keys.
+
+- **Batch idempotency note.** `client_token` replays of pre-upgrade
+  batches hash identically in the common case, so retries keep
+  returning the prior job. The exception: a replay of a request that
+  set the removed `skip_supersession: true` flag now fails loudly
+  with "client_token reused with different request body" rather than
+  silently diverging — re-send with a fresh token.
 
 - **Curation no longer supersedes or consolidates records.** The
   deterministic dedup sweep is gone, and the LLM relationship

@@ -105,7 +105,7 @@ func TestSaveBatchStampsAuthor(t *testing.T) {
 	emb := &stubBatchEmbedder{dim: 4}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), withTestAuthor)
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Items:            mustItems("batch author one", "batch author two", "batch author three"),
+		Items:        mustItems("batch author one", "batch author two", "batch author three"),
 		AllowSimilar: true,
 	})
 	if apiErr != nil {
@@ -130,8 +130,8 @@ func TestSaveBatchChunkedStampsAuthor(t *testing.T) {
 
 	f := false
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(5),
+		Wait:         &f,
+		Items:        chunkedItems(5),
 		AllowSimilar: true,
 	})
 	if apiErr != nil {

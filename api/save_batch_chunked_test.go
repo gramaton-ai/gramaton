@@ -39,8 +39,8 @@ func TestSaveBatchChunkedHappyPath(t *testing.T) {
 	const N = 30
 	f := false
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(N),
+		Wait:         &f,
+		Items:        chunkedItems(N),
 		AllowSimilar: true,
 	})
 	if apiErr != nil {
@@ -84,9 +84,9 @@ func TestSaveBatchChunkedCrossChunkEdges(t *testing.T) {
 
 	f := false
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
-		Edges:            edges,
+		Wait:         &f,
+		Items:        items,
+		Edges:        edges,
 		AllowSimilar: true,
 	})
 	if apiErr != nil {
@@ -141,9 +141,9 @@ func TestSaveBatchChunkedFailedItemEdge(t *testing.T) {
 
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
-		Edges:            edges,
+		Wait:         &f,
+		Items:        items,
+		Edges:        edges,
 		AllowSimilar: true,
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
@@ -199,9 +199,9 @@ func TestSaveBatchChunkedEdgeFixupFailure(t *testing.T) {
 
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
-		Edges:            edges,
+		Wait:         &f,
+		Items:        items,
+		Edges:        edges,
 		AllowSimilar: true,
 	})
 	j := pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
@@ -261,9 +261,9 @@ func TestSaveBatchChunkedManualEdgeRecovery(t *testing.T) {
 	}
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
-		Edges:            edges,
+		Wait:         &f,
+		Items:        items,
+		Edges:        edges,
 		AllowSimilar: true,
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
@@ -320,8 +320,8 @@ func TestSaveBatchChunkedPerChunkProgress(t *testing.T) {
 
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(N),
+		Wait:         &f,
+		Items:        chunkedItems(N),
 		AllowSimilar: true,
 	})
 	// Wait for the runner to enter the first chunk's chunk_save.
@@ -363,8 +363,8 @@ func TestSaveBatchChunkedCancelMidImport(t *testing.T) {
 	const N = 30 // 3 chunks of 10
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(N),
+		Wait:         &f,
+		Items:        chunkedItems(N),
 		AllowSimilar: true,
 	})
 	inj.waitEntered(t, FaultPhaseChunkSave, 10*time.Second)
@@ -420,8 +420,8 @@ func TestSaveBatchChunkedChunk2SaveFailure(t *testing.T) {
 	const N = 30 // 3 chunks of 10
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(N),
+		Wait:         &f,
+		Items:        chunkedItems(N),
 		AllowSimilar: true,
 	})
 	j := pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
@@ -548,9 +548,9 @@ func TestSaveBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
 	}
 	f := false
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            items,
-		Edges:            edges,
+		Wait:         &f,
+		Items:        items,
+		Edges:        edges,
 		AllowSimilar: true,
 	})
 	if apiErr != nil {
@@ -601,8 +601,8 @@ func TestSaveBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
 	const N = 30 // 3 chunks of 10
 	f := false
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Wait:             &f,
-		Items:            chunkedItems(N),
+		Wait:         &f,
+		Items:        chunkedItems(N),
 		AllowSimilar: true,
 	})
 

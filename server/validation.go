@@ -164,7 +164,6 @@ var validEpistemicStatuses = map[string]bool{
 	"well_established": true, "probable": true, "speculative": true, "contested": true, "refuted": true,
 }
 
-
 // validateFloat64Range checks that a float64 pointer is in [min, max].
 // Rejects NaN and Inf which would bypass comparison checks.
 func validateFloat64Range(name string, val *float64, min, max float64) error {

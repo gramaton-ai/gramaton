@@ -507,6 +507,12 @@ func metaBM25TextFromNode(n *graph.Node) string {
 }
 
 func validateUpdateRequest(r *UpdateRequest) error {
+	if len(r.ID) > MaxIDArgLen {
+		return fmt.Errorf("id exceeds maximum length of %d", MaxIDArgLen)
+	}
+	if len(r.ExpectedVersion) > MaxIDArgLen {
+		return fmt.Errorf("expected_version exceeds maximum length of %d", MaxIDArgLen)
+	}
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err
 	}

@@ -1357,7 +1357,7 @@ func Defaults() Config {
 					MaxChecks:         5,
 					MinSimilarity:     0.5,
 					MaxSimilarity:     0.94, // contiguous with save_guard.similar_hold_threshold
-					BatchSize:         5, // batched (~5x call reduction at saturation)
+					BatchSize:         5,    // batched (~5x call reduction at saturation)
 					CheckReverseEdges: true,
 				},
 				Concept: LLMConceptConfig{

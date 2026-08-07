@@ -12,7 +12,7 @@ import (
 var (
 	ingestRecursive    bool
 	ingestAllowSimilar bool
-	ingestMessage   string
+	ingestMessage      string
 )
 
 var ingestCmd = &cobra.Command{

@@ -364,9 +364,9 @@ func TestSaveConcurrentDistinctContent(t *testing.T) {
 			t.Fatalf("writer %d failed: %v", i, e)
 		}
 	}
-	// Distinct contents may still collide in the toy hash-embedder's
-	// vector space; count both surviving and superseded records so the
-	// assertion is about not LOSING writes, not about dedup outcomes.
+	// The FNV-hash embedder gives distinct contents distinct vectors,
+	// so none of the eight writers may hold against another; every
+	// write must land.
 	if got := eng.NodeCount(); got != baseline+writers {
 		t.Fatalf("node count %d, want %d", got, baseline+writers)
 	}

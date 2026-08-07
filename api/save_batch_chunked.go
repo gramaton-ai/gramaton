@@ -435,10 +435,12 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	}
 	unlock()
 	return &chunkData{
-		Added:     added,
-		Held:      heldItems,
-		NewRefs:   newRefs,
-		Processed: len(added),
+		Added:   added,
+		Held:    heldItems,
+		NewRefs: newRefs,
+		// Held items count as processed: they were fully examined and
+		// disposed, and a completed job's bookkeeping covers TotalItems.
+		Processed: len(added) + len(heldItems),
 	}, nil
 }
 
