@@ -1,7 +1,6 @@
 name: packing-list
 description: Trip-scoped packing checklist. One-off so items are ephemeral; curation off because LLM passes add nothing to "socks" or "charger". Same-list dedup keeps the checklist clean; contradictions are meaningless on packed/unpacked items.
 clear_mode: resolve
-supersession: collection
 curation: none
 contradictions: off
 schema:

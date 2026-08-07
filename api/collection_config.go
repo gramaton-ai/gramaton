@@ -45,31 +45,6 @@ var validClearModes = map[ClearMode]bool{
 	ClearModeUnlink:  true,
 }
 
-// Supersession controls the candidate scope for auto-supersession on
-// short-content records.
-//
-//	collection (default) -- only records sharing this collection
-//	                        participate in same-collection supersession.
-//	                        Cross-collection collisions ("eggs" in
-//	                        Grocery vs "eggs" in Recipes) don't fire.
-//	store                -- legacy behaviour: any record in the store
-//	                        is a candidate. Default for memory orphans.
-//	none                 -- collection's items never participate in
-//	                        auto-supersession.
-type Supersession string
-
-const (
-	SupersessionCollection Supersession = "collection"
-	SupersessionStore      Supersession = "store"
-	SupersessionNone       Supersession = "none"
-)
-
-var validSupersessions = map[Supersession]bool{
-	SupersessionCollection: true,
-	SupersessionStore:      true,
-	SupersessionNone:       true,
-}
-
 // Curation controls per-collection LLM-analysis intensity. Each
 // pipeline stage that consults this knob (classify, summarize,
 // observation_extract, concept synthesis) runs only when the
@@ -133,7 +108,6 @@ var validContradictions = map[Contradictions]bool{
 // rely on an inherited default.
 const (
 	DefaultClearMode      = ClearModeResolve
-	DefaultSupersession   = SupersessionCollection
 	DefaultCuration       = CurationNone
 	DefaultContradictions = ContradictionsOn
 )
@@ -147,7 +121,6 @@ const (
 // without parsing JSON each cycle.
 const (
 	propClearMode      = "collection_clear_mode"
-	propSupersession   = "collection_supersession"
 	propCuration       = "collection_curation"
 	propContradictions = "collection_contradictions"
 	propContentFields  = "collection_content_fields"
@@ -158,12 +131,9 @@ const (
 // and the getters pick that up. Legacy curation values "minimal" and
 // "full" are rejected on writes; reads still accept them and
 // normalize.
-func validateCollectionConfig(clearMode, supersession, curation, contradictions string) error {
+func validateCollectionConfig(clearMode, curation, contradictions string) error {
 	if clearMode != "" && !validClearModes[ClearMode(clearMode)] {
 		return fmt.Errorf("clear_mode %q not in {resolve, unlink}", clearMode)
-	}
-	if supersession != "" && !validSupersessions[Supersession(supersession)] {
-		return fmt.Errorf("supersession %q not in {collection, store, none}", supersession)
 	}
 	if curation != "" && !validCurations[Curation(curation)] {
 		return fmt.Errorf("curation %q not in {standard, none}", curation)
@@ -188,18 +158,6 @@ func CollectionClearMode(n *graph.Node) ClearMode {
 	return ClearMode(v)
 }
 
-// CollectionSupersession returns the collection's supersession
-// config, falling back to DefaultSupersession when absent.
-func CollectionSupersession(n *graph.Node) Supersession {
-	if n == nil {
-		return DefaultSupersession
-	}
-	v, _ := n.Properties.GetString(propSupersession)
-	if v == "" {
-		return DefaultSupersession
-	}
-	return Supersession(v)
-}
 
 // CollectionCuration returns the collection's curation profile,
 // falling back to DefaultCuration when absent. Legacy values from

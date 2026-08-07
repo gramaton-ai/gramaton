@@ -227,7 +227,6 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 		Description    string                `json:"description,omitempty" jsonschema:"optional description"`
 		Schema         *api.CollectionSchema `json:"schema,omitempty" jsonschema:"optional schema defining item fields"`
 		ClearMode      string                `json:"clear_mode,omitempty" jsonschema:"how items are cleared when the collection is cleared: resolve (default, sets resolution=completed + valid_until) or unlink (remove member_of edge, keep item record)"`
-		Supersession   string                `json:"supersession,omitempty" jsonschema:"auto-supersession candidate scope: collection (default, only same-collection records), store (legacy store-wide), or none (opt out entirely)"`
 		Curation       string                `json:"curation,omitempty" jsonschema:"LLM analysis intensity: standard (default, runs classify/summarize/observation_extract/concept synthesis) or none (skip all LLM stages; embed + supersession + contradictions still governed by their own knobs)"`
 		Contradictions string                `json:"contradictions,omitempty" jsonschema:"whether the system generates contradicts edges from records in this collection: on (default) or off"`
 		Template       string                `json:"template,omitempty" jsonschema:"optional template name (backlog, todo, reading-list, shopping-list, packing-list, journal, references). Applies template defaults for schema + behaviour knobs; caller-provided fields override."`
@@ -243,7 +242,6 @@ func (s *Server) registerCollectionsMCPTools(mcpServer *mcp.Server) {
 			Description:    args.Description,
 			Schema:         args.Schema,
 			ClearMode:      args.ClearMode,
-			Supersession:   args.Supersession,
 			Curation:       args.Curation,
 			Contradictions: args.Contradictions,
 			Template:       args.Template,

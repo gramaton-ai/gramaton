@@ -7,20 +7,17 @@ import (
 	"github.com/gramaton-ai/gramaton/core"
 )
 
-// Pin that capture-time supersession honors supersession=none
-// opt-out on the older candidate. The dedupEmbedder (defined in
-// save_batch_review_test.go) gives identical vectors for identical
-// text, so seeding then re-capturing the same content reliably
-// triggers CheckDedup and the auto-supersession code path.
+// Hold-semantics pins for the batch and session paths. The
+// dedupEmbedder (defined in save_batch_review_test.go) gives
+// identical vectors for identical text, so seeding then re-capturing
+// the same content reliably triggers the save-guard scan.
 
-// addToOptOutCollection links recordID into a collection whose
-// effective supersession is "none". After this runs,
-// EffectiveCurationFor(g, recordID).Supersession == "none".
-func addToOptOutCollection(t *testing.T, a *API, recordID string) string {
+// addToCollection links recordID into a collection, exercising the
+// hold paths against collection-member candidates.
+func addToCollection(t *testing.T, a *API, recordID string) string {
 	t.Helper()
 	coll, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
-		Name:         "no-supersede",
-		Supersession: "none",
+		Name: "hold-target-collection",
 	})
 	if apiErr != nil {
 		t.Fatalf("CollectionCreate: %v", apiErr)
@@ -30,16 +27,11 @@ func addToOptOutCollection(t *testing.T, a *API, recordID string) string {
 	if _, err := a.engine.Graph().AddEdge(recordID, coll.ID, "member_of", 1.0, nil); err != nil {
 		t.Fatalf("AddEdge member_of: %v", err)
 	}
-	if _, err := a.engine.Save("test seed: member_of opt-out collection"); err != nil {
+	if _, err := a.engine.Save("test seed: member_of collection"); err != nil {
 		t.Fatalf("engine.Save: %v", err)
 	}
 	return coll.ID
 }
-
-// The single-save opt-out test was removed with auto-supersession on
-// the save path: holds never mutate the older record, so the
-// supersession opt-out gate has nothing to protect there. The batch
-// and session variants below still pin the (not yet migrated) paths.
 
 // TestSaveBatchHoldNeverMutatesCandidate: the batch hold replaces
 // batch auto-supersession; whatever collection knobs the older
@@ -57,7 +49,7 @@ func TestSaveBatchHoldNeverMutatesCandidate(t *testing.T) {
 		t.Fatalf("seed SaveBatch: %v", apiErr)
 	}
 	seedID := resp.Added[0].ID
-	addToOptOutCollection(t, a, seedID)
+	addToCollection(t, a, seedID)
 
 	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: mustItems(text)})
 	if apiErr != nil {

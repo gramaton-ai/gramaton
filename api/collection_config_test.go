@@ -28,9 +28,6 @@ func TestCollectionConfigDefaults(t *testing.T) {
 	if got := CollectionClearMode(n); got != DefaultClearMode {
 		t.Errorf("ClearMode default: got %q, want %q", got, DefaultClearMode)
 	}
-	if got := CollectionSupersession(n); got != DefaultSupersession {
-		t.Errorf("Supersession default: got %q, want %q", got, DefaultSupersession)
-	}
 	if got := CollectionCuration(n); got != DefaultCuration {
 		t.Errorf("Curation default: got %q, want %q", got, DefaultCuration)
 	}
@@ -49,7 +46,6 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	coll, apiErr := a.CollectionCreate(ctx, CollectionCreateRequest{
 		Name:           "With-Config",
 		ClearMode:      "unlink",
-		Supersession:   "store",
 		Curation:       "none",
 		Contradictions: "off",
 	})
@@ -61,9 +57,6 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	if got := CollectionClearMode(n); got != ClearModeUnlink {
 		t.Errorf("ClearMode: got %q, want unlink", got)
 	}
-	if got := CollectionSupersession(n); got != SupersessionStore {
-		t.Errorf("Supersession: got %q, want store", got)
-	}
 	if got := CollectionCuration(n); got != CurationNone {
 		t.Errorf("Curation: got %q, want none", got)
 	}
@@ -74,9 +67,6 @@ func TestCollectionConfigRoundTrip(t *testing.T) {
 	// Sanity: raw property names.
 	if v, _ := n.Properties.GetString("collection_clear_mode"); v != "unlink" {
 		t.Errorf("raw collection_clear_mode: %q", v)
-	}
-	if v, _ := n.Properties.GetString("collection_supersession"); v != "store" {
-		t.Errorf("raw collection_supersession: %q", v)
 	}
 	if v, _ := n.Properties.GetString("collection_curation"); v != "none" {
 		t.Errorf("raw collection_curation: %q", v)
@@ -94,17 +84,6 @@ func TestCollectionConfigInvalidClearMode(t *testing.T) {
 	})
 	if apiErr == nil || apiErr.Code != "input_error" {
 		t.Fatalf("expected input_error for clear_mode=delete, got %+v", apiErr)
-	}
-}
-
-func TestCollectionConfigInvalidSupersession(t *testing.T) {
-	a, _ := setupTestAPI(t)
-	_, apiErr := a.CollectionCreate(context.Background(), CollectionCreateRequest{
-		Name:         "X",
-		Supersession: "galactic",
-	})
-	if apiErr == nil || apiErr.Code != "input_error" {
-		t.Fatalf("expected input_error for supersession=galactic, got %+v", apiErr)
 	}
 }
 
@@ -185,9 +164,6 @@ func TestCollectionConfigGettersOnNilNode(t *testing.T) {
 	var n *graph.Node
 	if got := CollectionClearMode(n); got != DefaultClearMode {
 		t.Errorf("nil node ClearMode: got %q, want %q", got, DefaultClearMode)
-	}
-	if got := CollectionSupersession(n); got != DefaultSupersession {
-		t.Errorf("nil node Supersession: got %q, want %q", got, DefaultSupersession)
 	}
 	if got := CollectionCuration(n); got != DefaultCuration {
 		t.Errorf("nil node Curation: got %q, want %q", got, DefaultCuration)

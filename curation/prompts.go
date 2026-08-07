@@ -262,18 +262,17 @@ const ContradictionSystemPrompt = `You analyze the relationship between two know
 
 Respond with this exact JSON structure:
 {
-  "relationship": "contradicts|supersedes|related|none",
+  "relationship": "contradicts|related|none",
   "confidence": 0.0-1.0,
   "explanation": "brief explanation of why"
 }
 
 Guide:
 - contradicts: The records make incompatible claims about the same topic. Both cannot be true simultaneously.
-- supersedes: Record B is a newer/updated version of the same knowledge as Record A. A should be marked historical.
-- related: The records discuss similar topics but do not conflict. No action needed.
+- related: The records discuss similar topics but do not conflict. This includes one record reading like a newer or expanded version of the other -- classify that as related; never decide one replaces the other.
 - none: The records are not meaningfully related despite surface similarity. No action needed.
 
-Only use "contradicts" or "supersedes" when you are confident. When in doubt, use "related" or "none".`
+Only use "contradicts" when you are confident. When in doubt, use "related" or "none".`
 
 // contradictionPrompt is the per-pair user message. Variable content only.
 const contradictionPrompt = `Record A:
@@ -291,18 +290,17 @@ const ContradictionBatchSystemPrompt = `You analyze relationships between pairs 
 Respond with a JSON array of objects, one per pair, in the same order as the input. Each object must match:
 {
   "pair_id": <integer matching the input pair_id>,
-  "relationship": "contradicts|supersedes|related|none",
+  "relationship": "contradicts|related|none",
   "confidence": 0.0-1.0,
   "explanation": "brief explanation of why"
 }
 
 Relationships:
 - contradicts: The records make incompatible claims about the same topic. Both cannot be true simultaneously.
-- supersedes: Record B is a newer/updated version of the same knowledge as Record A. A should be marked historical.
-- related: The records discuss similar topics but do not conflict. No action needed.
+- related: The records discuss similar topics but do not conflict. This includes one record reading like a newer or expanded version of the other -- classify that as related; never decide one replaces the other.
 - none: The records are not meaningfully related despite surface similarity. No action needed.
 
-Only use "contradicts" or "supersedes" when confident. When in doubt, use "related" or "none". Return JSON only, no prose, no code fences.`
+Only use "contradicts" when confident. When in doubt, use "related" or "none". Return JSON only, no prose, no code fences.`
 
 // classificationSchema is the JSON Schema passed to CompleteStructured
 // for the classification call. Providers that support wire-layer

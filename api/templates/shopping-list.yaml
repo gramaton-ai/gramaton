@@ -1,7 +1,6 @@
 name: shopping-list
 description: Grocery-shaped list. Short-content items like "eggs" or "milk" - LLM classification adds no value, so curation is off. Same-list dedup keeps duplicates from piling up; contradictions are meaningless on shopping items. Resolve on clear so "when did I last buy eggs" works.
 clear_mode: resolve
-supersession: collection
 curation: none
 contradictions: off
 schema:

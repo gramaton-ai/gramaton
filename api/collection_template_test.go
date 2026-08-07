@@ -55,25 +55,23 @@ func TestTemplateLookup(t *testing.T) {
 	}
 }
 
-// TestTemplateThreeKnobsExplicit asserts that every starter template
-// sets all three behaviour knobs (curation, supersession,
-// contradictions) explicitly. The three-knob model relies on this:
-// templates that don't set a knob would inherit the global default,
+// TestTemplateKnobsExplicit asserts that every starter template sets
+// both behaviour knobs (curation, contradictions) explicitly.
+// Templates that don't set a knob would inherit the global default,
 // which can drift from the template's intent. Catching this at the
 // template-registry level prevents accidental drops.
-func TestTemplateThreeKnobsExplicit(t *testing.T) {
+func TestTemplateKnobsExplicit(t *testing.T) {
 	want := map[string]struct {
 		curation       string
-		supersession   string
 		contradictions string
 	}{
-		"backlog":       {curation: "standard", supersession: "collection", contradictions: "on"},
-		"todo":          {curation: "standard", supersession: "collection", contradictions: "on"},
-		"reading-list":  {curation: "standard", supersession: "collection", contradictions: "off"},
-		"shopping-list": {curation: "none", supersession: "collection", contradictions: "off"},
-		"packing-list":  {curation: "none", supersession: "collection", contradictions: "off"},
-		"journal":       {curation: "standard", supersession: "none", contradictions: "off"},
-		"references":    {curation: "standard", supersession: "collection", contradictions: "off"},
+		"backlog":       {curation: "standard", contradictions: "on"},
+		"todo":          {curation: "standard", contradictions: "on"},
+		"reading-list":  {curation: "standard", contradictions: "off"},
+		"shopping-list": {curation: "none", contradictions: "off"},
+		"packing-list":  {curation: "none", contradictions: "off"},
+		"journal":       {curation: "standard", contradictions: "off"},
+		"references":    {curation: "standard", contradictions: "off"},
 	}
 	for name, w := range want {
 		tmpl, ok := LookupTemplate(name)
@@ -83,9 +81,6 @@ func TestTemplateThreeKnobsExplicit(t *testing.T) {
 		}
 		if tmpl.Curation != w.curation {
 			t.Errorf("%s.curation = %q, want %q", name, tmpl.Curation, w.curation)
-		}
-		if tmpl.Supersession != w.supersession {
-			t.Errorf("%s.supersession = %q, want %q", name, tmpl.Supersession, w.supersession)
 		}
 		if tmpl.Contradictions != w.contradictions {
 			t.Errorf("%s.contradictions = %q, want %q", name, tmpl.Contradictions, w.contradictions)
