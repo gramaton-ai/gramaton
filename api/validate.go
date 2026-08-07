@@ -189,6 +189,18 @@ const (
 	MaxDuplicatePairs = 1000
 	MaxLogLimit       = 500
 	MaxLogTraversal   = 5000
+	// History-search bounds. The budget counts version blobs loaded
+	// and matched in one call; the default keeps a store-scope scan
+	// in interactive territory on a mid-size store, the cap bounds
+	// worst-case latency on large ones (the response reports
+	// truncation either way). Hits are capped to keep the response
+	// prompt-sized; candidates is the top-K retrieval nomination for
+	// the default scope.
+	MaxHistorySearchTextLen    = 1024
+	DefaultHistorySearchBudget = 20000
+	MaxHistorySearchBudget     = 200000
+	MaxHistorySearchHits       = 30
+	HistorySearchCandidates    = 15
 	// MaxLogActionsFilter bounds the size of the Actions filter
 	// array on gramaton_log. A caller passing thousands of Kinds
 	// would otherwise inflate the in-memory set and force a scan

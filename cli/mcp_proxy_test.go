@@ -150,6 +150,7 @@ func TestProxyToolRegistry(t *testing.T) {
 		"gramaton_explore",
 		"gramaton_guide",
 		"gramaton_history",
+		"gramaton_history_search",
 		"gramaton_inspect",
 		"gramaton_jobs_list",
 		"gramaton_link",

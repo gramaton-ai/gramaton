@@ -75,6 +75,7 @@ var mcpToolAccess = map[string]string{
 	"gramaton_link":              MCPToolWrite,
 	"gramaton_unlink":            MCPToolWrite,
 	"gramaton_history":           MCPToolRead,
+	"gramaton_history_search":    MCPToolRead,
 
 	// Search + ops cluster.
 	"gramaton_search":     MCPToolRead,

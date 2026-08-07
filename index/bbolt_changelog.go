@@ -231,3 +231,20 @@ func (c *BboltChangelog) AppendBatch(perNode map[string][]ChangelogEntry, marker
 		return nil
 	})
 }
+
+// ForEach visits every record's version list. Used by history search's
+// store scope; the visit order is bbolt key order (record id). A
+// non-nil error from fn stops the walk and is returned.
+func (c *BboltChangelog) ForEach(fn func(nodeID string, entries []ChangelogEntry) error) error {
+	return c.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(changelogBucket).ForEach(func(k, v []byte) error {
+			var list []ChangelogEntry
+			if err := json.Unmarshal(v, &list); err != nil {
+				// A corrupt row degrades to invisible-to-search rather
+				// than failing the whole scan.
+				return nil
+			}
+			return fn(string(k), list)
+		})
+	})
+}

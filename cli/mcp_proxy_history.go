@@ -12,6 +12,7 @@ import (
 func registerHistoryProxyTools(mcpServer *mcp.Server) {
 	registerLogProxy(mcpServer)
 	registerDiffProxy(mcpServer)
+	registerHistorySearchProxy(mcpServer)
 }
 
 // --- log ---
@@ -89,5 +90,25 @@ func registerDiffProxy(s *mcp.Server) {
 			path += "?" + params.Encode()
 		}
 		return proxyGet(path)
+	})
+}
+
+// --- history search ---
+
+type proxyHistorySearchInput struct {
+	Text   string `json:"text" jsonschema:"lexical query matched against version content and change_notes (case-insensitive substring)"`
+	ID     string `json:"id,omitempty" jsonschema:"scan only this record's versions (fastest scope)"`
+	Scope  string `json:"scope,omitempty" jsonschema:"'candidates' (default: retrieval nominates records, then their histories are scanned) or 'store' (budgeted scan of every logical version; slow on large stores but finds knowledge revised away entirely)"`
+	Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan in store scope (default 20000, max 200000)"`
+	Since  string `json:"since,omitempty" jsonschema:"only match versions on or after this date (YYYY-MM-DD or RFC3339)"`
+	Until  string `json:"until,omitempty" jsonschema:"only match versions up to this date (YYYY-MM-DD or RFC3339)"`
+}
+
+func registerHistorySearchProxy(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gramaton_history_search",
+		Description: api.HistorySearchDescription,
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyHistorySearchInput) (*mcp.CallToolResult, any, error) {
+		return proxyPost("/v1/history/search", args)
 	})
 }
