@@ -11,7 +11,6 @@ import (
 // resolution rule against api-created collections.
 const (
 	propCuration       = "collection_curation"
-	propSupersession   = "collection_supersession"
 	propContradictions = "collection_contradictions"
 	propKnowledgeType  = "knowledge_type"
 )
@@ -19,12 +18,11 @@ const (
 // MemoryOrphan defaults: applied when a record has no member_of
 // edges (Memory record, not in any collection).
 //
-// curation=standard preserves today's full-pipeline behaviour on
-// captured Memory records. supersession=store preserves global
-// dedup. contradictions=on preserves contradiction detection.
+// curation=standard preserves the full-pipeline behaviour on
+// captured Memory records. contradictions=on preserves contradiction
+// detection.
 const (
 	MemoryOrphanCuration       = "standard"
-	MemoryOrphanSupersession   = "store"
 	MemoryOrphanContradictions = "on"
 )
 
@@ -41,55 +39,43 @@ const (
 // items -- standard had been theatre while content_full was
 // uniformly absent.
 //
-// supersession defaults to "collection" (intra-collection scope);
-// MemoryOrphan defaults to "store" for back-compat with today's
-// global Memory dedup.
-//
 // contradictions defaults to "on" matching the additive-knob /
 // most-permissive-wins resolution principle.
 const (
 	collectionDefaultCuration       = "none"
-	collectionDefaultSupersession   = "collection"
 	collectionDefaultContradictions = "on"
 )
 
 // EffectiveConfig is the resolved per-record curation behaviour,
-// derived from the record's collection memberships and the
-// destructive-vs-additive resolution rule. Values are the underlying
-// string forms of the three knobs; api callers can cast to
-// api.Curation / api.Supersession / api.Contradictions when the
-// typed forms are required (e.g. for response serialisation).
+// derived from the record's collection memberships. Both remaining
+// knobs are additive (LLM enrichment; contradicts edges), so
+// resolution is uniformly most-permissive-wins. The destructive
+// supersession knob was removed with auto-supersession: no curation
+// pass irreversibly modifies a record any more, so there is nothing
+// left for a restrictive knob to protect.
 //
 // JSON tags lowercase the field names for API responses
 // (gramaton_inspect surfaces this struct as an effective_curation
 // object).
 type EffectiveConfig struct {
 	Curation       string `json:"curation"`
-	Supersession   string `json:"supersession"`
 	Contradictions string `json:"contradictions"`
 }
 
-// EffectiveCurationFor returns the effective curation, supersession,
-// and contradictions settings for a record by walking its member_of
+// EffectiveCurationFor returns the effective curation and
+// contradictions settings for a record by walking its member_of
 // edges and applying per-knob resolution rules.
 //
 // Records with no member_of edges (memory orphans) get the memory
-// store defaults: standard / store / on.
+// store defaults: standard / on.
 //
 // Records with one or more memberships have each collection's
-// settings combined per knob:
+// settings combined per knob, most-permissive wins:
 //
-//   - supersession is destructive (sets valid_until on records).
-//     Most-restrictive wins. Order: none > collection > store.
+//   - curation (LLM stages add metadata fields): standard > none.
+//   - contradictions (creates contradicts edges): on > off.
 //
-//   - curation is additive (LLM stages add metadata fields).
-//     Most-permissive wins. Order: standard > none.
-//
-//   - contradictions is additive (creates contradicts edges).
-//     Most-permissive wins. Order: on > off.
-//
-// One-line principle: never irreversibly modify a record without
-// unanimous agreement; always enrich when any collection wants it.
+// One-line principle: always enrich when any collection wants it.
 //
 // The function is read-only and acquires no locks; callers hold
 // either RLock or Lock for the duration.
@@ -102,7 +88,6 @@ func EffectiveCurationFor(g graph.NodeReader, recordID string) EffectiveConfig {
 	}
 	orphan := EffectiveConfig{
 		Curation:       MemoryOrphanCuration,
-		Supersession:   MemoryOrphanSupersession,
 		Contradictions: MemoryOrphanContradictions,
 	}
 	if len(collectionIDs) == 0 {
@@ -111,7 +96,6 @@ func EffectiveCurationFor(g graph.NodeReader, recordID string) EffectiveConfig {
 
 	var (
 		curation       string
-		supersession   string
 		contradictions string
 		seen           bool
 	)
@@ -125,17 +109,14 @@ func EffectiveCurationFor(g graph.NodeReader, recordID string) EffectiveConfig {
 		}
 
 		cur := readCuration(n)
-		sup := readSupersession(n)
 		con := readContradictions(n)
 
 		if !seen {
 			curation = cur
-			supersession = sup
 			contradictions = con
 			seen = true
 			continue
 		}
-		supersession = mostRestrictiveSupersession(supersession, sup)
 		curation = mostPermissiveCuration(curation, cur)
 		contradictions = mostPermissiveContradictions(contradictions, con)
 	}
@@ -145,7 +126,6 @@ func EffectiveCurationFor(g graph.NodeReader, recordID string) EffectiveConfig {
 	}
 	return EffectiveConfig{
 		Curation:       curation,
-		Supersession:   supersession,
 		Contradictions: contradictions,
 	}
 }
@@ -169,30 +149,12 @@ func readCuration(n *graph.Node) string {
 	}
 }
 
-func readSupersession(n *graph.Node) string {
-	v, _ := n.Properties.GetString(propSupersession)
-	if v == "" {
-		return collectionDefaultSupersession
-	}
-	return v
-}
-
 func readContradictions(n *graph.Node) string {
 	v, _ := n.Properties.GetString(propContradictions)
 	if v == "" {
 		return collectionDefaultContradictions
 	}
 	return v
-}
-
-// mostRestrictiveSupersession picks the value highest in the
-// "more restrictive" order: none > collection > store.
-func mostRestrictiveSupersession(a, b string) string {
-	rank := map[string]int{"none": 2, "collection": 1, "store": 0}
-	if rank[a] >= rank[b] {
-		return a
-	}
-	return b
 }
 
 // mostPermissiveCuration picks "standard" if either input wants
@@ -211,75 +173,4 @@ func mostPermissiveContradictions(a, b string) string {
 		return "on"
 	}
 	return "off"
-}
-
-// IsSupersessionOptOut reports whether the record at recordID has
-// explicitly opted out of auto-supersession (effective
-// supersession=none). Use at capture-time supersession sites to
-// honor the opt-out contract: capture must not destructively modify
-// a record configured to skip auto-supersession.
-//
-// shouldAutoSupersede also checks this, alongside scope and
-// shared-collection rules. Those other rules require the new node
-// to have its own member_of edges, which it doesn't at capture
-// time, so this helper isolates the one gate that applies in both
-// contexts.
-//
-// The function is read-only and acquires no locks; callers hold
-// either RLock or Lock for the duration.
-func IsSupersessionOptOut(g graph.NodeReader, recordID string) bool {
-	return EffectiveCurationFor(g, recordID).Supersession == "none"
-}
-
-// shouldAutoSupersede returns true if the auto-supersession path
-// may consolidate a candidate pair (a, b). Encodes the per-pair
-// rule that flows from each record's effective supersession value:
-//
-//   - If either record's effective supersession is "none", skip.
-//     A "none" record opted out of auto-supersession entirely.
-//   - If both records are at "store" scope, fire. This is the
-//     legacy global-dedup path, used by Memory orphan records.
-//   - Otherwise (at least one record is at "collection" scope),
-//     require the pair to share at least one member_of collection.
-//     Cross-collection pairs at "collection" scope correctly skip
-//     -- this is the bug fix Phase 5 ships.
-//
-// Mixed "collection" + "store" with a shared collection: fires.
-// The "collection"-scope record's contract ("only supersede with
-// records that share my collection") is satisfied; the "store"-
-// scope record's broader contract is also satisfied, since a
-// shared-collection peer is a subset of "anywhere in the store".
-func shouldAutoSupersede(g graph.NodeReader, aID, bID string) bool {
-	eA := EffectiveCurationFor(g, aID)
-	eB := EffectiveCurationFor(g, bID)
-	if eA.Supersession == "none" || eB.Supersession == "none" {
-		return false
-	}
-	if eA.Supersession == "store" && eB.Supersession == "store" {
-		return true
-	}
-	return shareCollection(g, aID, bID)
-}
-
-// shareCollection returns true if a and b have at least one
-// member_of edge target in common. O(M+N) where M and N are the
-// edge counts of each record.
-func shareCollection(g graph.NodeReader, aID, bID string) bool {
-	aColls := make(map[string]struct{})
-	for _, e := range g.EdgesFrom(aID) {
-		if e.Type == "member_of" {
-			aColls[e.TargetID] = struct{}{}
-		}
-	}
-	if len(aColls) == 0 {
-		return false
-	}
-	for _, e := range g.EdgesFrom(bID) {
-		if e.Type == "member_of" {
-			if _, ok := aColls[e.TargetID]; ok {
-				return true
-			}
-		}
-	}
-	return false
 }

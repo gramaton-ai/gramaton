@@ -11,7 +11,7 @@
 
 **Gramaton is a versioned, epistemic memory for AI agents.** Every record
 carries metadata about the knowledge it holds: how confident it is, how it
-ages, whether something newer supersedes it, who wrote it, and what it
+ages, whether it still stands, who wrote it, and what it
 connects to. Agents read and write it over MCP: save now, retrieve months
 later, and know how much to trust what comes back.
 
@@ -61,20 +61,20 @@ breaking changes are flagged in the [CHANGELOG](CHANGELOG.md).
 > **Your agent,** after checking Gramaton: In January you decided to
 > renegotiate rather than let the contract renew; the trigger was two SLA
 > misses. It auto-renews May 1 with 60 days' notice, so the cancellation
-> window closes March 2. Nothing supersedes the decision, and your backlog
+> window closes March 2. The decision still stands, and your backlog
 > still has "draft renegotiation terms" open.
 
-Each answer comes back with its provenance. Because everything is versioned,
-updating a memory preserves its history rather than overwriting it. And
-supersession extends this further: had any of these decisions later been
-reversed, search would have returned the replacement, and the old record
-would remain, marked historical and linked to its successor.
+Each answer comes back with its provenance. When knowledge changes, the
+record holding it is updated in place, so search always returns the current
+position — one live record per fact, not the decision and every draft it
+replaced. And because every mutation is a commit, nothing is lost: what a
+record used to say is a history query away.
 
 ## Why Gramaton
 
 AI tools ship with built-in memory, and general-purpose vector stores are
 everywhere. Both store text and rank it by similarity, so retrieval cannot
-tell whether knowledge is current, superseded, or refuted. Ask what was
+tell whether knowledge is current, outdated, or refuted. Ask what was
 decided three months ago and you get a confident answer assembled from
 whatever scored highest: sometimes the decision, sometimes the draft it
 replaced. And when the question is "what's still open?", ranked retrieval is
@@ -84,18 +84,23 @@ a relevance tradeoff.
 Gramaton is built for exactly these gaps:
 
 - **Epistemic metadata on every record.** Confidence, temporality, epistemic
-  status, knowledge type, author. A superseded decision is marked historical
-  and stops competing with its replacement in search.
+  status, knowledge type, author. Search knows how much to trust each record
+  and ranks accordingly.
+- **One live record per fact.** When knowledge changes, the record is
+  updated in place, and a save that near-duplicates an existing record is
+  held at the door and pointed at the record it should revise instead.
+  Search returns the current position, not a pile of drafts.
 - **Three storage paths with different guarantees.** Ranked semantic search
   for knowledge, automatic extraction from conversations, and exhaustive
   collections for tasks. See [Three ways to store knowledge](#three-ways-to-store-knowledge).
 - **Versioned by design.** Every mutation is a commit. Branch, diff, log,
-  revert. You can ask what changed as easily as what is.
+  revert. You can ask what changed as easily as what is, and every prior
+  version of every record stays reachable.
 - **A property graph.** Typed, weighted edges connect records, and traversal
   surfaces related knowledge the query text never mentioned.
 - **Automatic curation.** A background process expires stale short-lived
-  records, links orphans, and consolidates duplicates. With an LLM
-  configured, it also classifies new records and detects contradictions.
+  records and links orphans. With an LLM configured, it also classifies new
+  records and detects contradictions.
 - **Self-hosted and portable.** One store works with every MCP-aware tool you
   use, and your other machines can reach it over your network.
 
@@ -112,7 +117,7 @@ Gramaton is built for exactly these gaps:
 
 Gramaton is an experiment in whether structured epistemic metadata actually
 helps agents remember well. The mechanics work: agents save, retrieve,
-traverse, branch, and supersede, and curation integrates new knowledge in the
+update, traverse, and branch, and curation integrates new knowledge in the
 background. What remains unproven is whether agents consistently use the
 structure well enough to justify its surface area.
 
@@ -203,8 +208,8 @@ For knowledge that benefits from best-match retrieval: decisions, design
 rationale, research findings, preferences, domain context. Records arrive
 from explicit `gramaton_save` calls, from session extraction (below), and
 from bulk ingest (`gramaton ingest`). Retrieval is `gramaton_search`, which
-ranks current, confident, relevant records first; superseded ones drop out
-unless asked for.
+ranks current, confident, relevant records first; records resolved as
+historical sink down the ranking.
 
 ### Sessions
 
@@ -339,12 +344,12 @@ reverts, and each record's change history is queryable.
 Search fuses vector similarity with keyword matching, then ranks candidates
 by a composite score of similarity, freshness (decayed by each record's
 temporality), usage, and confidence. Metadata filters run before ranking, so
-a superseded record is excluded rather than merely outscored. Graph traversal
-then fans out from the top results to related knowledge the query text never
-mentioned.
+a filtered-out record is excluded rather than merely outscored. Graph
+traversal then fans out from the top results to related knowledge the query
+text never mentioned.
 
 Curation runs on a timer inside the server. Without an LLM, it expires stale
-short-lived records, links orphans, consolidates duplicates, and detects
+short-lived records, links orphans, and detects
 concept candidates. With an LLM provider configured, it also classifies
 pending records, generates missing summaries, detects contradictions between
 similar records, and promotes recurring themes to concept nodes.
@@ -392,7 +397,7 @@ the read tools. For live descriptions and schemas, call
 | `gramaton_save` | Store a knowledge record with epistemic metadata |
 | `gramaton_save_batch` | Store many records in one call, sync or async, with `_status`, `_result`, and `_cancel` companions for polling |
 | `gramaton_inspect` | Full content, metadata, and one-hop related edges for a record |
-| `gramaton_update` | Modify properties on an existing record |
+| `gramaton_update` | Update a record in place — metadata, content, or an append |
 | `gramaton_classify` | Assign or update classification metadata on a pending record |
 | `gramaton_resolve` | Mark a record resolved (completed / superseded / abandoned / obsolete) |
 | `gramaton_link` / `gramaton_unlink` | Manage typed, weighted edges between records |

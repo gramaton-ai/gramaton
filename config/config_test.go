@@ -39,11 +39,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.Concepts.EmergenceThreshold != 3 {
 		t.Fatalf("concepts.emergence_threshold: expected 3, got %d", cfg.Concepts.EmergenceThreshold)
 	}
-	if cfg.Dedup.SimilarityThreshold != 0.92 {
-		t.Fatalf("dedup.similarity_threshold: expected 0.92, got %f", cfg.Dedup.SimilarityThreshold)
+	if cfg.SaveGuard.SimilarHoldThreshold != 0.94 {
+		t.Fatalf("save_guard.similar_hold_threshold: expected 0.94, got %f", cfg.SaveGuard.SimilarHoldThreshold)
 	}
-	if cfg.Dedup.Action != "supersede" {
-		t.Fatalf("dedup.action: expected 'supersede', got %q", cfg.Dedup.Action)
+	if cfg.SaveGuard.AdvisoryThreshold != 0.85 {
+		t.Fatalf("save_guard.advisory_threshold: expected 0.85, got %f", cfg.SaveGuard.AdvisoryThreshold)
 	}
 	if cfg.Graph.EdgeWeightTraversalThreshold != 0.3 {
 		t.Fatalf("graph.edge_weight_traversal_threshold: expected 0.3, got %f", cfg.Graph.EdgeWeightTraversalThreshold)
@@ -141,7 +141,7 @@ func TestNormalizeSearchPaginationClamps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Defaults()
 			cfg.Search.Pagination = tc.in
-			cfg.Dedup.Action = "supersede" // satisfy normalize's required field
+
 			if err := normalize(&cfg); err != nil {
 				t.Fatalf("normalize: %v", err)
 			}
@@ -160,7 +160,7 @@ func TestSaveAndLoad(t *testing.T) {
 	cfg := Defaults()
 	cfg.Scoring.WeightSimilarity = 0.5
 	cfg.Embedding.Provider = "ollama"
-	cfg.Dedup.Action = "reject"
+	cfg.SaveGuard.AdvisoryThreshold = 0.8
 
 	if err := Save(cfg, path); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -177,8 +177,8 @@ func TestSaveAndLoad(t *testing.T) {
 	if loaded.Embedding.Provider != "ollama" {
 		t.Fatalf("expected 'ollama', got %q", loaded.Embedding.Provider)
 	}
-	if loaded.Dedup.Action != "reject" {
-		t.Fatalf("expected 'reject', got %q", loaded.Dedup.Action)
+	if loaded.SaveGuard.AdvisoryThreshold != 0.8 {
+		t.Fatalf("expected 0.8, got %f", loaded.SaveGuard.AdvisoryThreshold)
 	}
 }
 
@@ -293,73 +293,6 @@ func TestLoadTrimsAuthorWhitespace(t *testing.T) {
 	}
 	if cfg.Author.Email != "ada@example.com" {
 		t.Errorf("Author.Email = %q, want trimmed %q", cfg.Author.Email, "ada@example.com")
-	}
-}
-
-// TestLoadCoercesLegacyFlagAction asserts that pre-2026-04 configs with
-// dedup.action: "flag" are silently coerced to "supersede" at load time.
-// See design-decisions.md D37: "flag" never had behavior distinct from
-// "supersede" in any capture path, so the coercion is a cosmetic rename
-// preserving prior behavior.
-func TestLoadCoercesLegacyFlagAction(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	content := []byte("dedup:\n  action: flag\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if cfg.Dedup.Action != "supersede" {
-		t.Fatalf("legacy 'flag' should coerce to 'supersede', got %q", cfg.Dedup.Action)
-	}
-}
-
-// TestLoadRejectsUnknownDedupAction asserts that typos or unsupported
-// values in dedup.action error at config load rather than silently
-// being ignored or coerced to a default. Surfaces invalid configs
-// before they produce surprising runtime behavior.
-func TestLoadRejectsUnknownDedupAction(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	// Common typo: "supercede" (missing 's'). Should not silently coerce.
-	content := []byte("dedup:\n  action: supercede\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected error for invalid dedup.action, got nil")
-	}
-}
-
-// TestLoadEmptyDedupActionCoercesToSupersede asserts that a config that
-// omits dedup.action (or sets it to the empty string explicitly) ends up
-// with the default value populated. This matches Defaults() and keeps
-// the downstream capture paths from having to handle the empty string.
-func TestLoadEmptyDedupActionCoercesToSupersede(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	content := []byte("dedup:\n  action: \"\"\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if cfg.Dedup.Action != "supersede" {
-		t.Fatalf("empty dedup.action should default to 'supersede', got %q", cfg.Dedup.Action)
 	}
 }
 
@@ -607,7 +540,6 @@ llm:
     batch_size: 999
 curation:
   max_orphans_per_run: 999
-  max_dedup_per_run: 999
 `), 0o600)
 
 	cfg, err := Load(path)
@@ -623,9 +555,6 @@ curation:
 	}
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		t.Fatalf("MaxOrphansPerRun should be capped, got %d", cfg.Curation.MaxOrphansPerRun)
-	}
-	if cfg.Curation.MaxDedupPerRun > 200 {
-		t.Fatalf("MaxDedupPerRun should be capped, got %d", cfg.Curation.MaxDedupPerRun)
 	}
 }
 

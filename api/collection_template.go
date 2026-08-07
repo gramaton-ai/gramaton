@@ -27,7 +27,6 @@ type Template struct {
 	Description    string            `yaml:"description,omitempty"`
 	Schema         *CollectionSchema `yaml:"schema,omitempty"`
 	ClearMode      string            `yaml:"clear_mode,omitempty"`
-	Supersession   string            `yaml:"supersession,omitempty"`
 	Curation       string            `yaml:"curation,omitempty"`
 	Contradictions string            `yaml:"contradictions,omitempty"`
 }
@@ -124,9 +123,6 @@ func applyTemplate(req *CollectionCreateRequest) *APIError {
 	}
 	if req.ClearMode == "" {
 		req.ClearMode = t.ClearMode
-	}
-	if req.Supersession == "" {
-		req.Supersession = t.Supersession
 	}
 	if req.Curation == "" {
 		req.Curation = t.Curation

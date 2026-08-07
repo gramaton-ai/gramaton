@@ -181,7 +181,7 @@ func TestSessionCommitRejectsContaminatedSegment(t *testing.T) {
 	segments := []SaveSegment{
 		{Content: "Clean segment content.", TopicName: "Topic", SummaryShort: contaminationTail},
 	}
-	_, apiErr := a.SessionSave(ctx, sessionID, segments)
+	_, apiErr := a.SessionSave(ctx, sessionID, segments, false)
 	if apiErr == nil {
 		t.Fatal("expected ErrInvalid, got nil")
 	}
@@ -210,7 +210,7 @@ func TestSessionCommitStripsSegmentContaminationTail(t *testing.T) {
 			SummaryShort: "Clean summary." + contaminationTail,
 		},
 	}
-	if _, apiErr := a.SessionSave(ctx, sessionID, segments); apiErr != nil {
+	if _, apiErr := a.SessionSave(ctx, sessionID, segments, false); apiErr != nil {
 		t.Fatalf("commit: %v", apiErr)
 	}
 

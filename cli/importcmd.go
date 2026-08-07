@@ -87,11 +87,8 @@ func importJSON(data []byte) error {
 }
 
 func importCSV(data []byte) error {
-	// CSV import goes through the ingest endpoint with individual
-	// records, since the server import endpoint expects JSON.
-	// For now, parse CSV client-side and send as JSON records.
-
-	// TODO: implement CSV import via server endpoint
+	// TODO: implement CSV import (parse client-side, send as JSON
+	// records to the import endpoint).
 	return fmt.Errorf("CSV import via CLI is not yet implemented. Use the REST API directly: POST /v1/import")
 }
 

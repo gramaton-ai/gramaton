@@ -9,16 +9,13 @@ import (
 // addCollection creates a collection-typed node with the given knob
 // values. Empty strings leave the property unset (exercising the
 // collection default fallback inside the readers).
-func addCollection(t *testing.T, g *graph.Graph, curation, supersession, contradictions string) string {
+func addCollection(t *testing.T, g *graph.Graph, curation, contradictions string) string {
 	t.Helper()
 	props := graph.Properties{
 		propKnowledgeType: graph.StringProperty("collection"),
 	}
 	if curation != "" {
 		props[propCuration] = graph.StringProperty(curation)
-	}
-	if supersession != "" {
-		props[propSupersession] = graph.StringProperty(supersession)
 	}
 	if contradictions != "" {
 		props[propContradictions] = graph.StringProperty(contradictions)
@@ -39,44 +36,6 @@ func addRecord(t *testing.T, g *graph.Graph, collectionIDs ...string) string {
 	return rec
 }
 
-// TestIsSupersessionOptOut: the helper is true only when effective
-// supersession resolves to "none". Orphans and records in
-// collections with supersession != none must NOT be flagged as
-// opt-out.
-func TestIsSupersessionOptOut(t *testing.T) {
-	g := graph.New()
-
-	orphan := g.AddNode(graph.Properties{}).ID
-	if IsSupersessionOptOut(g, orphan) {
-		t.Error("orphan: got opt-out, want false (memory orphan default = store)")
-	}
-
-	collNone := addCollection(t, g, "", "none", "")
-	recNone := addRecord(t, g, collNone)
-	if !IsSupersessionOptOut(g, recNone) {
-		t.Error("record in supersession=none collection: got false, want opt-out")
-	}
-
-	collColl := addCollection(t, g, "", "collection", "")
-	recColl := addRecord(t, g, collColl)
-	if IsSupersessionOptOut(g, recColl) {
-		t.Error("record in supersession=collection: got opt-out, want false")
-	}
-
-	collStore := addCollection(t, g, "", "store", "")
-	recStore := addRecord(t, g, collStore)
-	if IsSupersessionOptOut(g, recStore) {
-		t.Error("record in supersession=store: got opt-out, want false")
-	}
-
-	// Mixed: one collection at none + another at store. Most-
-	// restrictive wins for the destructive knob -> effective none.
-	recMixed := addRecord(t, g, collNone, collStore)
-	if !IsSupersessionOptOut(g, recMixed) {
-		t.Error("mixed none+store membership: got false, want opt-out (most-restrictive wins)")
-	}
-}
-
 // TestEffectiveCurationOrphan: a record with no member_of edges
 // gets the memory-orphan defaults. This is today's Memory record
 // behaviour and the no-regression contract.
@@ -87,7 +46,6 @@ func TestEffectiveCurationOrphan(t *testing.T) {
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       MemoryOrphanCuration,
-		Supersession:   MemoryOrphanSupersession,
 		Contradictions: MemoryOrphanContradictions,
 	}
 	if got != want {
@@ -100,13 +58,12 @@ func TestEffectiveCurationOrphan(t *testing.T) {
 // resolution rule is exercised.
 func TestEffectiveCurationSingleMembership(t *testing.T) {
 	g := graph.New()
-	cID := addCollection(t, g, "none", "collection", "off")
+	cID := addCollection(t, g, "none", "off")
 	rec := addRecord(t, g, cID)
 
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       "none",
-		Supersession:   "collection",
 		Contradictions: "off",
 	}
 	if got != want {
@@ -121,13 +78,12 @@ func TestEffectiveCurationSingleMembership(t *testing.T) {
 // the two.)
 func TestEffectiveCurationCollectionDefaults(t *testing.T) {
 	g := graph.New()
-	cID := addCollection(t, g, "", "", "")
+	cID := addCollection(t, g, "", "")
 	rec := addRecord(t, g, cID)
 
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       collectionDefaultCuration,
-		Supersession:   collectionDefaultSupersession,
 		Contradictions: collectionDefaultContradictions,
 	}
 	if got != want {
@@ -151,40 +107,11 @@ func TestEffectiveCurationLegacyValuesNormalize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		g := graph.New()
-		cID := addCollection(t, g, tc.stored, "collection", "on")
+		cID := addCollection(t, g, tc.stored, "on")
 		rec := addRecord(t, g, cID)
 		got := EffectiveCurationFor(g, rec)
 		if got.Curation != tc.want {
 			t.Errorf("stored=%q: Curation=%q, want %q", tc.stored, got.Curation, tc.want)
-		}
-	}
-}
-
-// TestEffectiveCurationSupersessionMostRestrictive verifies that
-// when a record sits in two collections with conflicting
-// supersession settings, the most-restrictive value wins.
-//
-// Rule: none > collection > store. supersession is destructive
-// (sets valid_until on records); never destroy state any membership
-// wants preserved.
-func TestEffectiveCurationSupersessionMostRestrictive(t *testing.T) {
-	cases := []struct {
-		a, b, want string
-	}{
-		{"none", "collection", "none"},
-		{"none", "store", "none"},
-		{"collection", "store", "collection"},
-		{"collection", "collection", "collection"},
-		{"store", "store", "store"},
-	}
-	for _, tc := range cases {
-		g := graph.New()
-		cA := addCollection(t, g, "standard", tc.a, "on")
-		cB := addCollection(t, g, "standard", tc.b, "on")
-		rec := addRecord(t, g, cA, cB)
-		got := EffectiveCurationFor(g, rec)
-		if got.Supersession != tc.want {
-			t.Errorf("supersession(%q, %q) = %q, want %q", tc.a, tc.b, got.Supersession, tc.want)
 		}
 	}
 }
@@ -206,8 +133,8 @@ func TestEffectiveCurationCurationMostPermissive(t *testing.T) {
 	}
 	for _, tc := range cases {
 		g := graph.New()
-		cA := addCollection(t, g, tc.a, "collection", "off")
-		cB := addCollection(t, g, tc.b, "collection", "off")
+		cA := addCollection(t, g, tc.a, "off")
+		cB := addCollection(t, g, tc.b, "off")
 		rec := addRecord(t, g, cA, cB)
 		got := EffectiveCurationFor(g, rec)
 		if got.Curation != tc.want {
@@ -233,8 +160,8 @@ func TestEffectiveCurationContradictionsMostPermissive(t *testing.T) {
 	}
 	for _, tc := range cases {
 		g := graph.New()
-		cA := addCollection(t, g, "standard", "collection", tc.a)
-		cB := addCollection(t, g, "standard", "collection", tc.b)
+		cA := addCollection(t, g, "standard", tc.a)
+		cB := addCollection(t, g, "standard", tc.b)
 		rec := addRecord(t, g, cA, cB)
 		got := EffectiveCurationFor(g, rec)
 		if got.Contradictions != tc.want {
@@ -249,7 +176,7 @@ func TestEffectiveCurationContradictionsMostPermissive(t *testing.T) {
 // orphan defaults.
 func TestEffectiveCurationStaleEdgeIgnored(t *testing.T) {
 	g := graph.New()
-	cID := addCollection(t, g, "none", "collection", "off")
+	cID := addCollection(t, g, "none", "off")
 	rec := addRecord(t, g, cID)
 
 	// Delete the collection node, leaving the member_of edge
@@ -259,7 +186,6 @@ func TestEffectiveCurationStaleEdgeIgnored(t *testing.T) {
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       MemoryOrphanCuration,
-		Supersession:   MemoryOrphanSupersession,
 		Contradictions: MemoryOrphanContradictions,
 	}
 	if got != want {
@@ -281,7 +207,6 @@ func TestEffectiveCurationNonCollectionTargetIgnored(t *testing.T) {
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       MemoryOrphanCuration,
-		Supersession:   MemoryOrphanSupersession,
 		Contradictions: MemoryOrphanContradictions,
 	}
 	if got != want {
@@ -296,14 +221,13 @@ func TestEffectiveCurationNonCollectionTargetIgnored(t *testing.T) {
 // wants fact-checking). Pinning the principle in one shot.
 func TestEffectiveCurationCombinedScenario(t *testing.T) {
 	g := graph.New()
-	journal := addCollection(t, g, "standard", "none", "off")
-	knowledge := addCollection(t, g, "standard", "collection", "on")
+	journal := addCollection(t, g, "standard", "off")
+	knowledge := addCollection(t, g, "standard", "on")
 	rec := addRecord(t, g, journal, knowledge)
 
 	got := EffectiveCurationFor(g, rec)
 	want := EffectiveConfig{
 		Curation:       "standard",
-		Supersession:   "none",
 		Contradictions: "on",
 	}
 	if got != want {

@@ -50,7 +50,7 @@ func createSessionWithSegments(t *testing.T, srv *Server, clientID string, segme
 	if _, apiErr := srv.api.SessionPrepare(ctx, sessionID); apiErr != nil {
 		t.Fatalf("session prepare: %v", apiErr)
 	}
-	if _, apiErr := srv.api.SessionSave(ctx, sessionID, segments); apiErr != nil {
+	if _, apiErr := srv.api.SessionSave(ctx, sessionID, segments, false); apiErr != nil {
 		t.Fatalf("session commit: %v", apiErr)
 	}
 	return sessionID

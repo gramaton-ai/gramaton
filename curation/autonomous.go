@@ -29,8 +29,8 @@ type AutonomousResult struct {
 	SummariesGenerated     int `json:"summaries_generated"`
 	ConceptsCreated        int `json:"concepts_created"`
 	ContradictionsDetected int `json:"contradictions_detected"`
-	// NoContradictionEdges counts pairs the LLM affirmatively said are not
-	// contradicting/superseding. Each such pair gets a "no_contradiction"
+	// NoContradictionEdges counts pairs the LLM affirmatively said are
+	// not contradicting. Each such pair gets a "no_contradiction"
 	// edge so subsequent cycles don't re-ask. Without this counter (and
 	// its underlying edge) the candidate pool does not drain on negative
 	// results -- see design-decisions.md D38.
@@ -769,8 +769,14 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			}
 		}
 
-		// Priority 1: non-structural record with no summary.
-		if !isStructural && !hasSummary && len(batch) < batchSize {
+		// Priority 1: non-structural record with no summary -- or one
+		// whose content changed under an unchanged summary
+		// (summary_refresh_pending, set by gramaton_update when a
+		// content rewrite or accumulated appends outgrow the summary;
+		// the summary is the vector anchor, so a stale one makes the
+		// new content semantically invisible).
+		refreshPending, _ := n.Properties.GetBool("summary_refresh_pending")
+		if !isStructural && (!hasSummary || refreshPending) && len(batch) < batchSize {
 			batch = append(batch, needsSummary{id: id, content: content})
 			continue
 		}
@@ -898,6 +904,15 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			continue
 		}
 		e.SetContentProp(s.id, "content_short", s.summary)
+		// A fresh summary resolves the refresh flag and resets the
+		// append bookkeeping (mirrors gramaton_update's behaviour
+		// when the caller provides summary_short directly).
+		for _, key := range []string{"summary_refresh_pending", "appended_since_summary"} {
+			if old, has := n.Properties[key]; has {
+				e.PropIdx().Remove(s.id, key, old)
+				e.Graph().RemoveNodeProperty(s.id, key)
+			}
+		}
 		recordTaskSuccess(e, n, "summary_attempts")
 		result.SummariesGenerated++
 		summaryActions = append(summaryActions, graph.CommitAction{
@@ -1727,7 +1742,7 @@ func conceptShortSummary(synthesis string, maxRunes int) string {
 }
 
 // detectContradictions finds records with moderate similarity and uses the
-// LLM to determine if they contradict or supersede each other.
+// LLM to determine whether they contradict each other.
 func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provider, cfg config.Config, result *AutonomousResult, maxCalls int, maxCostUSD float64, logger *slog.Logger, dryRun bool) {
 	logger = ensureLogger(logger)
 	maxChecks := cfg.LLM.Curation.Contradiction.MaxChecks
@@ -1967,7 +1982,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 				continue
 			}
 
-			if cr.Relationship == "contradicts" || cr.Relationship == "supersedes" {
+			if cr.Relationship == "contradicts" {
 				findings = append(findings, detected{
 					idA: c.idA, idB: c.idB, contentA: c.contentA,
 					relationship: cr.Relationship,
@@ -2064,7 +2079,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 					continue
 				}
 				c := batch[idx]
-				if br.Relationship == "contradicts" || br.Relationship == "supersedes" {
+				if br.Relationship == "contradicts" {
 					findings = append(findings, detected{
 						idA: c.idA, idB: c.idB, contentA: c.contentA,
 						relationship: br.Relationship,
@@ -2108,7 +2123,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		return
 	}
 
-	// Write phase: create edges and mark superseded records.
+	// Write phase: create contradicts edges and set contested status.
 	e.Lock()
 	var contradictionActions []graph.CommitAction
 	for _, f := range findings {
@@ -2121,9 +2136,7 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 
 		// Every checked pair emits two contradiction_check actions
 		// (one per endpoint) so gramaton_log filtering by either
-		// record finds the commit. The supersedes outcome
-		// additionally emits supersede actions so a filter on
-		// curation:supersede finds LLM-driven supersessions too.
+		// record finds the commit.
 		contradictionActions = append(contradictionActions,
 			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idA},
 			graph.CommitAction{Kind: graph.ActionCurationContradictionCheck, RecordID: f.idB},
@@ -2139,23 +2152,22 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 				logger.Error("failed to add contradicts edge (reverse)",
 					"component", "curation", "from", f.idB, "to", f.idA, "err", err)
 			}
+			// Conflict visibility: both records carry contested so
+			// retrieval presents both sides -- EXCEPT records the user
+			// deliberately marked well_established; an LLM verdict
+			// never downgrades a deliberate classification. Contested
+			// clears when either record's content is updated (the
+			// change reopens the question) or manually.
+			for _, id := range []string{f.idA, f.idB} {
+				if node, ok := e.Graph().GetNode(id); ok {
+					es, _ := node.Properties.GetString("epistemic_status")
+					if es != "well_established" && es != "contested" {
+						e.SetProp(id, "epistemic_status", graph.StringProperty("contested"))
+					}
+				}
+			}
 			result.ContradictionsDetected++
 
-		case "supersedes":
-			// B supersedes A: A is older, B is the replacement.
-			now := time.Now().UTC()
-			if _, err := e.Graph().AddEdge(f.idB, f.idA, "supersedes", f.confidence, nil); err != nil {
-				logger.Error("failed to add supersedes edge",
-					"component", "curation", "newer", f.idB, "older", f.idA, "err", err)
-			}
-			e.SetProp(f.idA, "valid_until", graph.TimestampProperty(now))
-			e.SetProp(f.idA, "resolution", graph.StringProperty("superseded"))
-			e.SetProp(f.idA, "resolved_at", graph.TimestampProperty(now))
-			result.ContradictionsDetected++
-			contradictionActions = append(contradictionActions,
-				graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: f.idA},
-				graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: f.idB},
-			)
 		}
 	}
 	// Write no_contradiction edges for pairs the LLM successfully
@@ -2318,7 +2330,7 @@ func parseContradictionBatchResult(resp string) ([]batchContradictionResult, err
 	out := make([]batchContradictionResult, 0, len(raw))
 	for _, r := range raw {
 		r.Relationship = validateEnumLogged(r.Relationship,
-			[]string{"contradicts", "supersedes", "related", "none"},
+			[]string{"contradicts", "related", "none"},
 			"contradiction_batch.relationship", slog.Default())
 		if r.Relationship == "" {
 			r.Relationship = "none"
@@ -2364,7 +2376,7 @@ func parseContradictionResult(resp string) (*contradictionResult, error) {
 	}
 
 	result.Relationship = validateEnumLogged(result.Relationship,
-		[]string{"contradicts", "supersedes", "related", "none"},
+		[]string{"contradicts", "related", "none"},
 		"contradiction.relationship", slog.Default())
 	if result.Relationship == "" {
 		result.Relationship = "none"

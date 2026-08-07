@@ -1,7 +1,6 @@
 name: reading-list
 description: Books, articles, and papers. Clear via unlink (an unread book stays a record you can re-add later). Standard curation runs on captured notes and takeaways; contradictions off because two recommendations are not contradicting each other.
 clear_mode: unlink
-supersession: collection
 curation: standard
 contradictions: off
 schema:

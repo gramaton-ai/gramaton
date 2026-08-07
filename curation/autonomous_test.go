@@ -1189,7 +1189,7 @@ func TestDetectContradictionsDryRun(t *testing.T) {
 
 	llm := &mockLLM{
 		responses: []string{
-			`{"relationship":"supersedes","confidence":0.85,"explanation":"MySQL migration replaces PostgreSQL"}`,
+			`{"relationship":"contradicts","confidence":0.85,"explanation":"MySQL migration conflicts with PostgreSQL claim"}`,
 		},
 	}
 
@@ -1202,8 +1202,8 @@ func TestDetectContradictionsDryRun(t *testing.T) {
 	if len(result.PlannedChanges) != 1 {
 		t.Fatalf("expected 1 planned change, got %d", len(result.PlannedChanges))
 	}
-	if result.PlannedChanges[0].Action != "supersedes" {
-		t.Fatalf("expected action 'supersedes', got %q", result.PlannedChanges[0].Action)
+	if result.PlannedChanges[0].Action != "contradicts" {
+		t.Fatalf("expected action 'contradicts', got %q", result.PlannedChanges[0].Action)
 	}
 
 	// Verify no mutation.
@@ -1565,13 +1565,13 @@ func TestParseContradictionResult(t *testing.T) {
 }
 
 func TestParseContradictionResultWithCodeFences(t *testing.T) {
-	input := "```json\n" + `{"relationship":"supersedes","confidence":0.9,"explanation":"Updated version"}` + "\n```"
+	input := "```json\n" + `{"relationship":"contradicts","confidence":0.9,"explanation":"Incompatible claims"}` + "\n```"
 	r, err := parseContradictionResult(input)
 	if err != nil {
 		t.Fatalf("parseContradictionResult: %v", err)
 	}
-	if r.Relationship != "supersedes" {
-		t.Fatalf("expected supersedes, got %q", r.Relationship)
+	if r.Relationship != "contradicts" {
+		t.Fatalf("expected contradicts, got %q", r.Relationship)
 	}
 }
 
@@ -1597,6 +1597,10 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 	idA := addProcessedNodeWithEmbedding(t, eng, "Original API v1 design", []float32{1.0, 0.0, 0.0})
 	idB := addProcessedNodeWithEmbedding(t, eng, "Updated API v2 design", []float32{0.7, 0.7, 0.0})
 
+	// The supersedes verdict was removed with auto-supersession: an
+	// LLM that still emits it hits the enum fallback ("none") and the
+	// detector must mutate NOTHING -- no valid_until, no resolution,
+	// no supersedes edge. Contradiction detection is non-destructive.
 	llm := &mockLLM{
 		responses: []string{
 			`{"relationship":"supersedes","confidence":0.85,"explanation":"v2 replaces v1"}`,
@@ -1606,43 +1610,30 @@ func TestDetectContradictionsSupersedes(t *testing.T) {
 	result := &AutonomousResult{}
 	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
 
-	if result.ContradictionsDetected != 1 {
-		t.Fatalf("expected 1 supersession, got %d", result.ContradictionsDetected)
+	if result.ContradictionsDetected != 0 {
+		t.Fatalf("supersedes verdict must not count as a detection, got %d", result.ContradictionsDetected)
 	}
 
-	// Exactly one of the two records should have valid_until set.
-	// The contradiction-application path trusts the LLM's A/B
-	// assignment, which depends on the iteration order of the
-	// (now shuffled) candidate set, so the test asserts the
-	// invariant ("one survivor, one loser") rather than a
-	// specific identity.
 	eng.RLock()
 	defer eng.RUnlock()
-	losers := 0
 	for _, id := range []string{idA, idB} {
 		n, ok := eng.Graph().GetNode(id)
 		if !ok {
 			t.Fatalf("node %s should exist", id)
 		}
 		if _, has := n.Properties.GetTimestamp("valid_until"); has {
-			losers++
+			t.Errorf("record %s was mutated by a supersedes verdict", id)
+		}
+		if res, _ := n.Properties.GetString("resolution"); res != "" {
+			t.Errorf("record %s carries resolution %q after a supersedes verdict", id, res)
 		}
 	}
-	if losers != 1 {
-		t.Fatalf("expected exactly 1 superseded record, got %d", losers)
-	}
-
-	// Verify supersedes edge exists.
-	foundEdge := false
 	for _, id := range eng.Graph().AllNodeIDs() {
 		for _, e := range eng.Graph().EdgesFrom(id) {
 			if e.Type == "supersedes" {
-				foundEdge = true
+				t.Fatal("a supersedes edge was created; the detector must be non-destructive")
 			}
 		}
-	}
-	if !foundEdge {
-		t.Fatal("expected supersedes edge")
 	}
 }
 
@@ -2648,12 +2639,12 @@ func TestParseContradictionBatchResult(t *testing.T) {
 }
 
 func TestParseContradictionBatchResultWithCodeFences(t *testing.T) {
-	input := "```json\n" + `[{"pair_id":1,"relationship":"supersedes","confidence":0.9,"explanation":"a"}]` + "\n```"
+	input := "```json\n" + `[{"pair_id":1,"relationship":"contradicts","confidence":0.9,"explanation":"a"}]` + "\n```"
 	results, err := parseContradictionBatchResult(input)
 	if err != nil {
 		t.Fatalf("parseContradictionBatchResult: %v", err)
 	}
-	if len(results) != 1 || results[0].Relationship != "supersedes" {
+	if len(results) != 1 || results[0].Relationship != "contradicts" {
 		t.Fatalf("unexpected results: %+v", results)
 	}
 }
@@ -3269,5 +3260,48 @@ func TestConceptShortSummary(t *testing.T) {
 				t.Errorf("expected truncation, got full input")
 			}
 		})
+	}
+}
+
+// TestDetectContradictionsSetsContested pins conflict visibility: a
+// confirmed contradiction marks both records contested so retrieval
+// presents both sides -- EXCEPT a record the user deliberately
+// classified well_established, which an LLM verdict never downgrades.
+func TestDetectContradictionsSetsContested(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.LLM.Curation.Contradiction.MaxChecks = 10
+	cfg.LLM.Curation.Contradiction.MinSimilarity = 0.5
+	cfg.LLM.Curation.Contradiction.MaxSimilarity = 0.95
+	cfg.LLM.Curation.Contradiction.BatchSize = 1
+
+	idA := addProcessedNodeWithEmbedding(t, eng, "The service is deployed on Kubernetes", []float32{1.0, 0.0, 0.0})
+	idB := addProcessedNodeWithEmbedding(t, eng, "The service runs on bare-metal hosts", []float32{0.7, 0.7, 0.0})
+	eng.Lock()
+	eng.SetProp(idA, "epistemic_status", graph.StringProperty("well_established"))
+	eng.SetProp(idB, "epistemic_status", graph.StringProperty("probable"))
+	eng.Unlock()
+
+	llm := &mockLLM{
+		responses: []string{
+			`{"relationship":"contradicts","confidence":0.9,"explanation":"kubernetes vs bare-metal deployment claims conflict"}`,
+		},
+	}
+
+	result := &AutonomousResult{}
+	detectContradictions(context.Background(), eng, llm, cfg, result, 20, 0, nil, false)
+	if result.ContradictionsDetected != 1 {
+		t.Fatalf("expected 1 contradiction detected, got %d", result.ContradictionsDetected)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	nodeA, _ := eng.Graph().GetNode(idA)
+	if es, _ := nodeA.Properties.GetString("epistemic_status"); es != "well_established" {
+		t.Errorf("well_established record downgraded to %q; LLM verdicts must never override it", es)
+	}
+	nodeB, _ := eng.Graph().GetNode(idB)
+	if es, _ := nodeB.Properties.GetString("epistemic_status"); es != "contested" {
+		t.Errorf("peer record epistemic_status = %q, want contested", es)
 	}
 }

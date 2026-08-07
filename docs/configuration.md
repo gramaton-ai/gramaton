@@ -469,17 +469,19 @@ Concept candidate *detection* is deterministic and always-on. *Promotion* of can
 
 **Search default excludes concepts.** `gramaton_search` filters out `node_type=concept` from results by default — concept syntheses are derivative cross-record summaries that compete with their member records for top-N slots without earning the space. Pass `include_concepts=true` (or `--include-concepts` on the CLI) to opt back in. `gramaton_explore` and `gramaton_inspect` are unchanged; concepts remain walkable and inspectable when their IDs are known.
 
-### Dedup
+### Save guard
 
 ```yaml
-dedup:
-  similarity_threshold: 0.92         # cosine similarity threshold for duplicate detection
-  action: supersede                  # supersede | reject (default: supersede)
+save_guard:
+  similar_hold_threshold: 0.94       # cosine at/above which a new save is held
+  advisory_threshold: 0.85           # cosine at/above which a save carries an advisory
 ```
 
-`supersede` (the default) marks the older near-duplicate historical (sets `valid_until` + `resolution=superseded`) and adds a `supersedes` edge from the new record to the old. `reject` refuses the capture with `ErrConflict` and rolls back the new node.
+A save at or above `similar_hold_threshold` (also verified by a word-level Jaccard gate) is **held**: nothing is created, and the response carries the existing record's ID, content, similarity, and version token so the caller can revise that record via `gramaton_update` — or re-send the save with `allow_similar` acknowledging the match. A save in the advisory band `[advisory_threshold, similar_hold_threshold)` succeeds and carries a one-line notice naming the most similar existing record.
 
-**Legacy `action: flag`**: configs written before 2026-04 used `flag` as the default. The value is accepted and silently coerced to `supersede` at load time — the two values never had distinct behavior in any capture path. See `design-decisions.md` D37 for the full history. Any other value (typos, unsupported options) errors at config load rather than being silently ignored.
+The hold threshold defaults to 0.94; the earlier 0.92 calibration produced frequent false positives. A false positive now costs one extra round trip rather than data, so lowering it is a safe experiment. If embedding fails at save time, the record commits with a `similar_check_pending` warning and the check runs when the record is re-embedded.
+
+**Legacy `dedup:` section**: configs written before v0.4.0 configured auto-supersession under a `dedup:` key. That mechanism is gone — near-duplicates are refused at save time instead of superseding older records after the fact. A leftover `dedup:` section errors at config load so stale calibration isn't silently ignored.
 
 ### Graph
 

@@ -26,7 +26,6 @@ type SearchRequest struct {
 	ConfidenceMax      *float64          `json:"confidence_max,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMin      *float64          `json:"importance_min,omitempty" jsonschema:"0.0-1.0"`
 	ImportanceMax      *float64          `json:"importance_max,omitempty" jsonschema:"0.0-1.0"`
-	IncludeHistorical  bool              `json:"include_historical,omitempty" jsonschema:"include records past valid_until"`
 	IncludeConcepts    bool              `json:"include_concepts,omitempty" jsonschema:"include synthesized concept nodes (node_type=concept) in results. Default false: concepts are derivative cross-record summaries and compete with their member records for top-N slots, so they're filtered out of default search. Set true when you specifically want concepts (e.g. browsing what patterns have crystallized)."`
 	Since              string            `json:"since,omitempty" jsonschema:"filter: created after date (YYYY-MM-DD or RFC3339)"`
 	Missing            []string          `json:"missing,omitempty" jsonschema:"array of field names that must be unset (e.g. [temporality, confidence])"`
@@ -216,34 +215,33 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 
 	q := search.Query{
-		Text:              req.Text,
-		Top:               candidateCap,
-		Temporality:       req.Temporality,
-		KnowledgeType:     req.KnowledgeType,
-		EpistemicStatus:   req.EpistemicStatus,
-		Resolution:        req.Resolution,
-		ProcessingStatus:  req.ProcessingStatus,
-		IncludeHistorical: req.IncludeHistorical,
-		ExcludeConcepts:   !req.IncludeConcepts,
-		ConfidenceMin:     req.ConfidenceMin,
-		ConfidenceMax:     req.ConfidenceMax,
-		ImportanceMin:     req.ImportanceMin,
-		ImportanceMax:     req.ImportanceMax,
-		Missing:           req.Missing,
-		Keywords:          req.Keywords,
-		AccessCountMin:    req.AccessCountMin,
-		AccessCountMax:    req.AccessCountMax,
-		Match:             req.Match,
-		SimilarTo:         req.SimilarTo,
-		NearNode:          req.NearNode,
-		MaxHops:           req.MaxHops,
-		MinEdges:          req.MinEdges,
-		MaxEdges:          req.MaxEdges,
-		Random:            req.Random,
-		Sort:              req.Sort,
-		Order:             req.Order,
-		Meta:              req.Meta,
-		Store:             req.Store,
+		Text:             req.Text,
+		Top:              candidateCap,
+		Temporality:      req.Temporality,
+		KnowledgeType:    req.KnowledgeType,
+		EpistemicStatus:  req.EpistemicStatus,
+		Resolution:       req.Resolution,
+		ProcessingStatus: req.ProcessingStatus,
+		ExcludeConcepts:  !req.IncludeConcepts,
+		ConfidenceMin:    req.ConfidenceMin,
+		ConfidenceMax:    req.ConfidenceMax,
+		ImportanceMin:    req.ImportanceMin,
+		ImportanceMax:    req.ImportanceMax,
+		Missing:          req.Missing,
+		Keywords:         req.Keywords,
+		AccessCountMin:   req.AccessCountMin,
+		AccessCountMax:   req.AccessCountMax,
+		Match:            req.Match,
+		SimilarTo:        req.SimilarTo,
+		NearNode:         req.NearNode,
+		MaxHops:          req.MaxHops,
+		MinEdges:         req.MinEdges,
+		MaxEdges:         req.MaxEdges,
+		Random:           req.Random,
+		Sort:             req.Sort,
+		Order:            req.Order,
+		Meta:             req.Meta,
+		Store:            req.Store,
 	}
 
 	// Parse date filters. Collected in one table so error messages

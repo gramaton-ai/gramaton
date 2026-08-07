@@ -97,6 +97,11 @@ func (a *API) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error {
 	} {
 		if vec, ok := pre.vectors[candidate]; ok {
 			a.engine.VecIdx().Add(nodeID, vec)
+			// Register in the save-guard delta re-scan ring so a
+			// concurrent save whose off-lock scan predates this
+			// commit still sees it under the write lock. Single
+			// choke point for every creation path that embeds.
+			a.engine.NoteRecentWrite(nodeID, vec)
 			break
 		}
 	}
@@ -106,6 +111,25 @@ func (a *API) applyPreEmbedded(nodeID string, pre *preEmbeddedVectors) error {
 	a.engine.PropIdx().Add(nodeID, "embedding_model", modelProp)
 
 	return nil
+}
+
+// recordVersionToken returns a short opaque token identifying the
+// current content of a record. The save-guard hold response carries
+// it and gramaton_update's expected_version compares it (optimistic
+// concurrency for the hold-to-update funnel). Content-hash based
+// rather than commit based so it is stable across metadata-only
+// mutations -- a revision race is about content.
+func recordVersionToken(n *graph.Node) string {
+	content, _ := n.Properties.GetString("content_full")
+	return hashCanonical([]byte(content))[:12]
+}
+
+// RecordVersionToken is the exported form for transports that build
+// hold responses outside the api package (the legacy intake path).
+// Every surface must hand out tokens from the same derivation or
+// expected_version round-trips break.
+func RecordVersionToken(n *graph.Node) string {
+	return recordVersionToken(n)
 }
 
 // setMetaProps stores meta.* properties on a node from a meta map.

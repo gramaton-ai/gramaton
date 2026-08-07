@@ -40,7 +40,6 @@ func ensureLogger(logger *slog.Logger) *slog.Logger {
 type DeterministicResult struct {
 	LifecycleTransitions   int
 	OrphansLinked          int
-	DuplicatesSuperseded   int
 	SectionsLinked         int
 	ObservationsCreated    int // observation child nodes extracted (D18, D23)
 	ConceptsCreated        int // new concept nodes created (template content)
@@ -81,9 +80,9 @@ type StoreManifest struct {
 // cycle against an old store can find a large backlog of members that
 // were never linked; the cap keeps the write batch bounded and the
 // remainder drains on subsequent cycles. There is no per-phase config
-// knob for attachments (unlike MaxOrphansPerRun / MaxDedupPerRun), so
-// this is a constant set to the 200 ceiling config validation clamps
-// those knobs to.
+// knob for attachments (unlike MaxOrphansPerRun), so this is a
+// constant set to the 200 ceiling config validation clamps that knob
+// to.
 const maxConceptAttachPerRun = 200
 
 // RunDeterministic performs all deterministic curation tasks.
@@ -431,11 +430,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 		manifest.TopKeywords = append(manifest.TopKeywords, kwList[i].keyword)
 	}
 
-	// Duplicate detection.
-	dedupThreshold := cfg.Dedup.SimilarityThreshold
-	maxDedup := cfg.Curation.MaxDedupPerRun
-	pairs := search.FindDuplicates(g, e.VecIdx(), dedupThreshold, maxDedup)
-
 	// Orphan similarity search: for each orphan, find similar records.
 	type orphanLink struct {
 		orphanID   string
@@ -649,7 +643,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 	// mutations serialised hundreds of disk syncs under the write
 	// lock). The helper also handles the "only Save if something
 	// actually changed" gate and wraps errors with the phase label.
-	mutations := len(staleIDs) + len(orphanLinks) + len(pairs) + len(qualityIssues) + len(newConcepts) + len(aliasMerges) + len(attachments)
+	mutations := len(staleIDs) + len(orphanLinks) + len(qualityIssues) + len(newConcepts) + len(aliasMerges) + len(attachments)
 	if mutations > 0 {
 		err := e.WithWriteBatch("curation: deterministic", func(ws *core.WriteSession) (bool, error) {
 
@@ -676,78 +670,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationLink, RecordID: ol.orphanID})
 					ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationLink, RecordID: ol.targetID})
 				}
-			}
-
-			// Duplicate consolidation with Jaccard verification to prevent
-			// false positives on structurally similar long documents.
-			for _, pair := range pairs {
-				na, okA := ws.Graph().GetNode(pair.IDA)
-				nb, okB := ws.Graph().GetNode(pair.IDB)
-				if !okA || !okB {
-					continue
-				}
-
-				// Observations are derived from their parents, so observation-
-				// vs-parent similarity is not a duplicate signal. FindDuplicates
-				// already filters observation_of pairs, but we defense-in-depth
-				// here in case an observation ever lands without its edge.
-				if nt, ok := na.Properties.GetString("node_type"); ok && nt == "observation" {
-					continue
-				}
-				if nt, ok := nb.Properties.GetString("node_type"); ok && nt == "observation" {
-					continue
-				}
-
-				// Per-record effective supersession governs candidacy:
-				// - either record's supersession=none -> skip (opt-out);
-				// - both at supersession=store -> fire (legacy global,
-				//   memory-orphan path);
-				// - at least one at supersession=collection -> require
-				//   a shared member_of collection. Cross-collection
-				//   pairs at "collection" scope correctly skip.
-				// Operators still see filtered pairs via gramaton_duplicates
-				// for manual triage.
-				if !shouldAutoSupersede(ws.Graph(), na.ID, nb.ID) {
-					continue
-				}
-
-				// Jaccard guard: verify content similarity, not just embedding.
-				if !verifyDedupJaccard(ws.Graph(), na, nb) {
-					continue
-				}
-
-				// Determine which is older. Tie-break on identical
-				// created_at (common in bulk imports) by inbound edge
-				// count -- keep the more-referenced record as the
-				// "newer" survivor since rewriting more inbound edges
-				// is more destructive. Final fallback is lex order on
-				// ID, which matches FindDuplicates' canonical pair
-				// ordering and stays deterministic.
-				// Previously the lex-smaller ID was silently chosen as
-				// "older" on identical timestamps, because pair.IDA =
-				// lex-smaller per FindDuplicates.
-				caA, _ := na.Properties.GetTimestamp("created_at")
-				caB, _ := nb.Properties.GetTimestamp("created_at")
-				olderID, newerID := pickOlder(ws.Graph(), pair.IDA, pair.IDB, caA, caB)
-
-				older, ok := ws.Graph().GetNode(olderID)
-				if !ok {
-					continue
-				}
-				// Skip if already historical.
-				if _, has := older.Properties.GetTimestamp("valid_until"); has {
-					continue
-				}
-				ws.SetProp(olderID, "valid_until", graph.TimestampProperty(now))
-				ws.SetProp(olderID, "resolution", graph.StringProperty("superseded"))
-				ws.SetProp(olderID, "resolved_at", graph.TimestampProperty(now))
-				if _, err := ws.AddEdge(newerID, olderID, "supersedes", pair.Similarity, nil); err != nil {
-					logger.Error("failed to add supersedes edge",
-						"component", "curation", "newer", newerID, "older", olderID, "err", err)
-				}
-				result.DuplicatesSuperseded++
-				ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: olderID})
-				ws.AddAction(graph.CommitAction{Kind: graph.ActionCurationSupersede, RecordID: newerID})
 			}
 
 			// Quality repairs: fix deterministic issues, flag others.
@@ -1018,7 +940,7 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 			}
 
-			changed := result.LifecycleTransitions + result.OrphansLinked + result.DuplicatesSuperseded + result.QualityRepairs + result.ConceptsCreated + result.ConceptsAliased + result.ConceptMembersAttached
+			changed := result.LifecycleTransitions + result.OrphansLinked + result.QualityRepairs + result.ConceptsCreated + result.ConceptsAliased + result.ConceptMembersAttached
 			return changed > 0, nil
 		})
 		if err != nil {
@@ -1057,7 +979,6 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 			"component", "curation",
 			"lifecycle_transitions", result.LifecycleTransitions,
 			"orphans_linked", result.OrphansLinked,
-			"duplicates_superseded", result.DuplicatesSuperseded,
 			"observations_created", result.ObservationsCreated,
 			"quality_repairs", result.QualityRepairs,
 			"quality_flags", result.QualityFlags,
@@ -1303,60 +1224,6 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 	}
 }
 
-// dedupJaccardMin is the minimum word-level Jaccard similarity required
-// to confirm a cosine-based duplicate match. True duplicates (even with
-// minor edits) easily exceed this; structurally similar but semantically
-// different documents fall well below.
-const (
-	dedupJaccardMin        = 0.3 // long-content threshold
-	dedupJaccardShortMin   = 0.5 // short-content threshold (stricter)
-	dedupShortContentChars = 200
-)
-
-// verifyDedupJaccard checks whether two nodes are genuine duplicates by
-// comparing word-level Jaccard similarity on their content. Returns false
-// when token overlap is below the threshold.
-//
-// The threshold is stricter for short content. Reason: BERT-class
-// embeddings compress short text into a region dominated by positional
-// and structural tokens, so cosine ≥ 0.92 on a short pair is much less
-// discriminating than the same score on a long pair. The previous
-// behaviour (skip Jaccard entirely when both sides <200 chars and trust
-// cosine) was load-bearing for false-positive supersession on short
-// records.
-func verifyDedupJaccard(g graph.NodeReader, a, b *graph.Node) bool {
-	textA := curationNodeText(g, a)
-	textB := curationNodeText(g, b)
-
-	tokA := index.Tokenize(textA)
-	tokB := index.Tokenize(textB)
-	sim := index.JaccardSimilarity(tokA, tokB)
-
-	threshold := dedupJaccardMin
-	if len(textA) < dedupShortContentChars || len(textB) < dedupShortContentChars {
-		threshold = dedupJaccardShortMin
-	}
-	return sim >= threshold
-}
-
-// curationNodeText returns the best content text for Jaccard
-// comparison. Prefers RecordContentFor (Memory: content_full;
-// collection items: content_fields-driven text). Falls back to
-// content_short when present but no resolvable RecordContent --
-// covers concept nodes and partially-curated records.
-func curationNodeText(g graph.NodeReader, n *graph.Node) string {
-	if n == nil {
-		return ""
-	}
-	if s := RecordContentFor(g, n.ID); s != "" {
-		return s
-	}
-	if s, ok := n.Properties.GetString("content_short"); ok {
-		return s
-	}
-	return ""
-}
-
 // linkSections finds semantically similar sections across different parent
 // documents and creates related_to edges. This is the Mem0-inspired
 // entity resolution pattern: embedding comparison scoped to sections,
@@ -1547,42 +1414,6 @@ func isLikelyProperName(kw string) bool {
 }
 
 // isWeakConceptKeyword returns true if a keyword is too short, too
-// pickOlder selects which of (idA, idB) should be marked as the
-// historical/older record in an auto-supersession pair. Strategy:
-//
-//  1. If created_at differs, the older timestamp wins.
-//  2. If timestamps are identical (common in bulk imports), the
-//     record with FEWER inbound edges is treated as older. This
-//     keeps the more-referenced record alive so we rewrite fewer
-//     existing graph relationships.
-//  3. Final fallback is lex-order on ID for determinism.
-//
-// Returns (olderID, newerID).
-func pickOlder(g *graph.Graph, idA, idB string, caA, caB time.Time) (string, string) {
-	if caA.Before(caB) {
-		return idA, idB
-	}
-	if caB.Before(caA) {
-		return idB, idA
-	}
-	// Identical timestamps: tie-break on inbound edge count.
-	inA := len(g.EdgesTo(idA))
-	inB := len(g.EdgesTo(idB))
-	if inA < inB {
-		return idA, idB
-	}
-	if inB < inA {
-		return idB, idA
-	}
-	// Final fallback: lex-order. Matches FindDuplicates' canonical
-	// pair ordering so behaviour is at least deterministic across
-	// runs even when fully ambiguous.
-	if idA < idB {
-		return idA, idB
-	}
-	return idB, idA
-}
-
 // generic, or is a meta-term that doesn't represent a real concept.
 func isWeakConceptKeyword(kw string) bool {
 	if len(kw) < 3 {

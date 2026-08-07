@@ -80,11 +80,12 @@ var readOnlyClassification = map[string]string{
 	// Sessions cluster. Prepare is read-shaped but is the entry to
 	// the two-phase write flow; archive is read-shaped but stamps
 	// archive_* props and commits.
-	"SessionStart":   guardWrite,
-	"SessionPrepare": guardWrite,
-	"SessionSave":    guardWrite,
-	"SessionArchive": guardWrite,
-	"SessionGet":     guardRead,
+	"SessionStart":       guardWrite,
+	"SessionPrepare":     guardWrite,
+	"SessionSave":        guardWrite,
+	"SessionResolveHeld": guardWrite,
+	"SessionArchive":     guardWrite,
+	"SessionGet":         guardRead,
 
 	// Branches cluster. Checkout rewrites HEAD/BRANCH in the data
 	// dir even though it does not change knowledge content.

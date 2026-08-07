@@ -183,7 +183,7 @@ func TestSessionMultipleSessions(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, idA, []SaveSegment{
 		{Content: "Segment in A", TopicName: "Topic A"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit A: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestSessionMultipleSessions(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, idB, []SaveSegment{
 		{Content: "Segment in B", TopicName: "Topic B"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit B: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestSessionPersistence(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "This should survive a restart", TopicName: "Persistent topic"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestSessionConcurrentCommits(t *testing.T) {
 			}
 			if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 				{Content: "Concurrent segment", TopicName: "Concurrent topic"},
-			}); err != nil {
+			}, false); err != nil {
 				errors <- err
 			}
 		}(i)
@@ -325,7 +325,7 @@ func TestSessionPrepareReturnsInstructionsAndState(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Previous knowledge segment", TopicName: "Design"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("seed commit: %v", err)
 	}
 
@@ -608,7 +608,7 @@ func TestSessionCommitRejectsWithoutPrepare(t *testing.T) {
 	segments := []SaveSegment{
 		{Content: "Some knowledge", TopicName: "Design"},
 	}
-	_, svcErr := a.SessionSave(ctx, sessionID, segments)
+	_, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr == nil {
 		t.Fatal("expected error when committing without prepare")
 	}
@@ -632,7 +632,7 @@ func TestSessionCommitAfterPrepare(t *testing.T) {
 		{Content: "Decided to use PostgreSQL", TopicName: "Architecture"},
 		{Content: "User prefers dark mode", TopicName: "Preferences"},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -666,7 +666,7 @@ func TestSessionCommitPromoteFalseSkipsMemoryRecord(t *testing.T) {
 		{Content: "Considered approach X but moved on without deciding",
 			TopicName: "Exploration", PromoteToMemory: &promoteFalse},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -721,7 +721,7 @@ func TestSessionCommitMixedPromotion(t *testing.T) {
 		{Content: "User prefers Go modules over GOPATH", TopicName: "Preferences"},
 		// nil PromoteToMemory defaults to true.
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -757,7 +757,7 @@ func TestSessionCommitNilPromoteDefaultsTrue(t *testing.T) {
 		{Content: "Some knowledge", TopicName: "Topic A"},
 		{Content: "More knowledge", TopicName: "Topic B"},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -786,7 +786,7 @@ func TestSessionCommitExistingTopic(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Seed segment", TopicName: "Architecture"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("first commit: %v", err)
 	}
 
@@ -796,7 +796,7 @@ func TestSessionCommitExistingTopic(t *testing.T) {
 	}
 	commitResult, svcErr := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Database choice: PostgreSQL", TopicName: "Architecture"},
-	})
+	}, false)
 	if svcErr != nil {
 		t.Fatalf("second commit: %v", svcErr)
 	}
@@ -831,7 +831,7 @@ func TestSessionRoundTrip(t *testing.T) {
 		{Content: "Target: sub-200ms search latency", TopicName: "Performance"},
 		{Content: "Using BM25 for session segments", TopicName: "Tech Stack"},
 	}
-	if _, err := a.SessionSave(ctx, sessionID, segments); err != nil {
+	if _, err := a.SessionSave(ctx, sessionID, segments, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -861,7 +861,7 @@ func TestSessionCommitEmptySegments(t *testing.T) {
 		t.Fatalf("prepare: %v", err)
 	}
 
-	_, svcErr := a.SessionSave(ctx, sessionID, []SaveSegment{})
+	_, svcErr := a.SessionSave(ctx, sessionID, []SaveSegment{}, false)
 	if svcErr == nil {
 		t.Fatal("expected error for empty segments")
 	}
@@ -879,7 +879,7 @@ func TestSessionCommitMalformedSegments(t *testing.T) {
 
 	_, svcErr := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "", TopicName: "Design"},
-	})
+	}, false)
 	if svcErr == nil {
 		t.Fatal("expected error for empty content")
 	}
@@ -893,7 +893,7 @@ func TestSessionCommitMalformedSegments(t *testing.T) {
 
 	_, svcErr = a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Some content", TopicName: ""},
-	})
+	}, false)
 	if svcErr == nil {
 		t.Fatal("expected error for empty topic name")
 	}
@@ -919,7 +919,7 @@ func TestPrepareReturnsWatermark(t *testing.T) {
 
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Initial decision", TopicName: "Design", SummaryShort: "initial"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -949,7 +949,7 @@ func TestSessionSaveAdvancesWatermark(t *testing.T) {
 	}
 	save1, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "First save", TopicName: "Topic", SummaryShort: "first"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("save1: %v", err)
 	}
@@ -971,7 +971,7 @@ func TestSessionSaveAdvancesWatermark(t *testing.T) {
 	}
 	save2, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Second save", TopicName: "Topic", SummaryShort: "second"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("save2: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestSessionSaveEmitsBoundaryMarker(t *testing.T) {
 	}
 	saveResp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Boundary segment", TopicName: "Marker", SummaryShort: "boundary"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -1043,7 +1043,7 @@ func TestPrepareLeanStateForPreBoundarySegments(t *testing.T) {
 			TopicName:    "Design",
 			SummaryShort: "decision-anchor",
 		},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -1118,7 +1118,7 @@ func TestSessionSaveResponseJSONShape(t *testing.T) {
 	}
 	resp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Wire-shape probe", TopicName: "Wire", SummaryShort: "probe"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -1159,11 +1159,11 @@ func TestSessionPreparedFlagConsumed(t *testing.T) {
 	segments := []SaveSegment{
 		{Content: "First commit", TopicName: "Test"},
 	}
-	if _, svcErr := a.SessionSave(ctx, sessionID, segments); svcErr != nil {
+	if _, svcErr := a.SessionSave(ctx, sessionID, segments, false); svcErr != nil {
 		t.Fatalf("first commit: %v", svcErr)
 	}
 
-	_, svcErr := a.SessionSave(ctx, sessionID, segments)
+	_, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr == nil {
 		t.Fatal("expected error on second commit without prepare")
 	}
@@ -1189,7 +1189,7 @@ func TestSessionConcurrentPrepare(t *testing.T) {
 	segments := []SaveSegment{
 		{Content: "After double prepare", TopicName: "Test"},
 	}
-	if _, svcErr := a.SessionSave(ctx, sessionID, segments); svcErr != nil {
+	if _, svcErr := a.SessionSave(ctx, sessionID, segments, false); svcErr != nil {
 		t.Fatalf("commit after double prepare: %v", svcErr)
 	}
 }
@@ -1258,7 +1258,7 @@ func TestHybridCommitCreatesMemoryRecords(t *testing.T) {
 		{Content: "We decided on PostgreSQL", TopicName: "Architecture",
 			Temporality: "durable", KnowledgeType: "semantic"},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -1306,7 +1306,7 @@ func TestHybridCommitExtractedAsEdge(t *testing.T) {
 
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Redis caching layer design", TopicName: "Infra"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -1352,7 +1352,7 @@ func TestHybridCommitMemoryRecordHasMetadata(t *testing.T) {
 			SummaryShort:    "Event sourcing decision",
 		},
 	}
-	if _, err := a.SessionSave(ctx, sessionID, segments); err != nil {
+	if _, err := a.SessionSave(ctx, sessionID, segments, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -1390,7 +1390,7 @@ func TestHybridCommitPartialMetadata(t *testing.T) {
 	segments := []SaveSegment{
 		{Content: "Some insight with no classification", TopicName: "General"},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -1423,7 +1423,7 @@ func TestHybridCommitMultipleSegments(t *testing.T) {
 		{Content: "Second knowledge", TopicName: "Topic A"},
 		{Content: "Third knowledge", TopicName: "Topic B"},
 	}
-	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments)
+	commitResult, svcErr := a.SessionSave(ctx, sessionID, segments, false)
 	if svcErr != nil {
 		t.Fatalf("commit: %v", svcErr)
 	}
@@ -1452,7 +1452,7 @@ func TestHybridCommitSegmentNotVectorIndexed(t *testing.T) {
 
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Session segment should have no vector", TopicName: "Test"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -1484,7 +1484,7 @@ func TestHybridCommitFollowEdges(t *testing.T) {
 	}
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: "Bidirectional edge test", TopicName: "Test"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
@@ -1541,7 +1541,7 @@ func TestCurationSkipsSegmentNodes(t *testing.T) {
 		"Testing should verify this content exceeds five hundred characters."
 	if _, err := a.SessionSave(ctx, sessionID, []SaveSegment{
 		{Content: longContent, TopicName: "Architecture"},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 

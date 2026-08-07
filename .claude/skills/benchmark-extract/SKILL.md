@@ -128,9 +128,13 @@ Do these steps exactly:
    list of segments.
 
 5. Call mcp__gramaton-bench__gramaton_session_save with:
-     session_id = SESSION_ULID
-     segments   = <your extracted segments>
+     session_id    = SESSION_ULID
+     segments      = <your extracted segments>
+     allow_similar = true
    Default `promote_to_memory: true` — do NOT override.
+   `allow_similar: true` is the bulk-ingestion escape: benchmark
+   haystacks legitimately contain near-identical segments, and a
+   promotion hold would stall the run.
 
 6. Return a single line: "committed <N> segments for
    <CLIENT_SESSION_ID>". Nothing else.

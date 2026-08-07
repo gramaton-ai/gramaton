@@ -117,7 +117,7 @@ func TestReadOnlyAPIRejectsWrites(t *testing.T) {
 			return e
 		}},
 		{"SessionSave", func() *APIError {
-			_, e := a.SessionSave(ctx, "some-session", nil)
+			_, e := a.SessionSave(ctx, "some-session", nil, false)
 			return e
 		}},
 		{"CurationTrigger", func() *APIError {

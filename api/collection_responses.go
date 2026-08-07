@@ -178,21 +178,35 @@ type ItemFailure struct {
 
 // SessionSaveResponse pins SessionSave's previous map[string]any
 // shape. The legacy map emits session_only_segments unconditionally,
-// so it has no omitempty here. Superseded is omitempty (emitted only
-// when at least one record got auto-superseded by a commit segment).
+// so it has no omitempty here. Held is omitempty (emitted only when
+// the save guard held at least one segment's Memory promotion).
 // Failed is the per-segment failure list reserved for future
 // partial-success work (see CollectionMigrateResponse.Failed for the
 // same disclaimer).
 type SessionSaveResponse struct {
-	SessionID            string           `json:"session_id"`
-	SegmentsAdded        int              `json:"segments_added"`
-	SessionOnlySegments  int              `json:"session_only_segments"`
-	TopicsCreated        int              `json:"topics_created"`
-	MemoryRecordsCreated int              `json:"memory_records_created"`
-	EdgesCreated         int              `json:"edges_created"`
-	Boundary             *SaveBoundary    `json:"boundary,omitempty"`
-	Superseded           []map[string]any `json:"superseded,omitempty"`
-	Failed               []ItemFailure    `json:"failed,omitempty"`
+	SessionID            string                 `json:"session_id"`
+	SegmentsAdded        int                    `json:"segments_added"`
+	SessionOnlySegments  int                    `json:"session_only_segments"`
+	TopicsCreated        int                    `json:"topics_created"`
+	MemoryRecordsCreated int                    `json:"memory_records_created"`
+	EdgesCreated         int                    `json:"edges_created"`
+	Boundary             *SaveBoundary          `json:"boundary,omitempty"`
+	Held                 []SessionHeldPromotion `json:"held,omitempty"`
+	Failed               []ItemFailure          `json:"failed,omitempty"`
+}
+
+// SessionHeldPromotion describes a segment whose Memory promotion the
+// save guard held: the segment itself WAS created (the Sessions tier
+// is append-only and always lands), but no Memory record exists for
+// it yet. The hold persists in session state and is re-presented at
+// the next session_prepare until resolved via
+// gramaton_session_resolve_held: either update the similar existing
+// record with this segment's knowledge (the server then wires the
+// segment's provenance to it), or re-promote with allow_similar.
+type SessionHeldPromotion struct {
+	SegmentID string       `json:"segment_id"`
+	Topic     string       `json:"topic"`
+	Held      *HeldSimilar `json:"held"`
 }
 
 // SaveBoundary is the watermark emitted by a successful session_save.

@@ -3,9 +3,6 @@ package server
 import (
 	"context"
 	"testing"
-	"time"
-
-	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // Tests here cover the server-level serviceSave wrapper that
@@ -40,67 +37,6 @@ func TestServiceCaptureValidation(t *testing.T) {
 	}
 	if svcErr.Code != "missing_field" {
 		t.Fatalf("expected missing_field, got %s", svcErr.Code)
-	}
-}
-
-// TestServiceCaptureSupersedeSetResolution verifies Bug 1 fix: when a
-// capture auto-supersedes a near-duplicate, the old record gets resolution
-// and resolved_at set (previously missing in MCP path).
-func TestServiceCaptureSupersedeSetResolution(t *testing.T) {
-	_, eng := setupTestServer(t)
-
-	eng.Lock()
-	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("the sky is blue on clear days"),
-		"processing_status": graph.StringProperty("processed"),
-		"created_at":        graph.TimestampProperty(time.Now().UTC()),
-		"access_count":      graph.Int64Property(0),
-		"embedding_full":    graph.VectorProperty([]float32{1, 0, 0, 0}),
-	})
-	eng.IndexNode(n.ID, "the sky is blue on clear days", nil)
-	eng.VecIdx().Add(n.ID, []float32{1, 0, 0, 0})
-	eng.Save("test")
-	oldID := n.ID
-	eng.Unlock()
-
-	eng.Lock()
-	n2 := eng.Graph().AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("the sky is blue on clear days indeed"),
-		"processing_status": graph.StringProperty("processed"),
-		"created_at":        graph.TimestampProperty(time.Now().UTC()),
-		"access_count":      graph.Int64Property(0),
-		"embedding_full":    graph.VectorProperty([]float32{1, 0, 0, 0}),
-	})
-	eng.IndexNode(n2.ID, "the sky is blue on clear days indeed", nil)
-	eng.VecIdx().Add(n2.ID, []float32{1, 0, 0, 0})
-
-	if dupID, sim := eng.CheckDedup(n2.ID); dupID != "" {
-		now := time.Now().UTC()
-		oldNode, _ := eng.Graph().GetNode(dupID)
-		if oldNode != nil {
-			eng.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-			eng.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-			eng.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-			eng.Graph().AddEdge(n2.ID, dupID, "supersedes", sim, nil)
-		}
-	}
-	eng.Save("test-supersede")
-	eng.Unlock()
-
-	eng.RLock()
-	defer eng.RUnlock()
-	old, ok := eng.Graph().GetNode(oldID)
-	if !ok {
-		t.Fatal("old record not found")
-	}
-	if res, ok := old.Properties.GetString("resolution"); !ok || res != "superseded" {
-		t.Errorf("expected resolution=superseded, got %q", res)
-	}
-	if _, ok := old.Properties.GetTimestamp("resolved_at"); !ok {
-		t.Error("expected resolved_at to be set")
-	}
-	if _, ok := old.Properties.GetTimestamp("valid_until"); !ok {
-		t.Error("expected valid_until to be set")
 	}
 }
 

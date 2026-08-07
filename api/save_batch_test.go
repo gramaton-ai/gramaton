@@ -44,11 +44,20 @@ func (e *stubBatchEmbedder) Embed(_ context.Context, texts []string) ([][]float3
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
 		out[i] = make([]float32, e.dim)
-		// Vary the vector by content length so dedup tests get
-		// distinct geometries without colliding by accident.
-		out[i][0] = float32(len(t)%7+1) * 0.1
-		if e.dim > 1 {
-			out[i][1] = float32(i%3+1) * 0.1
+		// Hash the text into a deterministic vector (same scheme as
+		// dedupEmbedder): identical text -> identical vector (cosine
+		// 1.0, triggers the similarity guard); distinct text ->
+		// decorrelated vectors that stay below the guard thresholds.
+		// The earlier length-based geometry collided for same-length
+		// distinct contents, which the save-guard hold now punishes.
+		var h uint32 = 2166136261
+		for _, c := range []byte(t) {
+			h ^= uint32(c)
+			h *= 16777619
+		}
+		for j := range out[i] {
+			h = h*16777619 + uint32(j)
+			out[i][j] = float32(h%101) / 100.0
 		}
 	}
 	return out, nil
@@ -69,7 +78,11 @@ func (f *stubFaultInjector) Inject(phase string) error { return f.errs[phase] }
 // BERT. Uses setupReembedAPI for the engine wiring.
 func setupBatchAPI(t testing.TB) (*API, *core.Engine, *stubBatchEmbedder) {
 	t.Helper()
-	emb := &stubBatchEmbedder{dim: 4}
+	// dim 16 matches dedupEmbedder: enough dimensions that hashed
+	// vectors for distinct texts stay safely below the save-guard
+	// thresholds (at dim 4, random positive vectors routinely exceed
+	// 0.94 cosine).
+	emb := &stubBatchEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	return a, eng, emb
 }
@@ -337,9 +350,10 @@ func TestSaveBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
 // gated its assertion on `if len(Superseded) > 0` which the stub
 // embedder rarely satisfied, making the test vacuous.)
 
-// TestSaveBatchSkipSupersession: SkipSupersession=true disables
-// dedup-driven supersession entirely.
-func TestSaveBatchSkipSupersession(t *testing.T) {
+// TestSaveBatchAllowSimilar: allow_similar=true disables the
+// similarity holds for the entire batch (the migration/bulk-ingest
+// escape); the duplicate item is created rather than held.
+func TestSaveBatchAllowSimilar(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("identical phrase one"),
@@ -351,20 +365,17 @@ func TestSaveBatchSkipSupersession(t *testing.T) {
 		t.Fatalf("seed added: %d", len(resp.Added))
 	}
 	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Items:            mustItems("identical phrase one"),
-		SkipSupersession: true,
+		Items:        mustItems("identical phrase one"),
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("skip: %v", apiErr)
+		t.Fatalf("allow_similar batch: %v", apiErr)
 	}
 	if len(resp2.Added) != 1 {
-		t.Fatalf("skip added: %d", len(resp2.Added))
+		t.Fatalf("allow_similar added: %d, want 1 (hold disabled)", len(resp2.Added))
 	}
-	if len(resp2.Added[0].Superseded) != 0 {
-		t.Errorf("expected no supersession with SkipSupersession=true, got %+v", resp2.Added[0].Superseded)
-	}
-	if resp2.Stats.SupersededCount != 0 {
-		t.Errorf("expected SupersededCount=0, got %d", resp2.Stats.SupersededCount)
+	if len(resp2.Held) != 0 || resp2.Stats.HeldCount != 0 {
+		t.Errorf("expected no holds with allow_similar=true, got held=%+v stats=%+v", resp2.Held, resp2.Stats)
 	}
 }
 
@@ -643,15 +654,15 @@ func TestCanonicalizeRequestDistinguishes(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeRequestSkipSupersessionDistinguishes: SkipSupersession
-// affects semantics so it must affect the hash.
-func TestCanonicalizeRequestSkipSupersessionDistinguishes(t *testing.T) {
+// TestCanonicalizeRequestAllowSimilarDistinguishes: AllowSimilar
+// affects semantics so it must affect the idempotency hash.
+func TestCanonicalizeRequestAllowSimilarDistinguishes(t *testing.T) {
 	base := SaveBatchRequest{Items: mustItems("x")}
 	a, _ := canonicalizeRequest(base)
-	base.SkipSupersession = true
+	base.AllowSimilar = true
 	b, _ := canonicalizeRequest(base)
 	if string(a) == string(b) {
-		t.Errorf("SkipSupersession should change canonical bytes")
+		t.Errorf("AllowSimilar should change canonical bytes")
 	}
 }
 

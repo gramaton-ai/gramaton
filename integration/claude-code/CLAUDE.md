@@ -206,9 +206,9 @@ loses information.
 
 1. Classify the content (temporality, confidence, knowledge_type,
    epistemic_status).
-2. Extract keywords and write a `summary_short` (~750 chars; this is
-   the embedding-ready semantic anchor — semantically representative,
-   not a tagline).
+2. Extract keywords and write a `summary_short` (target ~750 chars,
+   max ~900; this is the embedding-ready semantic anchor —
+   semantically representative, not a tagline).
 3. Save:
    ```
    gramaton_save(
@@ -237,11 +237,19 @@ loses information.
      edge_type="related_to", edge_weight=0.7)
    ```
 
-**Auto-supersession:** When a saved record is very similar to an
-existing one (>= 0.92 cosine similarity), the server automatically
-marks the older record as historical (sets `valid_until`) and creates
-a `supersedes` edge. You do not need to check for duplicates before
-saving — the server handles it.
+**Update, don't re-save:** Records are mutable. When knowledge
+evolves — a decision is refined, a fact changes, new detail lands —
+update the existing record with `gramaton_update` (any metadata
+field, `content` for a rewrite, `content_append` for an addition)
+instead of saving a near-copy. Do not pre-check for duplicates
+before saving; the server does it. A save that is near-verbatim of
+an existing record is refused with a HELD response carrying that
+record's ID, content, and version token: either fold your material
+into it via `gramaton_update(id=..., expected_version=...)`, or —
+if the two are genuinely distinct knowledge — re-send the save with
+`allow_similar` naming the held record's ID. A save just below the
+hold threshold succeeds with a one-line advisory naming the most
+similar existing record.
 
 ### Sessions (Automatic Knowledge Extraction)
 
@@ -256,10 +264,18 @@ Two-phase flow:
    submits extracted segments. Each segment becomes a Session segment
    (BM25-indexed, saves the conversation thread). When
    `promote_to_memory: true` (the default when omitted), it ALSO
-   becomes a Memory record (vector-embedded, full lifecycle,
-   auto-supersession). Set `promote_to_memory: false` for
+   becomes a Memory record (vector-embedded, full lifecycle).
+   Set `promote_to_memory: false` for
    exploration, open questions, and dead ends — they stay searchable
    in Sessions without polluting Memory's vector space.
+
+If the save response lists `held_promotions`, a segment closely
+matched an existing Memory record and was not promoted (the segment
+itself is safely stored). Resolve each with
+`gramaton_session_resolve_held`: `update_target` after folding the
+segment's material into the similar record via `gramaton_update`,
+or `allow_similar` if the two are genuinely distinct. Unresolved
+holds are re-presented by the next prepare.
 
 **Do not call save without calling prepare first.** The server
 rejects save without a prior prepare because prepare delivers the
@@ -330,7 +346,8 @@ A subagent or delegated task that can reach Gramaton's MCP tools is
 able to write to the store. Keep semantic saves (`gramaton_save`) and
 session extraction in the main conversation anyway: a subagent sees
 only its task brief, so its saves land as fragmentary, poorly-linked
-records and can mis-fire auto-supersession. Recording a discrete item
+records and can trip save-guard holds it lacks the context to
+resolve. Recording a discrete item
 to a collection is different — a task or finding is self-contained, so
 adding it from a subagent is fine; returning items for the
 orchestrator to batch-add is usually cleaner (it dedupes and avoids
@@ -339,7 +356,7 @@ repeated write prompts).
 ### Curation
 
 The server runs background curation on a configurable cadence to
-classify pending records, link orphans, detect duplicates, and
+classify pending records, link orphans, detect contradictions, and
 synthesize concept nodes. You don't need to trigger it manually — but
 you can inspect or force it:
 
@@ -356,8 +373,10 @@ need to classify pending records manually as a fallback.
 
 - **`gramaton_resolve`** — Mark a record as resolved (completed,
   superseded, abandoned, obsolete). Auto-sets `valid_until`.
-- **`gramaton_update`** — Update metadata on a record without
-  reclassifying.
+- **`gramaton_update`** — Update any field on a record: metadata,
+  `content` (full rewrite), or `content_append` (addition). Pass
+  `expected_version` from a recent read to guard against concurrent
+  edits.
 - **`gramaton_explore`** — Graph traversal from a node; returns
   connected nodes and edges within a depth.
 - Store admin (rarely needed mid-conversation): `gramaton_branch`

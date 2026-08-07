@@ -39,6 +39,10 @@ type intakeRequest struct {
 	SourceRef    string `json:"source_ref,omitempty"`
 	AssertedAsOf string `json:"asserted_as_of,omitempty"`
 
+	// AllowSimilar carries record IDs from a prior hold response,
+	// acknowledging the new record is genuinely distinct from them.
+	AllowSimilar []string `json:"allow_similar,omitempty"`
+
 	// Structured metadata.
 	Meta map[string]any `json:"meta,omitempty"`
 }
@@ -56,6 +60,12 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A held save created nothing: 409 with the hold body, matching
+	// the /v1/records route.
+	if _, held := result["held"]; held {
+		s.writeJSON(w, http.StatusConflict, result)
+		return
+	}
 	s.writeJSON(w, http.StatusCreated, result)
 }
 
@@ -92,6 +102,7 @@ func (s *Server) serviceIntake(ctx context.Context, req *intakeRequest) (map[str
 		ContextReliability:     req.ContextReliability,
 		ContextCaptureReason:   req.ContextCaptureReason,
 		Meta:                   req.Meta,
+		AllowSimilar:           req.AllowSimilar,
 	}
 
 	result, svcErr := s.serviceSave(ctx, capReq)

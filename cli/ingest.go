@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	ingestRecursive bool
-	ingestMessage   string
+	ingestRecursive    bool
+	ingestAllowSimilar bool
+	ingestMessage      string
 )
 
 var ingestCmd = &cobra.Command{
@@ -33,6 +34,7 @@ Supported: .md, .txt, .json, .yaml, .yml, .csv, .html, .xml, .go,
 
 func init() {
 	ingestCmd.Flags().BoolVar(&ingestRecursive, "recursive", false, "recursively ingest directories")
+	ingestCmd.Flags().BoolVar(&ingestAllowSimilar, "allow-similar", false, "disable similar-record holds for this ingest (bulk-import escape)")
 	ingestCmd.Flags().StringVar(&ingestMessage, "commit-message", "", "commit message (default: auto-generated)")
 	rootCmd.AddCommand(ingestCmd)
 }
@@ -104,7 +106,8 @@ func runIngest(cmd *cobra.Command, args []string) error {
 
 	// Send to server via ingest API.
 	resp, err := serverPost("/v1/ingest", map[string]any{
-		"files": files,
+		"files":         files,
+		"allow_similar": ingestAllowSimilar,
 	})
 	if err != nil {
 		return fmt.Errorf("ingest: %w", err)

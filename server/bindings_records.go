@@ -23,6 +23,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 			s.writeAPIError(w, apiErr)
 			return
 		}
+		// A held save created nothing: 409 with the structured hold
+		// body (the similar record + the two exits), not 201.
+		if resp.Held != nil {
+			s.writeJSON(w, http.StatusConflict, resp)
+			return
+		}
 		s.writeJSON(w, http.StatusCreated, resp)
 	})
 
@@ -116,6 +122,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		}
 		req.ID = r.PathValue("id")
 		resp, apiErr := s.api.Update(r.Context(), req)
+		if apiErr == nil && resp.VersionConflict != nil {
+			// Nothing was applied: 409 with the structured conflict
+			// body (current content + version for the re-judge).
+			s.writeJSON(w, http.StatusConflict, resp)
+			return
+		}
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -148,6 +160,12 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		resp, apiErr := s.api.Resolve(r.Context(), req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
+			return
+		}
+		// Version precondition failed: nothing was applied. 409 with
+		// the structured conflict body, matching the update route.
+		if resp.VersionConflict != nil {
+			s.writeJSON(w, http.StatusConflict, resp)
 			return
 		}
 		s.writeJSON(w, http.StatusOK, resp)
@@ -323,13 +341,16 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 
 	type updateArgs struct {
 		ID              string         `json:"id" jsonschema:"record ID to update"`
+		Content         string         `json:"content,omitempty" jsonschema:"replacement content_full (mutually exclusive with content_append). Compose from the record's current full content, never from a summary."`
+		ContentAppend   string         `json:"content_append,omitempty" jsonschema:"text appended to the current content (mutually exclusive with content)"`
+		ExpectedVersion string         `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the update applies only if the content is unchanged since (409 version_conflict otherwise)"`
 		Confidence      *float64       `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
 		Temporality     string         `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
 		KnowledgeType   string         `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
 		EpistemicStatus string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64       `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration (YYYY-MM-DD or RFC3339); 'clear' removes."`
 		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata"`
@@ -344,7 +365,9 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 			return mcpErr("id is required")
 		}
 		resp, apiErr := s.api.Update(ctx, api.UpdateRequest{
-			ID: args.ID, Confidence: args.Confidence, Temporality: args.Temporality,
+			ID: args.ID, Content: args.Content, ContentAppend: args.ContentAppend,
+			ExpectedVersion: args.ExpectedVersion,
+			Confidence:      args.Confidence, Temporality: args.Temporality,
 			KnowledgeType: args.KnowledgeType, EpistemicStatus: args.EpistemicStatus,
 			Importance: args.Importance, Keywords: args.Keywords, SummaryShort: args.SummaryShort,
 			ValidUntil: args.ValidUntil, AssertedAsOf: args.AssertedAsOf, Meta: args.Meta,
@@ -363,7 +386,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_classify",
@@ -386,9 +409,10 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	})
 
 	type resolveArgs struct {
-		ID             string `json:"id" jsonschema:"record ID to resolve"`
-		Resolution     string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
-		ResolutionNote string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ID              string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -402,6 +426,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		}
 		resp, apiErr := s.api.Resolve(ctx, api.ResolveRequest{
 			ID: args.ID, Resolution: args.Resolution, ResolutionNote: args.ResolutionNote,
+			ExpectedVersion: args.ExpectedVersion,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

@@ -76,9 +76,10 @@ func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 		// STAMPED x3: collection create, single item add, batch item
 		// add; batch composes once before the loop.
 		filepath.Join("api", "collections.go"): 3,
-		// STAMPED x4: session node, topic node, segment node, promoted
-		// Memory record; SessionSave composes once per commit.
-		filepath.Join("api", "sessions.go"): 4,
+		// STAMPED x5: session node, topic node, segment node, promoted
+		// Memory record, and resolve_held's allow_similar promotion;
+		// SessionSave and SessionResolveHeld each compose once per commit.
+		filepath.Join("api", "sessions.go"): 5,
 		// STAMPED: server-side save service (intake + legacy HTTP save).
 		filepath.Join("server", "service_records.go"): 1,
 		// STAMPED: /v1/ingest file ingestion; composed once per request.

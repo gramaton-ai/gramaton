@@ -3,63 +3,15 @@ package server
 import (
 	"net/http"
 	"testing"
-	"time"
-
-	"github.com/gramaton-ai/gramaton/graph"
 )
-
-func TestAutoSupersessionAlreadyHistorical(t *testing.T) {
-	srv, eng := setupTestServer(t)
-
-	// Create a record that's already historical (has valid_until).
-	eng.Lock()
-	n := eng.Graph().AddNode(graph.Properties{
-		"content_full":      graph.StringProperty("Already expired"),
-		"content_short":     graph.StringProperty("Expired"),
-		"processing_status": graph.StringProperty("processed"),
-		"valid_until":       graph.TimestampProperty(time.Now().UTC().Add(-24 * time.Hour)),
-		"created_at":        graph.TimestampProperty(time.Now().UTC()),
-		"access_count":      graph.Int64Property(0),
-	})
-	for k, v := range n.Properties {
-		eng.PropIdx().Add(n.ID, k, v)
-	}
-	eng.VecIdx().Add(n.ID, []float32{1.0, 0.0, 0.0})
-	eng.Graph().SetNodeProperty(n.ID, "embedding_full",
-		graph.VectorProperty([]float32{1.0, 0.0, 0.0}))
-	eng.Save("seed")
-	eng.Unlock()
-
-	// Create a near-identical record. The old one is already historical,
-	// so supersession should NOT set valid_until again.
-	w := doRequest(t, srv, "POST", "/v1/records", map[string]any{
-		"content": "Already expired updated",
-	})
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Verify the old record still has its original valid_until
-	// (not overwritten by supersession).
-	eng.RLock()
-	old, _ := eng.Graph().GetNode(n.ID)
-	vu, ok := old.Properties.GetTimestamp("valid_until")
-	eng.RUnlock()
-
-	if !ok {
-		t.Fatal("old record should still have valid_until")
-	}
-	// Should be the original value (yesterday), not just now.
-	if vu.After(time.Now().UTC().Add(-23 * time.Hour)) {
-		t.Fatal("valid_until should be the original (yesterday), not updated")
-	}
-}
 
 func TestSaveWithNoEmbedder(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	// Without an embedder, capture should still work --
-	// no dedup check, no supersession, just creates the record.
+	// Without an embedder, capture should still work -- no
+	// similarity scan, no hold, no advisory; just creates the record.
+	// (similar_check_pending is reserved for embed FAILURES; a
+	// no-embedder store never runs the guard at all.)
 	w := doRequest(t, srv, "POST", "/v1/records", map[string]any{
 		"content":     "No embedder content",
 		"temporality": "durable",
@@ -71,8 +23,11 @@ func TestSaveWithNoEmbedder(t *testing.T) {
 
 	resp := parseResponse(t, w)
 	data := resp["data"].(map[string]any)
-	if data["superseded"] != nil {
-		t.Fatal("should not have superseded without embedder")
+	if data["held"] != nil {
+		t.Fatal("should not hold without embedder")
+	}
+	if data["advisory"] != nil {
+		t.Fatal("should not carry an advisory without embedder")
 	}
 }
 

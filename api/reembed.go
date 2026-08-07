@@ -33,6 +33,20 @@ type ReembedResponse struct {
 	Skipped    int      `json:"skipped"`
 	Errors     int      `json:"errors"`
 	ErrorIDs   []string `json:"error_ids,omitempty"`
+	// SimilarPairs reports deferred save-guard matches: records saved
+	// during an embedder outage skipped the save-time similarity scan;
+	// when their vectors arrive the scan re-runs, and hold-grade
+	// matches are reported here (both records exist by now, so this
+	// surfaces rather than holds -- triage via gramaton_update /
+	// gramaton_resolve, or find the pair in gramaton_duplicates).
+	SimilarPairs []ReembedSimilarPair `json:"similar_pairs,omitempty"`
+}
+
+// ReembedSimilarPair is one deferred save-guard match.
+type ReembedSimilarPair struct {
+	ID         string  `json:"id"`
+	SimilarTo  string  `json:"similar_to"`
+	Similarity float64 `json:"similarity"`
 }
 
 // ReembedDescription is shared by HTTP, MCP, and CLI proxy.
@@ -241,6 +255,10 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		}
 		if len(res.vectors) > 0 {
 			a.engine.VecIdx().Add(res.target.nodeID, res.vectors[len(res.vectors)-1])
+			// The record just became similarity-visible; register it in
+			// the delta re-scan ring so a save whose off-lock scan
+			// predates this commit still sees it under the write lock.
+			a.engine.NoteRecentWrite(res.target.nodeID, res.vectors[len(res.vectors)-1])
 		}
 
 		modelProp := graph.StringProperty(currentModel)
@@ -253,6 +271,30 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		// churn the index for happy-path records.
 		if _, has := n.Properties.GetInt64("embed_attempts"); has {
 			a.engine.SetProp(res.target.nodeID, "embed_attempts", graph.Int64Property(0))
+		}
+
+		// Deferred save-guard check: a record saved during an embedder
+		// outage skipped the save-time similarity scan. Now that its
+		// vector exists, re-run the scan and surface any hold-grade
+		// match -- both records already exist, so this reports rather
+		// than holds.
+		if pending, _ := n.Properties.GetBool("similar_check_pending"); pending {
+			if out := a.engine.ScanSimilar(res.target.nodeID); out.Hold != nil {
+				resp.SimilarPairs = append(resp.SimilarPairs, ReembedSimilarPair{
+					ID:         res.target.nodeID,
+					SimilarTo:  out.Hold.NodeID,
+					Similarity: out.Hold.Similarity,
+				})
+				a.log.Warn("reembed: deferred save-guard match",
+					"component", "reembed",
+					"node", res.target.nodeID,
+					"similar_to", out.Hold.NodeID,
+					"similarity", fmt.Sprintf("%.3f", out.Hold.Similarity))
+			}
+			if old, has := n.Properties["similar_check_pending"]; has {
+				a.engine.PropIdx().Remove(res.target.nodeID, "similar_check_pending", old)
+				a.engine.Graph().RemoveNodeProperty(res.target.nodeID, "similar_check_pending")
+			}
 		}
 
 		resp.Reembedded++

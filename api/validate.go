@@ -105,6 +105,19 @@ const (
 	MaxMetaKeyLen      = 64
 	MaxMetaValueLen    = 1024
 	MaxReembedBatch    = 500
+	// MaxHeldResolutions caps one gramaton_session_resolve_held call.
+	// Each allow_similar resolution creates a record under the write
+	// lock; holds accumulate per session in small numbers, so this is
+	// generous headroom, not a throughput knob.
+	MaxHeldResolutions = 100
+	// MaxAllowSimilar caps the allow_similar acknowledgment list on a
+	// save. A hold names exactly one record, so acknowledgments
+	// accumulate one per round trip; 20 is generous headroom.
+	MaxAllowSimilar = 20
+	// MaxIDArgLen bounds caller-supplied node identifiers and version
+	// tokens before any lookup. Node IDs are 26-char ULIDs and version
+	// tokens 12 hex chars; 64 leaves room for either format to grow.
+	MaxIDArgLen = 64
 	// MaxCollectionBatchSize caps how many items a single bulk add
 	// can commit. Bigger batches would tie up the engine write lock
 	// for an extended period and potentially exceed provider

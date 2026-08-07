@@ -1,7 +1,6 @@
 name: references
 description: Reference / lookup data — bookmarks, recipes, places to visit, contacts, code snippets. Standard curation runs on captured notes for findability; same-collection dedup keeps duplicates clean; contradictions off because two recommendations are not contradicting each other.
 clear_mode: resolve
-supersession: collection
 curation: standard
 contradictions: off
 schema:

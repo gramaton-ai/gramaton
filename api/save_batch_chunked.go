@@ -8,6 +8,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/jobs"
+	"github.com/gramaton-ai/gramaton/similarity"
 )
 
 // runCaptureBatchAsyncChunked is the multi-chunk async pipeline. It
@@ -88,9 +89,10 @@ func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req
 		}
 
 		chunkData, saveErr := a.commitItemsChunk(jobID, chunkIdx+1, len(chunks),
+			rng.start,
 			req.Items[rng.start:rng.end], itemValid[rng.start:rng.end],
 			itemVecs[rng.start:rng.end], itemEmbedErrs[rng.start:rng.end],
-			embedderModel, req.SkipSupersession)
+			embedderModel, req.AllowSimilar)
 		if saveErr != nil {
 			a.finalizeChunkSaveFailure(jobID, chunkIdx+1, summary, saveErr)
 			return
@@ -99,7 +101,14 @@ func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req
 		for k, v := range chunkData.NewRefs {
 			summary.ClientRefToID[k] = v
 		}
-		summary.SupersededCount += chunkData.SupersededCount
+		summary.Held = append(summary.Held, chunkData.Held...)
+		// Held items were never created; edges referencing them fail
+		// like edges referencing failed items.
+		for _, h := range chunkData.Held {
+			if h.ClientRef != "" {
+				summary.FailedRefs[h.ClientRef] = struct{}{}
+			}
+		}
 		summary.ProcessedItems += chunkData.Processed
 
 		// Persist per-chunk progress so a Status reader sees real
@@ -134,12 +143,12 @@ func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req
 
 // chunkSummary aggregates per-chunk state for the final response.
 type chunkSummary struct {
-	Added           []CaptureBatchAdded
-	Failures        []BatchItemFailure
-	ClientRefToID   map[string]string
-	FailedRefs      map[string]struct{}
-	SupersededCount int
-	ProcessedItems  int // valid items actually committed
+	Added          []CaptureBatchAdded
+	Held           []CaptureBatchHeld
+	Failures       []BatchItemFailure
+	ClientRefToID  map[string]string
+	FailedRefs     map[string]struct{}
+	ProcessedItems int // valid items actually committed
 }
 
 // chunkRange describes one item-slice [start, end) in the full Items
@@ -220,23 +229,29 @@ func (a *API) validateAllBatchItems(req SaveBatchRequest) ([]bool, []BatchItemFa
 // chunkData is the per-chunk output: items committed, new refs
 // learned, etc.
 type chunkData struct {
-	Added           []CaptureBatchAdded
-	NewRefs         map[string]string
-	SupersededCount int
-	Processed       int
+	Added     []CaptureBatchAdded
+	Held      []CaptureBatchHeld
+	NewRefs   map[string]string
+	Processed int
 }
 
-// commitItemsChunk runs Phase 3 over one chunk's items. Acquires the
-// engine write lock, walks valid items, runs Save with N
-// ActionSave entries, releases the lock. On Save failure performs
-// scoped rollback (only this chunk's nodes) and returns the error.
+// commitItemsChunk runs Phase 3 over one chunk's items. Runs the
+// save-guard scans off-lock, then acquires the engine write lock,
+// walks valid items, runs Save with N ActionSave entries, releases
+// the lock. On Save failure performs scoped rollback (only this
+// chunk's nodes) and returns the error.
 //
 // itemValid / itemVecs / itemEmbedErrs are parallel to items
-// (already chunk-local — caller slices before passing). embedderModel
-// labels embeddings for the applyPreEmbedded call.
+// (already chunk-local — caller slices before passing); baseIdx is
+// the chunk's offset into the original Items slice so held entries
+// carry the caller-visible index. embedderModel labels embeddings
+// for the applyPreEmbedded call. Cross-chunk similarity needs no
+// sibling pass: earlier chunks committed before this one runs, so
+// the store scan (plus the delta re-scan) sees their records.
 func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
+	baseIdx int,
 	items []SaveBatchItem, itemValid []bool, itemVecs [][]float32,
-	itemEmbedErrs []error, embedderModel string, skipSupersession bool,
+	itemEmbedErrs []error, embedderModel string, allowSimilar bool,
 ) (*chunkData, error) {
 	type rollbackEntry struct {
 		nodeID string
@@ -244,8 +259,49 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	}
 	rollback := make([]rollbackEntry, 0, len(items))
 	added := make([]CaptureBatchAdded, 0, len(items))
+	heldItems := make([]CaptureBatchHeld, 0)
 	newRefs := map[string]string{}
-	supersededTotal := 0
+
+	// Save-guard scans off-lock: store scan per item, then the
+	// within-chunk sibling pass (see runCaptureBatchCore for the
+	// contract).
+	itemStoreHold := make([]*similarity.Match, len(items))
+	itemSiblingOf := make([]int, len(items))
+	for i := range itemSiblingOf {
+		itemSiblingOf[i] = -1
+	}
+	var scanSeq uint64
+	if !allowSimilar {
+		guardCfg := a.engine.Config().SaveGuard
+		a.engine.RLock()
+		scanSeq = a.engine.WriteSeq()
+		for i := range items {
+			if !itemValid[i] || itemVecs[i] == nil {
+				continue
+			}
+			out := a.engine.ScanSimilarVec(itemVecs[i], items[i].Content)
+			if out.Hold != nil && !ackContains(items[i].AllowSimilar, out.Hold.NodeID) {
+				itemStoreHold[i] = out.Hold
+			}
+		}
+		a.engine.RUnlock()
+		for i := range items {
+			if !itemValid[i] || itemVecs[i] == nil || itemStoreHold[i] != nil {
+				continue
+			}
+			for j := 0; j < i; j++ {
+				if !itemValid[j] || itemVecs[j] == nil || itemStoreHold[j] != nil {
+					continue
+				}
+				if _, holds := similarity.SiblingMatch(guardCfg,
+					itemVecs[i], items[i].Content,
+					itemVecs[j], items[j].Content); holds {
+					itemSiblingOf[i] = j
+					break
+				}
+			}
+		}
+	}
 
 	// Author attribution: composed once for the whole chunk (see
 	// api/save.go for the stamping contract).
@@ -261,10 +317,41 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	}
 	defer unlock()
 
+	// createdID tracks this chunk's created node per local index, for
+	// sibling-hold resolution.
+	createdID := make([]string, len(items))
+
 	actions := make([]graph.CommitAction, 0, len(items))
 	for i, item := range items {
 		if !itemValid[i] {
 			continue
+		}
+
+		if !allowSimilar {
+			hold := itemStoreHold[i]
+			if hold == nil && itemVecs[i] != nil {
+				if m, found, _ := a.engine.SimilarInDelta(scanSeq, itemVecs[i], item.Content); found &&
+					!ackContains(item.AllowSimilar, m.NodeID) {
+					held := m
+					hold = &held
+				}
+			}
+			if hold == nil && itemSiblingOf[i] >= 0 && createdID[itemSiblingOf[i]] != "" {
+				j := itemSiblingOf[i]
+				sim, _ := similarity.SiblingMatch(a.engine.Config().SaveGuard,
+					itemVecs[i], item.Content, itemVecs[j], items[j].Content)
+				hold = &similarity.Match{NodeID: createdID[j], Similarity: sim}
+			}
+			if hold != nil {
+				if hs := a.buildHeldSimilar(hold); hs != nil {
+					heldItems = append(heldItems, CaptureBatchHeld{
+						Index:     baseIdx + i,
+						ClientRef: item.ClientRef,
+						Held:      hs,
+					})
+					continue
+				}
+			}
 		}
 		props := graph.Properties{
 			"content_full": graph.StringProperty(item.Content),
@@ -299,6 +386,9 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 		var itemWarnings []string
 		if itemEmbedErrs[i] != nil {
 			itemWarnings = append(itemWarnings, fmt.Sprintf("embedding failed: %s", itemEmbedErrs[i]))
+			// The save-guard scan never ran for this item; mark it so
+			// reembed re-runs the check when the vector arrives.
+			a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 		} else if itemVecs[i] != nil {
 			pre := &preEmbeddedVectors{
 				vectors: map[string][]float32{"embedding_full": itemVecs[i]},
@@ -306,21 +396,16 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 			}
 			if err := a.applyPreEmbedded(n.ID, pre); err != nil {
 				itemWarnings = append(itemWarnings, fmt.Sprintf("embedding failed: %s", err))
+				a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 			}
 		}
 
-		var supList []SupersededRecord
-		if !skipSupersession {
-			supList = a.batchSupersedeIfDuplicate(n.ID)
-			supersededTotal += len(supList)
-		}
-
 		added = append(added, CaptureBatchAdded{
-			ID:         n.ID,
-			ClientRef:  item.ClientRef,
-			Warnings:   itemWarnings,
-			Superseded: supList,
+			ID:        n.ID,
+			ClientRef: item.ClientRef,
+			Warnings:  itemWarnings,
 		})
+		createdID[i] = n.ID
 		if item.ClientRef != "" {
 			newRefs[item.ClientRef] = n.ID
 		}
@@ -350,10 +435,12 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	}
 	unlock()
 	return &chunkData{
-		Added:           added,
-		NewRefs:         newRefs,
-		SupersededCount: supersededTotal,
-		Processed:       len(added),
+		Added:   added,
+		Held:    heldItems,
+		NewRefs: newRefs,
+		// Held items count as processed: they were fully examined and
+		// disposed, and a completed job's bookkeeping covers TotalItems.
+		Processed: len(added) + len(heldItems),
 	}, nil
 }
 
@@ -612,17 +699,18 @@ func buildChunkedResponse(jobID, status string, items []SaveBatchItem,
 		total = len(items)
 	}
 	stats := CaptureBatchStats{
-		TotalItems:      total,
-		AddedCount:      len(summary.Added),
-		FailedCount:     len(summary.Failures),
-		SupersededCount: summary.SupersededCount,
-		EdgesAdded:      len(edge.Added),
-		EdgesFailed:     len(edge.Failed),
+		TotalItems:  total,
+		AddedCount:  len(summary.Added),
+		FailedCount: len(summary.Failures),
+		HeldCount:   len(summary.Held),
+		EdgesAdded:  len(edge.Added),
+		EdgesFailed: len(edge.Failed),
 	}
 	return SaveBatchResponse{
 		JobID:       jobID,
 		Status:      status,
 		Added:       summary.Added,
+		Held:        summary.Held,
 		Failed:      summary.Failures,
 		Edges:       edge.Added,
 		EdgesFailed: edge.Failed,

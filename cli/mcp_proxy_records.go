@@ -117,13 +117,16 @@ func registerRecordsProxyTools(s *mcp.Server) {
 
 	type updateArgs struct {
 		ID              string         `json:"id" jsonschema:"record ID to update"`
+		Content         string         `json:"content,omitempty" jsonschema:"replacement content_full (mutually exclusive with content_append). Compose from the record's current full content, never from a summary."`
+		ContentAppend   string         `json:"content_append,omitempty" jsonschema:"text appended to the current content (mutually exclusive with content)"`
+		ExpectedVersion string         `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the update applies only if the content is unchanged since (version_conflict otherwise)"`
 		Confidence      *float64       `json:"confidence,omitempty" jsonschema:"0.0-1.0"`
 		Temporality     string         `json:"temporality,omitempty" jsonschema:"immutable|durable|temporal|ephemeral"`
 		KnowledgeType   string         `json:"knowledge_type,omitempty" jsonschema:"episodic|semantic|procedural|conceptual|reference"`
 		EpistemicStatus string         `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64       `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string       `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string         `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration (YYYY-MM-DD or RFC3339); 'clear' removes."`
 		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata"`
@@ -136,6 +139,15 @@ func registerRecordsProxyTools(s *mcp.Server) {
 			return proxyErr("id is required")
 		}
 		body := map[string]any{}
+		if args.Content != "" {
+			body["content"] = args.Content
+		}
+		if args.ContentAppend != "" {
+			body["content_append"] = args.ContentAppend
+		}
+		if args.ExpectedVersion != "" {
+			body["expected_version"] = args.ExpectedVersion
+		}
 		if args.Confidence != nil {
 			body["confidence"] = *args.Confidence
 		}
@@ -177,7 +189,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		EpistemicStatus string   `json:"epistemic_status,omitempty" jsonschema:"well_established|probable|speculative|contested|refuted"`
 		Importance      *float64 `json:"importance,omitempty" jsonschema:"0.0-1.0"`
 		Keywords        []string `json:"keywords,omitempty" jsonschema:"array of keyword strings"`
-		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"~750 chars (semantic anchor for embedding)"`
+		SummaryShort    string   `json:"summary_short,omitempty" jsonschema:"target ~750 chars, max ~900 (semantic anchor for embedding)"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_classify",
@@ -212,9 +224,10 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	})
 
 	type resolveArgs struct {
-		ID             string `json:"id" jsonschema:"record ID to resolve"`
-		Resolution     string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
-		ResolutionNote string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ID              string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -226,6 +239,9 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		body := map[string]any{"resolution": args.Resolution}
 		if args.ResolutionNote != "" {
 			body["resolution_note"] = args.ResolutionNote
+		}
+		if args.ExpectedVersion != "" {
+			body["expected_version"] = args.ExpectedVersion
 		}
 		return proxyPost(fmt.Sprintf("/v1/records/%s/resolve", url.PathEscape(args.ID)), body)
 	})

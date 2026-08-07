@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -58,7 +59,7 @@ type Config struct {
 	Activation ActivationConfig `yaml:"activation"`
 	Chunking   ChunkingConfig   `yaml:"chunking"`
 	Concepts   ConceptsConfig   `yaml:"concepts"`
-	Dedup      DedupConfig      `yaml:"dedup"`
+	SaveGuard  SaveGuardConfig  `yaml:"save_guard"`
 	Graph      GraphConfig      `yaml:"graph"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Merge      MergeConfig      `yaml:"merge"`
@@ -418,10 +419,6 @@ type CurationConfig struct {
 	// cycle.
 	MaxOrphansPerRun int `yaml:"max_orphans_per_run"`
 
-	// MaxDedupPerRun caps how many duplicate-consolidation operations
-	// run per cycle.
-	MaxDedupPerRun int `yaml:"max_dedup_per_run"`
-
 	// SectionLinkMin is the minimum similarity for cross-section
 	// linking. Section nodes below this similarity are not linked
 	// to sibling sections.
@@ -655,9 +652,11 @@ type LLMContradictionConfig struct {
 	// dissimilar to meaningfully contradict.
 	MinSimilarity float64 `yaml:"min_similarity"`
 
-	// MaxSimilarity is the upper bound. Pairs above this are
-	// near-duplicates handled by auto-supersession, not contradiction
-	// detection.
+	// MaxSimilarity is the upper bound, kept contiguous with
+	// save_guard.similar_hold_threshold: pairs at or above the hold
+	// threshold are near-verbatim duplicates surfaced by the
+	// save-time hold and the gramaton_duplicates listing, not
+	// contradiction detection.
 	MaxSimilarity float64 `yaml:"max_similarity"`
 
 	// BatchSize is the number of pairs packed into a single LLM
@@ -1202,25 +1201,29 @@ type TelemetryConfig struct {
 	ConceptMatchThreshold float64 `yaml:"concept_match_threshold"`
 }
 
-// DedupConfig controls auto-supersession of near-duplicate records.
-// The similarity threshold is carefully calibrated; changing it can
-// either miss true duplicates or incorrectly supersede distinct records.
-type DedupConfig struct {
-	// SimilarityThreshold: cosine similarity above which a new capture
-	// supersedes an older record. Default 0.92 is calibrated for
-	// bge-small-en-v1.5 embeddings.
-	SimilarityThreshold float64 `yaml:"similarity_threshold"`
+// SaveGuardConfig controls the write-time similarity checks on record
+// creation: the hold (a save at or above the hold threshold is refused
+// before any record is created, returning the similar record's details
+// so the caller can revise it via gramaton_update or re-send
+// acknowledging the match) and the advisory (a successful save in the
+// band below the hold threshold carries a one-line notice naming the
+// most similar existing record).
+type SaveGuardConfig struct {
+	// SimilarHoldThreshold: cosine similarity at or above which a new
+	// save is held. Default 0.94 -- the prior 0.92 calibration
+	// produced frequent false positives in practice. With holds, a
+	// false positive costs one extra round trip rather than data, so
+	// lowering this is a safe experiment.
+	SimilarHoldThreshold float64 `yaml:"similar_hold_threshold"`
 
-	// Action: "supersede" (default) marks the older record historical
-	// (sets valid_until + resolution=superseded + adds a supersedes
-	// edge). "reject" refuses the capture with ErrConflict and rolls
-	// back the new node.
-	//
-	// The previous "flag" value was removed in 2026-04 (see
-	// design-decisions.md D37). Load() silently coerces legacy
-	// `action: flag` configs to "supersede" for one release cycle --
-	// the two values never had distinct behavior.
-	Action string `yaml:"action"`
+	// AdvisoryThreshold: cosine similarity at or above which a
+	// successful save's response includes an advisory naming the most
+	// similar existing record ("if this is a revision, update it
+	// instead"). The advisory band is [AdvisoryThreshold,
+	// SimilarHoldThreshold); setting the two equal disables the band.
+	// Default 0.85 -- genuine revisions tend to embed in this range,
+	// below any sane hold threshold.
+	AdvisoryThreshold float64 `yaml:"advisory_threshold"`
 }
 
 // GraphConfig controls graph traversal behavior.
@@ -1306,7 +1309,6 @@ func Defaults() Config {
 			StaleEphemeralScore:         0.95,
 			StaleTemporalScore:          0.99,
 			MaxOrphansPerRun:            20,
-			MaxDedupPerRun:              20,
 			SectionLinkMin:              0.75,
 			MaxSectionLinksPerRun:       30,
 			ObservationBatchSize:        0, // auto: 500 for local providers, 20 for external
@@ -1354,8 +1356,8 @@ func Defaults() Config {
 				Contradiction: LLMContradictionConfig{
 					MaxChecks:         5,
 					MinSimilarity:     0.5,
-					MaxSimilarity:     0.85,
-					BatchSize:         5, // batched (~5x call reduction at saturation)
+					MaxSimilarity:     0.94, // contiguous with save_guard.similar_hold_threshold
+					BatchSize:         5,    // batched (~5x call reduction at saturation)
 					CheckReverseEdges: true,
 				},
 				Concept: LLMConceptConfig{
@@ -1477,9 +1479,9 @@ func Defaults() Config {
 			ConceptMatchThreshold: 0.7,
 		},
 
-		Dedup: DedupConfig{
-			SimilarityThreshold: 0.92,
-			Action:              "supersede",
+		SaveGuard: SaveGuardConfig{
+			SimilarHoldThreshold: 0.94,
+			AdvisoryThreshold:    0.85,
 		},
 
 		Graph: GraphConfig{
@@ -1769,21 +1771,6 @@ func normalize(cfg *Config) error {
 	// to run regardless of which error path follows.
 	trimConfigStrings(cfg)
 
-	// Dedup action coercion. See DedupConfig docs + design-decisions.md D37.
-	// "flag" is a legacy alias that never had behavior distinct from
-	// "supersede"; silently coerce for one release cycle. Empty (omitted
-	// in YAML) -> default. Anything else -> error so typos surface.
-	switch cfg.Dedup.Action {
-	case "":
-		cfg.Dedup.Action = "supersede"
-	case "flag":
-		cfg.Dedup.Action = "supersede"
-	case "supersede", "reject":
-		// ok
-	default:
-		return fmt.Errorf("config: invalid dedup.action %q; expected \"supersede\" or \"reject\"", cfg.Dedup.Action)
-	}
-
 	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {
 		cfg.LLM.Curation.MaxCallsPerRun = 10000
 	}
@@ -1806,8 +1793,30 @@ func normalize(cfg *Config) error {
 	if cfg.Curation.MaxOrphansPerRun > 200 {
 		cfg.Curation.MaxOrphansPerRun = 200
 	}
-	if cfg.Curation.MaxDedupPerRun > 200 {
-		cfg.Curation.MaxDedupPerRun = 200
+
+	// Save-guard thresholds: zero-fill defaults so a partial yaml
+	// override doesn't disable the checks, then validate ordering.
+	// The hold threshold must not sit below the advisory threshold --
+	// the advisory band is [advisory, hold).
+	if cfg.SaveGuard.SimilarHoldThreshold == 0 {
+		cfg.SaveGuard.SimilarHoldThreshold = 0.94
+	}
+	if cfg.SaveGuard.AdvisoryThreshold == 0 {
+		cfg.SaveGuard.AdvisoryThreshold = 0.85
+	}
+	if cfg.SaveGuard.SimilarHoldThreshold <= 0 || cfg.SaveGuard.SimilarHoldThreshold > 1 ||
+		math.IsNaN(cfg.SaveGuard.SimilarHoldThreshold) {
+		return fmt.Errorf("config: save_guard.similar_hold_threshold %v out of range (0, 1]",
+			cfg.SaveGuard.SimilarHoldThreshold)
+	}
+	if cfg.SaveGuard.AdvisoryThreshold <= 0 || cfg.SaveGuard.AdvisoryThreshold > 1 ||
+		math.IsNaN(cfg.SaveGuard.AdvisoryThreshold) {
+		return fmt.Errorf("config: save_guard.advisory_threshold %v out of range (0, 1]",
+			cfg.SaveGuard.AdvisoryThreshold)
+	}
+	if cfg.SaveGuard.AdvisoryThreshold > cfg.SaveGuard.SimilarHoldThreshold {
+		return fmt.Errorf("config: save_guard.advisory_threshold %v exceeds similar_hold_threshold %v",
+			cfg.SaveGuard.AdvisoryThreshold, cfg.SaveGuard.SimilarHoldThreshold)
 	}
 
 	// Search pagination: zero-fill defaults so a partial yaml

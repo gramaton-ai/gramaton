@@ -348,7 +348,6 @@ type CollectionCreateRequest struct {
 	// explicit value stores it on the collection node so future reads
 	// surface it without the fallback (useful for visibility).
 	ClearMode      string `json:"clear_mode,omitempty"`
-	Supersession   string `json:"supersession,omitempty"`
 	Curation       string `json:"curation,omitempty"`
 	Contradictions string `json:"contradictions,omitempty"`
 
@@ -380,7 +379,7 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	if err := validateSchema(req.Schema); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
-	if err := validateCollectionConfig(req.ClearMode, req.Supersession, req.Curation, req.Contradictions); err != nil {
+	if err := validateCollectionConfig(req.ClearMode, req.Curation, req.Contradictions); err != nil {
 		return CollectionCreateResponse{}, ErrInvalid(err.Error())
 	}
 	// curation=standard runs LLM stages on items; those stages need a
@@ -439,9 +438,6 @@ func (a *API) CollectionCreate(_ context.Context, req CollectionCreateRequest) (
 	}
 	if req.ClearMode != "" {
 		props[propClearMode] = graph.StringProperty(req.ClearMode)
-	}
-	if req.Supersession != "" {
-		props[propSupersession] = graph.StringProperty(req.Supersession)
 	}
 	if req.Curation != "" {
 		props[propCuration] = graph.StringProperty(req.Curation)

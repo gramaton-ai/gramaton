@@ -28,13 +28,17 @@ The primary consumer is an LLM agent, not a human. Design for how agents think, 
 
 The system should be inspectable at every level. If you can't inspect it, you can't trust, debug, or improve it. Commit history, metadata, curation changes, retrieval scoring — all queryable. No black boxes.
 
+Because records mutate in place (tenet 8), the commit history is not just a debugging aid — it is the only place prior versions of a record live. "Queryable" therefore means queryable by agents through first-class tools, not just by a human with a debugger.
+
 ## 7. Domain-neutral by default.
 
 Gramaton is a general-purpose knowledge store. The user might be an engineer tracking architecture decisions, a researcher analyzing politics, a patient managing health records, or a writer organizing a novel. Every design choice — field names, context envelope structure, relationship types, examples in documentation — must work across all domains. When you catch yourself assuming tickets, PRs, sprints, or teams, step back and ask: does this work for a novelist? A lawyer? A doctor? If not, generalize.
 
-## 8. Never delete, always supersede.
+## 8. One live record per fact; history lives in the commit log.
 
-As a knowledge management practice, knowledge is never destroyed. Records are marked as superseded, refuted, or deprecated — and linked to what replaced them. The old knowledge stays in the graph because it may be contextually necessary (understanding why a decision was made, what it replaced, why a belief was held). The audit trail is sacred. Rollback reverts commits, it doesn't erase history.
+Knowledge evolves by mutation, not accumulation. When a fact changes, update the record that holds it — search and retrieval see exactly one live record per fact, never a pile of near-duplicates competing for rank. Nothing is destroyed by this: every mutation is a commit, so every prior state of every record is preserved in the store's version history and reachable through the history tools when the old reality matters (why a decision was made, what a belief used to be). The audit trail is sacred. Rollback reverts commits, it doesn't erase history.
+
+Records can still be closed out (resolved as completed, superseded, abandoned, obsolete) and manually linked to a replacement when the lineage is itself knowledge — that vocabulary survives. What the system never does is manufacture a new record to represent a change to an existing fact.
 
 Delete and purge exist as **repair tools** — for corrupt data, bad ingests, and compliance/PII requirements. They are not part of normal knowledge management. They require explicit reason strings and are logged.
 

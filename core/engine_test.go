@@ -358,17 +358,17 @@ func TestCheckDedup(t *testing.T) {
 		eng.PropIdx().Add(n2.ID, k, v)
 	}
 
-	dupID, sim := eng.CheckDedup(n2.ID)
+	out := eng.ScanSimilar(n2.ID)
 	eng.Unlock()
 
-	if dupID == "" {
+	if out.Hold == nil {
 		t.Fatal("should detect near-duplicate")
 	}
-	if dupID != n1.ID {
-		t.Fatalf("expected dup of %s, got %s", n1.ID, dupID)
+	if out.Hold.NodeID != n1.ID {
+		t.Fatalf("expected dup of %s, got %s", n1.ID, out.Hold.NodeID)
 	}
-	if sim < 0.9 {
-		t.Fatalf("similarity should be high, got %f", sim)
+	if out.Hold.Similarity < 0.9 {
+		t.Fatalf("similarity should be high, got %f", out.Hold.Similarity)
 	}
 }
 
@@ -387,10 +387,10 @@ func TestCheckDedupNoDuplicate(t *testing.T) {
 	})
 	eng.VecIdx().Add(n2.ID, []float32{0.0, 1.0, 0.0})
 
-	dupID, _ := eng.CheckDedup(n2.ID)
+	out := eng.ScanSimilar(n2.ID)
 	eng.Unlock()
 
-	if dupID != "" {
+	if out.Hold != nil || out.Advisory != nil {
 		t.Fatal("should not detect duplicate for orthogonal vectors")
 	}
 }
@@ -609,8 +609,8 @@ func TestConfig(t *testing.T) {
 	if cfg.Scoring.WeightSimilarity != 0.55 {
 		t.Fatalf("expected default weight_similarity 0.55, got %f", cfg.Scoring.WeightSimilarity)
 	}
-	if cfg.Dedup.SimilarityThreshold != 0.92 {
-		t.Fatalf("expected default dedup threshold 0.92, got %f", cfg.Dedup.SimilarityThreshold)
+	if cfg.SaveGuard.SimilarHoldThreshold != 0.94 {
+		t.Fatalf("expected default hold threshold 0.94, got %f", cfg.SaveGuard.SimilarHoldThreshold)
 	}
 }
 
@@ -652,14 +652,14 @@ func TestCheckDedupJaccardGuard(t *testing.T) {
 
 	eng.Unlock()
 
-	// CheckDedup for B should NOT return A as a duplicate because
-	// Jaccard similarity between the two articles is low.
+	// The scan for B should NOT hold against A: Jaccard similarity
+	// between the two articles is low (the false-positive guard).
 	eng.RLock()
-	dupID, _ := eng.CheckDedup(nB.ID)
+	outB := eng.ScanSimilar(nB.ID)
 	eng.RUnlock()
 
-	if dupID != "" {
-		t.Fatalf("Jaccard guard should reject false positive, but got dupID=%s", dupID)
+	if outB.Hold != nil {
+		t.Fatalf("Jaccard guard should reject false positive, but got hold=%+v", outB.Hold)
 	}
 
 	// Now add a genuine duplicate with slightly different wording.
@@ -677,13 +677,13 @@ func TestCheckDedupJaccardGuard(t *testing.T) {
 	eng.VecIdx().Add(nC.ID, vec)
 	eng.Unlock()
 
-	// CheckDedup for C should find a match (A or C's content are near-identical).
+	// The scan for C should hold: A and C's content are near-identical.
 	eng.RLock()
-	dupID2, _ := eng.CheckDedup(nC.ID)
+	outC := eng.ScanSimilar(nC.ID)
 	eng.RUnlock()
 
-	if dupID2 == "" {
-		t.Fatal("Jaccard guard should allow genuine duplicate, but got no match")
+	if outC.Hold == nil {
+		t.Fatal("Jaccard guard should allow genuine duplicate, but got no hold")
 	}
 }
 
@@ -711,11 +711,11 @@ func TestCheckDedupShortContentSkipsJaccard(t *testing.T) {
 
 	// Short content skips Jaccard, so cosine alone determines match.
 	eng.RLock()
-	dupID, _ := eng.CheckDedup(nB.ID)
+	out := eng.ScanSimilar(nB.ID)
 	eng.RUnlock()
 
-	if dupID == "" {
-		t.Fatal("short content should skip Jaccard guard and match on cosine alone")
+	if out.Hold == nil {
+		t.Fatal("short content should skip Jaccard guard and hold on cosine alone")
 	}
 }
 

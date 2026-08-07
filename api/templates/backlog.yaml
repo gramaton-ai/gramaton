@@ -1,7 +1,6 @@
 name: backlog
 description: Dev ticket backlog with rich per-item metadata. Standard curation runs classification, summarization, and concept detection on captured rationale; contradictions on so design conflicts between tickets surface.
 clear_mode: resolve
-supersession: collection
 curation: standard
 contradictions: on
 schema:
