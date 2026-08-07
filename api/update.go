@@ -47,6 +47,7 @@ type UpdateRequest struct {
 	ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration date (YYYY-MM-DD or RFC3339) -- marks record as historical. Use 'clear' to remove."`
 	AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 	Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata (e.g. {assignee: Sarah, status: done})"`
+	ChangeNote      string         `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this change (max ~1.8KB), surfaced per-version in the record timeline. The field diff is computed mechanically either way -- write the note only when there is a distillable reason a diff cannot show."`
 }
 
 // VersionConflict reports an expected_version mismatch: the record's
@@ -380,7 +381,7 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 
 	if updated {
 		if _, err := a.engine.Save("update", graph.CommitAction{
-			Kind: graph.ActionUpdate, RecordID: req.ID,
+			Kind: graph.ActionUpdate, RecordID: req.ID, Note: req.ChangeNote,
 		}); err != nil {
 			return UpdateResponse{}, ErrInternal("failed to save")
 		}
@@ -512,6 +513,9 @@ func validateUpdateRequest(r *UpdateRequest) error {
 	}
 	if len(r.ExpectedVersion) > MaxIDArgLen {
 		return fmt.Errorf("expected_version exceeds maximum length of %d", MaxIDArgLen)
+	}
+	if len(r.ChangeNote) > MaxChangeNote {
+		return fmt.Errorf("change_note exceeds maximum length of %d", MaxChangeNote)
 	}
 	if err := validateFloat64Range("confidence", r.Confidence, 0.0, 1.0); err != nil {
 		return err

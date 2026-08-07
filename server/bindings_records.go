@@ -354,6 +354,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration (YYYY-MM-DD or RFC3339); 'clear' removes."`
 		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata"`
+		ChangeNote      string         `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this change (max ~1.8KB), surfaced per-version in the record timeline"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
@@ -371,6 +372,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 			KnowledgeType: args.KnowledgeType, EpistemicStatus: args.EpistemicStatus,
 			Importance: args.Importance, Keywords: args.Keywords, SummaryShort: args.SummaryShort,
 			ValidUntil: args.ValidUntil, AssertedAsOf: args.AssertedAsOf, Meta: args.Meta,
+			ChangeNote: args.ChangeNote,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
@@ -413,6 +415,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
 		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
 		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
+		ChangeNote      string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -426,7 +429,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		}
 		resp, apiErr := s.api.Resolve(ctx, api.ResolveRequest{
 			ID: args.ID, Resolution: args.Resolution, ResolutionNote: args.ResolutionNote,
-			ExpectedVersion: args.ExpectedVersion,
+			ExpectedVersion: args.ExpectedVersion, ChangeNote: args.ChangeNote,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

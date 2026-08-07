@@ -25,6 +25,11 @@ type CommitAction struct {
 	Kind     string `json:"kind"`                // canonical Action* constant (see below)
 	RecordID string `json:"record_id,omitempty"` // target record when action is record-scoped
 	Field    string `json:"field,omitempty"`     // target property when action is field-scoped
+	// Note is the caller's optional free-text explanation of the
+	// change (the change_note on update/resolve), surfaced
+	// per-version in the record timeline. Color, not the record: the
+	// mechanical field diff is always computed regardless.
+	Note string `json:"note,omitempty"`
 }
 
 // Action kind canonical strings. Every emit site references one of

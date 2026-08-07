@@ -380,3 +380,50 @@ func TestUpdateContentReopensConflicts(t *testing.T) {
 		t.Errorf("record C's conflict with B is untouched; contested must survive, got %q", s)
 	}
 }
+
+// TestUpdateChangeNoteOnCommit pins the change_note round trip: the
+// note lands on the update's commit action, ready for the timeline.
+func TestUpdateChangeNoteOnCommit(t *testing.T) {
+	a, eng := setupSaveAPI(t, nil)
+	ctx := context.Background()
+
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: "record whose change carries a note"})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+
+	confHigh, confLow := 0.9, 0.5
+	const note = "corrected after the vendor confirmed the new rollout date"
+	if _, apiErr := a.Update(ctx, UpdateRequest{
+		ID:         saved.ID,
+		Confidence: &confHigh,
+		ChangeNote: note,
+	}); apiErr != nil {
+		t.Fatalf("update: %v", apiErr)
+	}
+
+	eng.RLock()
+	head := eng.HeadHashLocked()
+	commit, err := loadCommitMeta(eng.Store(), head)
+	eng.RUnlock()
+	if err != nil {
+		t.Fatalf("load head commit: %v", err)
+	}
+	var found bool
+	for _, act := range commit.Actions {
+		if act.Kind == graph.ActionUpdate && act.RecordID == saved.ID && act.Note == note {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("head commit actions %+v missing the change note", commit.Actions)
+	}
+
+	if _, apiErr := a.Update(ctx, UpdateRequest{
+		ID:         saved.ID,
+		ChangeNote: strings.Repeat("x", MaxChangeNote+1),
+		Confidence: &confLow,
+	}); apiErr == nil {
+		t.Fatal("oversized change_note must be rejected")
+	}
+}
