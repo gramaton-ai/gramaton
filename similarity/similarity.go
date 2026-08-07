@@ -247,6 +247,23 @@ func check(g *graph.Graph, vecIdx index.VectorIndex, cfg config.DedupConfig, vec
 	return "", 0
 }
 
+// SiblingMatch evaluates two not-yet-inserted records from the same
+// batch/session call for a hold: cosine on their fresh embeddings
+// plus Jaccard verification on their raw contents. Same-call siblings
+// are invisible to the index scan (neither exists yet), so batch
+// paths run this pairwise pass over the call's own vectors; the later
+// item holds, naming the earlier.
+func SiblingMatch(cfg config.SaveGuardConfig, vecA []float32, contentA string, vecB []float32, contentB string) (float64, bool) {
+	if cfg.SimilarHoldThreshold <= 0 || vecA == nil || vecB == nil {
+		return 0, false
+	}
+	sim := float64(index.CosineSimilarity(vecA, vecB))
+	if sim < cfg.SimilarHoldThreshold {
+		return sim, false
+	}
+	return sim, jaccardTexts(contentA, contentB)
+}
+
 // verifyJaccard confirms a cosine-similarity duplicate match by
 // checking word-level Jaccard similarity on actual content. Returns
 // false (reject) when the texts are too dissimilar.
@@ -255,8 +272,12 @@ func verifyJaccard(g *graph.Graph, textA string, candidateID string) bool {
 	if !ok {
 		return false
 	}
-	textB := nodeContent(candidate)
+	return jaccardTexts(textA, nodeContent(candidate))
+}
 
+// jaccardTexts is the raw-text Jaccard gate shared by the index scan
+// and the sibling pass.
+func jaccardTexts(textA, textB string) bool {
 	// Short content rarely triggers structural false positives -- the
 	// cosine threshold alone is reliable.
 	if len(textA) < jaccardSkipCharLimit && len(textB) < jaccardSkipCharLimit {

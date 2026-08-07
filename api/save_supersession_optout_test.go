@@ -41,14 +41,17 @@ func addToOptOutCollection(t *testing.T, a *API, recordID string) string {
 // supersession opt-out gate has nothing to protect there. The batch
 // and session variants below still pin the (not yet migrated) paths.
 
-// TestSaveBatchHonorsSupersessionOptOut: same guarantee for the
-// batch path (batchSupersedeIfDuplicate).
-func TestSaveBatchHonorsSupersessionOptOut(t *testing.T) {
+// TestSaveBatchHoldNeverMutatesCandidate: the batch hold replaces
+// batch auto-supersession; whatever collection knobs the older
+// record carries, a hold must leave it byte-identical (holds never
+// mutate the matched record -- the supersession opt-out gate has
+// nothing left to protect).
+func TestSaveBatchHoldNeverMutatesCandidate(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
-	const text = "batch path also has to honor supersession=none on the older candidate record"
+	const text = "batch hold must leave the older candidate record untouched"
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{Items: mustItems(text)})
 	if apiErr != nil {
 		t.Fatalf("seed SaveBatch: %v", apiErr)
@@ -60,18 +63,18 @@ func TestSaveBatchHonorsSupersessionOptOut(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("dup SaveBatch: %v", apiErr)
 	}
-	if got := resp2.Stats.SupersededCount; got != 0 {
-		t.Errorf("SupersededCount = %d, want 0 (opt-out record)", got)
-	}
-	if sup := resp2.Added[0].Superseded; len(sup) != 0 {
-		t.Errorf("Added[0].Superseded = %+v, want none", sup)
+	if len(resp2.Held) != 1 || resp2.Held[0].Held == nil || resp2.Held[0].Held.ID != seedID {
+		t.Fatalf("expected the duplicate to be held against %s, got %+v", seedID, resp2.Held)
 	}
 
 	eng.RLock()
 	defer eng.RUnlock()
 	old, _ := eng.Graph().GetNode(seedID)
 	if _, hist := old.Properties.GetTimestamp("valid_until"); hist {
-		t.Error("opt-out record has valid_until set; should be untouched")
+		t.Error("held-against record has valid_until set; holds must never mutate")
+	}
+	if res, _ := old.Properties.GetString("resolution"); res != "" {
+		t.Errorf("held-against record has resolution %q; holds must never mutate", res)
 	}
 }
 

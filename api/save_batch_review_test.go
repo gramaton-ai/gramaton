@@ -125,12 +125,12 @@ func (e *dedupEmbedder) ContextWindow() int { return 512 }
 // vectors collide deterministically and the supersession path runs.
 // Replaces the L3 TestSaveBatchSupersession which was vacuously
 // gated on `if len(Superseded) > 0`.
-func TestSaveBatchSupersessionDeterministic(t *testing.T) {
+func TestSaveBatchHoldsAgainstStore(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
 	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
-	const text = "the deterministic supersession seed phrase"
+	const text = "the deterministic store-hold seed phrase"
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems(text),
 	})
@@ -138,6 +138,7 @@ func TestSaveBatchSupersessionDeterministic(t *testing.T) {
 		t.Fatalf("seed: %v", apiErr)
 	}
 	seedID := resp.Added[0].ID
+	baseline := eng.NodeCount()
 
 	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems(text),
@@ -145,35 +146,45 @@ func TestSaveBatchSupersessionDeterministic(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("dup: %v", apiErr)
 	}
-	if len(resp2.Added) != 1 {
-		t.Fatalf("expected 1 added, got %d", len(resp2.Added))
+	if len(resp2.Added) != 0 {
+		t.Fatalf("duplicate item must be held, got added %+v", resp2.Added)
 	}
-	sup := resp2.Added[0].Superseded
-	if len(sup) != 1 {
-		t.Fatalf("expected 1 superseded record, got %d", len(sup))
+	if len(resp2.Held) != 1 {
+		t.Fatalf("expected 1 held item, got %d", len(resp2.Held))
 	}
-	if sup[0].ID != seedID {
-		t.Errorf("superseded.ID = %s, want %s", sup[0].ID, seedID)
+	h := resp2.Held[0]
+	if h.Index != 0 {
+		t.Errorf("held index = %d, want 0", h.Index)
 	}
-	if sup[0].EdgeID == "" {
-		t.Error("superseded.EdgeID empty")
+	if h.Held == nil || h.Held.ID != seedID {
+		t.Fatalf("held against %+v, want %s", h.Held, seedID)
+	}
+	if h.Held.ContentFull != text {
+		t.Errorf("hold must carry full content, got %q", h.Held.ContentFull)
+	}
+	if resp2.Stats.HeldCount != 1 || resp2.Stats.AddedCount != 0 {
+		t.Errorf("stats = %+v, want held 1 / added 0", resp2.Stats)
+	}
+	if got := eng.NodeCount(); got != baseline {
+		t.Fatalf("held batch item created residue: count %d, want %d", got, baseline)
 	}
 
-	// Seed record should now have valid_until set.
+	// The seed record must be untouched: no valid_until, no edges.
 	eng.RLock()
 	defer eng.RUnlock()
 	old, _ := eng.Graph().GetNode(seedID)
-	if _, hist := old.Properties.GetTimestamp("valid_until"); !hist {
-		t.Error("seed record missing valid_until after supersession")
+	if _, hist := old.Properties.GetTimestamp("valid_until"); hist {
+		t.Error("held-against record was mutated (valid_until set)")
 	}
 }
 
-// TestSaveBatchInternalSupersession: items A and B in the same
-// batch with identical content. B supersedes A; a supersedes edge
-// from B to A exists; A has valid_until set.
-func TestSaveBatchInternalSupersession(t *testing.T) {
+// TestSaveBatchSiblingHold: items A and B in the same batch with
+// identical content are invisible to the index scan (neither exists
+// at scan time). The sibling pass holds the LATER item, naming the
+// earlier -- which was created.
+func TestSaveBatchSiblingHold(t *testing.T) {
 	emb := &dedupEmbedder{dim: 16}
-	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	a, _ := setupReembedAPI(t, core.WithEmbedder(emb), nil)
 	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
 
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
@@ -182,33 +193,21 @@ func TestSaveBatchInternalSupersession(t *testing.T) {
 	if apiErr != nil {
 		t.Fatalf("SaveBatch: %v", apiErr)
 	}
-	if len(resp.Added) != 2 {
-		t.Fatalf("expected 2 added, got %d", len(resp.Added))
+	if len(resp.Added) != 1 {
+		t.Fatalf("expected 1 added (the earlier item), got %d", len(resp.Added))
 	}
-	// Whichever order they committed, exactly one of them should
-	// carry a supersedes pointer at the other.
-	supCount := 0
-	for _, ad := range resp.Added {
-		supCount += len(ad.Superseded)
+	if len(resp.Held) != 1 {
+		t.Fatalf("expected 1 held (the later item), got %d", len(resp.Held))
 	}
-	if supCount != 1 {
-		t.Errorf("expected 1 internal supersession, got %d", supCount)
+	if resp.Held[0].Index != 1 {
+		t.Errorf("held index = %d, want 1 (the later item holds)", resp.Held[0].Index)
 	}
-	if resp.Stats.SupersededCount != 1 {
-		t.Errorf("Stats.SupersededCount = %d, want 1", resp.Stats.SupersededCount)
+	if resp.Held[0].Held == nil || resp.Held[0].Held.ID != resp.Added[0].ID {
+		t.Fatalf("sibling hold names %+v, want the created sibling %s",
+			resp.Held[0].Held, resp.Added[0].ID)
 	}
-
-	// Verify the edge actually exists in the graph.
-	eng.RLock()
-	defer eng.RUnlock()
-	for _, ad := range resp.Added {
-		if len(ad.Superseded) == 0 {
-			continue
-		}
-		old, _ := eng.Graph().GetNode(ad.Superseded[0].ID)
-		if _, hist := old.Properties.GetTimestamp("valid_until"); !hist {
-			t.Errorf("superseded record %s missing valid_until", ad.Superseded[0].ID)
-		}
+	if resp.Stats.AddedCount != 1 || resp.Stats.HeldCount != 1 {
+		t.Errorf("stats = %+v, want added 1 / held 1", resp.Stats)
 	}
 }
 
@@ -674,7 +673,7 @@ func TestSaveBatchAsyncLargerThanSyncCap(t *testing.T) {
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            items,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("expected accept in async mode (sync cap is 10, async cap is %d), got %v", MaxAsyncBatchSize, apiErr)

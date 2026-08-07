@@ -41,7 +41,7 @@ func TestSaveBatchChunkedHappyPath(t *testing.T) {
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("SaveBatch: %v", apiErr)
@@ -87,7 +87,7 @@ func TestSaveBatchChunkedCrossChunkEdges(t *testing.T) {
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("SaveBatch: %v", apiErr)
@@ -144,7 +144,7 @@ func TestSaveBatchChunkedFailedItemEdge(t *testing.T) {
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
@@ -202,7 +202,7 @@ func TestSaveBatchChunkedEdgeFixupFailure(t *testing.T) {
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	j := pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 	if j.Status != jobs.StatusFailed {
@@ -264,7 +264,7 @@ func TestSaveBatchChunkedManualEdgeRecovery(t *testing.T) {
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 
@@ -322,7 +322,7 @@ func TestSaveBatchChunkedPerChunkProgress(t *testing.T) {
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	// Wait for the runner to enter the first chunk's chunk_save.
 	inj.waitEntered(t, FaultPhaseChunkSave, 10*time.Second)
@@ -365,7 +365,7 @@ func TestSaveBatchChunkedCancelMidImport(t *testing.T) {
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	inj.waitEntered(t, FaultPhaseChunkSave, 10*time.Second)
 
@@ -422,7 +422,7 @@ func TestSaveBatchChunkedChunk2SaveFailure(t *testing.T) {
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	j := pollUntilTerminal(t, a, resp.JobID, 30*time.Second)
 	if j.Status != jobs.StatusFailed {
@@ -551,7 +551,7 @@ func TestSaveBatchChunkedAsyncTwoCommitsForItemsAndEdges(t *testing.T) {
 		Wait:             &f,
 		Items:            items,
 		Edges:            edges,
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
 		t.Fatalf("SaveBatch: %v", apiErr)
@@ -603,7 +603,7 @@ func TestSaveBatchChunkedRefMapPersistedAcrossChunks(t *testing.T) {
 	resp, _ := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Wait:             &f,
 		Items:            chunkedItems(N),
-		SkipSupersession: true,
+		AllowSimilar: true,
 	})
 
 	// Wait for the runner to be parked at chunk 2's chunk_save.

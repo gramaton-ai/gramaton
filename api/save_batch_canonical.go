@@ -27,8 +27,8 @@ import (
 // regardless of insertion order.
 func canonicalizeRequest(req SaveBatchRequest) ([]byte, error) {
 	c := canonicalRequest{
-		Items:            make([]canonicalItem, len(req.Items)),
-		SkipSupersession: req.SkipSupersession,
+		Items:        make([]canonicalItem, len(req.Items)),
+		AllowSimilar: req.AllowSimilar,
 	}
 	for i, item := range req.Items {
 		c.Items[i] = canonicalizeItem(item)
@@ -77,9 +77,9 @@ func defaultedEdgeWeight(p *float64) *float64 {
 // normalized. Edges affect semantics so they hash; their order is
 // preserved (caller-meaningful).
 type canonicalRequest struct {
-	Items            []canonicalItem `json:"items"`
-	Edges            []EdgeSpec      `json:"edges,omitempty"`
-	SkipSupersession bool            `json:"skip_supersession,omitempty"`
+	Items        []canonicalItem `json:"items"`
+	Edges        []EdgeSpec      `json:"edges,omitempty"`
+	AllowSimilar bool            `json:"allow_similar,omitempty"`
 }
 
 // canonicalItem is the per-item canonical form.

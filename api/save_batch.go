@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gramaton-ai/gramaton/curation"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/jobs"
+	"github.com/gramaton-ai/gramaton/similarity"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -28,7 +28,7 @@ type SaveBatchRequest struct {
 	Edges            []EdgeSpec      `json:"edges,omitempty" jsonschema:"intra-batch and to-existing-record edges. Capped at 10x item count. Each edge resolves source/target via either an existing record id or an in-batch client_ref."`
 	Wait             *bool           `json:"wait,omitempty" jsonschema:"true (sync, default) returns the full result inline; false (async) returns a job_id to poll. Layer 5 implements async; Layer 3 rejects wait=false."`
 	ClientToken      string          `json:"client_token,omitempty" jsonschema:"UUID. With identical request body returns the prior JobID idempotently; with a different body the same token is rejected."`
-	SkipSupersession bool            `json:"skip_supersession,omitempty" jsonschema:"when true, dedup-driven supersession is disabled for the entire batch. For migration imports."`
+	AllowSimilar     bool            `json:"allow_similar,omitempty" jsonschema:"when true, similar-record holds are disabled for the entire batch. For migration imports and bulk ingestion of pre-vetted content; never as a standing default."`
 }
 
 // EdgeSpec describes a single edge to create alongside the batch's
@@ -84,13 +84,22 @@ type SaveBatchItem struct {
 
 // CaptureBatchAdded describes one record that the batch successfully
 // committed. ClientRef is echoed back when the request supplied one.
-// Warnings collect non-fatal events (embed fallback, internal
-// supersession, etc.) per item.
+// Warnings collect non-fatal events (embed fallback etc.) per item.
 type CaptureBatchAdded struct {
-	ID         string             `json:"id"`
-	ClientRef  string             `json:"client_ref,omitempty"`
-	Warnings   []string           `json:"warnings,omitempty"`
-	Superseded []SupersededRecord `json:"superseded,omitempty"`
+	ID        string   `json:"id"`
+	ClientRef string   `json:"client_ref,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+}
+
+// CaptureBatchHeld describes one item the save guard held: nothing
+// was created for it. Index maps back to the original Items slice.
+// Held carries the similar record and the two exits (see the
+// gramaton_save hold contract); for a same-batch sibling match the
+// similar record is the earlier batch item, already created.
+type CaptureBatchHeld struct {
+	Index     int          `json:"index"`
+	ClientRef string       `json:"client_ref,omitempty"`
+	Held      *HeldSimilar `json:"held"`
 }
 
 // BatchItemFailure describes one item that did NOT commit. Index maps
@@ -109,12 +118,12 @@ type BatchItemFailure struct {
 // CaptureBatchStats summarizes the outcome counts. Always populated
 // (zero values when nothing happened).
 type CaptureBatchStats struct {
-	TotalItems      int `json:"total_items"`
-	AddedCount      int `json:"added_count"`
-	FailedCount     int `json:"failed_count"`
-	SupersededCount int `json:"superseded_count"`
-	EdgesAdded      int `json:"edges_added,omitempty"`
-	EdgesFailed     int `json:"edges_failed,omitempty"`
+	TotalItems  int `json:"total_items"`
+	AddedCount  int `json:"added_count"`
+	FailedCount int `json:"failed_count"`
+	HeldCount   int `json:"held_count"`
+	EdgesAdded  int `json:"edges_added,omitempty"`
+	EdgesFailed int `json:"edges_failed,omitempty"`
 }
 
 // SaveBatchResponse is the canonical output of SaveBatch. Sync
@@ -124,6 +133,7 @@ type SaveBatchResponse struct {
 	JobID       string              `json:"job_id"`
 	Status      string              `json:"status"`
 	Added       []CaptureBatchAdded `json:"added,omitempty"`
+	Held        []CaptureBatchHeld  `json:"held,omitempty"`
 	Failed      []BatchItemFailure  `json:"failed,omitempty"`
 	Edges       []EdgeAdded         `json:"edges,omitempty"`
 	EdgesFailed []EdgeFailure       `json:"edges_failed,omitempty"`
@@ -325,6 +335,51 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 		embedderModel = a.engine.Embedder().ModelID()
 	}
 
+	// Phase 2.5: save-guard scans off-lock (skipped wholesale under
+	// the batch-level allow_similar migration escape). Store scan per
+	// item, then the same-call sibling pass -- items in one batch are
+	// invisible to the index scan (none exists yet), so later items
+	// are compared pairwise against earlier ones and hold naming the
+	// earlier. The write-seq snapshot anchors the under-lock delta
+	// re-scan.
+	itemStoreHold := make([]*similarity.Match, len(req.Items))
+	itemSiblingOf := make([]int, len(req.Items))
+	for i := range itemSiblingOf {
+		itemSiblingOf[i] = -1
+	}
+	var scanSeq uint64
+	if !req.AllowSimilar {
+		guardCfg := a.engine.Config().SaveGuard
+		a.engine.RLock()
+		scanSeq = a.engine.WriteSeq()
+		for i := range req.Items {
+			if !itemValid[i] || itemVecs[i] == nil {
+				continue
+			}
+			out := a.engine.ScanSimilarVec(itemVecs[i], req.Items[i].Content)
+			if out.Hold != nil && !ackContains(req.Items[i].AllowSimilar, out.Hold.NodeID) {
+				itemStoreHold[i] = out.Hold
+			}
+		}
+		a.engine.RUnlock()
+		for i := range req.Items {
+			if !itemValid[i] || itemVecs[i] == nil || itemStoreHold[i] != nil {
+				continue
+			}
+			for j := 0; j < i; j++ {
+				if !itemValid[j] || itemVecs[j] == nil || itemStoreHold[j] != nil {
+					continue
+				}
+				if _, holds := similarity.SiblingMatch(guardCfg,
+					itemVecs[i], req.Items[i].Content,
+					itemVecs[j], req.Items[j].Content); holds {
+					itemSiblingOf[i] = j
+					break
+				}
+			}
+		}
+	}
+
 	// Phase 3: lock once; commit valid items together; rollback the
 	// in-memory indexes if Save fails so vector and BM25 indexes don't
 	// retain entries for nodes that didn't land on disk.
@@ -335,7 +390,7 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 	rollback := make([]rollbackEntry, 0, len(req.Items))
 	added := make([]CaptureBatchAdded, len(req.Items))
 	addedFlag := make([]bool, len(req.Items))
-	supersededTotal := 0
+	heldItems := make([]CaptureBatchHeld, 0)
 
 	// Author attribution: composed once for the whole batch (see
 	// api/save.go for the stamping contract).
@@ -354,6 +409,42 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 	for i, item := range req.Items {
 		if !itemValid[i] {
 			continue
+		}
+
+		// Save-guard hold decisions, under the lock. Store holds and
+		// sibling holds were computed off-lock; the delta re-scan
+		// covers records other writers committed in the gap. A held
+		// item is not created; the response carries the material for
+		// the judgment call. Sibling holds resolve against the
+		// earlier item's just-created node (skipped if that item was
+		// itself held).
+		if !req.AllowSimilar {
+			hold := itemStoreHold[i]
+			if hold == nil && itemVecs[i] != nil {
+				if m, found, _ := a.engine.SimilarInDelta(scanSeq, itemVecs[i], item.Content); found &&
+					!ackContains(item.AllowSimilar, m.NodeID) {
+					held := m
+					hold = &held
+				}
+			}
+			if hold == nil && itemSiblingOf[i] >= 0 && addedFlag[itemSiblingOf[i]] {
+				j := itemSiblingOf[i]
+				// The pair passed the off-lock gate; recompute the
+				// cosine for the response.
+				sim, _ := similarity.SiblingMatch(a.engine.Config().SaveGuard,
+					itemVecs[i], item.Content, itemVecs[j], req.Items[j].Content)
+				hold = &similarity.Match{NodeID: added[j].ID, Similarity: sim}
+			}
+			if hold != nil {
+				if hs := a.buildHeldSimilar(hold); hs != nil {
+					heldItems = append(heldItems, CaptureBatchHeld{
+						Index:     i,
+						ClientRef: item.ClientRef,
+						Held:      hs,
+					})
+					continue
+				}
+			}
 		}
 		props := graph.Properties{
 			"content_full": graph.StringProperty(item.Content),
@@ -402,17 +493,10 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			}
 		}
 
-		var supList []SupersededRecord
-		if !req.SkipSupersession {
-			supList = a.batchSupersedeIfDuplicate(n.ID)
-			supersededTotal += len(supList)
-		}
-
 		added[i] = CaptureBatchAdded{
-			ID:         n.ID,
-			ClientRef:  item.ClientRef,
-			Warnings:   itemWarnings,
-			Superseded: supList,
+			ID:        n.ID,
+			ClientRef: item.ClientRef,
+			Warnings:  itemWarnings,
 		}
 		addedFlag[i] = true
 		if item.ClientRef != "" {
@@ -425,10 +509,17 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 	// the in-batch ClientRef map, an existing record id, or both.
 	// Failures land in edgesFailed[]; successes append an ActionLink
 	// CommitAction for the same Save call as the items.
-	failedItemRefs := make(map[string]struct{}, len(failures))
+	failedItemRefs := make(map[string]struct{}, len(failures)+len(heldItems))
 	for _, f := range failures {
 		if f.ClientRef != "" {
 			failedItemRefs[f.ClientRef] = struct{}{}
+		}
+	}
+	// Held items were never created; edges referencing them fail the
+	// same way as edges referencing failed items.
+	for _, h := range heldItems {
+		if h.ClientRef != "" {
+			failedItemRefs[h.ClientRef] = struct{}{}
 		}
 	}
 	type edgeKey struct{ source, target, etype string }
@@ -558,16 +649,17 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 		JobID:       jobID,
 		Status:      jobs.StatusCompleted,
 		Added:       finalAdded,
+		Held:        heldItems,
 		Failed:      failures,
 		Edges:       edgesAdded,
 		EdgesFailed: edgesFailed,
 		Stats: CaptureBatchStats{
-			TotalItems:      len(req.Items),
-			AddedCount:      len(finalAdded),
-			FailedCount:     len(failures),
-			SupersededCount: supersededTotal,
-			EdgesAdded:      len(edgesAdded),
-			EdgesFailed:     len(edgesFailed),
+			TotalItems:  len(req.Items),
+			AddedCount:  len(finalAdded),
+			FailedCount: len(failures),
+			HeldCount:   len(heldItems),
+			EdgesAdded:  len(edgesAdded),
+			EdgesFailed: len(edgesFailed),
 		},
 	}
 	if data, err := json.Marshal(resp); err == nil {
@@ -636,48 +728,6 @@ func (a *API) batchEmbed(ctx context.Context, valid []bool, texts []string, vecs
 	}
 }
 
-// batchSupersedeIfDuplicate inlines the dedup logic from Capture so
-// each batch item runs the same auto-supersession check. Caller holds
-// the engine write lock. Returns the list of records superseded by
-// this item (zero or one in practice).
-func (a *API) batchSupersedeIfDuplicate(newID string) []SupersededRecord {
-	cfg := a.engine.Config()
-	if cfg.Dedup.Action == "reject" {
-		return nil
-	}
-	dupID, sim := a.engine.CheckDedup(newID)
-	if dupID == "" {
-		return nil
-	}
-	if curation.IsSupersessionOptOut(a.engine.Graph(), dupID) {
-		a.log.Debug("auto-supersession skipped: opt-out",
-			"component", "save_batch", "new_id", newID, "dup_id", dupID,
-			"similarity", fmt.Sprintf("%.3f", sim))
-		return nil
-	}
-	now := time.Now().UTC()
-	oldNode, _ := a.engine.Graph().GetNode(dupID)
-	if oldNode == nil {
-		return nil
-	}
-	if _, alreadyHistorical := oldNode.Properties.GetTimestamp("valid_until"); alreadyHistorical {
-		return nil
-	}
-	a.engine.SetProp(dupID, "valid_until", graph.TimestampProperty(now))
-	a.engine.SetProp(dupID, "resolution", graph.StringProperty("superseded"))
-	a.engine.SetProp(dupID, "resolved_at", graph.TimestampProperty(now))
-	e, err := a.engine.Graph().AddEdge(newID, dupID, "supersedes", sim, nil)
-	if err != nil {
-		return nil
-	}
-	summary, _ := oldNode.Properties.GetString("content_short")
-	return []SupersededRecord{{
-		ID:         dupID,
-		Summary:    summary,
-		Similarity: sim,
-		EdgeID:     e.ID,
-	}}
-}
 
 // resolveEdgeEndpoint returns the resolved record ID for one edge
 // endpoint, or a (code, message) failure tuple. Caller already holds

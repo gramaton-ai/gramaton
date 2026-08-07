@@ -350,9 +350,10 @@ func TestSaveBatchEmbedFallbackWarnsOnRetryFailure(t *testing.T) {
 // gated its assertion on `if len(Superseded) > 0` which the stub
 // embedder rarely satisfied, making the test vacuous.)
 
-// TestSaveBatchSkipSupersession: SkipSupersession=true disables
-// dedup-driven supersession entirely.
-func TestSaveBatchSkipSupersession(t *testing.T) {
+// TestSaveBatchAllowSimilar: allow_similar=true disables the
+// similarity holds for the entire batch (the migration/bulk-ingest
+// escape); the duplicate item is created rather than held.
+func TestSaveBatchAllowSimilar(t *testing.T) {
 	a, _, _ := setupBatchAPI(t)
 	resp, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
 		Items: mustItems("identical phrase one"),
@@ -364,20 +365,17 @@ func TestSaveBatchSkipSupersession(t *testing.T) {
 		t.Fatalf("seed added: %d", len(resp.Added))
 	}
 	resp2, apiErr := a.SaveBatch(context.Background(), SaveBatchRequest{
-		Items:            mustItems("identical phrase one"),
-		SkipSupersession: true,
+		Items:        mustItems("identical phrase one"),
+		AllowSimilar: true,
 	})
 	if apiErr != nil {
-		t.Fatalf("skip: %v", apiErr)
+		t.Fatalf("allow_similar batch: %v", apiErr)
 	}
 	if len(resp2.Added) != 1 {
-		t.Fatalf("skip added: %d", len(resp2.Added))
+		t.Fatalf("allow_similar added: %d, want 1 (hold disabled)", len(resp2.Added))
 	}
-	if len(resp2.Added[0].Superseded) != 0 {
-		t.Errorf("expected no supersession with SkipSupersession=true, got %+v", resp2.Added[0].Superseded)
-	}
-	if resp2.Stats.SupersededCount != 0 {
-		t.Errorf("expected SupersededCount=0, got %d", resp2.Stats.SupersededCount)
+	if len(resp2.Held) != 0 || resp2.Stats.HeldCount != 0 {
+		t.Errorf("expected no holds with allow_similar=true, got held=%+v stats=%+v", resp2.Held, resp2.Stats)
 	}
 }
 
@@ -656,15 +654,15 @@ func TestCanonicalizeRequestDistinguishes(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeRequestSkipSupersessionDistinguishes: SkipSupersession
-// affects semantics so it must affect the hash.
-func TestCanonicalizeRequestSkipSupersessionDistinguishes(t *testing.T) {
+// TestCanonicalizeRequestAllowSimilarDistinguishes: AllowSimilar
+// affects semantics so it must affect the idempotency hash.
+func TestCanonicalizeRequestAllowSimilarDistinguishes(t *testing.T) {
 	base := SaveBatchRequest{Items: mustItems("x")}
 	a, _ := canonicalizeRequest(base)
-	base.SkipSupersession = true
+	base.AllowSimilar = true
 	b, _ := canonicalizeRequest(base)
 	if string(a) == string(b) {
-		t.Errorf("SkipSupersession should change canonical bytes")
+		t.Errorf("AllowSimilar should change canonical bytes")
 	}
 }
 
