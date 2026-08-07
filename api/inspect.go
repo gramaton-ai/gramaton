@@ -76,14 +76,10 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	}
 
 	if !readOnly {
-		// Spread activation; in-memory updates only. Disk persistence is
+		// Record access; in-memory updates only. Disk persistence is
 		// deferred to the periodic access-flush goroutine.
 		now := time.Now().UTC()
-		cfg := a.engine.Config()
-		a.engine.Graph().RecordAccess(req.ID, now, graph.ActivationConfig{
-			BaseAmount:        cfg.Activation.BaseAmount,
-			AttenuationFactor: cfg.Activation.AttenuationFactor,
-		})
+		a.engine.Graph().RecordAccess(req.ID, now)
 		a.engine.MarkAccessDirty()
 		n, ok = a.engine.Graph().GetNode(req.ID)
 		if !ok {

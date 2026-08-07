@@ -92,10 +92,7 @@ func TestRecordAccessLazyLoadsEvictedNode(t *testing.T) {
 
 	// RecordAccess: previously this would silently no-op because
 	// g.nodes[id] returned nothing.
-	g2.RecordAccess(id, time.Now().UTC(), ActivationConfig{
-		BaseAmount:        0.1,
-		AttenuationFactor: 0.5,
-	})
+	g2.RecordAccess(id, time.Now().UTC())
 
 	// Verify access was recorded by re-fetching the node.
 	loaded, ok := g2.GetNode(id)

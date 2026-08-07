@@ -766,7 +766,7 @@ func (s *Server) recordActivity() {
 }
 
 // accessFlusher periodically persists deferred access metadata
-// (access_count, last_accessed, activation_boost). Runs as a
+// (access_count, last_accessed). Runs as a
 // background goroutine. Exits when ctx is cancelled or when the
 // store becomes read-only (see accessFlushTick).
 func (s *Server) accessFlusher(ctx context.Context) {

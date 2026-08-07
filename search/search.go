@@ -1057,9 +1057,6 @@ func (t *Tool) buildScoreInputs(n *graph.Node, similarity float64) ScoreInputs {
 	if v, ok := n.Properties.GetInt64("access_count"); ok {
 		inputs.AccessCount = v
 	}
-	if v, ok := n.Properties.GetFloat64("activation_boost"); ok {
-		inputs.ActivationBoost = v
-	}
 	if v, ok := n.Properties.GetTimestamp("valid_from"); ok {
 		inputs.ValidFrom = v
 	}

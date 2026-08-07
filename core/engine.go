@@ -87,7 +87,7 @@ type Engine struct {
 	jobSweepDone   chan struct{} // closed when the sweeper goroutine exits
 
 	// accessDirty is set when access metadata (access_count,
-	// last_accessed, activation_boost) has been recorded in memory
+	// last_accessed) has been recorded in memory
 	// but not yet persisted to disk. The server flushes this
 	// periodically rather than saving on every read.
 	accessDirty bool
