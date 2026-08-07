@@ -135,6 +135,8 @@ func (ws *WriteSession) DeleteNode(id string) error {
 	}
 	ws.indexes.propIdx.RemoveNodeTx(ws.tx, id, n.Properties)
 	ws.indexes.bm25Full.RemoveTx(ws.tx, ws.bm25, id)
+	// Vector-index and access-sidecar removals both persist outside
+	// the shared bbolt tx, so they defer to the post-commit flush.
 	ws.vecRemovals = append(ws.vecRemovals, id)
 	if ws.indexes.secIdx != nil {
 		ws.indexes.secIdx.RemoveNodeTx(ws.tx, id)

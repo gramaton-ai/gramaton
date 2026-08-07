@@ -159,14 +159,6 @@ func TestReadOnlyBackgroundWritersGated(t *testing.T) {
 		t.Error("startup self-heal ran on a read-only store")
 	}
 
-	frozen.startAccessFlusher()
-	frozen.mu.Lock()
-	accessCancel := frozen.accessCancel
-	frozen.mu.Unlock()
-	if accessCancel != nil {
-		t.Error("access flusher started on a read-only store")
-	}
-
 	// Control: on a writable store the same starters DO start, so
 	// the assertions above cannot pass vacuously.
 	writable, _ := setupTestServer(t)
@@ -185,36 +177,6 @@ func TestReadOnlyBackgroundWritersGated(t *testing.T) {
 		t.Error("writable store: startup self-heal should run")
 	}
 
-	writable.startAccessFlusher()
-	writable.mu.Lock()
-	wAccessCancel := writable.accessCancel
-	writable.mu.Unlock()
-	if wAccessCancel == nil {
-		t.Error("writable store: access flusher should start")
-	} else {
-		// Nothing is access-dirty, so the flusher's final flush is a
-		// no-op and cannot race the engine close in cleanup.
-		wAccessCancel()
-	}
-}
-
-// TestAccessFlushTickStopsWhenReadOnly covers the runtime-flip half
-// of the access-flusher gate. startAccessFlusher gates at boot, but a
-// BackupRestore of a frozen archive flips the live engine read-only
-// mid-process; the per-tick seam must then report stop so the flusher
-// goroutine quiesces at its next tick instead of ticking until
-// process restart. Control: a writable store's tick flushes and
-// continues.
-func TestAccessFlushTickStopsWhenReadOnly(t *testing.T) {
-	frozen, _ := setupReadOnlyTestServer(t)
-	if frozen.accessFlushTick() {
-		t.Error("accessFlushTick on a read-only store should report stop")
-	}
-
-	writable, _ := setupTestServer(t)
-	if !writable.accessFlushTick() {
-		t.Error("accessFlushTick on a writable store should report continue")
-	}
 }
 
 // TestCurationCycleSkipsWhenReadOnly covers the runtime-flip half of

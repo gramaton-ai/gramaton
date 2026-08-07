@@ -112,6 +112,10 @@ func ReadSnapshot(dataDir string) (Snapshot, error) {
 //   - indexes.db, vec.flat: derived state, rebuilt by Restore
 //   - server.json, gramaton.log*, .gramaton-*, .chunk-*: transient
 //
+// sidecar.db is deliberately INCLUDED: access bookkeeping and the
+// changelog live outside the commit substrate, so unlike the derived
+// indexes there is nothing to rebuild them from after a restore.
+//
 // If storeName is provided and non-empty, it is included in the
 // filename. Returns the archive path.
 func CreateSnapshot(snap Snapshot, dataDir, cfgPath, outputDir string, storeName ...string) (string, error) {

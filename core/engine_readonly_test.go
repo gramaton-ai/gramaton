@@ -134,17 +134,15 @@ func TestFrozenStoreLifecycle(t *testing.T) {
 		t.Fatal("WithWriteBatch fn ran on a frozen store")
 	}
 
-	// SaveOrLog and FlushAccess short-circuit quietly: no commit
-	// lands, observed via a stable HEAD.
+	// SaveOrLog short-circuits quietly: no commit lands, observed
+	// via a stable HEAD.
 	head := eng2.HeadHash()
 	if head == "" {
 		t.Fatal("frozen store should have the seed commit as HEAD")
 	}
 	eng2.Lock()
 	eng2.SaveOrLog("background save on frozen store")
-	eng2.MarkAccessDirty()
 	eng2.Unlock()
-	eng2.FlushAccess()
 	if got := eng2.HeadHash(); got != head {
 		t.Fatalf("background write path committed on a frozen store: HEAD %q -> %q", head, got)
 	}

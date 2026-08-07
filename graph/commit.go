@@ -479,6 +479,9 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 			if err != nil {
 				return nil, fmt.Errorf("load: unmarshal node: %w", err)
 			}
+			if g.loadHook != nil {
+				g.loadHook(n)
+			}
 			g.nodes[n.ID] = n
 			g.nodeHashes[n.ID] = hash
 		}

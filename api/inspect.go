@@ -76,11 +76,8 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	}
 
 	if !readOnly {
-		// Record access; in-memory updates only. Disk persistence is
-		// deferred to the periodic access-flush goroutine.
-		now := time.Now().UTC()
-		a.engine.Graph().RecordAccess(req.ID, now)
-		a.engine.MarkAccessDirty()
+		// Record access in the sidecar; never a commit.
+		a.engine.RecordAccess(req.ID, time.Now().UTC())
 		n, ok = a.engine.Graph().GetNode(req.ID)
 		if !ok {
 			return InspectResponse{}, ErrInternal("node disappeared after access update")

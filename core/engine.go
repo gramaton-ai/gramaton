@@ -62,8 +62,8 @@ type Engine struct {
 	volatile bool
 
 	// readOnly marks the store as logically frozen: Save and
-	// WithWriteBatch reject with ErrStoreReadOnly, SaveOrLog and
-	// FlushAccess short-circuit quietly -- all before any work.
+	// WithWriteBatch reject with ErrStoreReadOnly, SaveOrLog
+	// short-circuits quietly -- all before any work.
 	// Set by openFiles from the STORE manifest, or forced via
 	// WithReadOnly. Derived local caches (indexes.db, vec.flat,
 	// jobs.db) stay writable: they are rebuilt from the graph at
@@ -86,18 +86,15 @@ type Engine struct {
 	jobSweepCancel context.CancelFunc
 	jobSweepDone   chan struct{} // closed when the sweeper goroutine exits
 
-	// accessDirty is set when access metadata (access_count,
-	// last_accessed) has been recorded in memory
-	// but not yet persisted to disk. The server flushes this
-	// periodically rather than saving on every read.
-	accessDirty bool
-
-	// accessFlushFailures counts consecutive FlushAccess save
-	// failures. Reset to 0 on the next successful flush. Used to
-	// dedup log noise when a stuck disk causes the 30s flusher to
-	// retry indefinitely; we log the first failure at Warn and then
-	// every 10th attempt at Error rather than every attempt.
-	accessFlushFailures int
+	// sidecarDB is the non-versioned bookkeeping bbolt file
+	// (sidecar.db): access metadata now, the changelog index next.
+	// Separate from indexes.db because backup excludes indexes.db as
+	// rebuildable while sidecar contents are primary. accessIdx is
+	// the access-metadata sidecar over it; reads update it directly,
+	// so reads produce ZERO commits (the access_flush machinery this
+	// replaces committed read churn on a timer).
+	sidecarDB *bolt.DB
+	accessIdx *index.BboltAccessIndex
 
 	// searchSnapshots caches paginated search result sets so cursor
 	// calls slice into a stable matched-set without re-running the
@@ -322,7 +319,26 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 		return err
 	}
 
+	// The access sidecar lives in its own bbolt file, NOT indexes.db:
+	// indexes.db is derived state that backup excludes and restore
+	// rebuilds, while access metadata is primary bookkeeping that
+	// must survive a backup/restore cycle.
+	sidecarPath := filepath.Join(e.cfg.DataDir, "sidecar.db")
+	sidecarDB, err := bolt.Open(sidecarPath, 0600, nil)
+	if err != nil {
+		return fmt.Errorf("open sidecar: %w", err)
+	}
+	cleanups = append(cleanups, func() { sidecarDB.Close() })
+	accessIdx, err := index.NewBboltAccessIndex(sidecarDB)
+	if err != nil {
+		return err
+	}
+	e.sidecarDB = sidecarDB
+	e.accessIdx = accessIdx
+
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
+	// Installed before Load so eagerly-loaded nodes overlay too.
+	g.SetNodeLoadHook(e.overlayAccess)
 
 	// Load HEAD commit if it exists.
 	var headHash string
@@ -563,6 +579,9 @@ func (e *Engine) SwapGraph(g *graph.Graph) { e.graph = g }
 // call RebuildAllIndexes afterwards.
 func (e *Engine) AdoptGraph(staged *graph.Graph) {
 	staged.MigrateEdgesTo(e.indexes.edgeStore)
+	// The staged graph was built hook-less; the adopted live graph
+	// must overlay sidecar access values on every materialization.
+	staged.SetNodeLoadHook(e.overlayAccess)
 	e.graph = staged
 }
 
@@ -638,6 +657,79 @@ func (e *Engine) Lock() { e.mu.Lock() }
 // Unlock releases the write lock.
 func (e *Engine) Unlock() { e.mu.Unlock() }
 
+// overlayAccess is the node load hook: it replaces a materialized
+// node's stale blob bookkeeping values with the sidecar's live ones.
+// Runs on every lazy load, iterator scan, and eager load, so readers
+// (search filters, sorts, scoring, exports) keep reading node
+// properties and never learn the sidecar exists. Absent sidecar
+// entry means the blob's legacy values stand -- the seed source for
+// stores migrating from versioned access props.
+func (e *Engine) overlayAccess(n *graph.Node) {
+	m, ok := e.accessIdx.Get(n.ID)
+	if !ok {
+		return
+	}
+	if m.Count > 0 {
+		n.Properties["access_count"] = graph.Int64Property(m.Count)
+	}
+	if !m.LastAccessed.IsZero() {
+		n.Properties["last_accessed"] = graph.TimestampProperty(m.LastAccessed)
+	}
+	if m.EmbedAttempts > 0 {
+		n.Properties["embed_attempts"] = graph.Int64Property(m.EmbedAttempts)
+	}
+}
+
+// RecordAccess bumps a record's access bookkeeping: sidecar first
+// (the durable authority), then the cached in-memory node WITHOUT
+// dirtying it -- reads must never mint commits. The last_accessed
+// time index updates alongside so recency filters stay accurate.
+// Caller must hold the write lock. First access after a migration
+// seeds the sidecar from the blob's legacy values.
+func (e *Engine) RecordAccess(nodeID string, now time.Time) {
+	n, ok := e.graph.GetNode(nodeID)
+	if !ok {
+		return
+	}
+	m, has := e.accessIdx.Get(nodeID)
+	if !has {
+		if v, ok := n.Properties.GetInt64("access_count"); ok {
+			m.Count = v
+		}
+		if v, ok := n.Properties.GetInt64("embed_attempts"); ok {
+			m.EmbedAttempts = v
+		}
+	}
+	m.Count++
+	m.LastAccessed = now
+	e.accessIdx.Put(nodeID, m)
+
+	n.Properties["access_count"] = graph.Int64Property(m.Count)
+	n.Properties["last_accessed"] = graph.TimestampProperty(now)
+	if e.indexes.secIdx != nil {
+		e.indexes.secIdx.SetLastAccessed(nodeID, now)
+	}
+}
+
+// SetEmbedAttempts records reembed retry bookkeeping in the sidecar
+// and mirrors it onto the cached node without dirtying it. Caller
+// must hold the write lock.
+func (e *Engine) SetEmbedAttempts(nodeID string, attempts int64) {
+	m, _ := e.accessIdx.Get(nodeID)
+	m.EmbedAttempts = attempts
+	e.accessIdx.Put(nodeID, m)
+	if n, ok := e.graph.GetNode(nodeID); ok {
+		if attempts == 0 {
+			delete(n.Properties, "embed_attempts")
+		} else {
+			n.Properties["embed_attempts"] = graph.Int64Property(attempts)
+		}
+	}
+}
+
+// AccessIdx exposes the access sidecar (deletion cleanup, tests).
+func (e *Engine) AccessIdx() *index.BboltAccessIndex { return e.accessIdx }
+
 // CurationAuthor is the commit and node attribution identity for
 // writes the curation subsystem makes on its own initiative.
 // curation.NodeAuthor aliases it so node-level and commit-level
@@ -658,8 +750,7 @@ func (e *Engine) commitAuthor(message string) string {
 }
 
 // Save commits the current graph state and updates HEAD and the
-// active branch ref. Caller must hold the write lock. Clears the
-// accessDirty flag since all in-memory state is now persisted.
+// active branch ref. Caller must hold the write lock.
 //
 // Persists indexes (BM25, vector, property) alongside the commit
 // so startup can skip expensive rebuilds.
@@ -785,14 +876,7 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	}
 
 	e.headHash = commit.Hash
-	e.accessDirty = false
 	return commit, nil
-}
-
-// MarkAccessDirty records that access metadata has been modified
-// in memory but not yet persisted. Caller must hold the write lock.
-func (e *Engine) MarkAccessDirty() {
-	e.accessDirty = true
 }
 
 // SaveOrLog wraps Save for callers that have no meaningful path to
@@ -825,72 +909,6 @@ func (e *Engine) SaveOrLog(message string, actions ...graph.CommitAction) {
 			"message", message,
 			"err", err)
 	}
-}
-
-// FlushAccess saves the current graph state if access metadata is
-// dirty. Acquires the write lock internally. Safe to call from a
-// background goroutine.
-//
-// Save failures are counted and logged with dedup: first failure at
-// Warn, suppressed at Debug for runs 2-9, every 10th failure at
-// Error with the consecutive count. A stuck disk under the 30s
-// flusher would otherwise emit one Error log + full err every 30s
-// indefinitely. Counter resets on the next success.
-func (e *Engine) FlushAccess() {
-	// Read-only short-circuit: access metadata is knowledge-graph
-	// state and a frozen store must not commit it. Quiet (Debug) --
-	// the periodic flusher keeps running against a read-only store
-	// and must not spam the log every 30s.
-	if e.ReadOnly() {
-		slog.Debug("access flush: skipped, store is read-only", "component", "engine")
-		return
-	}
-	// Lifecycle steps stay at DEBUG -- this fires every 30s under
-	// normal operation. The end-of-flush INFO captures the only
-	// state change a user cares about: a save actually happened.
-	slog.Debug("access flush: acquiring write lock", "component", "engine")
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.accessDirty {
-		slog.Debug("access flush: nothing dirty, skipping", "component", "engine")
-		return
-	}
-	slog.Debug("access flush: saving", "component", "engine")
-	start := time.Now()
-	// access_flush is a periodic background save of dirty access
-	// metadata (last_accessed, access_count). It's not a logical
-	// mutation -- the records were already mutated; this just
-	// persists the in-memory state. Emitting an action would be
-	// noise: every record touched by any read would generate a
-	// curation-shaped log entry.
-	//gramaton:saveactions:exempt
-	if _, err := e.Save("access_flush"); err != nil {
-		e.accessFlushFailures++
-		switch {
-		case e.accessFlushFailures == 1:
-			slog.Warn("access flush: save failed",
-				"component", "engine",
-				"err", err)
-		case e.accessFlushFailures%10 == 0:
-			slog.Error("access flush: save still failing",
-				"component", "engine",
-				"consecutive_failures", e.accessFlushFailures,
-				"err", err)
-		default:
-			slog.Debug("access flush: save failed (suppressed)",
-				"component", "engine",
-				"consecutive_failures", e.accessFlushFailures,
-				"err", err)
-		}
-		return
-	}
-	if e.accessFlushFailures > 0 {
-		slog.Info("access flush: save recovered",
-			"component", "engine",
-			"prior_failures", e.accessFlushFailures)
-		e.accessFlushFailures = 0
-	}
-	slog.Info("access flush: done", "component", "engine", "save_ms", time.Since(start).Milliseconds())
 }
 
 // RebuildAllIndexes rebuilds all indexes from graph state and refreshes
@@ -1075,6 +1093,13 @@ func (e *Engine) CloseFiles() error {
 			firstErr = err
 		}
 		e.boltDB = nil
+	}
+	if e.sidecarDB != nil {
+		if err := e.sidecarDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		e.sidecarDB = nil
+		e.accessIdx = nil
 	}
 
 	// Drop in-memory state tied to the now-closed file-backed

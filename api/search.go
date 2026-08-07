@@ -312,9 +312,8 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		a.engine.Lock()
 		now := time.Now().UTC()
 		for _, r := range results {
-			a.engine.Graph().RecordAccess(r.ID, now)
+			a.engine.RecordAccess(r.ID, now)
 		}
-		a.engine.MarkAccessDirty()
 		a.engine.Unlock()
 	}
 

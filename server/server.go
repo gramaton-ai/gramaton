@@ -101,7 +101,6 @@ type Server struct {
 	lastRequest    time.Time
 	lastBackup     time.Time
 	curationCancel context.CancelFunc
-	accessCancel   context.CancelFunc
 
 	retrieval    *retrievalTracker
 	usageTracker *llm.UsageTracker
@@ -488,9 +487,6 @@ func (s *Server) Run() error {
 		go s.idleWatcher(s.shutdownCh)
 	}
 
-	// Start access flusher.
-	s.startAccessFlusher()
-
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
@@ -531,15 +527,12 @@ func (s *Server) Run() error {
 		}
 	}
 
-	// Stop access flusher (triggers final flush), prepared-sessions
-	// sweeper, and curation runner. Curation cancellation moved here
-	// from a Run-local `defer curationCancel()` so Run() and StartHTTP()
-	// share one shutdown shape -- both store curationCancel on s and
-	// both stop it explicitly.
+	// Stop the prepared-sessions sweeper and curation runner.
+	// Curation cancellation moved here from a Run-local
+	// `defer curationCancel()` so Run() and StartHTTP() share one
+	// shutdown shape -- both store curationCancel on s and both stop
+	// it explicitly.
 	s.mu.Lock()
-	if s.accessCancel != nil {
-		s.accessCancel()
-	}
 	curationCancel := s.curationCancel
 	s.mu.Unlock()
 	s.api.StopPreparedSweeper()
@@ -604,9 +597,6 @@ func (s *Server) StartHTTP() error {
 		"addr", ln.Addr().String(),
 		"store", s.engine.Config().DataDir)
 
-	// Start access flusher.
-	s.startAccessFlusher()
-
 	// Start prepared-sessions sweeper.
 	s.api.StartPreparedSweeper()
 
@@ -623,18 +613,12 @@ func (s *Server) StartHTTP() error {
 	return nil
 }
 
-// Shutdown gracefully stops the HTTP server, access flusher, prepared-
-// sessions sweeper, and curation runner.
+// Shutdown gracefully stops the HTTP server, prepared-sessions
+// sweeper, and curation runner.
 func (s *Server) Shutdown() {
 	s.mu.Lock()
 	curationCancel := s.curationCancel
-	accessCancel := s.accessCancel
 	s.mu.Unlock()
-
-	// Stop access flusher first (triggers final flush).
-	if accessCancel != nil {
-		accessCancel()
-	}
 
 	// Stop the prepared-sessions sweeper owned by the api layer.
 	s.api.StopPreparedSweeper()
@@ -763,64 +747,6 @@ func (s *Server) recordActivity() {
 	s.mu.Lock()
 	s.lastRequest = time.Now()
 	s.mu.Unlock()
-}
-
-// accessFlusher periodically persists deferred access metadata
-// (access_count, last_accessed). Runs as a
-// background goroutine. Exits when ctx is cancelled or when the
-// store becomes read-only (see accessFlushTick).
-func (s *Server) accessFlusher(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			// Final flush on shutdown.
-			s.engine.FlushAccess()
-			return
-		case <-ticker.C:
-			if !s.accessFlushTick() {
-				return
-			}
-		}
-	}
-}
-
-// accessFlushTick runs one flusher tick. Returns false -- stopping
-// the flusher goroutine -- when the store has become read-only since
-// the flusher started. startAccessFlusher gates on ReadOnly at boot,
-// but a BackupRestore of a frozen archive flips the live engine
-// read-only mid-process (Engine.OpenFiles re-reads the restored STORE
-// manifest); after that flip there is never anything to flush (the
-// read paths skip access bookkeeping and engine.FlushAccess
-// short-circuits), so the goroutine quiesces at the next tick instead
-// of ticking until process restart. The leftover s.accessCancel is
-// harmless: cancelling a context whose goroutine already exited is a
-// no-op.
-func (s *Server) accessFlushTick() bool {
-	if s.engine.ReadOnly() {
-		s.log.Debug("access flusher stopping: store became read-only")
-		return false
-	}
-	s.engine.FlushAccess()
-	return true
-}
-
-// startAccessFlusher starts the background access flusher and
-// stores its cancel function for shutdown. No-op on a read-only
-// store: the read paths skip access bookkeeping entirely, so there
-// is never anything to flush (engine.FlushAccess would short-circuit
-// anyway; not starting the goroutine keeps the frozen store inert).
-func (s *Server) startAccessFlusher() {
-	if s.engine.ReadOnly() {
-		s.log.Debug("access flusher not started: store is read-only")
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.mu.Lock()
-	s.accessCancel = cancel
-	s.mu.Unlock()
-	go s.accessFlusher(ctx)
 }
 
 // idleWatcher checks for idle timeout and signals shutdown.
