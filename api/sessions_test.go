@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -1765,5 +1766,36 @@ func TestSessionFreshStartNeverChains(t *testing.T) {
 	}
 	if r2["previous_session_id"] != nil {
 		t.Error("fresh start B should have no previous")
+	}
+}
+
+// TestSessionSaveRejectsOverCapSegments pins the cap on the segments
+// slice submitted to session_save: without it, an oversized array
+// runs an unbounded per-segment embed loop under an eventual write
+// lock. Mirrors the batch capture path's MaxSyncBatchSize cap.
+func TestSessionSaveRejectsOverCapSegments(t *testing.T) {
+	a, _ := setupTestAPI(t)
+	ctx := context.Background()
+
+	result, _ := a.SessionStart(ctx, "over-cap-test", "")
+	sessionID := result["id"].(string)
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	segments := make([]SaveSegment, MaxSessionSegments+1)
+	for i := range segments {
+		segments[i] = SaveSegment{
+			Content:   fmt.Sprintf("segment content %d", i),
+			TopicName: "Design",
+		}
+	}
+
+	_, svcErr := a.SessionSave(ctx, sessionID, segments, false)
+	if svcErr == nil {
+		t.Fatal("expected an error for over-cap segments")
+	}
+	if !strings.Contains(svcErr.Message, fmt.Sprintf("%d", MaxSessionSegments)) {
+		t.Errorf("error message %q should name the cap %d", svcErr.Message, MaxSessionSegments)
 	}
 }

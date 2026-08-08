@@ -133,6 +133,11 @@ const (
 	// savings vs a series of single captures; the async path (Layer 5)
 	// raises the cap to MaxAsyncBatchSize.
 	MaxSyncBatchSize = 500
+	// MaxSessionSegments caps the segments slice a single
+	// gramaton_session_save call may submit. Mirrors MaxSyncBatchSize:
+	// beyond this, the per-segment embed loop and the write-lock hold
+	// it runs under stop being a request-scoped cost.
+	MaxSessionSegments = 500
 	// MaxBatchBytes is the per-request total content-byte ceiling for
 	// the capture_batch path. Defends against a 1000-item × 100MB-each
 	// memory blowup; Phase 0 validation rejects oversize before any

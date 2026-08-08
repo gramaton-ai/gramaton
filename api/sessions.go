@@ -805,6 +805,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	if len(segments) == 0 {
 		return SessionSaveResponse{}, ErrMissing("segments is required and must not be empty")
 	}
+	if len(segments) > MaxSessionSegments {
+		return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segments exceeds maximum of %d", MaxSessionSegments))
+	}
 
 	// Validate all segments before consuming the prepared flag so that a
 	// malformed commit doesn't force the agent to re-prepare.
