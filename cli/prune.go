@@ -189,11 +189,15 @@ func producePrunePlan(eng *core.Engine, refs map[string]string) error {
 		if err != nil {
 			return err
 		}
-		plan.KeepVersions = kv
-		coverageNeeded = kv.NewestSweptTS
-		fmt.Printf("Content depth (--keep-versions %d):\n", pruneKeepVersions)
-		fmt.Printf("  records affected: %d\n", len(kv.Records))
-		fmt.Printf("  version blobs to remove: %d (%.1f MB)\n", kv.BlobCount, float64(kv.Bytes)/1e6)
+		if kv.BlobCount == 0 {
+			fmt.Printf("Content depth (--keep-versions %d): nothing to sweep at this depth.\n", pruneKeepVersions)
+		} else {
+			plan.KeepVersions = kv
+			coverageNeeded = kv.NewestSweptTS
+			fmt.Printf("Content depth (--keep-versions %d):\n", pruneKeepVersions)
+			fmt.Printf("  records affected: %d\n", len(kv.Records))
+			fmt.Printf("  version blobs to remove: %d (%.1f MB)\n", kv.BlobCount, float64(kv.Bytes)/1e6)
+		}
 	}
 	if pruneOlderThan != "" {
 		horizon, err := parsePruneDate(pruneOlderThan)
@@ -304,7 +308,7 @@ func executePrunePlan(eng *core.Engine, cfgDir string, refs map[string]string) e
 		}
 	}
 
-	if plan.KeepVersions != nil {
+	if plan.KeepVersions != nil && plan.KeepVersions.BlobCount > 0 {
 		res, err := prune.ApplyKeepVersions(eng, plan.KeepVersions)
 		if err != nil {
 			return fmt.Errorf("content depth sweep: %w", err)

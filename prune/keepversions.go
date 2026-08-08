@@ -68,6 +68,9 @@ func PlanKeepVersions(eng *core.Engine, keep int, refTips map[string]string) (*K
 			return fmt.Errorf("load ref tip %s: %w", core.TruncHash(commitHash), err)
 		}
 		if commit.NodeTreeRoot == "" {
+			if len(commit.NodeHashes) > 0 {
+				return fmt.Errorf("commit %s predates the tree format; run 'gramaton migrate' before pruning", core.TruncHash(commitHash))
+			}
 			return nil
 		}
 		entries, err := storage.LoadProllyTree(store, commit.NodeTreeRoot).AllEntries()
@@ -120,6 +123,12 @@ func PlanKeepVersions(eng *core.Engine, keep int, refTips map[string]string) (*K
 		if cut < len(content) {
 			rs.KeptFromCommit = content[cut].Commit
 			rs.KeptFromTS = content[cut].Timestamp
+		} else if len(entries) > 0 {
+			// Fully swept (since-deleted record): the watermark must
+			// still cover every swept version or their absence reads
+			// as corruption instead of policy. Sit it just past the
+			// newest entry (the deletion tombstone when present).
+			rs.KeptFromTS = entries[len(entries)-1].Timestamp.Add(time.Nanosecond)
 		}
 		for _, e := range content[:cut] {
 			if _, marked := mark[e.NodeHash]; marked {
@@ -147,8 +156,9 @@ func PlanKeepVersions(eng *core.Engine, keep int, refTips map[string]string) (*K
 		return nil, err
 	}
 
-	// Cross-record dedup: a CAS blob can be a candidate under two
-	// records (identical content); count and delete it once.
+	// Cross-record dedup, defensive only: node blobs embed the record
+	// id, so two records cannot share a version blob -- but a repeated
+	// hash must still never double-count or double-delete.
 	seen := make(map[string]struct{}, plan.BlobCount)
 	total := 0
 	for i := range plan.Records {

@@ -38,19 +38,36 @@ func PlanOlderThan(eng *core.Engine, horizon time.Time, refTips map[string]strin
 		return nil, fmt.Errorf("empty store")
 	}
 
-	// Walk HEAD back to root collecting (hash, ts, parent).
+	// Walk HEAD back to root -- or to the floor of a previous prune,
+	// where the chain deliberately grounds out (the parent chunk was
+	// swept; that is policy, not corruption, and re-pruning must work).
+	floor := eng.HistoryFloor()
 	type link struct {
 		hash   string
 		ts     time.Time
 		parent string
 	}
 	var chain []link
+	var prevTS time.Time
 	for cur := head; cur != ""; {
 		c, err := graph.LoadCommitMeta(store, cur)
 		if err != nil {
 			return nil, fmt.Errorf("chain walk at %s: %w", core.TruncHash(cur), err)
 		}
+		if c.NodeTreeRoot == "" && len(c.NodeHashes) > 0 {
+			return nil, fmt.Errorf("commit %s predates the tree format; run 'gramaton migrate' before pruning", core.TruncHash(cur))
+		}
+		if !prevTS.IsZero() && c.Timestamp.After(prevTS) {
+			// The truncation boundary is timestamp-predicated in the
+			// derived indexes; non-monotonic clocks would desynchronize
+			// the swept set from the index truncations.
+			return nil, fmt.Errorf("commit timestamps are not monotonic near %s (clock skew); refusing to plan a timestamp-bounded truncation", core.TruncHash(cur))
+		}
+		prevTS = c.Timestamp
 		chain = append(chain, link{hash: cur, ts: c.Timestamp, parent: c.Parent})
+		if floor != nil && cur == floor.OldestKeptCommit {
+			break
+		}
 		cur = c.Parent
 	}
 
@@ -146,6 +163,10 @@ func ApplyOlderThan(eng *core.Engine, plan *OlderThanPlan, refTips map[string]st
 	eng.Lock()
 	eng.SetPendingTombstoneRoot(root)
 	commit, err := eng.Save("prune: chain truncation", graph.CommitAction{Kind: graph.ActionPrune})
+	if err != nil {
+		// Disarm: a later unrelated Save must not inherit the stamp.
+		eng.SetPendingTombstoneRoot("")
+	}
 	eng.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("prune commit: %w", err)
@@ -174,7 +195,13 @@ func ApplyOlderThan(eng *core.Engine, plan *OlderThanPlan, refTips map[string]st
 
 	res := &ApplyResult{Commit: commit, TombstoneRoot: root, SweptBlobs: gcRes.DeletedCount}
 	if gcRes.Errors > 0 {
+		// The GC refuses to sweep when marking was incomplete; honor
+		// that refusal instead of truncating indexes over a store
+		// whose reachability is in doubt. The tombstone and prune
+		// commit already landed -- harmless (nothing was deleted), and
+		// a later successful run unions over them.
 		res.SweepErrors = gcRes.Errors
+		return res, fmt.Errorf("reachability marking reported %d error(s); nothing was truncated -- investigate before re-running", gcRes.Errors)
 	}
 
 	// Derived-index truncation last: both are repairable (TSIndex by

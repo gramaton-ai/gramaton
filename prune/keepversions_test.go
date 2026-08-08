@@ -152,3 +152,46 @@ func TestKeepVersionsRefusesBehindMarker(t *testing.T) {
 		t.Fatal("plan succeeded with a stale changelog marker")
 	}
 }
+
+// TestKeepVersionsCoversDeletedRecords pins the fully-swept
+// watermark: a since-deleted record's swept versions must read as
+// pruned-by-policy, not as unexplained missing blobs.
+func TestKeepVersionsCoversDeletedRecords(t *testing.T) {
+	eng, _ := newPruneTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("doomed v1"),
+	})
+	if _, err := eng.Save("create"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+	saveVersion(t, eng, n.ID, "doomed v2")
+	versions := eng.Changelog().Versions(n.ID)
+	err := eng.WithWriteBatch("delete", func(ws *core.WriteSession) (bool, error) {
+		return true, ws.DeleteNode(n.ID)
+	})
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	plan, err := PlanKeepVersions(eng, 1, nil)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if _, err := ApplyKeepVersions(eng, plan); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	floor := eng.HistoryFloor()
+	if floor == nil {
+		t.Fatal("no floor installed")
+	}
+	for _, v := range versions {
+		if !floor.CoversRecordVersion(n.ID, v.Timestamp) {
+			t.Fatalf("swept version at %v of the deleted record not covered -- reads as corruption", v.Timestamp)
+		}
+	}
+}

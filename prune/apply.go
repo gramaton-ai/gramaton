@@ -54,6 +54,10 @@ func ApplyKeepVersions(eng *core.Engine, plan *KeepVersionsPlan) (*ApplyResult, 
 	eng.Lock()
 	eng.SetPendingTombstoneRoot(root)
 	commit, err := eng.Save("prune: content depth sweep", graph.CommitAction{Kind: graph.ActionPrune})
+	if err != nil {
+		// Disarm: a later unrelated Save must not inherit the stamp.
+		eng.SetPendingTombstoneRoot("")
+	}
 	eng.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("prune commit: %w", err)

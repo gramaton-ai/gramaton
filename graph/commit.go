@@ -348,12 +348,6 @@ func (g *Graph) PrepareCommit(s *storage.Store, parent string, message string, a
 	return commit, nil
 }
 
-// WriteCommit serializes c, writes it as a content-addressed chunk,
-// sets c.Hash, and clears dirty tracking on success. Pair with
-// PrepareCommit -- typical flow is PrepareCommit, populate any
-// engine-managed fields (index roots), then WriteCommit. Calling
-// WriteCommit twice on the same commit writes two chunks and
-// orphans the first; the engine path writes once.
 // WriteCommitChunk persists a standalone commit chunk without graph
 // state (the prune baseline: a synthetic parentless commit that is
 // referenced from the tombstone, never from the chain). Returns the
@@ -372,6 +366,12 @@ func WriteCommitChunk(s *storage.Store, c *Commit) (string, error) {
 	return hash, nil
 }
 
+// WriteCommit serializes c, writes it as a content-addressed chunk,
+// sets c.Hash, and clears dirty tracking on success. Pair with
+// PrepareCommit -- typical flow is PrepareCommit, populate any
+// engine-managed fields (index roots), then WriteCommit. Calling
+// WriteCommit twice on the same commit writes two chunks and
+// orphans the first; the engine path writes once.
 func (g *Graph) WriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
 	c.Hash = "" // exclude prior hash from serialization
 	data, err := json.Marshal(c)

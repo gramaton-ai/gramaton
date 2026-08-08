@@ -827,15 +827,14 @@ func NewestArchiveFor(dir, storeName string) (string, error) {
 	// listBackups sorts oldest-first; walk backwards.
 	for i := len(files) - 1; i >= 0; i-- {
 		base := filepath.Base(files[i])
-		if storeName == "" {
-			// Unnamed archives have a timestamp right after the prefix.
-			rest := strings.TrimPrefix(base, marker)
-			if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-				return files[i], nil
-			}
+		if !strings.HasPrefix(base, marker) {
 			continue
 		}
-		if strings.HasPrefix(base, marker) {
+		// The timestamp must follow the marker directly, so store
+		// "alpha" never matches "alpha-beta"'s archives (and unnamed
+		// lookups never match named archives).
+		rest := strings.TrimPrefix(base, marker)
+		if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
 			return files[i], nil
 		}
 	}

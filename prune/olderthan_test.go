@@ -1,6 +1,7 @@
 package prune
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -141,5 +142,56 @@ func TestOlderThanRefusesBranchInTruncatedRegion(t *testing.T) {
 
 	if _, err := PlanOlderThan(eng, time.Now().UTC(), map[string]string{"stale": oldTip}); err == nil {
 		t.Fatal("plan succeeded with a ref in the truncated region")
+	}
+}
+
+// TestOlderThanRePrunable pins the one-shot-prune fix: after a
+// truncation, the chain grounds out at the floor instead of dying on
+// the swept parent chunk -- a second plan and the changelog backfill
+// (the advertised repair tool) both still work.
+func TestOlderThanRePrunable(t *testing.T) {
+	eng, _ := newPruneTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("r0"),
+	})
+	if _, err := eng.Save("create"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+	for i := 1; i < 9; i++ {
+		time.Sleep(2 * time.Millisecond)
+		saveVersion(t, eng, n.ID, "r"+string(rune('0'+i)))
+	}
+
+	plan, err := PlanOlderThan(eng, time.Now().UTC(), nil)
+	if err != nil {
+		t.Fatalf("first plan: %v", err)
+	}
+	if _, err := ApplyOlderThan(eng, plan, nil); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+
+	// A second plan must ground out at the floor, not error on the
+	// swept parent. (With so few commits left, "nothing to truncate"
+	// is the correct answer; a chunk-not-found error is the bug.)
+	if _, err := PlanOlderThan(eng, time.Now().UTC(), nil); err != nil {
+		if !strings.Contains(err.Error(), "nothing to truncate") {
+			t.Fatalf("second plan died at the floor: %v", err)
+		}
+	}
+
+	// The backfill grounds at the floor and diffs against the
+	// baseline instead of walking into swept history.
+	if err := eng.Changelog().SetMarker(""); err != nil {
+		t.Fatalf("SetMarker: %v", err)
+	}
+	if _, err := eng.BackfillChangelog(nil); err != nil {
+		t.Fatalf("backfill on pruned store: %v", err)
+	}
+	if got := len(eng.Changelog().Versions(n.ID)); got == 0 {
+		t.Fatal("backfill re-derived nothing on the pruned store")
 	}
 }

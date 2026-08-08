@@ -94,6 +94,12 @@ func (t *Tombstone) Union(prev *Tombstone) {
 			continue
 		}
 		cur.SweptVersions += old.SweptVersions
+		// The higher watermark wins: a regression would uncover blobs
+		// the older prune already explained.
+		if old.KeptFromTS.After(cur.KeptFromTS) {
+			cur.KeptFromTS = old.KeptFromTS
+			cur.KeptFromCommit = old.KeptFromCommit
+		}
 		t.Records[id] = cur
 	}
 }
