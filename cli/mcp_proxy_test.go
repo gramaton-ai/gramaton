@@ -701,3 +701,43 @@ func TestProxyServerErrOmitsRetryAfterWhenZero(t *testing.T) {
 		t.Error("retry_after should be omitted when zero")
 	}
 }
+
+// TestProxySessionStartSourcePassthrough pins the proxy's
+// gramaton_session_start source argument reaching the server: a
+// second start with source="resume" for the same client_session_id
+// must create a NEW session chained to the first (a fresh id,
+// previous_session_id set, resumed=false). Before the fix, the
+// proxy's args struct had no source field, so the value never left
+// the CLI process -- the server always saw source=="" and took the
+// idempotent-lookup branch, returning the SAME session id instead of
+// chaining a new one.
+func TestProxySessionStartSourcePassthrough(t *testing.T) {
+	clientID := "proxy-source-passthrough-test"
+
+	first := callProxy(t, "gramaton_session_start", map[string]any{
+		"client_session_id": clientID,
+		"source":            "startup",
+	})
+	firstID, _ := first["id"].(string)
+	if firstID == "" {
+		t.Fatal("expected a session id from the first start")
+	}
+
+	second := callProxy(t, "gramaton_session_start", map[string]any{
+		"client_session_id": clientID,
+		"source":            "resume",
+	})
+	secondID, _ := second["id"].(string)
+	if secondID == "" {
+		t.Fatal("expected a session id from the resume call")
+	}
+	if secondID == firstID {
+		t.Fatalf("resume should create a new chained session, got the same id %s twice (source was not forwarded)", firstID)
+	}
+	if prev, _ := second["previous_session_id"].(string); prev != firstID {
+		t.Fatalf("resume should chain to the prior session %s, got previous_session_id=%v", firstID, second["previous_session_id"])
+	}
+	if resumed, _ := second["resumed"].(bool); resumed {
+		t.Fatal("resume with a dropped source falls back to the idempotent lookup path (resumed=true); want a freshly chained session")
+	}
+}
