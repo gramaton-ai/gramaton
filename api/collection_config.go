@@ -10,7 +10,6 @@ import (
 // together determine how curation treats records in a collection:
 //
 //   - clear_mode     -- what `clear` does to items (resolve vs unlink).
-//   - supersession   -- auto-supersession scope (none/collection/store).
 //   - curation       -- LLM-analysis intensity (none/standard).
 //   - contradictions -- whether contradicts edges are generated (on/off).
 //
@@ -100,12 +99,11 @@ var validContradictions = map[Contradictions]bool{
 // the safe default for "I want a collection, didn't say anything
 // else." Templates that want LLM-driven enrichment (backlog, todo,
 // reading-list, journal, references) declare curation=standard
-// explicitly. The flip from CurationStandard followed activation
-// of curation on collection items: default=standard was risk-free
-// while items lacked content_full and no LLM stage actually ran;
-// once activation made the knob load-bearing, the deliberate
-// choice was to make LLM costs explicitly opt-in rather than
-// rely on an inherited default.
+// explicitly. The earlier CurationStandard default was inert while
+// collection items uniformly lacked content_full and no LLM stage
+// actually ran; it flipped to none once the knob began driving real
+// spend on every collection -- LLM costs are explicitly opt-in, not
+// inherited from a default.
 const (
 	DefaultClearMode      = ClearModeResolve
 	DefaultCuration       = CurationNone
