@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -402,12 +403,12 @@ func TestPreChunkConcurrentWithReads(t *testing.T) {
 					return
 				default:
 				}
-				// PreChunk is safe to call without lock.
-				longContent := ""
-				for k := 0; k < 600; k++ {
-					longContent += "word "
-				}
-				_ = eng.PreChunk(ctx, longContent, "", "")
+				// PreChunk is safe to call without lock. Content must
+				// clear the chunking trigger (chunking.threshold chars)
+				// or PreChunk short-circuits without exercising the
+				// split path.
+				longContent := strings.Repeat("word ", eng.Config().Chunking.Threshold/4)
+				_ = eng.PreChunk(ctx, longContent, "")
 			}
 		}()
 	}

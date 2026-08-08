@@ -1385,20 +1385,35 @@ func IsContextLengthError(err error) bool {
 	return chunking.IsContextLengthError(err)
 }
 
-// PreChunk splits long content into chunk nodes.
-//
-// PARKED: the chunking pipeline has no production caller since the
-// capture pipeline deferred chunking; it is retained deliberately
-// for long-document ingestion (research papers and similar), which
-// is planned work. Do not delete as dead code.
-func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) *PreChunkResult {
-	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, medium, summary)
+// ShouldChunk reports whether content of this length is above the
+// chunking trigger (chunking.threshold chars, floored at the
+// embedding window's capacity). Callers gate on this before paying
+// for PreChunk's embedding calls.
+func (e *Engine) ShouldChunk(contentLen int) bool {
+	return chunking.Trigger(contentLen, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding)
 }
 
-// ApplyChunks creates section/chunk nodes from pre. Caller must hold
-// the engine write lock.
-func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps graph.Properties) int {
-	return chunking.Apply(e, parentID, pre, parentProps)
+// PreChunk splits long content into section/chunk pieces and
+// pre-embeds them. Returns nil below the chunking threshold. Runs
+// network-bound embedding; call OFF-LOCK.
+func (e *Engine) PreChunk(ctx context.Context, content, summary string) *PreChunkResult {
+	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, summary)
+}
+
+// ApplyChunks creates section/chunk child nodes from pre and swaps
+// the parent's embedding for the purpose-sized ParentVec. Caller must
+// hold the engine write lock; the child writes are batched into one
+// index transaction (a many-child document costs one bbolt commit,
+// not one fsync per child). Returns the number of children created.
+func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps graph.Properties) (int, error) {
+	var n int
+	err := e.BatchIndexWrites(func(ws *WriteSession) {
+		n = chunking.Apply(ws, parentID, pre, parentProps)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("apply chunks: %w", err)
+	}
+	return n, nil
 }
 
 // IndexNode populates all indexes for a node already added to the

@@ -400,13 +400,13 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()
 
-	// Create content longer than chunk threshold.
+	// Create content longer than the chunking trigger.
 	longContent := ""
 	for i := 0; i < cfg.Chunking.Threshold+100; i++ {
 		longContent += "word "
 	}
 
-	pre := eng.PreChunk(context.Background(), longContent, "", "")
+	pre := eng.PreChunk(context.Background(), longContent, "")
 	if pre == nil {
 		t.Fatal("PreChunk should return result for long content")
 	}
@@ -418,21 +418,36 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 	n := eng.Graph().AddNode(graph.Properties{
 		"content_full": graph.StringProperty(longContent),
 	})
-	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
+	numChunks, err := eng.ApplyChunks(n.ID, pre, n.Properties)
 	eng.Unlock()
-
+	if err != nil {
+		t.Fatalf("ApplyChunks: %v", err)
+	}
 	if numChunks == 0 {
 		t.Fatal("ApplyChunks should create child nodes")
 	}
 
-	// Verify child nodes have chunk_of or section_of edges.
+	// Verify child nodes have chunk_of or section_of edges and carry
+	// the machine-derived discriminator the exclusion surfaces key on.
 	eng.RLock()
 	defer eng.RUnlock()
 	edges := eng.Graph().EdgesTo(n.ID)
 	childEdges := 0
 	for _, e := range edges {
-		if e.Type == "chunk_of" || e.Type == "section_of" {
-			childEdges++
+		if e.Type != "chunk_of" && e.Type != "section_of" {
+			continue
+		}
+		childEdges++
+		child, ok := eng.Graph().GetNode(e.SourceID)
+		if !ok {
+			t.Fatalf("child node %s missing", e.SourceID)
+		}
+		nt, _ := child.Properties.GetString("node_type")
+		if nt != "chunk" && nt != "section" {
+			t.Fatalf("child %s node_type = %q, want chunk or section", e.SourceID, nt)
+		}
+		if _, has := child.Properties["section_index"]; !has {
+			t.Fatalf("child %s missing section_index ordinal", e.SourceID)
 		}
 	}
 	if childEdges != numChunks {
@@ -442,9 +457,17 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 
 func TestPreChunkShortContent(t *testing.T) {
 	eng := setupTestEngine(t)
-	pre := eng.PreChunk(context.Background(), "short content", "", "")
+	pre := eng.PreChunk(context.Background(), "short content", "")
 	if pre != nil {
 		t.Fatal("PreChunk should return nil for short content")
+	}
+	// Content above the window floor but at or below the configured
+	// threshold must also stay unchunked: the raised threshold is the
+	// user-facing trigger.
+	mid := strings.Repeat("word ", eng.Config().Chunking.Threshold/5)
+	if pre := eng.PreChunk(context.Background(), mid, ""); pre != nil {
+		t.Fatalf("PreChunk should return nil at threshold (len=%d, threshold=%d)",
+			len(mid), eng.Config().Chunking.Threshold)
 	}
 }
 
@@ -459,21 +482,23 @@ func TestApplyChunksInheritsAuthor(t *testing.T) {
 	// Markdown-structured content so SplitSections detects sections
 	// (the metadata-inheriting path); long enough to exceed the
 	// chunking threshold.
+	// Enough body per section to clear the raised chunking threshold
+	// while keeping each section under SectionMax.
 	var sb strings.Builder
 	for i := 0; i < 4; i++ {
 		sb.WriteString("## Section heading ")
 		sb.WriteString(strings.Repeat("x", i+1))
 		sb.WriteString("\n\n")
-		for j := 0; j < 20; j++ {
+		for j := 0; j < 60; j++ {
 			sb.WriteString("Body sentence for the author inheritance test. ")
 		}
 		sb.WriteString("\n\n")
 	}
 	content := sb.String()
 
-	pre := eng.PreChunk(context.Background(), content, "", "")
+	pre := eng.PreChunk(context.Background(), content, "")
 	if pre == nil {
-		t.Fatal("PreChunk should return a result for long content")
+		t.Fatalf("PreChunk should return a result for long content (len=%d)", len(content))
 	}
 	if len(pre.Sections) == 0 {
 		t.Fatal("expected structural sections (the author-inheriting path); markdown headings were not detected")
@@ -484,8 +509,11 @@ func TestApplyChunksInheritsAuthor(t *testing.T) {
 		"content_full": graph.StringProperty(content),
 		"author":       graph.StringProperty(author),
 	})
-	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
+	numChunks, err := eng.ApplyChunks(n.ID, pre, n.Properties)
 	eng.Unlock()
+	if err != nil {
+		t.Fatalf("ApplyChunks: %v", err)
+	}
 	if numChunks == 0 {
 		t.Fatal("ApplyChunks should create section nodes")
 	}

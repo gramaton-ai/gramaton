@@ -33,8 +33,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Freshness.Scale != 8760 {
 		t.Fatalf("freshness.scale: expected 8760, got %f", cfg.Freshness.Scale)
 	}
-	if cfg.Chunking.Threshold != 512 {
-		t.Fatalf("chunking.threshold: expected 512, got %d", cfg.Chunking.Threshold)
+	if cfg.Chunking.Threshold != 8000 {
+		t.Fatalf("chunking.threshold: expected 8000, got %d", cfg.Chunking.Threshold)
 	}
 	if cfg.Concepts.EmergenceThreshold != 3 {
 		t.Fatalf("concepts.emergence_threshold: expected 3, got %d", cfg.Concepts.EmergenceThreshold)
@@ -329,8 +329,8 @@ func TestLoadPartialOverride(t *testing.T) {
 	if cfg.Scoring.WeightConfidence != 0.27 {
 		t.Fatalf("expected default 0.27, got %f", cfg.Scoring.WeightConfidence)
 	}
-	if cfg.Chunking.Threshold != 512 {
-		t.Fatalf("expected default 512, got %d", cfg.Chunking.Threshold)
+	if cfg.Chunking.Threshold != 8000 {
+		t.Fatalf("expected default 8000, got %d", cfg.Chunking.Threshold)
 	}
 }
 

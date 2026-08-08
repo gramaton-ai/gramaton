@@ -1088,11 +1088,18 @@ type FreshnessExponents struct {
 	Ephemeral float64 `yaml:"ephemeral"`
 }
 
-// ChunkingConfig controls structural text splitting. NOT used in the
-// capture hot path -- observation extraction (D18/D23) handles content
-// decomposition in the curation cycle. Retained for internal utilities.
+// ChunkingConfig controls long-document chunking on the write paths
+// (save, batch, ingest, content update): content above Threshold is
+// split into section/chunk child nodes with their own embeddings so
+// vector retrieval covers the whole document, not just the first
+// embedding window. Observation extraction (D18/D23) still handles
+// semantic decomposition in the curation cycle; chunking is the
+// mechanical retrieval layer beneath it.
 type ChunkingConfig struct {
-	// Threshold: content length above which chunking kicks in.
+	// Threshold: content length in characters above which a record is
+	// chunked. Floored at the embedding window's capacity -- content
+	// that fits a single embedding is never chunked regardless of
+	// this setting.
 	Threshold int `yaml:"threshold"`
 
 	// ChunkSize: target chunk length in chars.
@@ -1412,7 +1419,9 @@ func Defaults() Config {
 		},
 
 		Chunking: ChunkingConfig{
-			Threshold:  512,
+			// Chars. Only documents spanning several embedding windows
+			// chunk; ordinary records never do.
+			Threshold:  8000,
 			ChunkSize:  512,
 			Overlap:    128,
 			SectionMin: 500,
