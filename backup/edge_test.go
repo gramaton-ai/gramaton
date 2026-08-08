@@ -26,9 +26,7 @@ func TestBackupEmptyStore(t *testing.T) {
 func TestExportEmptyStoreCSV(t *testing.T) {
 	eng := setupTestEngine(t)
 	var buf strings.Builder
-	eng.RLock()
-	err := ExportCSV(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "csv")
 
 	if err != nil {
 		t.Fatalf("ExportCSV empty: %v", err)
@@ -43,15 +41,16 @@ func TestExportEmptyStoreCSV(t *testing.T) {
 func TestExportEmptyStoreMarkdown(t *testing.T) {
 	eng := setupTestEngine(t)
 	var buf strings.Builder
-	eng.RLock()
-	err := ExportMarkdown(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "markdown")
 
 	if err != nil {
 		t.Fatalf("ExportMarkdown empty: %v", err)
 	}
-	if !strings.Contains(buf.String(), "Exported 0 records") {
-		t.Fatal("should say 0 records")
+	if !strings.Contains(buf.String(), "# Gramaton Export") {
+		t.Fatal("markdown export must carry its header even when empty")
+	}
+	if strings.Contains(buf.String(), "## ") {
+		t.Fatal("empty store must render no record sections")
 	}
 }
 

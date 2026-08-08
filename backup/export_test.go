@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -71,9 +72,7 @@ func TestExportJSONL(t *testing.T) {
 	id := addTestRecord(t, eng, "Test content", "Test summary", "durable", 0.9, []string{"test", "export"})
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportJSONL(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "jsonl")
 
 	if err != nil {
 		t.Fatalf("ExportJSONL: %v", err)
@@ -108,9 +107,7 @@ func TestExportJSON(t *testing.T) {
 	id := addTestRecord(t, eng, "Array test content", "summary", "durable", 0.85, nil)
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportJSON(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "json")
 	if err != nil {
 		t.Fatalf("ExportJSON: %v", err)
 	}
@@ -134,9 +131,7 @@ func TestExportJSONEmptyStoreIsEmptyArray(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportJSON(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "json")
 	if err != nil {
 		t.Fatalf("ExportJSON empty: %v", err)
 	}
@@ -159,9 +154,7 @@ func TestExportJSONExcludesEmbeddings(t *testing.T) {
 	eng.Unlock()
 
 	var buf bytes.Buffer
-	eng.RLock()
-	ExportJSONL(&buf, eng)
-	eng.RUnlock()
+	exportAll(&buf, eng, "jsonl")
 
 	if strings.Contains(buf.String(), "embedding_full") {
 		t.Fatal("export should not include embeddings")
@@ -184,9 +177,7 @@ func TestExportJSONExcludesChunks(t *testing.T) {
 	eng.Unlock()
 
 	var buf bytes.Buffer
-	eng.RLock()
-	ExportJSONL(&buf, eng)
-	eng.RUnlock()
+	exportAll(&buf, eng, "jsonl")
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 1 {
@@ -199,9 +190,7 @@ func TestExportCSV(t *testing.T) {
 	addTestRecord(t, eng, "CSV test content", "CSV summary", "temporal", 0.7, []string{"csv", "test"})
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportCSV(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "csv")
 
 	if err != nil {
 		t.Fatalf("ExportCSV: %v", err)
@@ -245,9 +234,7 @@ func TestExportMarkdown(t *testing.T) {
 	addTestRecord(t, eng, "Markdown test", "MD summary", "durable", 0.95, []string{"md"})
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportMarkdown(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "markdown")
 
 	if err != nil {
 		t.Fatalf("ExportMarkdown: %v", err)
@@ -272,9 +259,7 @@ func TestExportEmptyStore(t *testing.T) {
 	eng := setupTestEngine(t)
 
 	var buf bytes.Buffer
-	eng.RLock()
-	err := ExportJSONL(&buf, eng)
-	eng.RUnlock()
+	err := exportAll(&buf, eng, "jsonl")
 
 	if err != nil {
 		t.Fatalf("ExportJSONL: %v", err)
@@ -286,3 +271,18 @@ func TestExportEmptyStore(t *testing.T) {
 
 // Suppress unused import warning for index package.
 var _ = index.NewPropertyIndex
+
+// exportAll streams every live record in the given format -- the
+// test-side stand-in for the removed export-all wrappers, exercising
+// the same StreamRecords path production uses.
+func exportAll(w io.Writer, e *core.Engine, format string) error {
+	e.RLock()
+	var ids []string
+	it := e.Graph().NodeIterator()
+	for it.Next() {
+		ids = append(ids, it.Node().ID)
+	}
+	it.Close()
+	e.RUnlock()
+	return StreamRecords(w, e, format, ids)
+}

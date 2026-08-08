@@ -65,7 +65,7 @@ func TestImportJSONPreservesAuthor(t *testing.T) {
 
 	var buf strings.Builder
 	src.RLock()
-	if err := ExportJSONL(&buf, src); err != nil {
+	if err := exportAll(&buf, src, "jsonl"); err != nil {
 		src.RUnlock()
 		t.Fatalf("ExportJSONL: %v", err)
 	}
