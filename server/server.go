@@ -85,7 +85,7 @@ func DefaultConfig() Config {
 	return Config{
 		Port:        42982,
 		Bind:        "127.0.0.1",
-		IdleTimeout: 30 * time.Minute,
+		IdleTimeout: 4 * time.Hour, // matches config.Defaults(); serve.go overrides from effective config
 	}
 }
 
@@ -676,7 +676,16 @@ func (s *Server) recordActivity() {
 	s.mu.Unlock()
 }
 
-// idleWatcher checks for idle timeout and signals shutdown.
+// idleWatcher checks for idle timeout and signals shutdown. The
+// timeout never fires while MCP proxies are attached: a proxy is a
+// live agent session, and although its next tool call would
+// auto-start a fresh server, the exit still breaks the session's MCP
+// connection until the client reconnects. Same principle as the
+// remote-serving gate in Run: never self-exit while an attached
+// consumer would be stranded by it. Registrations are
+// PID-liveness-checked (ListMCPProxies), so a SIGKILLed proxy's
+// stale file cannot pin the server; when the last proxy exits, the
+// already-elapsed idle clock shuts the server down within a tick.
 func (s *Server) idleWatcher(shutdownCh chan<- string) {
 	if s.cfg.IdleTimeout <= 0 {
 		return
@@ -684,16 +693,38 @@ func (s *Server) idleWatcher(shutdownCh chan<- string) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
+	deferralLogged := false
 	for range ticker.C {
 		s.mu.Lock()
 		idle := time.Since(s.lastRequest)
 		s.mu.Unlock()
 
-		if idle >= s.cfg.IdleTimeout {
-			shutdownCh <- fmt.Sprintf("idle for %s", idle.Round(time.Second))
-			return
+		if idle < s.cfg.IdleTimeout {
+			deferralLogged = false
+			continue
 		}
+		if n := s.attachedMCPProxies(); n > 0 {
+			// Log the deferral once per idle stretch, not per tick.
+			if !deferralLogged {
+				s.log.Info("idle timeout reached; deferring shutdown while MCP proxies are attached",
+					"idle", idle.Round(time.Second).String(), "proxies", n)
+				deferralLogged = true
+			}
+			continue
+		}
+		shutdownCh <- fmt.Sprintf("idle for %s", idle.Round(time.Second))
+		return
 	}
+}
+
+// attachedMCPProxies counts registered `gramaton mcp` proxies whose
+// process is still alive. Zero when the server has no config dir
+// (tests constructing Config directly get the pre-registry behavior).
+func (s *Server) attachedMCPProxies() int {
+	if s.cfg.ConfigDir == "" {
+		return 0
+	}
+	return len(ListMCPProxies(s.cfg.ConfigDir))
 }
 
 // registerRoutes sets up the HTTP routes.

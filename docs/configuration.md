@@ -50,13 +50,13 @@ The identity that records created in the store are attributed to. Works like git
 server:
   port: 0                # 0 = auto-assign; set a fixed port for stable URLs
   auto_start: true       # CLI auto-starts the server on first use
-  idle_timeout: 4h       # server shuts down after this idle period
+  idle_timeout: 4h       # server shuts down after this idle period (0 disables)
   tls:                   # bring-your-own certificate for the remote TLS listener
     cert_file: ""        # PEM paths; set both together, or leave empty to use
     key_file: ""         # the generated self-signed certificate
 ```
 
-Long idle timeouts (hours) match async usage patterns where the agent returns later. Disable `auto_start` if you run the server as a managed service (systemd, launchd, supervisor).
+Long idle timeouts (hours) match async usage patterns where the agent returns later. The timeout never fires while MCP proxies are attached — an open agent session keeps the server up, however long it idles; the clock only matters once the last session closes. Remote serving disables idle shutdown entirely, and `idle_timeout: 0` disables it unconditionally. Disable `auto_start` if you run the server as a managed service (systemd, launchd, supervisor).
 
 `server.tls` takes effect when remote access is enabled and is ignored while the server is loopback-only. `cert_file` and `key_file` must be set together — a config with only one of them fails to load. Note that the both-or-neither check runs after the global/per-store deep merge: a per-store config that sets only `cert_file` will inherit `key_file` from the global layer and pass validation with a mismatched pair, so per-store overrides should always set both fields together.
 
