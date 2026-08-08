@@ -1142,6 +1142,13 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			// save whose off-lock scan predates this commit must
 			// still see the promoted record under its write lock.
 			a.engine.NoteRecentWrite(memNode.ID, vec)
+		} else {
+			// No vector means the promotion was never
+			// similarity-checked (embedder outage or unconfigured).
+			// The deferred re-scan at reembed gates on this flag; the
+			// save and batch paths set it, and a promotion that
+			// skipped it let hold-grade duplicates land silently.
+			a.engine.SetProp(memNode.ID, "similar_check_pending", graph.BoolProperty(true))
 		}
 
 		// Mark the embedding model on success so gramaton_reembed

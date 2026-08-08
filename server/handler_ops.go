@@ -220,6 +220,9 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 
 		if err := s.applyPreEmbedded(n.ID, p.embedded); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
+			// Never similarity-checked; the deferred re-scan at
+			// reembed gates on this flag (parity with save/batch).
+			s.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 		}
 
 		ingested++

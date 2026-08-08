@@ -903,6 +903,15 @@ func generateSummaries(ctx context.Context, e *core.Engine, llmProv llm.Provider
 			logger.Debug("summarize node gone", "component", "curation", "record", s.id)
 			continue
 		}
+		// Content moved during the LLM call: applying this summary
+		// would anchor the record to STALE text and -- worse -- clear
+		// the refresh flag the mid-flight update just set, leaving
+		// the new content semantically invisible with no pending
+		// repair. Skip; the flag re-selects it next cycle.
+		if live, _ := n.Properties.GetString("content_full"); live != s.content {
+			logger.Debug("summarize content moved mid-flight; deferring", "component", "curation", "record", s.id)
+			continue
+		}
 		e.SetContentProp(s.id, "content_short", s.summary)
 		// A fresh summary resolves the refresh flag and resets the
 		// append bookkeeping (mirrors gramaton_update's behaviour

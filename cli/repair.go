@@ -47,12 +47,12 @@ func runRepair(cmd *cobra.Command, args []string) error {
 	}
 	dir := configDir()
 
-	// Refuse to run while the server is active to prevent concurrent
-	// writes to the same store.
-	if !repairDryRun {
-		if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
-			return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
-		}
+	// Refuse to run while the server is active. UNCONDITIONAL: even a
+	// dry run must LoadEngine, and bbolt's open has no timeout -- a
+	// dry run against a live server hung silently on the file lock
+	// instead of refusing.
+	if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
+		return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
 	}
 
 	eng, err := core.LoadEngine(dir, baseConfigDir())
