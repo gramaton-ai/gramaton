@@ -222,6 +222,25 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}, nil
 	}
 
+	// A no-summary append derives its vector from the phase-1 content
+	// snapshot, but the append itself rebases onto the live content.
+	// If the content moved between phases, storing the rebase would
+	// silently pair the record with a vector embedded from text it no
+	// longer contains -- surface it as the version conflict it is,
+	// before any mutation, and let the caller retry against the fresh
+	// state.
+	if req.ContentAppend != "" && req.SummaryShort == "" && existingSummary == "" &&
+		newVec != nil && currentContent != priorSnapshot {
+		return UpdateResponse{
+			ID: req.ID,
+			VersionConflict: &VersionConflict{
+				CurrentVersion: currentToken,
+				CurrentContent: currentContent,
+				Note:           "The record's content changed while the append was being prepared. Nothing was applied. Retry the append against current_content.",
+			},
+		}, nil
+	}
+
 	// The rebased append is checked against the content cap before any
 	// mutation: the per-field cap in phase 0 bounds the increment, not
 	// the sum, and repeated appends must not grow a record past the
