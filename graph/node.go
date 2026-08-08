@@ -420,3 +420,14 @@ func IsConcept(props Properties) bool {
 	nt, _ := props.GetString("node_type")
 	return nt == "concept"
 }
+
+// IsSectionOrChunk reports whether the node is a machine-derived
+// section or chunk child of a long document (created by the chunking
+// pipeline). Unlike concepts these DO live in the primary retrieval
+// indexes -- they are the retrieval unit for long documents -- but
+// they are excluded from save-guard candidacy, duplicates, and
+// manual mutation, and search folds their hits up to the parent.
+func IsSectionOrChunk(props Properties) bool {
+	nt, _ := props.GetString("node_type")
+	return nt == "section" || nt == "chunk"
+}

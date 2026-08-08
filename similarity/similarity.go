@@ -157,10 +157,14 @@ func MatchAgainst(g *graph.Graph, cfg config.SaveGuardConfig, vec []float32, con
 }
 
 // excluded reports whether a node is ineligible as a scan candidate:
-// derived nodes (concepts, observations), collection items (field.*
-// properties), and nodes with no content to judge against.
+// derived nodes (concepts, observations, section/chunk children),
+// collection items (field.* properties), and nodes with no content
+// to judge against. Section/chunk children matter on both sides: a
+// long document's sections must never be proposed as "the similar
+// record" (the caller cannot meaningfully update a section), and a
+// save must never be held against one.
 func excluded(n *graph.Node) bool {
-	if nt, _ := n.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+	if nt, _ := n.Properties.GetString("node_type"); nt == "concept" || nt == "observation" || nt == "section" || nt == "chunk" {
 		return true
 	}
 	for key := range n.Properties {
