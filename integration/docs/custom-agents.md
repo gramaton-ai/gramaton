@@ -58,7 +58,7 @@ store. Choose based on your framework's capabilities:
 ### 1. MCP (Recommended)
 
 The fastest path. Gramaton exposes the full MCP tool surface
-(currently 38 tools across 10 clusters) via Streamable HTTP. Agents
+(across 10 clusters) via Streamable HTTP. Agents
 call typed tools with structured parameters -- no shell, no escaping,
 no permission prompts.
 
@@ -73,10 +73,15 @@ no permission prompts.
 | Tool | Description |
 |------|-------------|
 | `gramaton_save` | User-initiated save to Memory |
+| `gramaton_save_batch` | Store many records in one call, sync or async |
+| `gramaton_save_batch_status` | Poll an async batch save's progress |
+| `gramaton_save_batch_result` | Fetch a completed async batch save's results |
+| `gramaton_save_batch_cancel` | Cancel a running async batch save |
+| `gramaton_jobs_list` | List active async jobs |
 | `gramaton_inspect` | Get full record details (and one-hop edges) |
-| `gramaton_update` | Update record metadata |
+| `gramaton_update` | Update a record in place — metadata, content, or append (optimistic concurrency via expected_version) |
 | `gramaton_classify` | Classify a pending record |
-| `gramaton_resolve` | Mark a record as resolved (completed/abandoned/obsolete) |
+| `gramaton_resolve` | Mark a record as resolved (completed/superseded/abandoned/obsolete) |
 
 *Search and ops:*
 | Tool | Description |
@@ -95,6 +100,7 @@ no permission prompts.
 | `gramaton_session_get` | Look up a session by id |
 | `gramaton_session_prepare` | Phase 1: receive extraction instructions |
 | `gramaton_session_save` | Phase 2: submit extracted segments |
+| `gramaton_session_resolve_held` | Resolve a held Memory promotion after a save-guard hold |
 
 *Intake:*
 | Tool | Description |
@@ -107,7 +113,7 @@ no permission prompts.
 | `gramaton_collection_create` | Create a collection (optional schema, template, behaviour fields) |
 | `gramaton_collection_list` | List all collections |
 | `gramaton_collection_items` | List ALL items (exhaustive); supports `as_of=T` for point-in-time |
-| `gramaton_collection_add` | Add an item (idempotent on `curation: minimal`) |
+| `gramaton_collection_add` | Add an item (idempotent on `curation: none`) |
 | `gramaton_collection_add_batch` | Add up to 500 items in one call |
 | `gramaton_collection_update` | Update item fields |
 | `gramaton_collection_move` | Move between collections |
@@ -129,6 +135,7 @@ no permission prompts.
 | `gramaton_log` | Commit history (filters: actions, exclude_curation, mutations) |
 | `gramaton_diff` | What changed between two dates / commits |
 | `gramaton_history` | Per-record change history |
+| `gramaton_history_search` | Lexical search over past versions of records |
 
 *Maintenance:*
 | Tool | Description |
@@ -191,6 +198,7 @@ POST   /v1/ingest                           Bulk file ingestion (loopback only)
 # History (temporal queries)
 GET    /v1/log                              Commit history
 GET    /v1/diff                             Compare commits / dates
+POST   /v1/history/search                   Lexical search over past record versions
 
 # Branches
 GET    /v1/branches                         List branches

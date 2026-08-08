@@ -193,6 +193,18 @@ specifically:
 The agent's `gramaton_search` call with `store=sessions` (singular `session` accepted as alias) narrows to
 conversation-derived content.
 
+### "What did this record say last month?"
+
+Records mutate in place, but nothing is thrown away — just ask.
+`gramaton_history` returns a record's version timeline: one entry per
+real change, each with its author, optional change note, and a diff
+against the previous version. For a frozen point-in-time read, give
+`gramaton_inspect` an `as_of` date or commit hash and it returns the
+record's exact state then, not now. And when you're not sure which
+record to ask — when the knowledge you want was revised away
+entirely and no longer matches anything current — `gramaton_history_search`
+does a lexical search over past versions across the store to find it.
+
 ### Exporting matched records
 
 When you want every matching record on disk — for offline
@@ -295,10 +307,10 @@ automatically**. You have to ask:
   commit abc123."
 
 Why not automatic? The closure flips `valid_until`, writes a
-resolution note, and creates an audit edge — it's a deliberate state
-change, not an inference from conversation. Auto-closing on "looks
-like we finished it" produces false positives that silently lose
-state.
+resolution note, and lands as a commit in the record's history —
+it's a deliberate state change, not an inference from conversation.
+Auto-closing on "looks like we finished it" produces false positives
+that silently lose state.
 
 > ### Important: session prepare/save does NOT close tickets
 >
@@ -435,7 +447,9 @@ record ID; that's enough to triage most issues.
 - **Index rebuilds.** Search indexes rebuild on startup if they
   drift. No manual intervention needed.
 - **Garbage collection.** GC is off by default; commit history is
-  cheap to keep, and you'll want it for the audit trail.
+  cheap to keep, and you'll want it for the audit trail. If you ever
+  want to trim old history, that's the manual `gramaton prune`
+  command — never automatic.
 
 You only think about Gramaton when you have something to save,
 something to find, or something to track. Everything else is the

@@ -95,7 +95,8 @@ Gramaton is built for exactly these gaps:
   collections for tasks. See [Three ways to store knowledge](#three-ways-to-store-knowledge).
 - **Versioned by design.** Every mutation is a commit. Branch, diff, log,
   revert. You can ask what changed as easily as what is, and every prior
-  version of every record stays reachable.
+  version of every record stays reachable (unless an operator prunes old
+  history with `gramaton prune`).
 - **A property graph.** Typed, weighted edges connect records, and traversal
   surfaces related knowledge the query text never mentioned.
 - **Automatic curation.** A background process expires stale short-lived
@@ -343,7 +344,7 @@ reverts, and each record's change history is queryable.
 
 Search fuses vector similarity with keyword matching, then ranks candidates
 by a composite score of similarity, freshness (decayed by each record's
-temporality), usage, and confidence. Metadata filters run before ranking, so
+temporality), and confidence. Metadata filters run before ranking, so
 a filtered-out record is excluded rather than merely outscored. Graph
 traversal then fans out from the top results to related knowledge the query
 text never mentioned.
@@ -422,6 +423,7 @@ the read tools. For live descriptions and schemas, call
 | `gramaton_session_get` | Fetch current session state |
 | `gramaton_session_prepare` | Get extraction instructions; must be called before save |
 | `gramaton_session_save` | Submit extracted segments as Session records and, by default, linked Memory records |
+| `gramaton_session_resolve_held` | Resolve a held Memory promotion after a save-guard hold: update the similar record or allow the segment as distinct |
 
 ### Collections
 
@@ -436,6 +438,7 @@ Twelve `gramaton_collection_*` tools cover the lifecycle: `create`, `list`,
 | Tool | What it does |
 |------|-------------|
 | `gramaton_log` | Commit log or per-record change log |
+| `gramaton_history_search` | Lexical search over past versions of records; three scopes by cost |
 | `gramaton_diff` | Structural diff between two commits or branches |
 | `gramaton_branch` | Create, list, checkout, merge, and discard branches |
 | `gramaton_backup` | Create a backup archive of the store |
@@ -479,7 +482,8 @@ curated subset:
 | `gramaton backup / restore` | Create a store archive; restore from one |
 | `gramaton reembed` | Re-embed after an embedding model change |
 | `gramaton repair` | Operator-driven self-heal |
-| `gramaton backfill author` | Stamp author on records created before attribution |
+| `gramaton prune` | Plan and confirm history retention (`--keep-versions`, `--older-than`); CLI-only by design |
+| `gramaton backfill author / collapse / changelog` | Stamp author on records created before attribution; collapse auto-superseded records out of the live graph; index historical logical versions into the changelog |
 | `gramaton validate / migrate` | Store integrity check; on-disk format upgrade |
 | `gramaton mcp` | Run as an MCP stdio proxy to the HTTP server |
 
