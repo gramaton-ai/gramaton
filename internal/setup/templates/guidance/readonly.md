@@ -5,7 +5,7 @@ shared as a frozen artifact: everything in it can be searched and
 read, and nothing is ever saved to it. No session capture, no
 memory saves, no curation, no edits of any kind.
 
-**What works (the full read surface):**
+**What works (the read surface):**
 
 - `gramaton_search` — ranked semantic + keyword retrieval across
   the store. Filters, sorting, and pagination all work normally.
@@ -24,6 +24,9 @@ memory saves, no curation, no edits of any kind.
   `gramaton_diff`, `gramaton_duplicates`, `gramaton_pending`,
   `gramaton_session_get`, `gramaton_jobs_list` — store overview,
   commit log, and diagnostics.
+- `gramaton_backup` — export the frozen store; sharing a copy is
+  the one "write" a read-only store supports (the archive lands
+  outside the store).
 - `gramaton_guide` — the live reference for how Gramaton works.
 
 **What is not available:** every write tool. `gramaton_save`, the

@@ -58,9 +58,9 @@ store. Choose based on your framework's capabilities:
 ### 1. MCP (Recommended)
 
 The fastest path. Gramaton exposes the full MCP tool surface
-(across 10 clusters) via Streamable HTTP. Agents
-call typed tools with structured parameters -- no shell, no escaping,
-no permission prompts.
+(across 10 clusters) via Streamable HTTP. Agents call typed tools
+with structured parameters -- no shell, no escaping, no permission
+prompts.
 
 **Setup:**
 - Ensure the gramaton daemon is running (`gramaton serve`)
@@ -77,7 +77,7 @@ no permission prompts.
 | `gramaton_save_batch_status` | Poll an async batch save's progress |
 | `gramaton_save_batch_result` | Fetch a completed async batch save's results |
 | `gramaton_save_batch_cancel` | Cancel a running async batch save |
-| `gramaton_jobs_list` | List active async jobs |
+| `gramaton_jobs_list` | List persisted async jobs (filterable by status, kind, time) |
 | `gramaton_inspect` | Get full record details (and one-hop edges) |
 | `gramaton_update` | Update a record in place — metadata, content, or append (optimistic concurrency via expected_version) |
 | `gramaton_classify` | Classify a pending record |

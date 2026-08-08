@@ -132,6 +132,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session promotions. `summary_short` budgets are advertised as
   target ~750 / max ~900 (enforced cap unchanged at 1000).
 
+- **Installed guidance teaches the history surface (GuidanceVersion
+  0.4.0).** The guidance templates describe `gramaton_history`
+  (version timeline), `gramaton_history_search` (lexical search over
+  past versions), and `as_of` point-in-time reads; `gramaton_log` is
+  correctly framed as the commit log. The read-only variant's tool
+  list matches the actual read-classified surface, including the
+  export path. Re-run `gramaton init --force` to refresh installed
+  instruction files.
+
 ### Changed
 
 - **Reads no longer produce commits (breaking for config).** Access

@@ -195,7 +195,7 @@ conversation-derived content.
 
 ### "What did this record say last month?"
 
-Records mutate in place, but nothing is thrown away — just ask.
+Records mutate in place, but nothing is thrown away short of a deliberate `gramaton prune` — just ask.
 `gramaton_history` returns a record's version timeline: one entry per
 real change, each with its author, optional change note, and a diff
 against the previous version. For a frozen point-in-time read, give
