@@ -33,7 +33,14 @@ type InspectResponse struct {
 	ID              string         `json:"id"`
 	Properties      map[string]any `json:"properties"`
 	MetadataSummary string         `json:"metadata_summary"`
-	Related         []RelatedEdge  `json:"related"`
+	// Version is the record's current version token, usable as
+	// expected_version on update/resolve for optimistic concurrency.
+	// The update and resolve docs have always pointed callers here;
+	// the token is a private content-hash derivation an agent cannot
+	// compute, so inspect must actually serve it. Empty on as_of
+	// reads (historical states are not updatable).
+	Version string        `json:"version,omitempty"`
+	Related []RelatedEdge `json:"related"`
 
 	// EffectiveCuration is the resolved per-record curation behaviour
 	// computed from the node's member_of edges. Tells callers exactly
@@ -107,6 +114,7 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		ID:              n.ID,
 		Properties:      props,
 		MetadataSummary: inspectMetadataSummary(n.Properties),
+		Version:         recordVersionToken(n),
 	}
 	// Conflict visibility (Tenet 12): mirror the search renderer.
 	if conflicts := search.ConflictingRecordIDs(a.engine.Graph(), n.ID); len(conflicts) > 0 {
