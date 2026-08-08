@@ -195,7 +195,7 @@ When any cap trips, curation pauses and subsequent LLM calls return `llm.ErrCapp
 
 #### Tuning for real workloads
 
-`gramaton init` writes conservative defaults (`max_calls_per_day: 500`, `max_cost_usd_per_day: 5`) — appropriate for trying Gramaton out, too tight for production curation against a meaningful backlog. A typical 500-record backlog with the default cycle interval (5 min) and per-cycle cap (`curation.max_calls_per_run: 20`) drains in ~125 minutes WITHIN the daily 500-call envelope; the moment you exceed roughly 500 records of work in 24 hours, you'll hit the cap and curation pauses until midnight UTC. Bump `max_calls_per_day` to `5000`-`10000`+ for sustained production work, or set it to `0` to disable entirely (relying on `max_cost_usd_per_day` as the sole guardrail).
+`gramaton init` writes conservative defaults (`max_calls_per_day: 500`, `max_cost_usd_per_day: 5`) — appropriate for trying Gramaton out, too tight for production curation against a meaningful backlog. A typical 500-record backlog with the default cycle interval (1 min) and per-cycle cap (`curation.max_calls_per_run: 20`) drains in ~25 minutes WITHIN the daily 500-call envelope; the moment you exceed roughly 500 records of work in 24 hours, you'll hit the cap and curation pauses until midnight UTC. Bump `max_calls_per_day` to `5000`-`10000`+ for sustained production work, or set it to `0` to disable entirely (relying on `max_cost_usd_per_day` as the sole guardrail).
 
 `curation.max_calls_per_run` is the per-cycle cap (default 20). It bounds worst-case spend in a single cycle; raising it to 100+ drains backlogs faster but multiplies per-cycle exposure. For a tight cost envelope keep it low; for backlog catch-up after a long pause, bump temporarily.
 
@@ -229,11 +229,11 @@ gc:
   min_age_days: 30                # only GC chunks older than this
 ```
 
-GC is disabled by default — the "never delete" posture means commit history is cheap to keep. Enable only if storage size becomes a concern.
+GC is disabled by default — the "never delete" posture means commit history is cheap to keep. History retention is otherwise operator-controlled via `gramaton prune` (CLI-only, plan/confirm), never automatic. Enable only if storage size becomes a concern.
 
 ## Curation
 
-Controls the deterministic + autonomous background maintenance pipeline. **Note**: this section governs the global *runner* — its cadence, retry caps, and per-task budgets. Whether a given record actually flows through curation depends on the per-collection eligibility knobs (`curation`, `supersession`, `contradictions`, `clear_mode`) set at collection-create time on the collection node, not in `config.yaml`. New ad-hoc collections default to `curation: none`; the standard templates opt their items into `curation: standard`. See [docs/integrator-guide.md](integrator-guide.md) for the per-collection knob shape and template defaults.
+Controls the deterministic + autonomous background maintenance pipeline. **Note**: this section governs the global *runner* — its cadence, retry caps, and per-task budgets. Whether a given record actually flows through curation depends on the per-collection eligibility knobs (`curation`, `contradictions`, `clear_mode`) set at collection-create time on the collection node, not in `config.yaml`. New ad-hoc collections default to `curation: none`; the standard templates opt their items into `curation: standard`. See [docs/integrator-guide.md](integrator-guide.md) for the per-collection knob shape and template defaults.
 
 ```yaml
 curation:
@@ -318,7 +318,7 @@ Per-task model selection lives in the `llm.models.tasks` map (see "LLM" above), 
 
 Controls the deterministic TF-IDF observation extractor that runs in every curation cycle (`curation/observe.go`). It finds records over `curation.observation_min_content_length` (default 1500 chars) that don't yet have observation children, picks key sentences via TF-IDF, and creates sub-fact nodes that inherit the parent's metadata. Provides narrow-target semantic recall for long documents.
 
-Unrelated to automatic conversation capture — that lives in the Sessions flow (`gramaton_session_prepare` / `_commit`). The original `/v1/observe` LLM-driven endpoint was replaced by sessions and removed; its knobs (`enabled`, `default_confidence`, `default_temporality`, `substance_min_length`, feedback-loop and retrieval-tracking dials) were removed in the 2026-04-21 config-drift sweep.
+Unrelated to automatic conversation capture — that lives in the Sessions flow (`gramaton_session_prepare` / `_save`). The original `/v1/observe` LLM-driven endpoint was replaced by sessions and removed; its knobs (`enabled`, `default_confidence`, `default_temporality`, `substance_min_length`, feedback-loop and retrieval-tracking dials) were removed in the 2026-04-21 config-drift sweep.
 
 ```yaml
 observe:

@@ -4,7 +4,7 @@ Gramaton records carry epistemic metadata. Each field is a
 *dimension* of "what kind of question does this record answer?" --
 not paperwork. Agents that default these fields flatline the
 distribution and disable the retrieval signals that depend on them
-(auto-supersession, temporal scoring, epistemic filtering).
+(temporal scoring, epistemic filtering).
 
 ## Fields and the Questions They Answer
 
@@ -58,7 +58,7 @@ reason to surface this above similar-scoring records.
 | Question | Typical metadata |
 |---|---|
 | Single-fact recall ("what did we decide about X?") | `semantic`, `well_established`, `confidence: 0.9+` |
-| Current position ("what's our position now?") | `temporal` or `durable`, with auto-supersession on cosine ≥ 0.92 |
+| Current position ("what's our position now?") | `temporal` or `durable`; records update in place, so the live record IS the current position |
 | Decision rationale ("why did we decide Y?") | `conceptual`, `confidence: 0.7+` |
 | What we tried ("did we already consider X?") | `epistemic_status: refuted`, `confidence: 0.5+` |
 | What's open ("what's still unresolved?") | `ephemeral` or `temporal`, `speculative`, `confidence: 0.3–0.5` |
