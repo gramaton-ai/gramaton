@@ -139,6 +139,40 @@ func (s *BboltEdgeStore) Put(e *Edge) {
 }
 
 // PutTx stores an edge via the caller's tx + optional *EdgeBatch.
+// ReplaceAll atomically replaces the store's contents with src's
+// edge set in ONE transaction. The naive Clear-then-Put loop costs
+// one fsynced bbolt Update per edge; on a state-changing load
+// (revert, checkout, merge) that runs under the engine write lock,
+// so a few thousand edges would stall every reader for seconds.
+func (s *BboltEdgeStore) ReplaceAll(src EdgeStore) error {
+	s.cache.reset()
+	return s.db.Update(func(tx *bolt.Tx) error {
+		for _, name := range [][]byte{edgesBucket, adjOutBucket, adjInBucket, adjTypBucket} {
+			if err := tx.DeleteBucket(name); err != nil {
+				return err
+			}
+			if _, err := tx.CreateBucket(name); err != nil {
+				return err
+			}
+		}
+		batch := NewEdgeBatch()
+		var firstErr error
+		src.ForEach(func(e *Edge) {
+			if firstErr != nil {
+				return
+			}
+			if err := s.putInTx(tx, batch, e); err != nil {
+				firstErr = err
+			}
+		})
+		if firstErr != nil {
+			return firstErr
+		}
+		s.FlushBatchTx(tx, batch)
+		return nil
+	})
+}
+
 func (s *BboltEdgeStore) PutTx(tx *bolt.Tx, batch *EdgeBatch, e *Edge) {
 	s.cache.Put(e)
 	if err := s.putInTx(tx, batch, e); err != nil {

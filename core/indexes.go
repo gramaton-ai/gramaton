@@ -244,7 +244,8 @@ func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content 
 // A non-nil return means the transaction was rolled back -- index
 // writes inside fn did not persist. Callers must check.
 func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
-	return s.boltDB.Update(func(tx *bolt.Tx) error {
+	var vecRemovals []string
+	err := s.boltDB.Update(func(tx *bolt.Tx) error {
 		ws := &WriteSession{
 			tx:      tx,
 			bm25:    index.NewBM25Batch(),
@@ -261,8 +262,20 @@ func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 		if s.edgeStore != nil {
 			s.edgeStore.FlushBatchTx(tx, ws.edges)
 		}
+		vecRemovals = ws.vecRemovals
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Vector removals apply only after the tx committed: the mmap-
+	// backed index persists writes independently of bbolt, so an
+	// eager removal inside a rolled-back batch would permanently
+	// drop the record from vector search.
+	for _, id := range vecRemovals {
+		s.vecIdx.Remove(id)
+	}
+	return nil
 }
 
 // rebuildPrimaryIfMissing populates the primary indexes (prop, bm25,

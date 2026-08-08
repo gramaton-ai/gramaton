@@ -536,27 +536,39 @@ func (e *Engine) Graph() *graph.Graph { return e.graph }
 // soon as no one retains a reference. Caller MUST hold the write
 // lock (Lock/Unlock).
 //
-// This is the primitive for "load a new state off-lock, then apply
-// under lock" -- callers construct a fresh *graph.Graph via
-// graph.NewWithCapacity(cap, graph.WithEdgeStore(engine.EdgeStore()))
-// + Load(store, hash) outside the lock, then take the write lock,
-// call SwapGraph, write HEAD/refs, call RebuildAllIndexes, release.
-// BranchCheckout/Merge use this to keep the expensive parse off-lock.
-//
-// IMPORTANT: the new graph must share the engine's BboltEdgeStore.
-// If you build it with the default graph.New() it gets a fresh
-// MemoryEdgeStore and any subsequent edge writes silently bypass
-// bbolt persistence. Use EdgeStore() to grab the engine's store
-// and inject via graph.WithEdgeStore.
+// Prefer AdoptGraph for state-changing loads (revert, checkout,
+// merge): build the replacement off-lock via graph.LoadStaged, then
+// AdoptGraph under the lock. Loading directly into a graph that
+// shares the engine's populated BboltEdgeStore makes Load skip edge
+// reload and keeps the OLD state's edges under the NEW state's
+// nodes; a bare graph.New() instead installs a MemoryEdgeStore whose
+// subsequent edge writes silently bypass bbolt. AdoptGraph threads
+// that needle. Direct SwapGraph remains for callers that already
+// hold a correctly-backed graph.
 //
 // Incremental-commit state (lastNodeTreeRoot/lastEdgeTreeRoot) is
 // carried on the graph itself and was set by Load, so subsequent
 // saves on the swapped-in graph commit correctly.
 func (e *Engine) SwapGraph(g *graph.Graph) { e.graph = g }
 
-// EdgeStore returns the engine's persistent edge store. Used by
-// SwapGraph callers (BranchCheckout/Merge) to construct a
-// replacement graph that shares the engine's BboltEdgeStore.
+// AdoptGraph installs a staged graph (produced by graph.LoadStaged,
+// memory-backed edges) as the live graph: the staged edge set
+// replaces the shared bbolt edge store's contents wholesale, and the
+// staged graph takes ownership of that store so subsequent edge
+// writes persist. This is the correct swap for state-changing loads
+// (revert, checkout, merge) -- handing the shared store to Load
+// directly makes Load skip edge reload entirely because the store is
+// already populated with the OLD state, resurrecting or dropping
+// edges wholesale. Caller must hold the engine write lock and must
+// call RebuildAllIndexes afterwards.
+func (e *Engine) AdoptGraph(staged *graph.Graph) {
+	staged.MigrateEdgesTo(e.indexes.edgeStore)
+	e.graph = staged
+}
+
+// EdgeStore returns the engine's persistent edge store. Mostly
+// internal since AdoptGraph took over the state-changing swap path;
+// remains exported for direct store inspection (tests, diagnostics).
 func (e *Engine) EdgeStore() *graph.BboltEdgeStore { return e.indexes.edgeStore }
 
 // PropIdx returns the property index.

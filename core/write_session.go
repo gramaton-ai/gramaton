@@ -4,6 +4,8 @@
 package core
 
 import (
+	"fmt"
+
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 	bolt "go.etcd.io/bbolt"
@@ -33,6 +35,13 @@ type WriteSession struct {
 	// batch closure; nil/empty is fine (commit still filterable by
 	// Message prefix).
 	actions []graph.CommitAction
+	// vecRemovals defers vector-index deletions until the shared tx
+	// commits. The vector index is mmap-backed and its writes persist
+	// regardless of the bbolt transaction's fate; removing eagerly
+	// would make a rolled-back batch permanently drop records from
+	// vector search (startup rebuild skips a non-empty vector
+	// snapshot, so there is no self-healing path).
+	vecRemovals []string
 }
 
 // AddAction records a D3 structured action for the current batch.
@@ -96,4 +105,44 @@ func (ws *WriteSession) IndexNode(nodeID, content string, vec []float32) {
 		return
 	}
 	ws.indexes.applyToNodeSession(ws, n, content, vec)
+}
+
+// DeleteNode hard-deletes a node: every index entry, the cascading
+// edges, and the node itself, all via the session's tx + caches.
+// Mirrors the plain-lock GC deletion pattern for batched callers --
+// the non-Tx variants open their own bbolt transactions and would
+// self-deadlock inside the session's shared one. The vector-index
+// removal is deferred to the tx commit (see vecRemovals).
+//
+// Constraint: the cascade set comes from the COMMITTED adjacency
+// lists. An edge added via ws.AddEdge earlier in the same session is
+// invisible to it -- do not add an edge and then delete one of its
+// endpoints within one batch, or the edge dangles.
+func (ws *WriteSession) DeleteNode(id string) error {
+	n, ok := ws.engine.graph.GetNode(id)
+	if !ok {
+		return fmt.Errorf("core: node %s: %w", id, graph.ErrNotFound)
+	}
+	// Collection membership caches are keyed by collection, not by
+	// member: cascading the member_of edge alone would leak the
+	// deleted ID in the collection's persistent member list forever.
+	if ws.indexes.collCache != nil {
+		for _, e := range ws.engine.graph.EdgesFrom(id) {
+			if e.Type == "member_of" {
+				ws.indexes.collCache.RemoveMemberTx(ws.tx, e.TargetID, id)
+			}
+		}
+	}
+	ws.indexes.propIdx.RemoveNodeTx(ws.tx, id, n.Properties)
+	ws.indexes.bm25Full.RemoveTx(ws.tx, ws.bm25, id)
+	ws.vecRemovals = append(ws.vecRemovals, id)
+	if ws.indexes.secIdx != nil {
+		ws.indexes.secIdx.RemoveNodeTx(ws.tx, id)
+	}
+	return ws.engine.graph.DeleteNodeTx(ws.tx, ws.edges, id)
+}
+
+// DeleteEdge removes an edge via the session's tx + edge batch.
+func (ws *WriteSession) DeleteEdge(id string) error {
+	return ws.engine.graph.DeleteEdgeTx(ws.tx, ws.edges, id)
 }

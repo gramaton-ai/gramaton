@@ -115,6 +115,21 @@ func (g *Graph) DeleteEdge(id string) error {
 	return nil
 }
 
+// DeleteEdgeTx removes an edge via the caller's tx + optional
+// *EdgeBatch. Inside a shared write transaction (WithWriteBatch) the
+// plain DeleteEdge would open its own bbolt Update against the same
+// DB and self-deadlock; this variant routes through the edge store's
+// DeleteTx instead. In-memory edge stores ignore tx/batch. See D40.
+func (g *Graph) DeleteEdgeTx(tx *bolt.Tx, batch *EdgeBatch, id string) error {
+	if _, ok := g.edgeStore.Get(id); !ok {
+		return fmt.Errorf("graph: edge %s: %w", id, ErrNotFound)
+	}
+	g.edgeStore.DeleteTx(tx, batch, id)
+	delete(g.dirtyEdges, id)
+	g.deletedEdges[id] = struct{}{}
+	return nil
+}
+
 // deleteEdge is the internal edge deletion that updates indexes.
 // Caller must ensure the edge exists.
 func (g *Graph) deleteEdge(id string) {
