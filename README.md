@@ -376,7 +376,7 @@ similar records, and promotes recurring themes to concept nodes.
 ┌─────┐  ┌──────────┐  ┌────────┐
 │Graph│  │ Indexes  │  │Storage │
 │     │  │ BM25     │  │ prolly │
-│     │  │ HNSW/Flat│  │ tree   │
+│     │  │ Vector   │  │ tree   │
 └─────┘  └──────────┘  └────────┘
 ```
 

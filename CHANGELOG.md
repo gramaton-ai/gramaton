@@ -163,6 +163,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity; the timeline surfaces it per version. Pre-existing
   commits read back unattributed.
 
+- **Discarding the active branch is refused (breaking).** BranchDiscard
+  previously switched HEAD to main and then discarded; it now
+  returns an error directing the caller to check out another branch
+  first -- an implicit branch switch buried inside a discard is how
+  work gets lost.
+
+- **New request bounds.** A single `gramaton_session_save` accepts
+  at most 500 segments (matching the batch path), and a single
+  `gramaton_save_batch_result` wait is bounded by the transport
+  (about two minutes over HTTP; the retryable timeout says to call
+  again). Requests beyond either bound were previously accepted --
+  and, for the wait, died as a connection reset.
+
+- **Wire additions and shape changes.** `gramaton_inspect` returns
+  the record's `version` token; search results carry `updated_at`
+  and `conflict_count` (live contradicts edges); access bookkeeping
+  (access_count / last_accessed) now covers exactly the results a
+  query returns rather than every ranked candidate; the repair
+  result drops its `indexes_rebuilt` field (repair deletes through
+  the canonical index-maintaining path and no longer mass-rebuilds);
+  and `gramaton repair --dry-run` refuses while the server is
+  running instead of hanging on the database lock.
+
 ### Added
 
 - **`gramaton prune`: deliberate, manual history retention (CLI

@@ -356,13 +356,7 @@ search:
   bm25_b: 0.75                       # BM25 length normalization
   rrf_k: 60                          # reciprocal rank fusion constant
   suggestion_threshold: 0.75         # score below which faceted suggestions are returned
-  hnsw_threshold: 5000               # vector count above which HNSW replaces flat scan
-  hnsw_m: 16                         # HNSW max connections per layer
-  hnsw_ef_construction: 200          # HNSW build quality
-  hnsw_ef_search: 100                # HNSW search width
 ```
-
-Below `hnsw_threshold`, vector search uses exact brute-force (FlatIndex). Above it, HNSW provides O(log N) approximate nearest-neighbor search. The HNSW parameters rarely need tuning — defaults follow the original paper.
 
 `session_dedup_enabled: true` (the default) means when a Memory record and the Session segment it was extracted from both match a query, only the Memory record is returned — the segment is suppressed to avoid visible duplication across the two stores.
 
@@ -473,13 +467,6 @@ A save at or above `similar_hold_threshold` (also verified by a word-level Jacca
 The hold threshold defaults to 0.94; the earlier 0.92 calibration produced frequent false positives. A false positive now costs one extra round trip rather than data, so lowering it is a safe experiment. If embedding fails at save time, the record commits with a `similar_check_pending` warning and the check runs when the record is re-embedded.
 
 **Legacy `dedup:` section**: configs written before v0.4.0 configured auto-supersession under a `dedup:` key. That mechanism is gone — near-duplicates are refused at save time instead of superseding older records after the fact. A leftover `dedup:` section errors at config load so stale calibration isn't silently ignored.
-
-### Graph
-
-```yaml
-graph:
-  edge_weight_traversal_threshold: 0.3  # min edge weight for graph_explore traversal
-```
 
 ### Storage
 

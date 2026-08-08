@@ -29,7 +29,7 @@ Gramaton is a single Go binary that runs as an on-demand daemon. The CLI auto-st
 ┌───────┐   ┌─────────────────┐   ┌──────────┐
 │ graph │   │ indexes         │   │ storage  │
 │       │   │ BM25 / Property │   │ prolly   │
-│       │   │ HNSW / Flat     │   │ tree     │
+│       │   │ Flat (mmap)     │   │ tree     │
 │       │   │ Collections /   │   │          │
 │       │   │ Secondary       │   │          │
 └───────┘   └─────────────────┘   └──────────┘
@@ -80,7 +80,7 @@ See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step pro
 `core/engine.go` owns the wiring. An `Engine` holds:
 
 - The loaded graph (`graph.Graph`).
-- The index set (`indexSet`: BM25, vector HNSW/Flat, property, secondary, collections, commit-timestamp).
+- The index set (`indexSet`: BM25, vector, property, secondary, collections, commit-timestamp).
 - A `searcherSubsystem` that wraps `search.Tool` — pure computation on top of the graph and indexes.
 - Provider references (`embed.Provider`, `llm.Provider`).
 - The storage layer (`storage.Store`).
@@ -94,7 +94,7 @@ The Engine never knows about the transports or the api/ layer. It exposes primit
 ### 4. Data layer (`graph/`, `index/`, `storage/`)
 
 - **`graph/`**: in-memory property graph. Nodes with typed key-value properties, edges with type + weight + optional properties. Pure data structure — no I/O. `graph.Properties` is a `map[string]Property`; property types are a sum (`String`, `Float64`, `Int64`, `Bool`, `Timestamp`, `Vector`, `StringList`, `Bytes`).
-- **`index/`**: BM25 (`bbolt_bm25.go`), vector indexes (`hnsw.go`, `flat_mmap.go`, switched dynamically by candidate-set size), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
+- **`index/`**: BM25 (`bbolt_bm25.go`), the vector index (`flat_mmap.go`), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
 - **`storage/`**: prolly tree — a probabilistic B-tree with content-addressed chunks. Mutations create new root hashes; old roots stay reachable as commit history. `storage/cas.go` is the content-addressed store; `storage/prolly.go` is the tree itself; `storage/gc.go` garbage-collects unreferenced chunks.
 
 The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted alongside each commit and loaded from disk at startup, skipping re-tokenization.
@@ -119,7 +119,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
-| `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
+| `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), and reranking. No I/O. |
 | `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. Per-collection eligibility is gated by orthogonal behavior knobs on the collection node (`curation`, `contradictions`, `clear_mode`); `EffectiveCurationFor(record)` resolves the effective level by walking `member_of` edges. New ad-hoc collections default to `curation=none`; the standard templates (`backlog`, `todo`, `reading-list`, `journal`, `references`) opt in to `curation=standard` and declare a `content_fields` list naming the fields the LLM treats as the item's content. |
 | `similarity/` | Save-guard similar-record detection: vector scan + Jaccard verification powering the hold and advisory bands. |
 | `chunking/` | Long-content splitting before embedding. |
@@ -136,7 +136,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `graph/` | In-memory property graph: nodes, edges, properties. Pure data structure. |
-| `index/` | Persisted indexes: BM25, vector (HNSW / Flat / mmap), property, secondary, collections. |
+| `index/` | Persisted indexes: BM25, vector (mmap'd flat), property, secondary, collections. |
 | `storage/` | Prolly tree on a content-addressed store. Commit history, garbage collection. |
 
 ### Support
