@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
@@ -120,6 +121,14 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 	s.engine.Lock()
 	defer s.engine.Unlock()
 
+	// An acknowledged scan hold is already judged -- clear it before
+	// the delta merge so a hold-grade record that committed in the
+	// scan-to-lock window still surfaces instead of being shadowed by
+	// the acked (and typically more similar) match. Mirrors api.Save.
+	if outcome.Hold != nil && intakeAckContains(req.AllowSimilar, outcome.Hold.NodeID) {
+		outcome.Hold = nil
+	}
+
 	// Delta re-scan + hold, pre-insert.
 	if scanVec != nil {
 		if m, found, _ := s.engine.SimilarInDelta(scanSeq, scanVec, req.Content); found {
@@ -164,9 +173,13 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 
 	n := s.engine.Graph().AddNode(props)
 
-	// Index content for BM25. Append meta values so keyword search
-	// matches structured metadata fields.
+	// Index content for BM25, with the caller's keywords and meta
+	// values appended -- the same three sources the api save path and
+	// the rebuild union (RecordIndexText) use.
 	bm25Text := req.Content
+	if len(req.Keywords) > 0 {
+		bm25Text += " " + strings.Join(req.Keywords, " ")
+	}
 	if metaText := metaBM25Text(req.Meta); metaText != "" {
 		bm25Text += " " + metaText
 	}

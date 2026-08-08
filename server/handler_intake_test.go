@@ -120,6 +120,26 @@ func TestIntakeRejectsMalformedDate(t *testing.T) {
 	}
 }
 
+// TestIntakeIndexesKeywordsForBM25: intake shares save's indexing
+// contract -- caller keywords are BM25 terms from the moment the
+// record lands, not only after an index rebuild.
+func TestIntakeIndexesKeywordsForBM25(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	w := doRequest(t, srv, "POST", "/v1/intake", map[string]any{
+		"content":  "a note about deployment cadence",
+		"keywords": []string{"quartzgreen"},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	id := parseResponse(t, w)["data"].(map[string]any)["id"].(string)
+
+	hits := eng.BM25Full().Search([]string{"quartzgreen"}, 5, nil)
+	if len(hits) != 1 || hits[0].NodeID != id {
+		t.Fatalf("BM25 search on an intake keyword = %+v, want the record %s", hits, id)
+	}
+}
+
 // intakeDedupEmbedder returns the same vector for identical input
 // text, so a second intake of the same content deterministically
 // triggers the save-guard hold (the server-package twin of the api
