@@ -1,6 +1,8 @@
 package search
 
 import (
+	"time"
+
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/index"
 )
@@ -33,6 +35,11 @@ func ScanConceptMatches(g graph.NodeReader, queryVec []float32, threshold float6
 	if len(queryVec) == 0 || threshold <= 0 {
 		return nil
 	}
+
+	// A record counts as historical only once valid_until has passed;
+	// a future valid_until marks a live record with a scheduled
+	// expiry, matching how the metadata summary reads the field.
+	now := time.Now().UTC()
 
 	var matches []ConceptMatch
 	it := g.NodeIterator()
@@ -77,7 +84,7 @@ func ScanConceptMatches(g graph.NodeReader, queryVec []float32, threshold float6
 			if !ok {
 				continue
 			}
-			if _, hist := src.Properties.GetTimestamp("valid_until"); hist {
+			if vu, ok := src.Properties.GetTimestamp("valid_until"); ok && vu.Before(now) {
 				continue
 			}
 			live = append(live, edge.SourceID)
