@@ -1792,6 +1792,13 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		if !ok {
 			continue
 		}
+		// Derived nodes are machine-owned: a contradiction verdict
+		// would write contested status and edges onto shapes the api
+		// guards protect (concepts) or sub-records whose parent is
+		// the canonical claim (observations).
+		if nt, _ := nA.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+			continue
+		}
 		contentA := RecordContentFor(e.Graph(), idA)
 		if contentA == "" {
 			continue
@@ -1810,6 +1817,11 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 		for _, sr := range results {
 			if sr.NodeID == idA {
 				continue
+			}
+			if nB, ok := e.Graph().GetNode(sr.NodeID); ok {
+				if nt, _ := nB.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+					continue
+				}
 			}
 			sim := float64(sr.Similarity)
 			if sim < minSim || sim >= maxSim {

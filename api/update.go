@@ -417,18 +417,31 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 // the pair re-enters the contradiction-detection window naturally.
 // Caller must hold the engine write lock.
 func (a *API) reopenConflicts(recordID string) {
+	// Every contradiction VERDICT reopens on content change -- the
+	// positive edge, and equally the negative ones (no_contradiction,
+	// contradiction_check_skipped): the curation pass hard-skips any
+	// pair carrying a prior verdict, so a stale negative would pin a
+	// pair out of re-evaluation forever even after a rewrite put the
+	// two records in direct contradiction.
+	verdictEdge := func(t string) bool {
+		return t == "contradicts" || t == "no_contradiction" || t == "contradiction_check_skipped"
+	}
 	peers := map[string]struct{}{}
 	var edgeIDs []string
 	for _, e := range a.engine.Graph().EdgesFrom(recordID) {
-		if e.Type == "contradicts" {
+		if verdictEdge(e.Type) {
 			edgeIDs = append(edgeIDs, e.ID)
-			peers[e.TargetID] = struct{}{}
+			if e.Type == "contradicts" {
+				peers[e.TargetID] = struct{}{}
+			}
 		}
 	}
 	for _, e := range a.engine.Graph().EdgesTo(recordID) {
-		if e.Type == "contradicts" {
+		if verdictEdge(e.Type) {
 			edgeIDs = append(edgeIDs, e.ID)
-			peers[e.SourceID] = struct{}{}
+			if e.Type == "contradicts" {
+				peers[e.SourceID] = struct{}{}
+			}
 		}
 	}
 	if len(edgeIDs) == 0 {

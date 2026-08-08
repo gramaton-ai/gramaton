@@ -73,6 +73,10 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 		if !ok {
 			continue
 		}
+		// Derived nodes are machine-owned; no contradiction edges.
+		if nt, _ := nA.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+			continue
+		}
 		if isChunkNode(e.Graph(), idA) {
 			continue
 		}
@@ -87,6 +91,11 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 		for _, sr := range results {
 			if sr.NodeID == idA {
 				continue
+			}
+			if nB, ok := e.Graph().GetNode(sr.NodeID); ok {
+				if nt, _ := nB.Properties.GetString("node_type"); nt == "concept" || nt == "observation" {
+					continue
+				}
 			}
 			sim := float64(sr.Similarity)
 			if sim < minSim || sim >= maxSim {

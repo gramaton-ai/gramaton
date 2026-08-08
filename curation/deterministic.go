@@ -1139,6 +1139,14 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 		if !ok {
 			continue
 		}
+		// "conceptual" is also a normal USER classification; only
+		// machine-owned concept nodes get evidence machinery. Stamping
+		// a user record would additionally mint a changelog version on
+		// every edge-count drift (evidence props are not bookkeeping
+		// for non-concept nodes by design).
+		if !graph.IsConcept(n.Properties) {
+			continue
+		}
 		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {
 			continue
 		}
