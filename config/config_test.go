@@ -348,6 +348,62 @@ func TestLoadInvalidYAML(t *testing.T) {
 	}
 }
 
+// TestLoadRemovedKeysGetUpgradeHints exercises the removed-key
+// annotation on strict-decode failures. A v0.3 config carrying keys
+// that v0.4 removed must fail with every offending key named plus a
+// removal note, so the error reads as upgrade guidance rather than a
+// typo report.
+func TestLoadRemovedKeysGetUpgradeHints(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`dedup:
+  similarity_threshold: 0.92
+graph:
+  max_hops: 3
+search:
+  hnsw_m: 16
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for removed keys")
+	}
+	msg := err.Error()
+	for _, want := range []string{"dedup", "graph", "hnsw_m", "removed in v0.4.0", "delete these keys"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+// TestLoadUnknownKeyTypoGetsNoHint pins the negative: a genuinely
+// unknown key (typo) fails strict decoding with the plain error and
+// no removed-key guidance block.
+func TestLoadUnknownKeyTypoGetsNoHint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := os.WriteFile(path, []byte("scorring:\n  weight_similarity: 0.5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown key")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "scorring") {
+		t.Fatalf("error should name the unknown key:\n%s", msg)
+	}
+	if strings.Contains(msg, "delete these keys") {
+		t.Fatalf("typo should not trigger removed-key guidance:\n%s", msg)
+	}
+}
+
 func TestSaveCreatesDirectories(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "deep", "config.yaml")
