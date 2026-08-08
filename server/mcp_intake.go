@@ -27,6 +27,7 @@ func (s *Server) registerMCPIntakeTools(mcpServer *mcp.Server) {
 			SummaryShort:           args.SummaryShort,
 			SourceRef:              args.SourceRef,
 			AssertedAsOf:           args.AssertedAsOf,
+			AllowSimilar:           args.AllowSimilar,
 			Meta:                   args.Meta,
 		})
 		if svcErr != nil {

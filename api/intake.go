@@ -41,6 +41,7 @@ type IntakeRequest struct {
 	SummaryShort           string         `json:"summary_short,omitempty" jsonschema:"summary, target ~750 chars, max ~900 (semantic anchor for embedding)"`
 	SourceRef              string         `json:"source_ref,omitempty" jsonschema:"source URL or path"`
 	AssertedAsOf           string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (RFC3339)"`
+	AllowSimilar           []string       `json:"allow_similar,omitempty" jsonschema:"record IDs from a prior hold response, acknowledging the new record is genuinely distinct from them. Only set after a hold; never as a standing default."`
 	Meta                   map[string]any `json:"meta,omitempty" jsonschema:"structured metadata from source systems"`
 }
 

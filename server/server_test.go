@@ -72,7 +72,7 @@ func TestServerNewAcceptsNilLLM(t *testing.T) {
 	}
 }
 
-func setupTestServer(t *testing.T) (*Server, *core.Engine) {
+func setupTestServer(t *testing.T, opts ...core.EngineOption) (*Server, *core.Engine) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Defaults()
@@ -93,11 +93,11 @@ func setupTestServer(t *testing.T) (*Server, *core.Engine) {
 	cfg.Search.SessionDedupEnabled = false
 	config.Save(cfg, dir+"/config.yaml")
 
-	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+	eng, err := core.LoadEngineWithOptions(dir, nil, append([]core.EngineOption{
 		core.WithLLM(noopLLM{}),
 		core.WithVectorIndex(index.NewFlatIndex()),
 		core.WithVolatileStorage(),
-	})
+	}, opts...))
 	if err != nil {
 		t.Fatalf("LoadEngine: %v", err)
 	}
