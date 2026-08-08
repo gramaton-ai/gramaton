@@ -139,8 +139,10 @@ gramaton init
 The wizard first asks how you want to start: fresh, restore from a backup,
 or attach a shared read-only store. A fresh install then sets up your author
 identity, an embedding provider, an optional LLM for autonomous curation,
-MCP registration for each AI tool it detects, agent usage guidance, and
-automatic session capture. The default embedder is pure-Go BERT; its 130 MB
+MCP registration for each AI tool it detects, agent usage guidance,
+automatic session capture, and (separately consented, Claude Code today)
+permission pre-approval so Gramaton's tools run without per-call prompts.
+The default embedder is pure-Go BERT; its 130 MB
 model downloads on first use. Re-running the wizard is safe; nothing gets
 double-registered.
 
@@ -190,7 +192,8 @@ Anything else that speaks MCP works with the manual setup above; see
 ## Uninstall
 
 `gramaton uninstall` removes everything `gramaton init` wired into your AI
-tools: MCP registrations, hooks, and usage guidance. It shows what it found
+tools: MCP registrations, hooks, permission pre-approvals, and usage
+guidance. It shows what it found
 and asks for confirmation before touching anything; `--dry-run` previews the
 removal without applying it.
 

@@ -26,14 +26,40 @@ import (
 // gramaton slice of that list. Ownership boundary: entries prefixed
 // mcp__gramaton__ -- the default MCP server name init itself
 // registers. Attached-store servers (registered under other names)
-// and every non-gramaton entry are never touched. Deny entries are
-// never written, never removed, and always win: a tool the user
-// denied is not added to allow.
+// and every non-gramaton entry are never touched. Deny and ask
+// entries are never written, never removed, and always win: a tool
+// the user denied (or set to ask) is not added to allow, in any of
+// the rule shapes Claude Code accepts (exact, trailing-glob, bare
+// server name).
 
 // claudePermissionPrefix marks the allow-list entries this installer
 // owns: tools of the default "gramaton" MCP server entry (the name
 // registerClaudeCodeEntry registers when no store name is given).
 const claudePermissionPrefix = "mcp__gramaton__"
+
+// errPermissionsBlocked reports that every gramaton tool is covered
+// by the user's deny/ask rules (a server-wide or broader block), so
+// the patcher wrote nothing. The wizard turns this into an honest
+// skip line instead of a failure.
+var errPermissionsBlocked = errors.New("permissions.deny/ask rules block every gramaton tool")
+
+// permissionRuleBlocks reports whether any of the user's deny/ask
+// rules covers the given mcp__gramaton__<tool> entry. Rule shapes
+// honored (Claude Code permission syntax): the exact entry, a
+// trailing-glob prefix (`mcp__*`, `mcp__gramaton__*`), and the bare
+// server form `mcp__gramaton` which blocks every tool of the server.
+func permissionRuleBlocks(rules []string, entry string) bool {
+	bareServer := strings.TrimSuffix(claudePermissionPrefix, "__")
+	for _, r := range rules {
+		if r == entry || r == bareServer {
+			return true
+		}
+		if p, ok := strings.CutSuffix(r, "*"); ok && strings.HasPrefix(entry, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // registerClaudePermissions patches the user-scope
 // ~/.claude/settings.json permissions.allow list to pre-approve the
@@ -80,19 +106,27 @@ func registerClaudePermissions(_ context.Context, toolNames []string) (bool, err
 		allow = arr
 	}
 
-	// Deny always wins and is read-only to us. A non-array deny is a
-	// won't-touch error even though we don't modify it: we cannot
-	// honor entries we cannot read, and guessing risks pre-approving
-	// something the user meant to block.
-	deny := map[string]bool{}
-	if raw, present := permsObj["deny"]; present {
+	// Deny and ask both outrank allow and are read-only to us. A
+	// non-array value is a won't-touch error even though we don't
+	// modify either list: we cannot honor entries we cannot read, and
+	// guessing risks pre-approving something the user meant to block.
+	// Claude Code permission rules come in more shapes than exact
+	// tool names -- `mcp__gramaton` (whole server), `mcp__gramaton__*`
+	// / `mcp__*` (trailing-glob), and per-tool -- so blocking rules
+	// are matched structurally, not by string equality.
+	var blocking []string
+	for _, key := range []string{"deny", "ask"} {
+		raw, present := permsObj[key]
+		if !present {
+			continue
+		}
 		arr, isArr := raw.([]any)
 		if !isArr {
-			return false, fmt.Errorf("%s has a non-array permissions.deny value; won't touch it -- fix by hand", settingsPath)
+			return false, fmt.Errorf("%s has a non-array permissions.%s value; won't touch it -- fix by hand", settingsPath, key)
 		}
 		for _, d := range arr {
 			if s, isStr := d.(string); isStr {
-				deny[s] = true
+				blocking = append(blocking, s)
 			}
 		}
 	}
@@ -100,12 +134,25 @@ func registerClaudePermissions(_ context.Context, toolNames []string) (bool, err
 	wanted := make([]string, 0, len(toolNames))
 	for _, name := range toolNames {
 		entry := claudePermissionPrefix + name
-		if deny[entry] {
+		if permissionRuleBlocks(blocking, entry) {
 			continue
 		}
 		wanted = append(wanted, entry)
 	}
 	sort.Strings(wanted)
+
+	// Every tool blocked means the user has a standing server-wide
+	// (or broader) deny/ask posture. Write nothing -- not even the
+	// stale-entry reconciliation -- and tell the wizard why: an
+	// installer half-editing the permission block of a user who shut
+	// the door on it would be exactly the overreach the consent gate
+	// exists to prevent.
+	if len(toolNames) > 0 && len(wanted) == 0 {
+		return false, errPermissionsBlocked
+	}
+	if len(wanted) == 0 {
+		return true, nil
+	}
 
 	// Rebuild allow: every non-gramaton entry (including non-string
 	// oddities) survives in place; the gramaton-owned slice is
@@ -139,7 +186,7 @@ func registerClaudePermissions(_ context.Context, toolNames []string) (bool, err
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(settingsPath), err)
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return false, fmt.Errorf("serialize settings: %w", err)
 	}
@@ -200,7 +247,7 @@ func unregisterClaudePermissions(_ context.Context, apply bool) (bool, string, e
 	if err != nil {
 		return true, "", err
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return true, backup, fmt.Errorf("serialize settings: %w", err)
 	}

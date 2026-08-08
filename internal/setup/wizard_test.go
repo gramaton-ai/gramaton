@@ -124,6 +124,15 @@ func TestWizardImportBranchDirectoryPath(t *testing.T) {
 func TestWizardFreshPathSkipEverything(t *testing.T) {
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
+	// Hermeticity: this test uses the REAL hook backend and real
+	// client detection. It stays out of the hooks/permissions
+	// writers only because the scripted prompter exhausts at the
+	// step-5 consents -- redirect HOME anyway so a future prompt
+	// added before step 5 can never scribble on the real
+	// ~/.claude/settings.json.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
 	// Answers, in order:
 	//   Step 0: [1] fresh (the route question is the wizard's FIRST
 	//   prompt, before identity)

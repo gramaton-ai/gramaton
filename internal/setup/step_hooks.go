@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,14 +11,18 @@ import (
 )
 
 // stepHooks is Step 5: install automatic-capture hooks for detected
-// MCP clients. This wires Gramaton's session lifecycle (start / stop
-// / pre-compact / post-compact) to the client so session prepare and
-// save run automatically without the user having to remember.
+// MCP clients, and offer permission pre-approval where the harness
+// supports it. This wires Gramaton's session lifecycle (start / stop
+// / pre-compact / post-compact / user-prompt-submit) to the client
+// so session prepare and save run automatically without the user
+// having to remember, and (separately consented) removes the
+// per-call permission prompts that would otherwise interrupt each
+// automatic save.
 //
 // Flow:
 //  1. Depend on Step 3's detection results: if no clients were
 //     detected, skip entirely with a short message.
-//  2. Ask one Yes/No "install auto-capture hooks for the detected
+//  2. Ask a Yes/No "install auto-capture hooks for the detected
 //     clients? [Y/n]".
 //  3. On confirm, for each detected client: materialize the proxy
 //     scripts to <configDir>/hooks/<client>/, then wire them via
@@ -27,8 +32,11 @@ import (
 //     strategy (kiro-cli: per-agent schema, no default agent to
 //     patch) get the script paths printed with manual wiring
 //     guidance instead.
-//  4. Warn at the end that users need to restart their clients for
-//     the new hooks to take effect.
+//  4. Offer permission pre-approval (offerPermissions) under its own
+//     Yes/No, on both the confirm and decline paths — the two
+//     consents are independent.
+//  5. Warn at the end that users need to restart their clients for
+//     the new hooks/permissions to take effect.
 //
 // Dependencies: this step re-runs Detect on the MCP backend rather
 // than threading detected clients through from Step 3. Both calls
@@ -83,7 +91,10 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 		)
 		// Permissions are consent-gated independently: declining
 		// hooks shouldn't cost the user the prompt-free tool calls.
-		w.offerPermissions(ctx, clients)
+		if w.offerPermissions(ctx, clients) {
+			w.writer.Blank()
+			w.writer.Warn("Restart your AI client(s) so the permissions take effect.")
+		}
 		return nil
 	}
 
@@ -136,11 +147,11 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 		}
 	}
 
-	w.offerPermissions(ctx, clients)
+	permsChanged := w.offerPermissions(ctx, clients)
 
-	if installed > 0 {
+	if installed > 0 || permsChanged {
 		w.writer.Blank()
-		w.writer.Warn("Restart your AI client(s) so the hooks take effect.")
+		w.writer.Warn("Restart your AI client(s) so the hooks and permissions take effect.")
 	}
 	return nil
 }
@@ -151,30 +162,42 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 // the hooks consent because the two grants differ in kind: hooks run
 // gramaton code on lifecycle events, permissions let the agent call
 // gramaton's MCP tools without per-call prompts. A user may
-// reasonably want either without the other.
-func (w *Wizard) offerPermissions(ctx context.Context, clients []DetectedClient) {
+// reasonably want either without the other. Reports whether any
+// permission config was actually rewritten, so the caller can widen
+// the restart warning. A bare Enter counts as yes, matching the
+// hooks consent above it.
+func (w *Wizard) offerPermissions(ctx context.Context, clients []DetectedClient) bool {
+	// Dedup by harness: two detected clients resolving to the same
+	// registry entry (not possible today, cheap to guard) must not
+	// write or report twice.
+	seen := map[string]bool{}
 	var eligible []*Harness
 	for _, c := range clients {
-		if h := harnessByName(c.Name); h != nil && h.WirePermissions != nil {
+		if h := harnessByName(c.Name); h != nil && h.WirePermissions != nil && !seen[h.Name] {
+			seen[h.Name] = true
 			eligible = append(eligible, h)
 		}
 	}
 	if len(eligible) == 0 {
-		return
+		return false
 	}
 
 	names := make([]string, 0, len(eligible))
 	for _, h := range eligible {
 		names = append(names, h.Name)
 	}
+	toolNames := server.MCPAgentSurfaceToolNames()
 	w.writer.Blank()
 	w.writer.Paragraph(
 		fmt.Sprintf("%s asks before every tool call that isn't", strings.Join(names, " / ")),
 		"pre-approved, so automatic saves would stop on a permission",
-		"prompt each time. Gramaton can pre-approve its own tools",
-		"(entries starting mcp__gramaton__ only -- your other",
-		"permission entries and every deny rule are left untouched,",
-		"and renamed tools are reconciled on re-run).",
+		"prompt each time. Gramaton can pre-approve its full tool",
+		fmt.Sprintf("surface -- %d tools, including ones that modify and delete", len(toolNames)),
+		"store data (records, collections, branches). Only entries",
+		"starting mcp__gramaton__ are touched: your other permission",
+		"entries are preserved, deny/ask rules always win, renamed",
+		"tools are reconciled on re-run, and `gramaton uninstall`",
+		"removes the grants.",
 		"",
 		"Pre-approve Gramaton's tools?",
 	)
@@ -191,25 +214,35 @@ func (w *Wizard) offerPermissions(ctx context.Context, clients []DetectedClient)
 		confirm, err = w.prompter.YesNo(true)
 		if err != nil {
 			w.writer.Warn("Couldn't parse answer twice; skipping permission pre-approval.")
-			return
+			return false
 		}
 	}
 	if !confirm {
 		w.writer.Warn("Skipping permission pre-approval.")
-		return
+		return false
 	}
 
-	toolNames := server.MCPAgentSurfaceToolNames()
+	changed := false
 	for _, h := range eligible {
 		unchanged, err := w.hookBackend.RegisterPermissions(ctx, h.HookEmbedDir, toolNames)
+		if errors.Is(err, errPermissionsBlocked) {
+			w.writer.Warn(fmt.Sprintf("%s: your permissions.deny/ask rules block Gramaton's tools; leaving permissions untouched.", h.Name))
+			continue
+		}
 		if err != nil {
 			w.writer.Warn(fmt.Sprintf("%s: permission update failed: %v", h.Name, err))
 			continue
 		}
 		if unchanged {
 			w.writer.Check(fmt.Sprintf("%s: permissions already up to date", h.Name))
-		} else {
-			w.writer.Check(fmt.Sprintf("%s: pre-approved %d tools in %s", h.Name, len(toolNames), h.HookConfigPathHint()))
+			continue
 		}
+		changed = true
+		where := "its permission config"
+		if h.HookConfigPathHint != nil {
+			where = h.HookConfigPathHint()
+		}
+		w.writer.Check(fmt.Sprintf("%s: pre-approved %d tools in %s", h.Name, len(toolNames), where))
 	}
+	return changed
 }

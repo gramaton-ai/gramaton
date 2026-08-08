@@ -1381,6 +1381,13 @@ func TestRegisterClaudePermissionsFreshFile(t *testing.T) {
 	if !strings.Contains(string(raw), `"mcp__gramaton__gramaton_search"`) {
 		t.Errorf("fresh settings.json missing the entry:\n%s", raw)
 	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("fresh settings.json is not valid JSON: %v", err)
+	}
+	if len(doc) != 1 {
+		t.Errorf("fresh settings.json should hold only the permissions block, got keys: %v", doc)
+	}
 }
 
 // TestUnregisterClaudePermissionsStripsOnlyOurs pins the uninstall
@@ -1429,5 +1436,221 @@ func TestUnregisterClaudePermissionsStripsOnlyOurs(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Errorf("non-owned entry %s was removed:\n%s", want, content)
 		}
+	}
+}
+
+// seedClaudeSettings writes a settings.json under a fresh fake HOME
+// and returns its path.
+func seedClaudeSettings(t *testing.T, content string) string {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	claudeDir := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return settingsPath
+}
+
+// TestRegisterClaudePermissionsBlockedByBroadRules pins the
+// deny/ask rule shapes beyond exact tool names: a bare server deny,
+// a server glob, an all-MCP glob, and a server glob under ask must
+// each block every tool -- the patcher writes NOTHING (not even
+// reconciliation) and returns the sentinel the wizard turns into an
+// honest skip line.
+func TestRegisterClaudePermissionsBlockedByBroadRules(t *testing.T) {
+	for _, tc := range []struct{ name, permsJSON string }{
+		{"bare server deny", `{"deny": ["mcp__gramaton"]}`},
+		{"server glob deny", `{"deny": ["mcp__gramaton__*"]}`},
+		{"all-mcp glob deny", `{"deny": ["mcp__*"]}`},
+		{"server glob ask", `{"ask": ["mcp__gramaton__*"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initial := `{"permissions": ` + tc.permsJSON + `}`
+			settingsPath := seedClaudeSettings(t, initial)
+
+			_, err := registerClaudePermissions(context.Background(), []string{"gramaton_search", "gramaton_save"})
+			if !errors.Is(err, errPermissionsBlocked) {
+				t.Fatalf("want errPermissionsBlocked, got %v", err)
+			}
+			raw, _ := os.ReadFile(settingsPath)
+			if string(raw) != initial {
+				t.Errorf("blocked run must not modify the file:\n%s", raw)
+			}
+		})
+	}
+}
+
+// TestRegisterClaudePermissionsPartialGlobDeny: a glob covering only
+// some tools skips those and writes the rest.
+func TestRegisterClaudePermissionsPartialGlobDeny(t *testing.T) {
+	settingsPath := seedClaudeSettings(t, `{"permissions": {"deny": ["mcp__gramaton__gramaton_collection_*"]}}`)
+
+	unchanged, err := registerClaudePermissions(context.Background(), []string{"gramaton_search", "gramaton_collection_delete"})
+	if err != nil {
+		t.Fatalf("RegisterPermissions: %v", err)
+	}
+	if unchanged {
+		t.Error("partial write should report changed")
+	}
+	raw, _ := os.ReadFile(settingsPath)
+	content := string(raw)
+	if !strings.Contains(content, `"mcp__gramaton__gramaton_search"`) {
+		t.Errorf("non-denied tool missing:\n%s", content)
+	}
+	if strings.Contains(content, `"allow"`) && strings.Contains(content, `"mcp__gramaton__gramaton_collection_delete"`) {
+		t.Errorf("glob-denied tool was written to allow:\n%s", content)
+	}
+}
+
+// TestRegisterClaudePermissionsNonArrayRulesRefused: unreadable
+// deny/ask shapes are won't-touch errors -- we cannot honor rules we
+// cannot read.
+func TestRegisterClaudePermissionsNonArrayRulesRefused(t *testing.T) {
+	for _, tc := range []struct{ name, initial string }{
+		{"non-array deny", `{"permissions": {"deny": {"oops": true}}}`},
+		{"non-array ask", `{"permissions": {"ask": "mcp__gramaton"}}`},
+		{"non-array allow", `{"permissions": {"allow": 42}}`},
+		{"non-object permissions", `{"permissions": []}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settingsPath := seedClaudeSettings(t, tc.initial)
+			_, err := registerClaudePermissions(context.Background(), []string{"gramaton_search"})
+			if err == nil {
+				t.Fatal("want won't-touch error, got nil")
+			}
+			raw, _ := os.ReadFile(settingsPath)
+			if string(raw) != tc.initial {
+				t.Errorf("refused run must not modify the file:\n%s", raw)
+			}
+		})
+	}
+}
+
+// TestRegisterClaudePermissionsPreservesShellEntries pins the
+// non-escaping serialization: permission entries routinely carry
+// shell operators, and an HTML-escaping writer would rewrite them
+// as unicode escapes -- semantically identical, visibly mangled.
+func TestRegisterClaudePermissionsPreservesShellEntries(t *testing.T) {
+	settingsPath := seedClaudeSettings(t,
+		`{"permissions": {"allow": ["Bash(git add . && git commit *)", "Bash(echo hi > /dev/null)"]}}`)
+
+	if _, err := registerClaudePermissions(context.Background(), []string{"gramaton_search"}); err != nil {
+		t.Fatalf("RegisterPermissions: %v", err)
+	}
+	raw, _ := os.ReadFile(settingsPath)
+	content := string(raw)
+	for _, want := range []string{"&& git commit", "> /dev/null"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("shell operators were escaped away; want %q in:\n%s", want, content)
+		}
+	}
+	for _, escape := range []string{`\u0026`, `\u003e`, `\u003c`} {
+		if strings.Contains(content, escape) {
+			t.Errorf("HTML escape %s leaked into settings.json:\n%s", escape, content)
+		}
+	}
+}
+
+// TestStepHooksPermissionsFailureAndUnchangedBranches drives the two
+// RegisterPermissions outcomes the consent test doesn't: a failing
+// backend surfaces a warn without aborting the wizard, and an
+// already-current config reports so without the restart warning.
+func TestStepHooksPermissionsFailureAndUnchangedBranches(t *testing.T) {
+	mcp := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook := &fakeHookBackend{permissionErr: errors.New("disk full")}
+	wiz, buf := newWizardForHooksTest(t, mcp, hook, "y", "n", "y")
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(buf.String(), "permission update failed") {
+		t.Errorf("missing failure warn:\n%s", buf.String())
+	}
+
+	mcp2 := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook2 := &fakeHookBackend{permissionUnchanged: true}
+	wiz2, buf2 := newWizardForHooksTest(t, mcp2, hook2, "y", "n", "y")
+	if err := wiz2.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out2 := buf2.String()
+	if !strings.Contains(out2, "permissions already up to date") {
+		t.Errorf("missing already-up-to-date line:\n%s", out2)
+	}
+	// No absence assertion on the restart warning: later wizard
+	// steps print their own restart hints, so a whole-output
+	// Contains can't isolate step 5's. The unchanged->false return
+	// (no step-5 warning) is pinned by offerPermissions returning
+	// changed=false, exercised right here via permissionUnchanged.
+
+	mcp3 := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook3 := &fakeHookBackend{permissionErr: errPermissionsBlocked}
+	wiz3, buf3 := newWizardForHooksTest(t, mcp3, hook3, "y", "n", "y")
+	if err := wiz3.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(buf3.String(), "block Gramaton's tools") {
+		t.Errorf("missing blocked-rules skip line:\n%s", buf3.String())
+	}
+}
+
+// TestUninstallReportsPermissions walks the uninstall report through
+// the permissions surface: present on probe, dry-run reports without
+// writing, apply strips and backs up, and a clean file reports
+// not-present.
+func TestUninstallReportsPermissions(t *testing.T) {
+	initial := `{"permissions": {"allow": ["Bash(sed *)", "mcp__gramaton__gramaton_search"]}}`
+	settingsPath := seedClaudeSettings(t, initial)
+
+	h := harnessByName("Claude Code")
+	if h == nil {
+		t.Fatal("Claude Code missing from registry")
+	}
+	hp := probeHarness(context.Background(), "", h)
+	if !hp.permPresent {
+		t.Fatal("probe should find the gramaton permission entry")
+	}
+
+	r := reportPermissions(context.Background(), &hp, false)
+	if r == nil || r.Outcome != UninstallPresent {
+		t.Fatalf("dry-run outcome = %+v, want UninstallPresent", r)
+	}
+	if raw, _ := os.ReadFile(settingsPath); string(raw) != initial {
+		t.Error("dry-run must not modify the file")
+	}
+
+	r = reportPermissions(context.Background(), &hp, true)
+	if r == nil || r.Outcome != UninstallRemoved {
+		t.Fatalf("apply outcome = %+v, want UninstallRemoved", r)
+	}
+	if r.Backup == "" {
+		t.Error("apply should record a backup path")
+	}
+	raw, _ := os.ReadFile(settingsPath)
+	if strings.Contains(string(raw), "mcp__gramaton__") {
+		t.Errorf("gramaton entries survived apply:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), `"Bash(sed *)"`) {
+		t.Errorf("non-gramaton entry removed:\n%s", raw)
+	}
+
+	hp2 := probeHarness(context.Background(), "", h)
+	r = reportPermissions(context.Background(), &hp2, false)
+	if r == nil || r.Outcome != UninstallNotPresent {
+		t.Fatalf("post-removal outcome = %+v, want UninstallNotPresent", r)
 	}
 }
