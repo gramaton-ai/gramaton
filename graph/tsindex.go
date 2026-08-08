@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"time"
@@ -202,4 +203,31 @@ func (idx *TSIndex) Count() int {
 		return nil
 	})
 	return n
+}
+
+// TruncateBefore deletes every index entry whose commit timestamp is
+// strictly before t and returns the count. The prune horizon: keys
+// are big-endian nanos, so lexicographic order is chronological and
+// the delete is a single cursor range walk. The index is derived
+// state -- a botched truncation is repaired by rebuild, not restore.
+func (idx *TSIndex) TruncateBefore(t time.Time) (int, error) {
+	horizon := make([]byte, 8)
+	binary.BigEndian.PutUint64(horizon, uint64(t.UTC().UnixNano()))
+	deleted := 0
+	err := idx.db.Update(func(tx *bolt.Tx) error {
+		c := tx.Bucket(commitTimestampsBucket).Cursor()
+		var doomed [][]byte
+		for k, _ := c.First(); k != nil && bytes.Compare(k[:8], horizon) < 0; k, _ = c.Next() {
+			doomed = append(doomed, append([]byte(nil), k...))
+		}
+		b := tx.Bucket(commitTimestampsBucket)
+		for _, k := range doomed {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	return deleted, err
 }

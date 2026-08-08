@@ -25,6 +25,12 @@ type GCOptions struct {
 	// Commits newer than this are always kept. Zero means keep all.
 	MinAge time.Duration
 
+	// Cutoff, when set, is the exact keep-boundary timestamp and
+	// takes precedence over MinAge. The prune planner resolves its
+	// horizon to a specific commit; recomputing now-MinAge at apply
+	// time would drift from that plan.
+	Cutoff time.Time
+
 	// MinKeepCommits is the minimum number of recent commits to
 	// keep regardless of age. Protects against GC'ing all history
 	// when a store is unused for a long time. Default: 5.
@@ -94,6 +100,9 @@ func (s *Store) GC(opts GCOptions) (*GCResult, error) {
 	cutoff := time.Time{}
 	if opts.MinAge > 0 {
 		cutoff = time.Now().UTC().Add(-opts.MinAge)
+	}
+	if !opts.Cutoff.IsZero() {
+		cutoff = opts.Cutoff.UTC()
 	}
 
 	tips := opts.BranchTips()

@@ -354,6 +354,24 @@ func (g *Graph) PrepareCommit(s *storage.Store, parent string, message string, a
 // engine-managed fields (index roots), then WriteCommit. Calling
 // WriteCommit twice on the same commit writes two chunks and
 // orphans the first; the engine path writes once.
+// WriteCommitChunk persists a standalone commit chunk without graph
+// state (the prune baseline: a synthetic parentless commit that is
+// referenced from the tombstone, never from the chain). Returns the
+// content hash.
+func WriteCommitChunk(s *storage.Store, c *Commit) (string, error) {
+	c.Hash = ""
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "", fmt.Errorf("write commit chunk: marshal: %w", err)
+	}
+	hash, err := s.Write(data)
+	if err != nil {
+		return "", fmt.Errorf("write commit chunk: %w", err)
+	}
+	c.Hash = hash
+	return hash, nil
+}
+
 func (g *Graph) WriteCommit(s *storage.Store, c *Commit) (*Commit, error) {
 	c.Hash = "" // exclude prior hash from serialization
 	data, err := json.Marshal(c)
