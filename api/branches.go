@@ -295,27 +295,16 @@ func (a *API) BranchDiscard(ctx context.Context, name string) (BranchDiscardResp
 		return BranchDiscardResponse{}, ErrNotFound(fmt.Sprintf("branch %q not found", name))
 	}
 
-	// If we're discarding the active branch, the on-disk HEAD must
-	// be moved to main BEFORE the ref is deleted -- a failure here
-	// is fatal because deleting the ref would orphan HEAD.
+	// Discarding the ACTIVE branch is refused outright. The old path
+	// moved the on-disk HEAD to main but left the in-memory graph,
+	// head hash, and indexes on the discarded lineage -- the next
+	// Save then minted a commit parented on the discarded tip and
+	// moved main's ref onto it, silently abandoning main's real
+	// history (the same grafting shape the checkout head-sync fix
+	// closed). Checkout owns the adopt choreography; requiring it
+	// first keeps one correct implementation.
 	if core.ActiveBranch(dataDir) == name {
-		mainHash, err := core.ReadRef(dataDir, "main")
-		if err != nil {
-			a.log.Warn("branch discard: read main ref failed",
-				"component", "branch", "name", name, "err", err)
-			return BranchDiscardResponse{}, ErrInternal("failed to read main ref while switching off discarded branch")
-		}
-		headPath := filepath.Join(dataDir, "HEAD")
-		if err := core.AtomicWriteFile(headPath, []byte(mainHash), 0o600); err != nil {
-			a.log.Warn("branch discard: write HEAD failed",
-				"component", "branch", "name", name, "err", err)
-			return BranchDiscardResponse{}, ErrInternal("failed to update HEAD while switching off discarded branch")
-		}
-		if err := core.SetActiveBranch(dataDir, "main"); err != nil {
-			a.log.Warn("branch discard: set main active failed",
-				"component", "branch", "name", name, "err", err)
-			return BranchDiscardResponse{}, ErrInternal("failed to set active branch while switching off discarded branch")
-		}
+		return BranchDiscardResponse{}, ErrInvalid(fmt.Sprintf("branch %q is the active branch; check out another branch first (e.g. branch checkout main), then discard", name))
 	}
 	if err := core.DeleteRef(dataDir, name); err != nil {
 		// Non-fatal: HEAD/active are correct; ref cleanup just lingers.

@@ -341,6 +341,7 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 	oldSeen := map[string]bool{}
 	newSeen := map[string]bool{}
 	var newChain []*graph.Commit // newHead -> ... in walk order
+	var oldChain []string        // marker -> ... in walk order
 	oldCur, newCur := marker, newHead
 	base := ""
 	for range maxWalk {
@@ -353,6 +354,7 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 				break
 			}
 			oldSeen[oldCur] = true
+			oldChain = append(oldChain, oldCur)
 			c, err := loadCommit(e.store, oldCur)
 			if err != nil {
 				oldCur = ""
@@ -375,11 +377,21 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 			}
 		}
 	}
-	// old-exclusive = everything the old walk visited strictly before
-	// the base (the base itself may sit in oldSeen when the new
-	// frontier discovered it there).
-	oldExclusive := oldSeen
-	delete(oldExclusive, base)
+	// old-exclusive = the old chain's ordered prefix strictly above
+	// the base. The interleaved walk lets the old frontier pass the
+	// merge-base while the new frontier is still catching up, so
+	// oldSeen can hold SHARED ancestors -- retracting those would
+	// erase live history the replay never restores. The chain order
+	// makes the cut exact, mirroring replayFrom on the new side.
+	// (When the old frontier discovered the base in newSeen, the base
+	// was never appended and the whole old chain is exclusive.)
+	oldExclusive := map[string]bool{}
+	for _, h := range oldChain {
+		if h == base {
+			break
+		}
+		oldExclusive[h] = true
+	}
 	if base == "" {
 		slog.Warn("changelog rebuild: no merge-base with the new lineage; resetting coverage (run 'gramaton backfill changelog' to re-index history)",
 			"component", "engine", "marker", trunc12(marker), "new_head", trunc12(newHead))
