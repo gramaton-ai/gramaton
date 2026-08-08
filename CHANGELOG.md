@@ -103,7 +103,67 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session promotions. `summary_short` budgets are advertised as
   target ~750 / max ~900 (enforced cap unchanged at 1000).
 
+### Changed
+
+- **Reads no longer produce commits (breaking for config).** Access
+  bookkeeping (`access_count`, `last_accessed`, reembed's
+  `embed_attempts`) moved out of versioned node properties into a
+  non-versioned sidecar (`sidecar.db`, included in backups). Every
+  read used to dirty the accessed record — and, via activation
+  spread, its whole neighborhood — with a timer committing the churn
+  as `access_flush` commits; that entire mechanism is gone. Values
+  still appear on records everywhere they did (search filters,
+  sorts, exports, API responses) via a load-time overlay, and
+  legacy stores seed the sidecar from their blobs' values on first
+  access.
+
+- **Activation is removed from scoring (breaking for config).** The
+  ACT-R term was a popularity prior that similarity plus trust
+  metadata outperform, it never decayed, and it entrenched stale
+  records against their own corrections. Its 0.20 default weight
+  redistributed within the metadata band (freshness 0.10 → 0.18,
+  confidence 0.15 → 0.27). Freshness now anchors to `valid_from`
+  when set, otherwise the new `updated_at` (a revised record is as
+  fresh as its revision — updates no longer lose to their own stale
+  predecessors), otherwise `created_at`. Configs carrying
+  `scoring.weight_activation` or an `activation:` section fail at
+  load — delete the keys.
+
+- **Commits carry an author.** User-driven commits are attributed to
+  the configured author identity, curation cycles to the curation
+  identity; the timeline surfaces it per version. Pre-existing
+  commits read back unattributed.
+
 ### Added
+
+- **Per-record version timeline.** `gramaton_history` responses gain
+  `versions`: one entry per LOGICAL version — content-based identity
+  with bookkeeping masked, so re-embeds and repair sweeps never mint
+  versions — newest first, with author, optional `change_note`, and
+  the mechanical field diff against the previous version. The
+  changelog index behind it appends at save time in the same
+  transaction as its durability marker, repairs drift at boot, and
+  re-scopes on branch checkout (abandoned-lineage entries retracted,
+  new-lineage entries replayed, O(divergence)).
+
+- **`change_note` on update and resolve.** An optional free-text WHY
+  (max ~1.8KB) stored with the operation's commit action and shown
+  per-version in the timeline. The field diff is computed either
+  way; the note is color.
+
+- **Point-in-time reads: `gramaton_inspect(id, as_of=...)`.** A date
+  or full commit hash returns the record's frozen reality at that
+  commit — properties and one-hop edges then — with the contract
+  named in the response (`semantics: point_in_time`). Commits not on
+  the current branch's ancestry are refused explicitly.
+
+- **`gramaton backfill changelog`** indexes pre-changelog history
+  offline: full-chain walk skipping the retired `access_flush`
+  commits by label, with every candidate change verified against
+  adjacent blobs (bookkeeping masked) so read churn that rode inside
+  logical commits cannot mint phantom versions. Idempotent and
+  resumable; expect minutes up to around an hour on a
+  million-commit store.
 
 - **`gramaton backfill collapse`** migrates stores that predate
   mutable records: it folds auto-supersession's chains out of the

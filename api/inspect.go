@@ -15,6 +15,7 @@ import (
 type InspectRequest struct {
 	ID             string `json:"id" jsonschema:"record ID to inspect"`
 	IncludeContent *bool  `json:"include_content,omitempty" jsonschema:"include content_full in response (default true)"`
+	AsOf           string `json:"as_of,omitempty" jsonschema:"point-in-time view: a date (YYYY-MM-DD or RFC3339) or a FULL commit hash. Returns the record's frozen reality at that commit (semantics: point_in_time) -- the live record may say something else NOW. The commit must be on the current branch's ancestry."`
 }
 
 // RelatedEdge describes an edge connected to an inspected record.
@@ -41,6 +42,13 @@ type InspectResponse struct {
 	// sessions, topics) and concept-synthesis nodes -- those are not
 	// records that flow through curation.
 	EffectiveCuration *curation.EffectiveConfig `json:"effective_curation,omitempty"`
+
+	// AsOf + Semantics are set on point-in-time reads: the response
+	// is the record's frozen reality at that commit, and the shape
+	// names its contract so callers never confuse it with the live
+	// record.
+	AsOf      string `json:"as_of,omitempty"`
+	Semantics string `json:"semantics,omitempty"`
 }
 
 // InspectDescription is the MCP tool description for gramaton_inspect.
@@ -55,6 +63,9 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		return InspectResponse{}, ErrMissing("id is required")
 	}
 	includeContent := req.IncludeContent == nil || *req.IncludeContent
+	if req.AsOf != "" {
+		return a.inspectAsOf(req, includeContent)
+	}
 
 	// The write lock exists solely for the access bump below. On a
 	// read-only store the bump is skipped (access metadata is
@@ -76,15 +87,8 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	}
 
 	if !readOnly {
-		// Spread activation; in-memory updates only. Disk persistence is
-		// deferred to the periodic access-flush goroutine.
-		now := time.Now().UTC()
-		cfg := a.engine.Config()
-		a.engine.Graph().RecordAccess(req.ID, now, graph.ActivationConfig{
-			BaseAmount:        cfg.Activation.BaseAmount,
-			AttenuationFactor: cfg.Activation.AttenuationFactor,
-		})
-		a.engine.MarkAccessDirty()
+		// Record access in the sidecar; never a commit.
+		a.engine.RecordAccess(req.ID, time.Now().UTC())
 		n, ok = a.engine.Graph().GetNode(req.ID)
 		if !ok {
 			return InspectResponse{}, ErrInternal("node disappeared after access update")

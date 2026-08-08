@@ -21,8 +21,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Scoring.WeightSimilarity != 0.55 {
 		t.Fatalf("scoring.weight_similarity: expected 0.55, got %f", cfg.Scoring.WeightSimilarity)
 	}
-	if cfg.Scoring.WeightConfidence != 0.15 {
-		t.Fatalf("scoring.weight_confidence: expected 0.15, got %f", cfg.Scoring.WeightConfidence)
+	if cfg.Scoring.WeightConfidence != 0.27 {
+		t.Fatalf("scoring.weight_confidence: expected 0.27, got %f", cfg.Scoring.WeightConfidence)
 	}
 	if cfg.Decay.Rates.Ephemeral != 0.173 {
 		t.Fatalf("decay.rates.ephemeral: expected 0.173, got %f", cfg.Decay.Rates.Ephemeral)
@@ -329,8 +329,8 @@ func TestLoadPartialOverride(t *testing.T) {
 	}
 
 	// Non-overridden fields should retain defaults.
-	if cfg.Scoring.WeightConfidence != 0.15 {
-		t.Fatalf("expected default 0.15, got %f", cfg.Scoring.WeightConfidence)
+	if cfg.Scoring.WeightConfidence != 0.27 {
+		t.Fatalf("expected default 0.27, got %f", cfg.Scoring.WeightConfidence)
 	}
 	if cfg.Chunking.Threshold != 512 {
 		t.Fatalf("expected default 512, got %d", cfg.Chunking.Threshold)

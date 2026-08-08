@@ -227,7 +227,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 						attempts = v
 					}
 					attempts++
-					a.engine.SetProp(res.target.nodeID, "embed_attempts", graph.Int64Property(attempts))
+					a.engine.SetEmbedAttempts(res.target.nodeID, attempts)
 					a.engine.SetProp(res.target.nodeID, "last_embed_error", graph.StringProperty(strutil.TruncateRunes(res.err.Error(), lastEmbedErrorMaxRunes)))
 					if attempts >= int64(maxEmbedAttempts) {
 						a.log.Warn("reembed: record will be skipped after repeated failures",
@@ -267,10 +267,10 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 
 		// Successful re-embed clears any prior failure tracking so an
 		// operator-fixed record passes cleanly on its next run. Skip
-		// the SetProp when the property was never present so we don't
-		// churn the index for happy-path records.
+		// the write when the counter was never set so happy-path
+		// records stay untouched.
 		if _, has := n.Properties.GetInt64("embed_attempts"); has {
-			a.engine.SetProp(res.target.nodeID, "embed_attempts", graph.Int64Property(0))
+			a.engine.SetEmbedAttempts(res.target.nodeID, 0)
 		}
 
 		// Deferred save-guard check: a record saved during an embedder

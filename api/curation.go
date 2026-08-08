@@ -350,7 +350,11 @@ func (a *API) CurationResetStuck(ctx context.Context, req CurationResetStuckRequ
 	}
 
 	if len(resets) > 0 {
-		if _, err := a.engine.Save("curation: reset stuck records", actions...); err != nil {
+		// No "curation:" prefix: reset_stuck is a user-initiated
+		// operation, and the prefix would both misattribute the
+		// commit to the curation identity and hide it behind
+		// exclude_curation filters.
+		if _, err := a.engine.Save("reset stuck records", actions...); err != nil {
 			a.log.Warn("save failed", "component", "curation", "op", "reset_stuck", "err", err)
 			return CurationResetStuckResponse{}, ErrInternal("failed to save reset")
 		}

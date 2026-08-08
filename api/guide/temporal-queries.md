@@ -35,10 +35,19 @@ Examples:
   actions=["resolve"])`
 - "Every modification to record Y in April" → `gramaton_history(
   id="01K...", since="2026-04-01", until="2026-04-30")`
+- "What did this record used to say, and why did it change?" → read
+  the response's `versions` list.
 
-Returns chronological transitions with the commit message per
-change. Without a date range, capped at MaxLogTraversal; with a
-date range, bounded by the range itself.
+The response carries two views. `versions` is the logical-version
+timeline: one entry per real knowledge change (bookkeeping like
+re-embeds never mints a version), newest first, each with its
+author, the optional `change_note` the writer left, and the
+mechanical field diff against the previous version. When
+`version_coverage` is present, history may predate the changelog
+index -- take it at face value and suggest
+`gramaton backfill changelog` if full history matters. `changes` is
+the raw commit walk (message-level). Without a date range the walk
+is capped at MaxLogTraversal; with a range, bounded by the range.
 
 ## Axis C — record-property queries ("which records have T?")
 
@@ -52,17 +61,24 @@ content also filters by time.
 
 ## Axis D — point-in-time state ("what did the store look like at T?")
 
-**Tool (today):** `gramaton_collection_items(collection_id, as_of)`
+**Tools (today):** `gramaton_inspect(id, as_of)` and
+`gramaton_collection_items(collection_id, as_of)`
 
-Answers "what was on this list then?" Walks to `CommitAt(as_of)`,
-reads the historical edge tree, returns the members that had
-`member_of` edges at that commit with their state at the same
-commit. Response carries `as_of` + `semantics: point_in_time` so
-you know which contract produced the result.
+`gramaton_inspect(id, as_of=<date|full commit hash>)` returns the
+record's frozen reality at that commit: its properties then, its
+one-hop edges then. The commit must be on the current branch's
+ancestry -- an off-branch resolution is refused explicitly rather
+than silently serving another lineage's state. The response names
+its contract (`semantics: point_in_time`, `as_of` carrying the
+resolved commit); the live record may say something else NOW.
 
-**Tools (future — v0.1.x):** `gramaton_search(as_of=...)`,
-`gramaton_inspect(as_of=...)`, `gramaton_stats(as_of=...)`. Bundled
-into a coherent time-travel release.
+`gramaton_collection_items(collection_id, as_of)` answers "what was
+on this list then?" the same way: historical edge tree, members and
+their state at that commit, `semantics: point_in_time` in the
+response.
+
+**Still future:** `gramaton_search(as_of=...)` and
+`gramaton_stats(as_of=...)`.
 
 ## Anti-patterns
 

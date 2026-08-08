@@ -105,6 +105,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		req := api.InspectRequest{
 			ID:             r.PathValue("id"),
 			IncludeContent: &includeContent,
+			AsOf:           r.URL.Query().Get("as_of"),
 		}
 		resp, apiErr := s.api.Inspect(r.Context(), req)
 		if apiErr != nil {
@@ -321,6 +322,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	type inspectArgs struct {
 		ID             string `json:"id" jsonschema:"record ID to inspect"`
 		IncludeContent *bool  `json:"include_content,omitempty" jsonschema:"include content_full in response (default true)"`
+		AsOf           string `json:"as_of,omitempty" jsonschema:"point-in-time view: a date (YYYY-MM-DD or RFC3339) or a FULL commit hash on the current branch. Returns the record's frozen reality then (semantics: point_in_time); the live record may say something else NOW."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_inspect",
@@ -332,7 +334,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		if args.ID == "" {
 			return mcpErr("id is required")
 		}
-		resp, apiErr := s.api.Inspect(ctx, api.InspectRequest{ID: args.ID, IncludeContent: args.IncludeContent})
+		resp, apiErr := s.api.Inspect(ctx, api.InspectRequest{ID: args.ID, IncludeContent: args.IncludeContent, AsOf: args.AsOf})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
 		}
@@ -354,6 +356,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		ValidUntil      string         `json:"valid_until,omitempty" jsonschema:"expiration (YYYY-MM-DD or RFC3339); 'clear' removes."`
 		AssertedAsOf    string         `json:"asserted_as_of,omitempty" jsonschema:"when the source made this claim (YYYY-MM-DD or RFC3339)"`
 		Meta            map[string]any `json:"meta,omitempty" jsonschema:"structured metadata"`
+		ChangeNote      string         `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this change (max ~1.8KB), surfaced per-version in the record timeline"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_update",
@@ -371,6 +374,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 			KnowledgeType: args.KnowledgeType, EpistemicStatus: args.EpistemicStatus,
 			Importance: args.Importance, Keywords: args.Keywords, SummaryShort: args.SummaryShort,
 			ValidUntil: args.ValidUntil, AssertedAsOf: args.AssertedAsOf, Meta: args.Meta,
+			ChangeNote: args.ChangeNote,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
@@ -413,6 +417,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
 		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
 		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
+		ChangeNote      string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -426,7 +431,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		}
 		resp, apiErr := s.api.Resolve(ctx, api.ResolveRequest{
 			ID: args.ID, Resolution: args.Resolution, ResolutionNote: args.ResolutionNote,
-			ExpectedVersion: args.ExpectedVersion,
+			ExpectedVersion: args.ExpectedVersion, ChangeNote: args.ChangeNote,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

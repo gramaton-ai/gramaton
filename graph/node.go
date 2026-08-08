@@ -102,6 +102,9 @@ func (g *Graph) GetNode(id string) (*Node, bool) {
 	if err != nil || n == nil {
 		return nil, false
 	}
+	if g.loadHook != nil {
+		g.loadHook(n)
+	}
 
 	// Re-check: another goroutine may have loaded the same node while
 	// we were doing I/O. If so, return the existing pointer so callers

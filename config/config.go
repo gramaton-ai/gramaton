@@ -53,17 +53,16 @@ type Config struct {
 
 	// --- Internal tuning (do not adjust casually) ---
 
-	Scoring    ScoringConfig    `yaml:"scoring"`
-	Decay      DecayConfig      `yaml:"decay"`
-	Freshness  FreshnessConfig  `yaml:"freshness"`
-	Activation ActivationConfig `yaml:"activation"`
-	Chunking   ChunkingConfig   `yaml:"chunking"`
-	Concepts   ConceptsConfig   `yaml:"concepts"`
-	SaveGuard  SaveGuardConfig  `yaml:"save_guard"`
-	Graph      GraphConfig      `yaml:"graph"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Merge      MergeConfig      `yaml:"merge"`
-	Telemetry  TelemetryConfig  `yaml:"telemetry"`
+	Scoring   ScoringConfig   `yaml:"scoring"`
+	Decay     DecayConfig     `yaml:"decay"`
+	Freshness FreshnessConfig `yaml:"freshness"`
+	Chunking  ChunkingConfig  `yaml:"chunking"`
+	Concepts  ConceptsConfig  `yaml:"concepts"`
+	SaveGuard SaveGuardConfig `yaml:"save_guard"`
+	Graph     GraphConfig     `yaml:"graph"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Merge     MergeConfig     `yaml:"merge"`
+	Telemetry TelemetryConfig `yaml:"telemetry"`
 }
 
 // =============================================================================
@@ -1036,9 +1035,6 @@ type ScoringConfig struct {
 	// WeightFreshness: decay-modulated recency bonus.
 	WeightFreshness float64 `yaml:"weight_freshness"`
 
-	// WeightActivation: graph-activation spreading from query anchors.
-	WeightActivation float64 `yaml:"weight_activation"`
-
 	// WeightConfidence: record's declared confidence (0-1).
 	WeightConfidence float64 `yaml:"weight_confidence"`
 
@@ -1105,18 +1101,6 @@ type FreshnessExponents struct {
 	// Ephemeral: linear-ish decay, subject to fast decay rate in
 	// DecayConfig.
 	Ephemeral float64 `yaml:"ephemeral"`
-}
-
-// ActivationConfig controls graph-based spreading activation. When a
-// query matches anchor records, activation spreads outward through
-// edges, boosting related records' scores.
-type ActivationConfig struct {
-	// BaseAmount: initial activation delivered to anchor records.
-	BaseAmount float64 `yaml:"base_amount"`
-
-	// AttenuationFactor: multiplier applied as activation spreads one
-	// hop further. 0.5 = each hop halves the contribution.
-	AttenuationFactor float64 `yaml:"attenuation_factor"`
 }
 
 // ChunkingConfig controls structural text splitting. NOT used in the
@@ -1428,9 +1412,8 @@ func Defaults() Config {
 
 		Scoring: ScoringConfig{
 			WeightSimilarity:    0.55,
-			WeightFreshness:     0.10,
-			WeightActivation:    0.20,
-			WeightConfidence:    0.15,
+			WeightFreshness:     0.18,
+			WeightConfidence:    0.27,
 			ImportanceThreshold: 0.7,
 			ImportanceFloor:     0.5,
 			HistoricalPenalty:   0.5,
@@ -1453,11 +1436,6 @@ func Defaults() Config {
 				Temporal:  1.0,
 				Ephemeral: 1.0,
 			},
-		},
-
-		Activation: ActivationConfig{
-			BaseAmount:        1.0,
-			AttenuationFactor: 0.5,
 		},
 
 		Chunking: ChunkingConfig{
@@ -1648,7 +1626,6 @@ func Validate(cfg *Config) error {
 	}{
 		{"scoring.weight_similarity", cfg.Scoring.WeightSimilarity},
 		{"scoring.weight_freshness", cfg.Scoring.WeightFreshness},
-		{"scoring.weight_activation", cfg.Scoring.WeightActivation},
 		{"scoring.weight_confidence", cfg.Scoring.WeightConfidence},
 		{"search.bm25_weight_full", cfg.Search.BM25WeightFull},
 		{"search.bm25_weight_medium", cfg.Search.BM25WeightMedium},

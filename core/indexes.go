@@ -268,12 +268,16 @@ func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 	if err != nil {
 		return err
 	}
-	// Vector removals apply only after the tx committed: the mmap-
-	// backed index persists writes independently of bbolt, so an
-	// eager removal inside a rolled-back batch would permanently
-	// drop the record from vector search.
+	// Vector and access-sidecar removals apply only after the tx
+	// committed: both persist independently of bbolt, so an eager
+	// removal inside a rolled-back batch would permanently drop the
+	// record from vector search (rebuild skips non-empty snapshots)
+	// or regress its access bookkeeping.
 	for _, id := range vecRemovals {
 		s.vecIdx.Remove(id)
+		if e.accessIdx != nil {
+			e.accessIdx.Remove(id)
+		}
 	}
 	return nil
 }

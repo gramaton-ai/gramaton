@@ -21,6 +21,7 @@ type ResolveRequest struct {
 	Resolution                string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
 	ResolutionNote            string `json:"resolution_note,omitempty" jsonschema:"free-form note about why/how"`
 	ExpectedVersion           string `json:"expected_version,omitempty" jsonschema:"version token from a hold response or inspect. When set, the resolve applies only if the record's content is unchanged since; on mismatch nothing is applied and version_conflict carries the current content."`
+	ChangeNote                string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
 	AutoCloseCollectionStatus *bool  `json:"auto_close_collection_status,omitempty" jsonschema:"default true; when false, skip flipping the collection item's status field even if the schema has one"`
 }
 
@@ -131,6 +132,9 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 	if len(req.ResolutionNote) > MaxContextFieldLen {
 		return ResolveResponse{}, ErrInvalid(fmt.Sprintf("resolution_note exceeds maximum length of %d", MaxContextFieldLen))
 	}
+	if len(req.ChangeNote) > MaxChangeNote {
+		return ResolveResponse{}, ErrInvalid(fmt.Sprintf("change_note exceeds maximum length of %d", MaxChangeNote))
+	}
 
 	autoClose := true
 	if req.AutoCloseCollectionStatus != nil {
@@ -216,7 +220,7 @@ func (a *API) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse,
 	}
 
 	if _, err := a.engine.Save("resolve", graph.CommitAction{
-		Kind: graph.ActionResolve, RecordID: req.ID,
+		Kind: graph.ActionResolve, RecordID: req.ID, Note: req.ChangeNote,
 	}); err != nil {
 		return ResolveResponse{}, ErrInternal("failed to save")
 	}

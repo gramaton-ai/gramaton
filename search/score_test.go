@@ -16,90 +16,13 @@ func approx(a, b, tolerance float64) bool {
 	return math.Abs(a-b) < tolerance
 }
 
-// --- ACT-R activation ---
-
-func TestACTRActivationNewRecord(t *testing.T) {
-	now := time.Now().UTC()
-	// Brand new record, just created, 1 access (birth).
-	a := actrActivation(0, now, 0, now)
-	// Should be moderate -- new record, not yet proven useful.
-	if a < 0.3 || a > 0.8 {
-		t.Fatalf("new record activation: expected 0.3-0.8, got %f", a)
-	}
-}
-
-func TestACTRActivationFrequentRecent(t *testing.T) {
-	now := time.Now().UTC()
-	// 50 accesses, created 1 day ago.
-	a := actrActivation(50, now.Add(-24*time.Hour), 0, now)
-	// Should be high -- heavily used and recent.
-	if a < 0.7 {
-		t.Fatalf("frequent recent: expected > 0.7, got %f", a)
-	}
-}
-
-func TestACTRActivationOldUnused(t *testing.T) {
-	now := time.Now().UTC()
-	// 0 accesses, created 1 year ago.
-	a := actrActivation(0, now.Add(-365*24*time.Hour), 0, now)
-	// Should be low -- old and never used.
-	if a > 0.4 {
-		t.Fatalf("old unused: expected < 0.4, got %f", a)
-	}
-}
-
-func TestACTRActivationOldHeavilyUsed(t *testing.T) {
-	now := time.Now().UTC()
-	// 500 accesses, created 1 year ago.
-	a := actrActivation(500, now.Add(-365*24*time.Hour), 0, now)
-	// Should be moderate-to-high -- many accesses offset the age.
-	if a < 0.5 {
-		t.Fatalf("old heavily used: expected > 0.5, got %f", a)
-	}
-}
-
-func TestACTRActivationSpreadingBoost(t *testing.T) {
-	now := time.Now().UTC()
-	created := now.Add(-24 * time.Hour)
-	base := actrActivation(5, created, 0, now)
-	boosted := actrActivation(5, created, 2.0, now)
-	if boosted <= base {
-		t.Fatalf("spreading boost should increase activation: base=%f, boosted=%f", base, boosted)
-	}
-}
-
-func TestACTRActivationMonotonic(t *testing.T) {
-	now := time.Now().UTC()
-	created := now.Add(-7 * 24 * time.Hour)
-	// More accesses should give higher activation.
-	a1 := actrActivation(1, created, 0, now)
-	a10 := actrActivation(10, created, 0, now)
-	a100 := actrActivation(100, created, 0, now)
-	if a1 >= a10 || a10 >= a100 {
-		t.Fatalf("activation should increase with access count: a1=%f, a10=%f, a100=%f", a1, a10, a100)
-	}
-}
-
-func TestACTRActivationBounded(t *testing.T) {
-	now := time.Now().UTC()
-	// Extreme cases should stay in [0, 1].
-	aMin := actrActivation(0, now.Add(-10*365*24*time.Hour), 0, now)
-	aMax := actrActivation(10000, now, 5.0, now)
-	if aMin < 0 || aMin > 1 {
-		t.Fatalf("min case out of bounds: %f", aMin)
-	}
-	if aMax < 0 || aMax > 1 {
-		t.Fatalf("max case out of bounds: %f", aMax)
-	}
-}
-
 // --- Knowledge freshness ---
 
 func TestFreshnessImmutableAlwaysOne(t *testing.T) {
 	cfg := defaultCfg()
 	now := time.Now().UTC()
 	created := now.Add(-10 * 365 * 24 * time.Hour) // 10 years ago
-	f := knowledgeFreshness("immutable", time.Time{}, created, now, cfg.Freshness)
+	f := knowledgeFreshness("immutable", time.Time{}, time.Time{}, created, now, cfg.Freshness)
 	if f != 1.0 {
 		t.Fatalf("immutable freshness: expected 1.0, got %f", f)
 	}
@@ -109,7 +32,7 @@ func TestFreshnessDurableSixMonths(t *testing.T) {
 	cfg := defaultCfg()
 	now := time.Now().UTC()
 	created := now.Add(-6 * 30 * 24 * time.Hour) // ~6 months
-	f := knowledgeFreshness("durable", time.Time{}, created, now, cfg.Freshness)
+	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, created, now, cfg.Freshness)
 	// ~0.82 per design doc table
 	if !approx(f, 0.82, 0.05) {
 		t.Fatalf("durable 6mo: expected ~0.82, got %f", f)
@@ -121,7 +44,7 @@ func TestFreshnessUsesValidFrom(t *testing.T) {
 	now := time.Now().UTC()
 	created := now.Add(-1 * time.Hour)              // recent creation
 	validFrom := now.Add(-2 * 365 * 24 * time.Hour) // but knowledge is 2 years old
-	f := knowledgeFreshness("durable", validFrom, created, now, cfg.Freshness)
+	f := knowledgeFreshness("durable", validFrom, time.Time{}, created, now, cfg.Freshness)
 	// Should use validFrom, not createdAt.
 	if !approx(f, 0.577, 0.05) {
 		t.Fatalf("durable 2yr via valid_from: expected ~0.577, got %f", f)
@@ -130,7 +53,7 @@ func TestFreshnessUsesValidFrom(t *testing.T) {
 
 func TestFreshnessNoTimestamp(t *testing.T) {
 	cfg := defaultCfg()
-	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, time.Now().UTC(), cfg.Freshness)
+	f := knowledgeFreshness("durable", time.Time{}, time.Time{}, time.Time{}, time.Now().UTC(), cfg.Freshness)
 	if f != 1.0 {
 		t.Fatalf("no timestamp: expected 1.0, got %f", f)
 	}
@@ -304,5 +227,24 @@ func TestComputeScoreMetadataBoostsRelevant(t *testing.T) {
 	scorePoor := ComputeScore(poor, now, cfg)
 	if scoreGood <= scorePoor {
 		t.Fatalf("better metadata should boost score: good=%f, poor=%f", scoreGood, scorePoor)
+	}
+}
+
+func TestFreshnessUpdatedAtRestoresFreshness(t *testing.T) {
+	cfg := defaultCfg()
+	now := time.Now().UTC()
+	oldCreated := now.Add(-2 * 365 * 24 * time.Hour)
+	// An old record freshly revised must score fresher than its
+	// unrevised twin: the revision is when its knowledge is from.
+	stale := knowledgeFreshness("durable", time.Time{}, time.Time{}, oldCreated, now, cfg.Freshness)
+	revised := knowledgeFreshness("durable", time.Time{}, now.Add(-time.Hour), oldCreated, now, cfg.Freshness)
+	if revised <= stale {
+		t.Fatalf("revised freshness %f <= stale %f; updates must restore freshness", revised, stale)
+	}
+	// A deliberate valid_from still wins over updated_at.
+	validFrom := now.Add(-3 * 365 * 24 * time.Hour)
+	anchored := knowledgeFreshness("durable", validFrom, now, oldCreated, now, cfg.Freshness)
+	if anchored >= revised {
+		t.Fatalf("valid_from must anchor freshness even when updated_at is recent: %f >= %f", anchored, revised)
 	}
 }

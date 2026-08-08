@@ -10,16 +10,27 @@ import (
 // ScoreInputs holds the values needed to compute a node's effective score.
 // All values are read from the node's properties at query time.
 type ScoreInputs struct {
-	Similarity      float64 // cosine similarity to query (0.0-1.0)
-	HasTextQuery    bool    // true when the search includes a text query
-	Temporality     string  // immutable, durable, temporal, ephemeral
-	Confidence      float64 // 0.0-1.0
-	Importance      float64 // 0.0-1.0
-	AccessCount     int64
-	ActivationBoost float64   // spreading activation from neighbors
-	ValidFrom       time.Time // zero if unset
-	ValidUntil      time.Time // zero if unset
-	CreatedAt       time.Time
+	Similarity   float64 // cosine similarity to query (0.0-1.0)
+	HasTextQuery bool    // true when the search includes a text query
+	Temporality  string  // immutable, durable, temporal, ephemeral
+	Confidence   float64 // 0.0-1.0
+	Importance   float64 // 0.0-1.0
+	// UpdatedAt anchors freshness for revised records: a mutable
+	// record's latest revision is when its knowledge is from, so an
+	// update restores freshness instead of the record aging from its
+	// creation date forever (stale incumbents no longer outrank
+	// their own corrections). valid_from, when set deliberately,
+	// still wins.
+	UpdatedAt time.Time
+	// AccessCount is bookkeeping only -- it plays no scoring role.
+	// The activation term was removed deliberately: a popularity
+	// prior that similarity plus trust metadata outperform, that
+	// never decays, and that entrenched stale incumbents against
+	// their own corrections.
+	AccessCount int64
+	ValidFrom   time.Time // zero if unset
+	ValidUntil  time.Time // zero if unset
+	CreatedAt   time.Time
 }
 
 // ComputeScore calculates the effective_score for a node using the
@@ -28,9 +39,9 @@ type ScoreInputs struct {
 //
 // When a text query is present (HasTextQuery=true), similarity acts
 // as a gate: low similarity drags down the entire score. This prevents
-// freshness, activation, and confidence from propping up irrelevant
-// results. When no text query is present (filter-only searches),
-// the score is purely metadata-based.
+// freshness and confidence from propping up irrelevant results. When
+// no text query is present (filter-only searches), the score is
+// purely metadata-based.
 func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 {
 	sc := cfg.Scoring
 
@@ -41,24 +52,22 @@ func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 
 	}
 
 	// Step 2: Component scores.
-	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.CreatedAt, now, cfg.Freshness)
-	activation := actrActivation(inputs.AccessCount, inputs.CreatedAt, inputs.ActivationBoost, now)
+	freshness := knowledgeFreshness(inputs.Temporality, inputs.ValidFrom, inputs.UpdatedAt, inputs.CreatedAt, now, cfg.Freshness)
 
 	if inputs.HasTextQuery {
 		// Text query present: similarity gates the metadata signals.
 		//
 		// The score is similarity * (weighted metadata blend). When
 		// similarity is near 0, the whole score approaches 0 regardless
-		// of how fresh, active, or confident the record is. When
-		// similarity is high, metadata signals boost the best matches.
+		// of how fresh or confident the record is. When similarity is
+		// high, metadata signals boost the best matches.
 		//
-		// The metadata blend is normalized to [0, 1]: freshness,
-		// activation, and confidence each contribute proportionally.
-		metaWeight := sc.WeightFreshness + sc.WeightActivation + sc.WeightConfidence
+		// The metadata blend is normalized to [0, 1]: freshness and
+		// confidence each contribute proportionally.
+		metaWeight := sc.WeightFreshness + sc.WeightConfidence
 		metaScore := 0.0
 		if metaWeight > 0 {
 			metaScore = (sc.WeightFreshness*freshness +
-				sc.WeightActivation*activation +
 				sc.WeightConfidence*inputs.Confidence) / metaWeight
 		}
 
@@ -78,9 +87,7 @@ func ComputeScore(inputs ScoreInputs, now time.Time, cfg config.Config) float64 
 	}
 
 	// No text query (filter-only): purely metadata-based score.
-	// Distribute weight equally across available signals.
 	score := validityMult * (sc.WeightFreshness*freshness +
-		sc.WeightActivation*activation +
 		sc.WeightConfidence*inputs.Confidence)
 
 	if inputs.Importance > sc.ImportanceThreshold {
@@ -108,9 +115,14 @@ func accessRecency(temporality string, lastAccessed, now time.Time, cfg config.D
 }
 
 // knowledgeFreshness computes 1 / (1 + hours/scale)^exponent.
-// Uses valid_from if set, otherwise created_at.
-func knowledgeFreshness(temporality string, validFrom, createdAt, now time.Time, cfg config.FreshnessConfig) float64 {
+// Anchor precedence: valid_from (a deliberate knowledge date) wins;
+// otherwise updated_at (a revised record's knowledge is as fresh as
+// its last revision); otherwise created_at.
+func knowledgeFreshness(temporality string, validFrom, updatedAt, createdAt, now time.Time, cfg config.FreshnessConfig) float64 {
 	knowledgeTime := createdAt
+	if !updatedAt.IsZero() {
+		knowledgeTime = updatedAt
+	}
 	if !validFrom.IsZero() {
 		knowledgeTime = validFrom
 	}
@@ -133,52 +145,6 @@ func knowledgeFreshness(temporality string, validFrom, createdAt, now time.Time,
 		scale = 8760 // default: 1 year in hours
 	}
 	return math.Pow(1.0+hours/scale, -exp)
-}
-
-// actrActivation computes a unified usage signal based on Anderson's
-// ACT-R base-level activation equation. This replaces the separate
-// frequency and recency signals with a single theoretically-grounded
-// formula that naturally combines both.
-//
-// Approximation: B = ln(n / (1-d)) - d * ln(L)
-// where n = access count (min 1, treating creation as first access),
-// L = lifetime in hours, d = 0.5 (canonical decay parameter).
-//
-// The spreading activation boost from neighbors is added after the
-// base-level activation, matching ACT-R's full equation: A = B + S.
-//
-// Output is normalized to [0, 1] via a sigmoid for compatibility with
-// the weighted scoring model.
-//
-// Reference: Anderson & Schooler 1991, "Reflections of the Environment
-// in Memory." The activation equation is the optimal predictor of
-// information need given past access patterns.
-func actrActivation(accessCount int64, createdAt time.Time, spreadingBoost float64, now time.Time) float64 {
-	const d = 0.5 // canonical ACT-R decay parameter
-
-	// Treat creation as first access: n is always >= 1.
-	n := float64(accessCount)
-	if n < 1 {
-		n = 1
-	}
-
-	// Lifetime in hours (minimum 1 hour to avoid log(0)).
-	L := now.Sub(createdAt).Hours()
-	if L < 1 {
-		L = 1
-	}
-
-	// ACT-R base-level activation approximation.
-	B := math.Log(n/(1-d)) - d*math.Log(L)
-
-	// Add spreading activation from neighbors (ACT-R: A = B + S).
-	A := B + spreadingBoost
-
-	// Normalize to [0, 1] via sigmoid. The raw activation ranges
-	// roughly from -5 (old, never accessed) to +10 (heavily used,
-	// recently created). Sigmoid with scale=2 maps this to a usable
-	// range where most values fall between 0.1 and 0.9.
-	return 1.0 / (1.0 + math.Exp(-A/2.0))
 }
 
 func decayRate(temporality string, cfg config.DecayConfig) float64 {

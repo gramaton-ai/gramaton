@@ -10,7 +10,7 @@ by defaulting.
    matching (both stores), fused via RRF.
 2. **Filter-only**: Omit text to query by metadata fields only.
 3. **Results**: Ranked by composite score combining similarity,
-   freshness, confidence, and activation.
+   freshness, and confidence.
 4. **Store origin**: Each result includes a `store` field --
    `"memory"` (decision-grade, vector-searchable) or `"session"`
    (broader conversational thread, BM25 only).

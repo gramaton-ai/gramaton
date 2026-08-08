@@ -28,6 +28,16 @@ type Graph struct {
 	nodes     map[string]*Node // in-memory node cache (lazy-loaded)
 	edgeStore EdgeStore        // edge storage and adjacency indexes
 
+	// loadHook, when set, runs on every node materialized from
+	// storage (lazy GetNode loads -- which the iterator also routes
+	// through -- and the eager v0 load loop). The engine installs an
+	// access-sidecar overlay here so committed blobs' stale
+	// bookkeeping values are replaced with live sidecar values the
+	// moment a node enters memory; readers then never need to know
+	// the sidecar exists. Never invoked for nodes created in this
+	// process (AddNode) -- they have no stale state to overlay.
+	loadHook func(*Node)
+
 	// Dirty tracking for incremental saves.
 	dirtyNodes   map[string]struct{} // node IDs modified since last save
 	dirtyEdges   map[string]struct{} // edge IDs modified since last save
@@ -123,6 +133,32 @@ func (g *Graph) markEdgeDirty(id string) {
 
 // ClearDirty resets all dirty tracking state. Called after a
 // successful save.
+// SetNodeLoadHook installs fn to run on every node materialized from
+// storage. See the loadHook field for semantics. Pass nil to clear.
+func (g *Graph) SetNodeLoadHook(fn func(*Node)) { g.loadHook = fn }
+
+// PendingChanges snapshots the graph's uncommitted mutation set:
+// dirty node IDs, deleted node IDs, and the PRE-commit content hash
+// of each (empty for brand-new nodes). Call before PrepareCommit --
+// it rebuilds nodeHashes, destroying the previous-version pointers
+// the changelog's logical-version comparison needs.
+func (g *Graph) PendingChanges() (dirty, deleted []string, prevHash map[string]string) {
+	prevHash = make(map[string]string, len(g.dirtyNodes)+len(g.deletedNodes))
+	for id := range g.dirtyNodes {
+		dirty = append(dirty, id)
+		prevHash[id] = g.nodeHashes[id]
+	}
+	for id := range g.deletedNodes {
+		deleted = append(deleted, id)
+		prevHash[id] = g.nodeHashes[id]
+	}
+	return dirty, deleted, prevHash
+}
+
+// NodeHashOf returns a node's current content hash as of the last
+// save/load, "" when unknown (new since last save).
+func (g *Graph) NodeHashOf(id string) string { return g.nodeHashes[id] }
+
 func (g *Graph) ClearDirty() {
 	g.dirtyNodes = make(map[string]struct{})
 	g.dirtyEdges = make(map[string]struct{})

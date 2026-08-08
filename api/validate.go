@@ -114,6 +114,10 @@ const (
 	// save. A hold names exactly one record, so acknowledgments
 	// accumulate one per round trip; 20 is generous headroom.
 	MaxAllowSimilar = 20
+	// MaxChangeNote caps the free-text change_note stored with an
+	// update/resolve commit action. Advertised as ~1.8KB in tool
+	// descriptions so agents leave buffer under the enforced cap.
+	MaxChangeNote = 2048
 	// MaxIDArgLen bounds caller-supplied node identifiers and version
 	// tokens before any lookup. Node IDs are 26-char ULIDs and version
 	// tokens 12 hex chars; 64 leaves room for either format to grow.

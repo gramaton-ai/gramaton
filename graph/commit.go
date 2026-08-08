@@ -25,6 +25,11 @@ type CommitAction struct {
 	Kind     string `json:"kind"`                // canonical Action* constant (see below)
 	RecordID string `json:"record_id,omitempty"` // target record when action is record-scoped
 	Field    string `json:"field,omitempty"`     // target property when action is field-scoped
+	// Note is the caller's optional free-text explanation of the
+	// change (the change_note on update/resolve), surfaced
+	// per-version in the record timeline. Color, not the record: the
+	// mechanical field diff is always computed regardless.
+	Note string `json:"note,omitempty"`
 }
 
 // Action kind canonical strings. Every emit site references one of
@@ -116,6 +121,12 @@ type Commit struct {
 	// deserialize with Actions == nil. Omitempty on write keeps
 	// pre-D3 consumers readable and bounds commit JSON size.
 	Actions []CommitAction `json:"actions,omitempty"`
+	// Author is the identity the commit is attributed to: the
+	// operator's composed author config for user-driven writes, the
+	// curation identity for curation cycles. Optional; pre-existing
+	// commits deserialize with Author == "" and the timeline reports
+	// them unattributed.
+	Author string `json:"author,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.
@@ -467,6 +478,9 @@ func (g *Graph) Load(s *storage.Store, commitHash string) (*Commit, error) {
 			n, err := UnmarshalNode(data)
 			if err != nil {
 				return nil, fmt.Errorf("load: unmarshal node: %w", err)
+			}
+			if g.loadHook != nil {
+				g.loadHook(n)
 			}
 			g.nodes[n.ID] = n
 			g.nodeHashes[n.ID] = hash

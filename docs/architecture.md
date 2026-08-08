@@ -271,10 +271,10 @@ Client → POST /v1/search → api.Search (no cursor in request)
   2. engine.RLock()
   3. Filter candidates by metadata (property index, resolution, lifecycle, epistemic status, temporality, ...)
   4. Hybrid rank: vector similarity + BM25 keyword, fused via RRF
-  5. Composite score per candidate: similarity, knowledge freshness (temporality-keyed exponent), access recency, confidence. Importance acts as a floor.
+  5. Composite score per candidate: similarity, knowledge freshness (temporality-keyed exponent, anchored valid_from > updated_at > created_at), confidence. Importance acts as a floor.
   6. Materialize the top-`candidate_cap` (default 500, hard ceiling 1000) IDs + scores into a SearchSnapshot keyed by a fresh ULID query_id; pin in core.SnapshotStore with `snapshot_ttl` (default 20m)
   7. Slice page 1 from the snapshot at the requested page_size (default 20, max 100); fetch record content + neighbor traversal for that page only
-  8. Record access (bump access_count / last_accessed / activation_boost on neighbors; flushed later by access-dirty timer)
+  8. Record access in the sidecar (access_count / last_accessed in sidecar.db; never a commit)
   9. engine.RUnlock()
  10. Assemble result rows with metadata summaries + store origin (memory / sessions); response carries `page`, `page_size`, `total`, `next_cursor`, `query_id`, and a `pages` table of `{page, cursor}` for every page in the snapshot
 ```
@@ -322,7 +322,7 @@ The engine uses one `sync.RWMutex`. Rules:
 - **Transport handlers** never hold the lock directly — they call api methods.
 - **Network I/O** (embedding calls, LLM calls) happens outside the lock. The canonical pattern: RLock to read what you need, Unlock, call provider, Lock to write results.
 - **Curation** runs in its own goroutine driven by a timer. Curation phases call the same api methods or engine primitives the transports do, so they participate in the same lock.
-- **Access metadata** (access_count, last_accessed, activation_boost) is written under the lock but not flushed to disk on every read. A background flusher saves the accumulated batch periodically (see `accessDirty` in `core/engine.go`). This trades exact durability of "last accessed at" for O(1) reads on hot queries.
+- **Access metadata** (access_count, last_accessed) lives in the non-versioned sidecar (sidecar.db), written through an in-memory cache at read time and overlaid onto nodes as they materialize. Reads never dirty the graph and never mint commits; the old periodic access-flush machinery is gone.
 
 ## Storage model
 

@@ -26,7 +26,7 @@ import (
 // user-initiated captures. The author backfill (cli/backfill.go)
 // stamps the same constant when retro-attributing curation-created
 // nodes in pre-attribution stores.
-const NodeAuthor = "curation"
+const NodeAuthor = core.CurationAuthor
 
 // ensureLogger returns a no-op logger if the provided logger is nil.
 func ensureLogger(logger *slog.Logger) *slog.Logger {

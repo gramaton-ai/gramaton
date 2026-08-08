@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -578,30 +579,6 @@ func TestRebuildPrimaryIfMissingAlwaysRebuildsProp(t *testing.T) {
 	}
 }
 
-// TestFlushAccessResetsFailureCounterOnSuccess pins the recovery
-// path of the accessFlusher dedup logic. After consecutive failures
-// bumped the counter, a successful flush must reset it to 0 so the
-// next transient failure logs at Warn rather than Debug. Drives via
-// MarkAccessDirty + simulated counter state because actually
-// forcing a Save failure mid-test requires closing bbolt under the
-// engine, which breaks teardown.
-func TestFlushAccessResetsFailureCounterOnSuccess(t *testing.T) {
-	eng := setupTestEngine(t)
-
-	eng.Lock()
-	eng.accessDirty = true
-	eng.accessFlushFailures = 5
-	eng.Unlock()
-
-	eng.FlushAccess()
-
-	eng.RLock()
-	defer eng.RUnlock()
-	if eng.accessFlushFailures != 0 {
-		t.Errorf("accessFlushFailures = %d after successful flush, want 0", eng.accessFlushFailures)
-	}
-}
-
 func TestConfig(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()
@@ -963,5 +940,45 @@ func TestWithWriteBatchPropagatesFnError(t *testing.T) {
 	}
 	if eng.headHash != "" {
 		t.Fatal("headHash should stay empty on fn error")
+	}
+}
+
+// TestSaveStampsCommitAuthor pins commit-level attribution: user
+// commits carry the configured author, curation-labeled commits
+// carry the curation identity, and both survive the round trip
+// through the commit chunk.
+func TestSaveStampsCommitAuthor(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Author.Name = "Commit Stamp Tester"
+	if err := config.Save(cfg, cfgPath); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	eng.Graph().AddNode(graph.Properties{"content_full": graph.StringProperty("author stamp fixture")})
+	userCommit, err := eng.Save("save record")
+	if err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Graph().AddNode(graph.Properties{"content_full": graph.StringProperty("curation fixture")})
+	curCommit, err := eng.Save("curation: cycle work")
+	if err != nil {
+		eng.Unlock()
+		t.Fatalf("Save curation: %v", err)
+	}
+	eng.Unlock()
+
+	if userCommit.Author != eng.Config().Author.String() || userCommit.Author == "" {
+		t.Fatalf("user commit author = %q, want the configured author", userCommit.Author)
+	}
+	if curCommit.Author != CurationAuthor {
+		t.Fatalf("curation commit author = %q, want %q", curCommit.Author, CurationAuthor)
 	}
 }
