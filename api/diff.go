@@ -80,8 +80,10 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 	var sinceHash string
 	if !sinceT.IsZero() {
 		if h, ok := tsIdx.CommitBefore(sinceT); ok {
-			sinceHash = h
-		} else {
+			// Branch-scope: the index spans every lineage.
+			sinceHash = a.snapToCurrentBranch(h)
+		}
+		if sinceHash == "" {
 			resp := DiffResponse{
 				Added:    []DiffEntry{},
 				Modified: []DiffEntry{},
@@ -102,16 +104,21 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 	// BEFORE until -- use CommitAt. Empty => HEAD.
 	untilHash := headHash
 	if !untilT.IsZero() {
-		if h, ok := tsIdx.CommitAt(untilT); ok {
-			untilHash = h
-		} else {
-			// until is before the earliest indexed commit; no range.
+		h, ok := tsIdx.CommitAt(untilT)
+		if ok {
+			// Branch-scope the hit: the index spans every lineage.
+			h = a.snapToCurrentBranch(h)
+		}
+		if !ok || h == "" {
+			// until predates every indexed commit, or nothing at or
+			// before it exists on this branch; no range.
 			return DiffResponse{
 				Added:    []DiffEntry{},
 				Modified: []DiffEntry{},
 				Removed:  []DiffEntry{},
 			}, nil
 		}
+		untilHash = h
 	}
 
 	if untilHash == "" {

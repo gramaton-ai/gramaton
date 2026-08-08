@@ -96,7 +96,14 @@ func (a *API) History(ctx context.Context, req HistoryRequest) (HistoryResponse,
 	hash := a.engine.HeadHashLocked()
 	if !untilT.IsZero() {
 		if h, ok := tsIdx.CommitAt(untilT); ok {
-			hash = h
+			// The timestamp index is global across branches; snap the
+			// hit onto the active lineage so the walk never serves an
+			// abandoned branch's history.
+			if snapped := a.snapToCurrentBranch(h); snapped != "" {
+				hash = snapped
+			} else {
+				return HistoryResponse{ID: req.ID, Changes: []HistoryChange{}}, nil
+			}
 		} else {
 			// Until predates every indexed commit; nothing to walk.
 			return HistoryResponse{ID: req.ID, Changes: []HistoryChange{}}, nil

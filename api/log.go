@@ -114,7 +114,12 @@ func (a *API) Log(ctx context.Context, req LogRequest) (LogResponse, *APIError) 
 	hash := a.engine.HeadHashLocked()
 	if !untilT.IsZero() {
 		if h, ok := tsIdx.CommitAt(untilT); ok {
-			hash = h
+			// Branch-scope the hit: the index spans every lineage.
+			if snapped := a.snapToCurrentBranch(h); snapped != "" {
+				hash = snapped
+			} else {
+				return LogResponse{Commits: []LogEntry{}}, nil
+			}
 		} else {
 			return LogResponse{Commits: []LogEntry{}}, nil
 		}
