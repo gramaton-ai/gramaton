@@ -112,3 +112,135 @@ func TestSaveChunkChildrenSurviveCommit(t *testing.T) {
 		t.Fatalf("children changed across commits: %d -> %d", before, after)
 	}
 }
+
+// TestUpdateContentRechunks pins the re-chunk lifecycle: a content
+// replace deletes the stale children and derives a fresh set from
+// the new content.
+func TestUpdateContentRechunks(t *testing.T) {
+	a, eng := setupTestAPI(t)
+	threshold := eng.Config().Chunking.Threshold
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: longStructuredContent(threshold),
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	oldChildren := sectionChildren(t, a, resp.ID)
+	if len(oldChildren) == 0 {
+		t.Fatal("no children created on save")
+	}
+
+	// Replace with different long content: children must be a fresh set.
+	updated, apiErr := a.Update(context.Background(), UpdateRequest{
+		ID:      resp.ID,
+		Content: longStructuredContent(threshold + 4000),
+	})
+	if apiErr != nil {
+		t.Fatalf("Update: %v", apiErr)
+	}
+	if !updated.Updated {
+		t.Fatal("update reported not-updated")
+	}
+
+	newChildren := sectionChildren(t, a, resp.ID)
+	if len(newChildren) == 0 {
+		t.Fatal("re-chunk created no children")
+	}
+	oldSet := map[string]bool{}
+	for _, id := range oldChildren {
+		oldSet[id] = true
+	}
+	a.engine.RLock()
+	defer a.engine.RUnlock()
+	for _, id := range newChildren {
+		if oldSet[id] {
+			t.Fatalf("stale child %s survived the re-chunk", id)
+		}
+	}
+	for _, id := range oldChildren {
+		if _, ok := a.engine.Graph().GetNode(id); ok {
+			t.Fatalf("old child %s still exists after re-chunk", id)
+		}
+	}
+}
+
+// TestUpdateShrinkBelowThresholdDeletesChildren pins the downward
+// crossing: children are cleared even when no re-chunk follows.
+func TestUpdateShrinkBelowThresholdDeletesChildren(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: longStructuredContent(eng.Config().Chunking.Threshold),
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	if len(sectionChildren(t, a, resp.ID)) == 0 {
+		t.Fatal("no children created on save")
+	}
+
+	if _, apiErr := a.Update(context.Background(), UpdateRequest{
+		ID:      resp.ID,
+		Content: "a short consolidating rewrite",
+	}); apiErr != nil {
+		t.Fatalf("Update: %v", apiErr)
+	}
+	if got := sectionChildren(t, a, resp.ID); len(got) != 0 {
+		t.Fatalf("children survived a shrink below the threshold: %d", len(got))
+	}
+}
+
+// TestUpdateGrowAboveThresholdCreatesChildren pins the upward
+// crossing via content_append on a previously unchunked record.
+func TestUpdateGrowAboveThresholdCreatesChildren(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: "## Seed\n\na short record that will grow",
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	if len(sectionChildren(t, a, resp.ID)) != 0 {
+		t.Fatal("short save unexpectedly chunked")
+	}
+
+	if _, apiErr := a.Update(context.Background(), UpdateRequest{
+		ID:            resp.ID,
+		ContentAppend: longStructuredContent(eng.Config().Chunking.Threshold),
+	}); apiErr != nil {
+		t.Fatalf("Update append: %v", apiErr)
+	}
+	if got := sectionChildren(t, a, resp.ID); len(got) == 0 {
+		t.Fatal("append across the threshold created no children")
+	}
+}
+
+// TestUpdateRefusesSectionChild pins the machine-owned refusal: a
+// child ID is not a valid update/classify/resolve target.
+func TestUpdateRefusesSectionChild(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: longStructuredContent(eng.Config().Chunking.Threshold),
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	children := sectionChildren(t, a, resp.ID)
+	if len(children) == 0 {
+		t.Fatal("no children created")
+	}
+	child := children[0]
+
+	if _, apiErr := a.Update(context.Background(), UpdateRequest{ID: child, Content: "overwrite attempt"}); apiErr == nil {
+		t.Fatal("Update accepted a section child")
+	}
+	if _, apiErr := a.Classify(context.Background(), ClassifyRequest{ID: child, Temporality: "durable"}); apiErr == nil {
+		t.Fatal("Classify accepted a section child")
+	}
+	if _, apiErr := a.Resolve(context.Background(), ResolveRequest{ID: child, Resolution: "obsolete"}); apiErr == nil {
+		t.Fatal("Resolve accepted a section child")
+	}
+}
