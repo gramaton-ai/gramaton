@@ -262,10 +262,15 @@ func (t *Tool) RerankResults(query string, results []Result) []Result {
 	}
 	var cands []candidate
 	for i, r := range head {
-		if r.SummaryShort == "" {
+		// buildResult fills RerankSnippet from summary or content;
+		// fall back to SummaryShort for Results constructed elsewhere.
+		s := r.RerankSnippet
+		if s == "" {
+			s = r.SummaryShort
+		}
+		if s == "" {
 			continue
 		}
-		s := r.SummaryShort
 		if len(s) > 300 {
 			s = s[:300]
 		}
