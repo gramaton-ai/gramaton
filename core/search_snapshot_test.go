@@ -51,8 +51,8 @@ func TestSnapshotStore_GetExpiredReturnsFalseAndEvicts(t *testing.T) {
 	if _, ok := s.Get(id); ok {
 		t.Error("Get on expired snapshot should return !ok")
 	}
-	if s.Len() != 0 {
-		t.Errorf("expired snapshot wasn't lazily evicted on Get; Len=%d", s.Len())
+	if snapshotLen(s) != 0 {
+		t.Errorf("expired snapshot wasn't lazily evicted on Get; Len=%d", snapshotLen(s))
 	}
 }
 
@@ -69,8 +69,8 @@ func TestSnapshotStore_SweepRemovesExpired(t *testing.T) {
 	if removed != 2 {
 		t.Errorf("sweep removed %d, want 2", removed)
 	}
-	if s.Len() != 1 {
-		t.Errorf("sweep left %d snapshots, want 1 (the fresh one)", s.Len())
+	if snapshotLen(s) != 1 {
+		t.Errorf("sweep left %d snapshots, want 1 (the fresh one)", snapshotLen(s))
 	}
 }
 
@@ -104,8 +104,8 @@ func TestSnapshotStore_PutNilNoOps(t *testing.T) {
 
 	s.Put(nil)
 	s.Put(&SearchSnapshot{}) // missing QueryID
-	if s.Len() != 0 {
-		t.Errorf("nil/empty Put leaked into store; Len=%d", s.Len())
+	if snapshotLen(s) != 0 {
+		t.Errorf("nil/empty Put leaked into store; Len=%d", snapshotLen(s))
 	}
 }
 
@@ -194,10 +194,18 @@ func TestSnapshotStore_BackgroundSweepEvictsExpired(t *testing.T) {
 	// parallel test packages competing for the scheduler.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if s.Len() == 0 {
+		if snapshotLen(s) == 0 {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Errorf("background sweep didn't evict expired snapshot within 3s; Len=%d", s.Len())
+	t.Errorf("background sweep didn't evict expired snapshot within 3s; Len=%d", snapshotLen(s))
+}
+
+// snapshotLen reports the number of currently-stored snapshots, including
+// any that are expired but not yet swept. For tests and metrics.
+func snapshotLen(s *SnapshotStore) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.snapshots)
 }

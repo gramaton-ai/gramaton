@@ -1450,11 +1450,6 @@ func DefaultDir() string {
 	return filepath.Join(defaultHomeDir(), ".gramaton")
 }
 
-// DefaultConfigPath returns the default config file path.
-func DefaultConfigPath() string {
-	return filepath.Join(DefaultDir(), "config.yaml")
-}
-
 // LoadWithFallback loads config with deep-merge semantics: start from
 // Defaults(), overlay the global config (if present), then overlay the
 // per-store config (if present). Keys absent from a layer's YAML inherit

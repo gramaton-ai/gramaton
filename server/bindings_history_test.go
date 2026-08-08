@@ -211,7 +211,7 @@ func TestAPIDiffSinceFutureReturnsEmpty(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "diff target")
 
-	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight, so the
+	// UTC: the api-layer date parsing interprets YYYY-MM-DD as UTC midnight, so the
 	// test must construct the date in UTC for the result to match.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Since: tomorrow})
@@ -274,7 +274,7 @@ func TestAPIDiffUntilAtHeadMatchesNoUntil(t *testing.T) {
 
 	// HEAD's timestamp is the most recent commit. Use "tomorrow" as Until
 	// so we know every commit is included (same as the no-Until case).
-	// Use UTC explicitly: parseDateArg interprets YYYY-MM-DD as UTC midnight,
+	// Use UTC explicitly: the api-layer date parsing interprets YYYY-MM-DD as UTC midnight,
 	// so tomorrow-in-local can be today-in-UTC if local is east of UTC, or
 	// today-in-local can be tomorrow-in-UTC if local is west — the test
 	// must construct tomorrow in the same frame the parser uses.
@@ -305,7 +305,7 @@ func TestAPIDiffUntilBeforeAnyCommit(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "target")
 
-	// UTC: parseDateArg interprets YYYY-MM-DD as UTC midnight. See
+	// UTC: the api-layer date parsing interprets YYYY-MM-DD as UTC midnight. See
 	// TestAPIDiffSinceFutureReturnsEmpty for the same TZ rationale.
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	resp, apiErr := srv.api.Diff(context.Background(), api.DiffRequest{Until: yesterday})

@@ -138,17 +138,6 @@ func New(deps Dependencies) *API {
 	return a
 }
 
-// Engine returns the underlying engine. Exposed for transport-layer
-// wiring that needs direct access (e.g. MCP request bindings that
-// want to acquire engine locks around registered tool metadata).
-// Prefer calling API methods over reaching through this accessor.
-func (a *API) Engine() *core.Engine { return a.engine }
-
-// UsageTracker returns the LLM usage tracker. Exposed for transports
-// that need to surface cost information outside of a specific
-// operation call (e.g. /v1/llm/stats).
-func (a *API) UsageTracker() *llm.UsageTracker { return a.usageTracker }
-
 // Runner returns the curation runner. Exposed for transports that
 // need to trigger or inspect curation state directly.
 func (a *API) Runner() *curation.Runner { return a.runner }

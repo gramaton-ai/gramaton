@@ -674,13 +674,6 @@ func TestDefaultDir(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigPath(t *testing.T) {
-	path := DefaultConfigPath()
-	if filepath.Base(path) != "config.yaml" {
-		t.Fatalf("expected config.yaml, got %s", filepath.Base(path))
-	}
-}
-
 func TestEffortForTask_DefaultsAndOverrides(t *testing.T) {
 	cfg := Defaults()
 

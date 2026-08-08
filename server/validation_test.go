@@ -97,27 +97,6 @@ func TestValidateEnumEmpty(t *testing.T) {
 	}
 }
 
-func TestParseDateArg(t *testing.T) {
-	tests := []struct {
-		input string
-		valid bool
-	}{
-		{"2026-04-05", true},
-		{"2026-04-05T10:30:00Z", true},
-		{"not-a-date", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		_, err := parseDateArg(tt.input)
-		if tt.valid && err != nil {
-			t.Errorf("parseDateArg(%q) should be valid, got: %v", tt.input, err)
-		}
-		if !tt.valid && err == nil {
-			t.Errorf("parseDateArg(%q) should be invalid", tt.input)
-		}
-	}
-}
-
 func TestServerLimits_ConfigDriven(t *testing.T) {
 	// Save and restore the package-level limits so the test doesn't
 	// leak state into other tests that run in the same binary.

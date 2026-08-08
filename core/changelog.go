@@ -24,8 +24,8 @@ var bookkeepingProps = map[string]bool{
 	// activation_boost has no live writer, but pre-v0.4 version blobs
 	// still carry it; masking keeps the comparison from minting a
 	// version when a legacy record sheds the prop.
-	"activation_boost": true,
-	"embedding_model":  true,
+	"activation_boost":  true,
+	"embedding_model":   true,
 	"embed_attempts":    true,
 	"repaired_at":       true,
 	"repair_method":     true,
