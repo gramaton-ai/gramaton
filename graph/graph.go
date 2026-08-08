@@ -72,7 +72,7 @@ type Graph struct {
 	//
 	// This lock is independent of the engine RWMutex above it. Engine
 	// callers must still serialize higher-level writes (multi-step
-	// mutations like dedup, reembed) via engine.Lock(); cacheMu only
+	// mutations like reembed) via engine.Lock(); cacheMu only
 	// guarantees that the node map itself never observes a concurrent
 	// read+write that would panic the runtime.
 	cacheMu sync.RWMutex

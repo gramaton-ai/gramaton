@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
@@ -102,13 +103,26 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		// limit is parsed but not clamped here: validation belongs at
+		// the api layer, so an over-limit value is passed through for
+		// api.JobsList to reject. Only the parse itself is enforced at
+		// this layer, so a non-numeric value still fails fast as 400.
+		limit := 0
+		if raw := query.Get("limit"); raw != "" {
+			v, err := strconv.Atoi(raw)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "input_error", "limit must be an integer", true)
+				return
+			}
+			limit = v
+		}
 		req := api.JobsListRequest{
 			Status:      query.Get("status"),
 			Kind:        query.Get("kind"),
 			ClientToken: query.Get("client_token"),
 			Since:       query.Get("since"),
 			Until:       query.Get("until"),
-			Limit:       parseIntParam(r, "limit", 0, api.MaxJobsListLimit),
+			Limit:       limit,
 			Offset:      parseIntParam(r, "offset", 0, 1<<31-1),
 		}
 		resp, apiErr := s.api.JobsList(r.Context(), req)

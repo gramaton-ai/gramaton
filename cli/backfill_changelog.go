@@ -53,6 +53,14 @@ func runBackfillChangelog(cmd *cobra.Command, args []string) error {
 	}
 	defer eng.Close()
 
+	// The changelog index lives in the sidecar bbolt file, which stays
+	// open (for access bookkeeping) even on a frozen store -- so
+	// nothing else stops this backfill from writing to it. Refuse up
+	// front, same message shape as the other store-mutating commands.
+	if eng.ReadOnly() {
+		return fmt.Errorf("store is read-only: backfill changelog is not permitted (make it writable first: gramaton store thaw)")
+	}
+
 	fmt.Println("Walking the commit chain (progress prints every batch)...")
 	indexed, err := eng.BackfillChangelog(func(done, total int) {
 		fmt.Printf("  %d / %d commits\n", done, total)

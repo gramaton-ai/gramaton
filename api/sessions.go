@@ -762,11 +762,12 @@ func (a *API) heldPromotionsForSession(sessionID string) []map[string]any {
 // PromoteToMemory implements the two-tier extraction model: when true
 // (or unset), the segment becomes both a Session segment (BM25-indexed)
 // and a Memory record (vector + BM25 indexed, full epistemic metadata,
-// auto-supersession). When false, only the Session segment is created
-// -- BM25-searchable but not vector-embedded, no Memory record, no
-// extracted_as edge. Use false for exploration, dead ends, open
-// questions, and other "valuable context" content that shouldn't
-// pollute the Memory store's vector space.
+// subject to the save-guard similarity hold). When false, only the
+// Session segment is created -- BM25-searchable but not
+// vector-embedded, no Memory record, no extracted_as edge. Use false
+// for exploration, dead ends, open questions, and other "valuable
+// context" content that shouldn't pollute the Memory store's vector
+// space.
 type SaveSegment struct {
 	Content         string   `json:"content"`
 	TopicName       string   `json:"topic"`
@@ -804,6 +805,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	}
 	if len(segments) == 0 {
 		return SessionSaveResponse{}, ErrMissing("segments is required and must not be empty")
+	}
+	if len(segments) > MaxSessionSegments {
+		return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segments exceeds maximum of %d", MaxSessionSegments))
 	}
 
 	// Validate all segments before consuming the prepared flag so that a

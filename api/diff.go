@@ -91,8 +91,10 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 			}
 			// State the floor instead of returning silently empty --
 			// on a pruned store, "no commit before since" usually
-			// means the window starts below removed history.
-			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && sinceT.Before(floor.FloorDate) {
+			// means the window starts at or below removed history.
+			// !After (not Before) so a since exactly on the floor date
+			// still gets the note instead of a silent empty diff.
+			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && !sinceT.After(floor.FloorDate) {
 				resp.Note = fmt.Sprintf("history available from %s (store pruned); the requested window starts before it", floor.FloorDate.UTC().Format(time.RFC3339))
 			}
 			return resp, nil

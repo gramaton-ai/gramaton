@@ -1706,9 +1706,10 @@ func trimConfigStrings(cfg *Config) {
 // loaded config. Runs once per load after all overlays have been applied.
 func normalize(cfg *Config) error {
 	// Whitespace trim first: downstream checks in this function
-	// (empty-string comparisons for e.g. provider vs dedup.action)
-	// assume strings are already trimmed. Also positions the trim
-	// to run regardless of which error path follows.
+	// (empty-string comparisons for e.g. embedding.provider vs
+	// remote.token_file) assume strings are already trimmed. Also
+	// positions the trim to run regardless of which error path
+	// follows.
 	trimConfigStrings(cfg)
 
 	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {
