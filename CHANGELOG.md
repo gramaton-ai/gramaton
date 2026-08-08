@@ -7,6 +7,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-08-08
+
 ### Changed
 
 - **Concepts are now a machine-owned derived layer (breaking for
@@ -141,8 +143,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   export path. Re-run `gramaton init --force` to refresh installed
   instruction files.
 
-### Changed
-
 - **Reads no longer produce commits (breaking for config).** Access
   bookkeeping (`access_count`, `last_accessed`, reembed's
   `embed_attempts`) moved out of versioned node properties into a
@@ -184,6 +184,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (about two minutes over HTTP; the retryable timeout says to call
   again). Requests beyond either bound were previously accepted --
   and, for the wait, died as a connection reset.
+
+- **Idle shutdown is proxy-aware.** The server's idle timeout
+  (`server.idle_timeout`, default 4h, 0 disables) no longer fires
+  while MCP proxies are attached: an open agent session keeps the
+  server up however long it idles, and the shutdown lands only once
+  the last session closes. Previously a long-running session lost
+  its server to the idle timer and needed an MCP reconnect to
+  recover.
+
+- **Config load errors explain removed keys.** A strict-load failure
+  on a key that a past release removed (`dedup:`, `activation:`,
+  `graph:`, the `hnsw_*` knobs, `scoring.weight_activation`,
+  `curation.max_dedup_per_run`) now appends per-key upgrade guidance
+  -- the key was valid once and the fix is deleting it -- instead of
+  reading like a typo report. All offending keys are named in one
+  failure.
 
 - **Wire additions and shape changes.** `gramaton_inspect` returns
   the record's `version` token; search results carry `updated_at`
@@ -373,6 +389,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `gramaton_classify` / `gramaton_resolve` refuse session segments
   (append-only), matching update's existing refusal.
 
+- **A broken config no longer hides its error behind a dead MCP
+  server.** `gramaton mcp` used to exit before the MCP handshake
+  when the server could not start, leaving the MCP client showing a
+  failed server and the actual error in a log file. The proxy now
+  completes the handshake and every tool call carries the real
+  startup error -- including the removed-key config guidance -- into
+  the session where the agent can act on it. The auto-start wait
+  also fails fast when the server process dies instead of burning
+  its ten-second timeout, and the spawning process reaps the dead
+  child instead of leaking a zombie per attempt.
+
 - **Transport parity and store gates tightened.** The MCP status
   handler takes the engine read lock (a concurrent restore could
   race it); the CLI proxy's `gramaton_session_start` forwards the
@@ -400,6 +427,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the export-all wrapper family (exports stream per-record and
   never hold the engine lock across a file), and unused accessors
   and helpers across the codebase.
+
+### Security
+
+- **Builds require Go 1.26.5.** Binaries built against go1.26.1
+  linked ten published Go standard-library vulnerabilities reachable
+  from Gramaton code (crypto/tls, crypto/x509, net/http, net,
+  net/textproto, archive/tar). The `go.mod` directive now requires
+  1.26.5; `govulncheck` reports no known reachable vulnerabilities
+  at this release. Go's toolchain auto-download handles the bump
+  when building from source.
 
 ## [0.3.0-alpha.6] - 2026-07-06
 
@@ -6471,7 +6508,8 @@ property graph storage, vector search, and versioned persistence.
 - **Configuration** -- YAML config with all design doc defaults, prolly
   tree tuning parameters, activation settings, storage paths
 
-[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.6...HEAD
+[Unreleased]: https://github.com/gramaton-ai/gramaton/compare/v0.4.0-alpha.1...HEAD
+[0.4.0-alpha.1]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.6...v0.4.0-alpha.1
 [0.3.0-alpha.6]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/gramaton-ai/gramaton/compare/v0.3.0-alpha.3...v0.3.0-alpha.4
