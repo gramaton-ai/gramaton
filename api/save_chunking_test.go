@@ -244,3 +244,61 @@ func TestUpdateRefusesSectionChild(t *testing.T) {
 		t.Fatal("Resolve accepted a section child")
 	}
 }
+
+// TestSearchFoldsSectionHitToParent pins the fold-up contract end to
+// end: a query matching one section of a long document returns the
+// PARENT record's ID carrying matched-section provenance, and child
+// ULIDs never appear as result identities.
+func TestSearchFoldsSectionHitToParent(t *testing.T) {
+	a, eng := setupTestAPI(t)
+	threshold := eng.Config().Chunking.Threshold
+
+	// A long document whose final section carries a unique token no
+	// other record shares.
+	var sb strings.Builder
+	sb.WriteString(longStructuredContent(threshold))
+	sb.WriteString("## Zanzibar appendix\n\n")
+	for i := 0; i < 40; i++ {
+		sb.WriteString("The zanzibar protocol governs the appendix payload. ")
+	}
+	resp, apiErr := a.Save(context.Background(), SaveRequest{Content: sb.String()})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	children := sectionChildren(t, a, resp.ID)
+	if len(children) == 0 {
+		t.Fatal("no children created")
+	}
+	childSet := map[string]bool{}
+	for _, id := range children {
+		childSet[id] = true
+	}
+
+	res, apiErr := a.Search(context.Background(), SearchRequest{Text: "zanzibar protocol", Top: 10})
+	if apiErr != nil {
+		t.Fatalf("Search: %v", apiErr)
+	}
+	if len(res.Results) == 0 {
+		t.Fatal("no results for a token present in a section")
+	}
+
+	foundParent := false
+	for _, r := range res.Results {
+		if childSet[r.ID] {
+			t.Fatalf("child %s surfaced as a result identity", r.ID)
+		}
+		if r.ID != resp.ID {
+			continue
+		}
+		foundParent = true
+		if r.MatchedSectionID == "" || !childSet[r.MatchedSectionID] {
+			t.Fatalf("folded row lacks child provenance: matched_section_id=%q", r.MatchedSectionID)
+		}
+		if r.MatchedSection == "" {
+			t.Fatal("folded row lacks a matched_section label")
+		}
+	}
+	if !foundParent {
+		t.Fatalf("parent %s not in results: %+v", resp.ID, res.Results)
+	}
+}

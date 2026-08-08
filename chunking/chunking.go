@@ -346,6 +346,10 @@ func applySections(a Applier, parentID string, pre *Result, parentProps graph.Pr
 		props["content_full"] = graph.StringProperty(sec.Text)
 		if sec.Heading != "" {
 			props["content_short"] = graph.StringProperty(sec.Heading)
+			// The heading also gets its own property: content_short
+			// doubles as a body prefix for headless sections, so it
+			// cannot serve as the matched-section label by itself.
+			props["section_heading"] = graph.StringProperty(sec.Heading)
 		} else if len(sec.Text) > shortContentThreshold {
 			props["content_short"] = graph.StringProperty(sec.Text[:shortContentThreshold])
 		}

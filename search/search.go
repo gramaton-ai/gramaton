@@ -53,6 +53,10 @@ type scored struct {
 	matchedBy string    // "vector", "bm25", "both", or "" (D14)
 	sortVal   float64   // numeric sort key when using field sort
 	sortTime  time.Time // time sort key
+	// foldedFrom is the section/chunk child whose hit this row
+	// represents after fold-up: id is then the PARENT record and
+	// score is the child's. Empty for direct hits and observations.
+	foldedFrom string
 }
 
 // New creates a search tool. embedder, bm25Full, and secIdx may be nil.
@@ -243,6 +247,8 @@ type Result struct {
 	ParentID            string   `json:"parent_id,omitempty"`             // non-empty for observations (D14)
 	ParentSummary       string   `json:"parent_summary,omitempty"`        // parent's content_short (D14 rev)
 	ParentContentLength int      `json:"parent_content_length,omitempty"` // parent's content_full byte length (D14 rev)
+	MatchedSectionID    string   `json:"matched_section_id,omitempty"`    // section/chunk child whose hit folded into this row
+	MatchedSection      string   `json:"matched_section,omitempty"`       // heading or ordinal of the matched section
 	MatchedBy           string   `json:"matched_by,omitempty"`            // "vector", "bm25", "both" (D14), or "concept_scan"
 	Keywords            []string `json:"keywords,omitempty"`
 	SummaryShort        string   `json:"summary_short,omitempty"`
@@ -532,22 +538,42 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			"ms", time.Since(rerankStart).Milliseconds())
 	}
 
-	// Step 5: Parent dedup (D14). For observation nodes, resolve the
-	// parent ID. Keep only the highest-scoring result per parent.
-	// Results are already sorted by score (descending), so the first
-	// result for each parent is the best.
+	// Step 5: Parent dedup and fold-up (D14). Results are already
+	// sorted by score (descending), so the first row per group is the
+	// group's max. Observation hits keep the current D14 contract:
+	// the child row survives, annotated with parent context in step
+	// 6 -- observations are independently meaningful assertions.
+	// Section/chunk hits FOLD UP: the emitted row is the parent
+	// record carrying the child's score (i.e. the parent takes
+	// max(parent, children)), with the matched child kept for
+	// provenance -- sections are mechanical fragments whose ULIDs
+	// callers cannot meaningfully inspect, link, or update.
 	seenParents := make(map[string]struct{})
 	var deduped []scored
 	for _, sr := range scoredResults {
-		parentID := t.resolveParentID(sr.id)
+		parentID, parentEdge := t.resolveParent(sr.id)
 		key := sr.id
 		if parentID != "" {
 			key = parentID
 		}
 		if _, seen := seenParents[key]; seen {
-			continue // already have a higher-scoring result for this parent
+			continue // already have a higher-scoring result for this group
 		}
 		seenParents[key] = struct{}{}
+		if parentID != "" && parentEdge != "observation_of" {
+			parent, ok := t.graph.GetNode(parentID)
+			if !ok {
+				continue // orphaned child; repair's territory
+			}
+			// A child's inherited properties are frozen at chunk
+			// time; never resurface a since-deleted parent through
+			// its stale fragments.
+			if ps, _ := parent.Properties.GetString("processing_status"); ps == "deleted" {
+				continue
+			}
+			sr.foldedFrom = sr.id
+			sr.id = parentID
+		}
 		deduped = append(deduped, sr)
 	}
 	scoredResults = deduped
@@ -556,9 +582,11 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		scoredResults = scoredResults[:q.Top]
 	}
 
-	// Step 6: Build results. For observation matches, enrich with
-	// parent context so the caller can decide whether to inspect
-	// the full record without a second round-trip (D14 revision).
+	// Step 6: Build results. Observation matches are enriched with
+	// parent context so the caller can decide whether to inspect the
+	// full record without a second round-trip (D14 revision). Folded
+	// section/chunk rows already carry the parent as their identity;
+	// they get matched-section provenance instead.
 	results := make([]Result, 0, len(scoredResults))
 	for _, sr := range scoredResults {
 		n, ok := t.graph.GetNode(sr.id)
@@ -567,14 +595,21 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		}
 		r := t.buildResult(n, sr.score, now)
 		r.MatchedBy = sr.matchedBy
-		r.ParentID = t.resolveParentID(sr.id)
-		if r.ParentID != "" {
-			if parent, ok := t.graph.GetNode(r.ParentID); ok {
-				if s, ok := parent.Properties.GetString("content_short"); ok {
-					r.ParentSummary = s
-				}
-				if c, ok := parent.Properties.GetString("content_full"); ok {
-					r.ParentContentLength = len(c)
+		if sr.foldedFrom != "" {
+			r.MatchedSectionID = sr.foldedFrom
+			if child, ok := t.graph.GetNode(sr.foldedFrom); ok {
+				r.MatchedSection = matchedSectionLabel(child.Properties)
+			}
+		} else {
+			r.ParentID, _ = t.resolveParent(sr.id)
+			if r.ParentID != "" {
+				if parent, ok := t.graph.GetNode(r.ParentID); ok {
+					if s, ok := parent.Properties.GetString("content_short"); ok {
+						r.ParentSummary = s
+					}
+					if c, ok := parent.Properties.GetString("content_full"); ok {
+						r.ParentContentLength = len(c)
+					}
 				}
 			}
 		}
@@ -646,13 +681,29 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	return results, nil
 }
 
-// resolveParentID returns the parent record ID for an observation or
-// section node, or "" for a direct (top-level) record.
-func (t *Tool) resolveParentID(nodeID string) string {
+// resolveParent returns the parent record ID and the structural edge
+// type for an observation, section, or chunk child, or ("", "") for
+// a direct (top-level) record. The edge type decides the step-5
+// treatment: observations keep their child row, section/chunk hits
+// fold up.
+func (t *Tool) resolveParent(nodeID string) (string, string) {
 	for _, e := range t.graph.EdgesFrom(nodeID) {
-		if e.Type == "observation_of" || e.Type == "section_of" {
-			return e.TargetID
+		if e.Type == "observation_of" || e.Type == "section_of" || e.Type == "chunk_of" {
+			return e.TargetID, e.Type
 		}
+	}
+	return "", ""
+}
+
+// matchedSectionLabel derives the human-facing section descriptor
+// for a folded hit: the section heading when the splitter found one,
+// else the ordinal.
+func matchedSectionLabel(props graph.Properties) string {
+	if s, ok := props.GetString("section_heading"); ok && s != "" {
+		return s
+	}
+	if idx, ok := props.GetInt64("section_index"); ok {
+		return fmt.Sprintf("section %d", idx)
 	}
 	return ""
 }
@@ -941,9 +992,6 @@ func (t *Tool) filterCandidates(q Query) map[string]struct{} {
 // asymmetric min-strict / max-lenient handling inline because no
 // other filter shares that shape.
 func (t *Tool) passesPropertyFilters(q Query, n *graph.Node, id string, now time.Time) bool {
-	if isLegacyChunk(t.graph, id) {
-		return false
-	}
 	if isCollectionItem(t.graph, id) {
 		return false
 	}
@@ -1415,9 +1463,12 @@ func edgeCount(g graph.NodeReader, id string) int {
 	return count
 }
 
-// isLegacyChunk checks if a node is a legacy dumb chunk (chunk_of edge).
-// Section nodes (section_of) are intentionally NOT excluded from search
-// results -- they have metadata and are independently meaningful.
+// isLegacyChunk checks if a node is a dumb chunk (chunk_of edge).
+// No longer a search-candidacy filter: chunk hits fold up to their
+// parent in step 5 like section hits (long-document retrieval is the
+// point of chunk children). Still used by duplicates, which excludes
+// chunk children pair-wise regardless of whether they carry the
+// node_type discriminator (pre-revival fixtures do not).
 func isLegacyChunk(g graph.NodeReader, id string) bool {
 	for _, e := range g.EdgesFrom(id) {
 		if e.Type == "chunk_of" {
