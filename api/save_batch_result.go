@@ -22,7 +22,7 @@ type SaveBatchResultRequest struct {
 // gramaton_save_batch_result.
 const SaveBatchResultDescription = `Block until an async gramaton_save_batch job reaches a terminal state (completed/failed/cancelled), then return the full response payload (added/failed/edges/edges_failed/stats).
 
-The call returns immediately if the job is already terminal. It honors the timeout_ms argument (default cfg.Jobs.ResultDefaultTimeout = 30 min); on timeout it returns the current Job snapshot with status=running and an unavailable error code so the caller can retry.
+The call returns immediately if the job is already terminal. It honors the timeout_ms argument (default cfg.Jobs.ResultDefaultTimeout = 30 min); on timeout it returns the current Job snapshot with status=running and an unavailable error code so the caller can retry. A single wait is additionally bounded by the transport (the HTTP server caps one response at about two minutes), so a long timeout_ms may return early with the retryable timeout error -- call again to keep waiting.
 
 For polling progress without blocking use gramaton_save_batch_status.`
 

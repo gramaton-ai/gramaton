@@ -32,6 +32,13 @@ import (
 	xrate "golang.org/x/time/rate"
 )
 
+// httpWriteTimeout bounds one HTTP response write. Embedding and
+// bulk ops can be slow, hence the generous window. Anything that
+// deliberately holds a response open -- the blocking batch-result
+// wait -- must finish under it (see resultWaitBudgetMS in
+// bindings_records.go).
+const httpWriteTimeout = 120 * time.Second
+
 // Config holds server configuration.
 type Config struct {
 	Port        int           `yaml:"port"`
@@ -402,7 +409,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		Handler:           s.securityHeaders(s.authenticate(s.admitWrites(mux))),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      120 * time.Second, // embedding and bulk ops can be slow
+		WriteTimeout:      httpWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}

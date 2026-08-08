@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
 )
@@ -180,3 +181,27 @@ func TestJobsListHTTP(t *testing.T) {
 // — the api-level TestJobsListPaginationCap exercises the rejection
 // path directly. The HTTP layer's clamp behaviour matches the rest
 // of the gramaton record/cluster routes.)
+
+// TestResultWaitBudgetFitsTransport pins the transport clamp on
+// blocking result waits: the budget must leave room for the timeout
+// snapshot to be written before the HTTP server aborts the response
+// at httpWriteTimeout, the default (0) and any longer ask must both
+// land on the budget, and a short ask passes through untouched.
+// Without the clamp, a wait beyond the write timeout ends as a
+// connection reset instead of the documented retryable-timeout
+// snapshot.
+func TestResultWaitBudgetFitsTransport(t *testing.T) {
+	budget := time.Duration(resultWaitBudgetMS) * time.Millisecond
+	if budget >= httpWriteTimeout {
+		t.Fatalf("result wait budget %v must be under the HTTP write timeout %v", budget, httpWriteTimeout)
+	}
+	if got := clampResultWait(0); got != resultWaitBudgetMS {
+		t.Errorf("clamp(0) = %d, want the budget %d (the api would expand 0 to 30 min)", got, resultWaitBudgetMS)
+	}
+	if got := clampResultWait(api.MaxResultTimeoutMS); got != resultWaitBudgetMS {
+		t.Errorf("clamp(max) = %d, want the budget %d", got, resultWaitBudgetMS)
+	}
+	if got := clampResultWait(5000); got != 5000 {
+		t.Errorf("clamp(5000) = %d, want the short ask passed through", got)
+	}
+}

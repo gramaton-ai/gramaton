@@ -59,7 +59,10 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		if args.TimeoutMS > 0 {
 			path += fmt.Sprintf("?timeout_ms=%d", args.TimeoutMS)
 		}
-		return proxyGet(path)
+		// Slow client: a result wait legitimately holds the response
+		// open up to the server's transport budget (~2 minutes); the
+		// default 30-second client would kill it mid-wait.
+		return proxyGetSlow(path)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

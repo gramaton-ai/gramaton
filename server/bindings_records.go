@@ -3,10 +3,29 @@ package server
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// resultWaitBudgetMS bounds one blocking batch-result wait to what
+// the HTTP transport can sustain: the server aborts the response
+// write at httpWriteTimeout, so the clean retryable-timeout snapshot
+// must be written before then. Every production transport rides this
+// pipe -- REST, remote /mcp, and the CLI stdio proxy -- and a caller
+// wanting a longer wait re-calls on the timeout error.
+const resultWaitBudgetMS = int((httpWriteTimeout - 10*time.Second) / time.Millisecond)
+
+// clampResultWait applies the transport budget: 0 (which the api
+// would expand to the 30-minute server default) and anything beyond
+// the budget both become the budget.
+func clampResultWait(ms int) int {
+	if ms <= 0 || ms > resultWaitBudgetMS {
+		return resultWaitBudgetMS
+	}
+	return ms
+}
 
 // registerRecordsRoutes wires the records-cluster HTTP endpoints to
 // the api methods. Each closure: parse body/path params -> call api
@@ -72,7 +91,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		timeoutMS := parseIntParam(r, "timeout_ms", 0, api.MaxResultTimeoutMS)
 		resp, apiErr := s.api.SaveBatchResult(r.Context(), api.SaveBatchResultRequest{
 			JobID:     r.PathValue("job_id"),
-			TimeoutMS: timeoutMS,
+			TimeoutMS: clampResultWait(timeoutMS),
 		})
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -295,6 +314,9 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchResultArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_save_batch_result")
 		defer done(nil)
+		// Production MCP reaches this binding via /mcp on the same
+		// HTTP server, so the same transport budget applies.
+		args.TimeoutMS = clampResultWait(args.TimeoutMS)
 		resp, apiErr := s.api.SaveBatchResult(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
