@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/internal/setup"
 	"github.com/gramaton-ai/gramaton/server"
 )
@@ -56,6 +59,14 @@ func serverURL() (string, error) {
 	// config-driven auto_start so no config state can re-enable it.
 	if os.Getenv(setup.NoAutostartEnv) == "1" {
 		return "", fmt.Errorf("no running server (%s=1 suppresses auto-start)", setup.NoAutostartEnv)
+	}
+	// The file sentinel closes the gap the env var cannot: an offline
+	// destructive run (prune) must also stop CONCURRENT processes --
+	// an MCP proxy fired from another terminal mid-run -- from
+	// spawning a server against the store it is mutating. Env vars
+	// don't cross process trees; a file in the config dir does.
+	if pid, held := noAutostartSentinelHolder(dir); held {
+		return "", fmt.Errorf("no running server (auto-start suspended by an offline maintenance run, pid %d)", pid)
 	}
 	// Respect server.auto_start (defaults true). A user running
 	// gramaton under systemd / launchd flips it to false so the CLI
@@ -271,4 +282,42 @@ func parseResponse(resp *http.Response) (*server.ResponseEnvelope, error) {
 	}
 
 	return &envelope, nil
+}
+
+// noAutostartFile is the config-dir sentinel an offline maintenance
+// command writes for its run: while it exists and its writer is
+// alive, no CLI process auto-starts a server. A dead writer's
+// sentinel is stale (a crashed run must not wedge auto-start
+// forever) and is ignored.
+const noAutostartFile = "no-autostart"
+
+func noAutostartSentinelPath(cfgDir string) string {
+	return filepath.Join(cfgDir, noAutostartFile)
+}
+
+// noAutostartSentinelHolder reports the live holder's pid, if any.
+func noAutostartSentinelHolder(cfgDir string) (int, bool) {
+	data, err := os.ReadFile(noAutostartSentinelPath(cfgDir))
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	if !server.IsProcessAlive(pid) {
+		return 0, false
+	}
+	return pid, true
+}
+
+// writeNoAutostartSentinel installs the sentinel for this process.
+// The returned release func removes it; callers defer it on every
+// exit path.
+func writeNoAutostartSentinel(cfgDir string) (func(), error) {
+	path := noAutostartSentinelPath(cfgDir)
+	if err := core.AtomicWriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		return nil, err
+	}
+	return func() { _ = os.Remove(path) }, nil
 }

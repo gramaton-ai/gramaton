@@ -754,3 +754,90 @@ func stripToAllowlist(m map[string]any, section string, safe map[string]bool) {
 		}
 	}
 }
+
+// ArchiveInfo is what VerifyArchive learns by opening an archive.
+type ArchiveInfo struct {
+	HEAD   string
+	Format string
+}
+
+// VerifyArchive opens the archive and streams entries until the
+// snapshot HEAD (and FORMAT, if present) is found. This is the prune
+// backup gate's proof that the archive is real and readable -- a
+// stat proves only that a file exists. It does not extract anything.
+func VerifyArchive(archivePath string) (*ArchiveInfo, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, fmt.Errorf("archive is not a valid gzip stream: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+
+	info := &ArchiveInfo{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("archive is not a valid tar stream: %w", err)
+		}
+		switch hdr.Name {
+		case "data/HEAD":
+			b, err := io.ReadAll(io.LimitReader(tr, 256))
+			if err != nil {
+				return nil, fmt.Errorf("read archived HEAD: %w", err)
+			}
+			info.HEAD = strings.TrimSpace(string(b))
+		case "data/FORMAT":
+			b, err := io.ReadAll(io.LimitReader(tr, 64))
+			if err != nil {
+				return nil, fmt.Errorf("read archived FORMAT: %w", err)
+			}
+			info.Format = strings.TrimSpace(string(b))
+		}
+		if info.HEAD != "" && info.Format != "" {
+			break
+		}
+	}
+	if info.HEAD == "" {
+		return nil, fmt.Errorf("archive carries no snapshot HEAD; not a coherent gramaton backup")
+	}
+	return info, nil
+}
+
+// NewestArchiveFor returns the newest backup archive in dir whose
+// filename names the given store, or "" when none exists. Store
+// identity lives in the filename (there is no store UUID); an
+// unnamed store matches only unnamed archives.
+func NewestArchiveFor(dir, storeName string) (string, error) {
+	files, err := listBackups(dir)
+	if err != nil {
+		return "", err
+	}
+	marker := "gramaton-backup-"
+	if storeName != "" {
+		marker = "gramaton-backup-" + storeName + "-"
+	}
+	// listBackups sorts oldest-first; walk backwards.
+	for i := len(files) - 1; i >= 0; i-- {
+		base := filepath.Base(files[i])
+		if storeName == "" {
+			// Unnamed archives have a timestamp right after the prefix.
+			rest := strings.TrimPrefix(base, marker)
+			if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+				return files[i], nil
+			}
+			continue
+		}
+		if strings.HasPrefix(base, marker) {
+			return files[i], nil
+		}
+	}
+	return "", nil
+}
