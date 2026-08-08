@@ -27,6 +27,11 @@ const DeleteRecordDescription = "Soft-delete a record. Sets processing_status=de
 // DeleteRecord sets processing_status to "deleted" and timestamps the
 // delete. Caller can still inspect the record; search deprioritizes
 // deleted records by default.
+//
+// Unlike Update, Classify, and Resolve, this path deliberately accepts
+// concept nodes: editing one would fight curation over a derived
+// summary, but discarding a bad one is a supported move -- the next
+// synthesis pass regenerates the concept from its members.
 func (a *API) DeleteRecord(ctx context.Context, req DeleteRecordRequest) (DeleteRecordResponse, *APIError) {
 	if apiErr := a.rejectIfReadOnly("delete"); apiErr != nil {
 		return DeleteRecordResponse{}, apiErr

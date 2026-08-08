@@ -241,11 +241,20 @@ func (s *indexSet) setPropSession(ws *WriteSession, nodeID, key string, val grap
 	}
 }
 
-// setContentPropSession is setContentProp via a WriteSession.
+// setContentPropSession is setContentProp via a WriteSession,
+// including its concept exclusion: the two paths write the same
+// index, so a gate on one alone would let batched callers reinstate
+// what the non-batched path refuses.
 func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content string) {
 	s.setPropSession(ws, nodeID, key, graph.StringProperty(content))
 	if key == "content_full" {
 		s.bm25Full.RemoveTx(ws.tx, ws.bm25, nodeID)
+		// A concept's synthesis rewrite must not re-enter BM25 (the
+		// Remove above also clears any entry a pre-exclusion store
+		// left behind).
+		if n, ok := ws.engine.graph.GetNode(nodeID); ok && graph.IsConcept(n.Properties) {
+			return
+		}
 		s.bm25Full.AddTx(ws.tx, ws.bm25, nodeID, content)
 	}
 }
