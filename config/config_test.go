@@ -45,9 +45,6 @@ func TestDefaults(t *testing.T) {
 	if cfg.SaveGuard.AdvisoryThreshold != 0.85 {
 		t.Fatalf("save_guard.advisory_threshold: expected 0.85, got %f", cfg.SaveGuard.AdvisoryThreshold)
 	}
-	if cfg.Graph.EdgeWeightTraversalThreshold != 0.3 {
-		t.Fatalf("graph.edge_weight_traversal_threshold: expected 0.3, got %f", cfg.Graph.EdgeWeightTraversalThreshold)
-	}
 	if cfg.Limits.MaxJSONSize != 2*1024*1024 {
 		t.Fatalf("limits.max_json_size: expected 2MB, got %d", cfg.Limits.MaxJSONSize)
 	}

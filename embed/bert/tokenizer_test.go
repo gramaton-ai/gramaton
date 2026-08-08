@@ -1,6 +1,7 @@
 package bert
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -66,7 +67,7 @@ func buildTestTokenizerJSON() string {
 }
 
 func TestTokenizerFromVocab(t *testing.T) {
-	tok, err := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, err := newTokenizerFromVocab([]byte(buildTestVocab()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestTokenizerFromJSONBadType(t *testing.T) {
 }
 
 func TestEncodeBasic(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, mask, types := tok.Encode("hello world")
 
@@ -128,7 +129,7 @@ func TestEncodeBasic(t *testing.T) {
 }
 
 func TestEncodePunctuation(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("hello, world!")
 
@@ -145,7 +146,7 @@ func TestEncodePunctuation(t *testing.T) {
 }
 
 func TestEncodeWordPiece(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("unknown")
 
@@ -163,7 +164,7 @@ func TestEncodeWordPiece(t *testing.T) {
 }
 
 func TestEncodeWordPieceSuffix(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("jumps")
 
@@ -181,7 +182,7 @@ func TestEncodeWordPieceSuffix(t *testing.T) {
 }
 
 func TestEncodeUnknownWord(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("xyz")
 
@@ -198,7 +199,7 @@ func TestEncodeUnknownWord(t *testing.T) {
 }
 
 func TestEncodeLowercase(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("Hello World")
 
@@ -216,7 +217,7 @@ func TestEncodeLowercase(t *testing.T) {
 }
 
 func TestEncodeEmpty(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, mask, types := tok.Encode("")
 
@@ -262,7 +263,7 @@ func TestEncodeTruncation(t *testing.T) {
 }
 
 func TestEncodeMultipleSpaces(t *testing.T) {
-	tok, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tok, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	ids, _, _ := tok.Encode("hello   world")
 
@@ -377,7 +378,7 @@ func TestSetMaxLen(t *testing.T) {
 func TestTokenizerFromJSONMatchesVocab(t *testing.T) {
 	// Ensure both loading methods produce the same tokenization.
 	tokJSON, _ := NewTokenizerFromJSON([]byte(buildTestTokenizerJSON()))
-	tokVocab, _ := NewTokenizerFromVocab([]byte(buildTestVocab()))
+	tokVocab, _ := newTokenizerFromVocab([]byte(buildTestVocab()))
 
 	texts := []string{
 		"hello world",
@@ -401,4 +402,36 @@ func TestTokenizerFromJSONMatchesVocab(t *testing.T) {
 			}
 		}
 	}
+}
+
+// newTokenizerFromVocab parses a plain vocab.txt file (one token per line,
+// indexed by line number). Uses default BERT normalizer settings.
+func newTokenizerFromVocab(data []byte) (*Tokenizer, error) {
+	lines := strings.Split(string(data), "\n")
+	vocab := make(map[string]int32, len(lines))
+	for i, line := range lines {
+		if line == "" && i == len(lines)-1 {
+			continue // trailing newline
+		}
+		vocab[line] = int32(i)
+	}
+	if len(vocab) == 0 {
+		return nil, fmt.Errorf("tokenizer: empty vocab")
+	}
+
+	t := &Tokenizer{
+		vocab:    vocab,
+		maxLen:   DefaultMaxLen,
+		doLower:  true,
+		stripAcc: true,
+	}
+	t.unkID = t.id("[UNK]")
+	t.clsID = t.id("[CLS]")
+	t.sepID = t.id("[SEP]")
+	t.padID = t.id("[PAD]")
+
+	if err := t.validateSpecialTokens(); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
