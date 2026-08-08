@@ -31,6 +31,9 @@ func init() {
 }
 
 func runMigrate(cmd *cobra.Command, args []string) error {
+	if err := guardLocalStore("migrate"); err != nil {
+		return err
+	}
 	dir := configDir()
 
 	if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
