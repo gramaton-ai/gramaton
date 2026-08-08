@@ -53,6 +53,7 @@ const (
 	ActionClassify               = "classify"
 	ActionUpdate                 = "update"
 	ActionResolve                = "resolve"
+	ActionPrune                  = "prune"
 	ActionDelete                 = "delete"
 	ActionLink                   = "link"
 	ActionUnlink                 = "unlink"

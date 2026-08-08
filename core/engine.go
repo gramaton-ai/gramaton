@@ -106,6 +106,12 @@ type Engine struct {
 	// never-pruned store). Loaded at open from the sidecar pointer;
 	// prune runs offline, so no live invalidation is needed.
 	pruneFloor *graph.Tombstone
+	// pendingTombstoneRoot, when set (offline prune only), is stamped
+	// onto the NEXT commit as PruneTombstoneRoot and cleared -- the
+	// prune commit rides the normal Save pipeline (HEAD write,
+	// ancestry, timestamp index, changelog marker) instead of
+	// duplicating it.
+	pendingTombstoneRoot string
 	// adoptedCommitPending marks that the next Save commits an
 	// adopted staged graph (revert/merge): its mutation set is empty,
 	// so the Save-time changelog append must NOT advance the marker
@@ -933,6 +939,10 @@ func (e *Engine) Save(message string, actions ...graph.CommitAction) (*graph.Com
 	commit.PropRoot = propRoot
 	commit.EdgeAdjRoot = edgeAdjRoot
 	commit.Author = e.commitAuthor(message)
+	if e.pendingTombstoneRoot != "" {
+		commit.PruneTombstoneRoot = e.pendingTombstoneRoot
+		e.pendingTombstoneRoot = ""
+	}
 	commit, err = e.graph.WriteCommit(e.store, commit)
 	if err != nil {
 		return nil, fmt.Errorf("write commit: %w", err)
@@ -1328,3 +1338,8 @@ func (e *Engine) HistoryFloor() *graph.Tombstone { return e.pruneFloor }
 // SetHistoryFloor installs a just-minted tombstone (the offline
 // prune run updates its own engine instance after committing).
 func (e *Engine) SetHistoryFloor(t *graph.Tombstone) { e.pruneFloor = t }
+
+// SetPendingTombstoneRoot stamps the next commit with a retention
+// tombstone reference. Offline prune use only; caller must hold the
+// write lock and follow with a Save.
+func (e *Engine) SetPendingTombstoneRoot(hash string) { e.pendingTombstoneRoot = hash }

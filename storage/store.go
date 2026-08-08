@@ -317,3 +317,17 @@ func gzipDecompress(data []byte) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// Size reports a chunk's on-disk (compressed) byte size. Prune plans
+// use it to report reclaimable space without reading blob contents.
+func (s *Store) Size(hash string) (int64, error) {
+	path, err := s.chunkPath(hash)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
