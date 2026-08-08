@@ -13,10 +13,17 @@ memory saves, no curation, no edits of any kind.
   single call. Use for ULIDs and ticket/decision codenames.
 - `gramaton_explore` — graph traversal from a node; returns
   connected nodes and edges within a depth.
-- `gramaton_collection_list` / `gramaton_collection_items` — browse
-  collections; items are returned exhaustively.
-- `gramaton_stats`, `gramaton_status`, `gramaton_history`,
-  `gramaton_log`, `gramaton_diff` — store overview and history.
+- `gramaton_collection_list` / `gramaton_collection_items` /
+  `gramaton_collection_schema` — browse collections; items are
+  returned exhaustively.
+- `gramaton_history` — a record's version timeline (what changed,
+  when, by whom); `gramaton_history_search` — lexical search over
+  past versions; `gramaton_inspect` accepts `as_of` for
+  point-in-time reads.
+- `gramaton_stats`, `gramaton_status`, `gramaton_log`,
+  `gramaton_diff`, `gramaton_duplicates`, `gramaton_pending`,
+  `gramaton_session_get`, `gramaton_jobs_list` — store overview,
+  commit log, and diagnostics.
 - `gramaton_guide` — the live reference for how Gramaton works.
 
 **What is not available:** every write tool. `gramaton_save`, the
