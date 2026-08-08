@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -177,10 +178,47 @@ func TestJobsListHTTP(t *testing.T) {
 	}
 }
 
-// (HTTP cap on limit is enforced by parseIntParam clamping silently
-// — the api-level TestJobsListPaginationCap exercises the rejection
-// path directly. The HTTP layer's clamp behaviour matches the rest
-// of the gramaton record/cluster routes.)
+// TestJobsListLimitRejectedOverCap: GET /v1/jobs?limit=<over the cap>
+// must reject with 400, matching api.JobsList's own rejection
+// (api-level TestJobsListPaginationCap covers the same cap directly).
+// Before the fix the HTTP route clamped an over-limit value down to
+// api.MaxJobsListLimit via parseIntParam, so the same request that the
+// MCP/CLI transports reject (calling api.JobsList directly) silently
+// succeeded over HTTP with a smaller page instead.
+func TestJobsListLimitRejectedOverCap(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	w := doRequest(t, srv, "GET", fmt.Sprintf("/v1/jobs?limit=%d", api.MaxJobsListLimit+1), nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Error.Code != "input_error" {
+		t.Errorf("code = %q, want input_error", env.Error.Code)
+	}
+	if !strings.Contains(env.Error.Message, fmt.Sprintf("%d", api.MaxJobsListLimit)) {
+		t.Errorf("message %q should name the cap %d", env.Error.Message, api.MaxJobsListLimit)
+	}
+}
+
+// TestJobsListLimitNonNumericRejected: GET /v1/jobs?limit=abc must
+// reject with 400 at the HTTP layer (the parse itself fails, before
+// api.JobsList ever sees a value) rather than silently falling back
+// to the default page size.
+func TestJobsListLimitNonNumericRejected(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	w := doRequest(t, srv, "GET", "/v1/jobs?limit=abc", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
 
 // TestResultWaitBudgetFitsTransport pins the transport clamp on
 // blocking result waits: the budget must leave room for the timeout
