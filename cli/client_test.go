@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/internal/setup"
 )
@@ -69,5 +70,43 @@ func TestServerURLNoAutostartSuppression(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "server.json")); !os.IsNotExist(statErr) {
 		t.Error("control leg must not start a server either")
+	}
+}
+
+// TestWaitForServerBailsWhenChildExits pins the fast-fail path: a
+// closed childExited channel (the auto-started server died, e.g. a
+// config-load failure) returns immediately instead of spinning out
+// the full timeout probing a server that will never come up.
+func TestWaitForServerBailsWhenChildExits(t *testing.T) {
+	dir := t.TempDir()
+	exited := make(chan struct{})
+	close(exited)
+
+	start := time.Now()
+	err := waitForServer(dir, 10*time.Second, exited)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when child already exited")
+	}
+	if !strings.Contains(err.Error(), "exited during startup") {
+		t.Errorf("error should name the child exit: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("should bail immediately, took %s", elapsed)
+	}
+
+	// A nil channel never fires: the poll loop runs to its deadline
+	// as before (short timeout keeps the test fast).
+	start = time.Now()
+	err = waitForServer(dir, 300*time.Millisecond, nil)
+	if err == nil {
+		t.Fatal("expected timeout error with no server")
+	}
+	if strings.Contains(err.Error(), "exited during startup") {
+		t.Errorf("nil channel must not report a child exit: %v", err)
+	}
+	if time.Since(start) < 300*time.Millisecond {
+		t.Error("nil-channel leg should poll to the deadline")
 	}
 }
