@@ -50,12 +50,6 @@ func KiroAgentSpawn(stdin io.Reader, stdout io.Writer) {
 	}
 }
 
-// extractionReminder is the text Kiro's UserPromptSubmit hook
-// injects into the agent's context when the turn counter crosses
-// the threshold. Preserved verbatim from the legacy shell script
-// so agents see the same nudge.
-const extractionReminder = `[Gramaton reminder: You have been working for a while without extracting knowledge. Consider calling gramaton_session_prepare to review what should be captured, then gramaton_session_save to save it.]`
-
 // KiroUserPromptSubmit handles Kiro's UserPromptSubmit event.
 // Kiro's unique contract for this hook: whatever the hook writes
 // to stdout is injected into the agent's next-prompt context.
@@ -68,7 +62,10 @@ const extractionReminder = `[Gramaton reminder: You have been working for a whil
 // Stdin: JSON with session_id OR agent_id.
 // Stdout: extraction reminder text when threshold crossed.
 func KiroUserPromptSubmit(stdin io.Reader, stdout io.Writer) {
-	log := OpenLogger("user-prompt-submit")
+	// Tag is kiro-prefixed (matching the cliEvent and the kiro-stop
+	// precedent) because Claude Code's handler shares hooks.log and
+	// owns the bare "user-prompt-submit" tag.
+	log := OpenLogger("kiro-user-prompt-submit")
 	defer log.Close()
 
 	in, err := DecodeInput(stdin)

@@ -39,15 +39,46 @@ func init() {
 	rootCmd.AddCommand(mcpCmd)
 }
 
-// mcpReadOnlyInstructions is the MCP server-instructions text handed
-// to clients when the attached store is frozen. It leads the
-// instructions string -- the read-only state must be the first thing
-// a client learns about this server. There is currently no base
-// instructions text to append after it; if one is ever added, this
-// sentence stays first.
+// mcpBaseInstructions is the MCP server-instructions text handed to
+// every client. Clients that defer tool schemas behind tool search
+// (Claude Code's default) still load the server name and this string
+// at session start, so it is the one channel guaranteed to reach the
+// model when the per-tool descriptions do not. It therefore carries
+// the load-bearing usage guidance -- above all the session-capture
+// cadence -- in compressed form. Claude Code truncates instructions
+// at 2KB (vendor docs, read 2026-08); keep this comfortably under
+// that with the critical content first.
+const mcpBaseInstructions = "Gramaton is the user's persistent knowledge store: " +
+	"semantic memory records, conversation session capture, and structured " +
+	"collections (tasks, TODOs, checklists), plus graph links, history, and " +
+	"curation. Search for and load its tools whenever the conversation " +
+	"involves remembering, saving, or recalling anything beyond the current " +
+	"session.\n\n" +
+	"Automatic session capture is expected, not optional: call " +
+	"gramaton_session_prepare then gramaton_session_save immediately when a " +
+	"decision lands, a task completes, the user says done/ship it/that works, " +
+	"the topic pivots, or context compaction is imminent -- and at least every " +
+	"~10 substantive turns regardless. Do not batch saves at session end. If a " +
+	"save response reports held promotions, resolve them promptly with " +
+	"gramaton_session_resolve_held.\n\n" +
+	"Retrieval: call gramaton_search before answering questions about past " +
+	"decisions, project state, preferences, or prior sessions; use " +
+	"gramaton_inspect for a specific record ID (ULID). Store new knowledge " +
+	"with gramaton_save; revise existing records with gramaton_update. Tasks " +
+	"and other must-not-miss-one items belong in collections " +
+	"(gramaton_collection_add / gramaton_collection_items, which returns " +
+	"every item). If unsure how any Gramaton workflow works, call " +
+	"gramaton_guide."
+
+// mcpReadOnlyInstructions is the MCP server-instructions text that
+// leads the instructions string when the attached store is frozen --
+// the read-only state must be the first thing a client learns about
+// this server, ahead of mcpBaseInstructions.
 const mcpReadOnlyInstructions = "This Gramaton store is read-only (frozen): " +
 	"all writes are rejected and no write tools are registered. " +
-	"Search and the other read tools work normally."
+	"Search and the other read tools work normally; the guidance " +
+	"below about saving, session capture, and collections does not " +
+	"apply until the store is thawed."
 
 func runMCP(cmd *cobra.Command, args []string) error {
 	// Ensure the HTTP server is running (auto-starts if needed). A
@@ -94,10 +125,11 @@ func runMCP(cmd *cobra.Command, args []string) error {
 // leading read-only notice in the server instructions) for a frozen
 // one.
 func newProxyMCPServer(readOnly bool) *mcp.Server {
-	var opts *mcp.ServerOptions
+	instructions := mcpBaseInstructions
 	if readOnly {
-		opts = &mcp.ServerOptions{Instructions: mcpReadOnlyInstructions}
+		instructions = mcpReadOnlyInstructions + "\n\n" + mcpBaseInstructions
 	}
+	opts := &mcp.ServerOptions{Instructions: instructions}
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "gramaton",
 		Version: version.Version,

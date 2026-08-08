@@ -120,6 +120,9 @@ func TestHarnessRegistryMigratedEntries(t *testing.T) {
 	if claude.ProxyStyle != proxyPosixOnly {
 		t.Error("Claude Code should keep .sh proxies on Windows (bundles Git Bash)")
 	}
+	if len(claude.HookEvents) != 5 {
+		t.Errorf("Claude Code should wire 5 lifecycle events (incl. UserPromptSubmit), got %d", len(claude.HookEvents))
+	}
 
 	kiro := harnessByName("kiro-cli")
 	if kiro == nil {

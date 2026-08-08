@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/gramaton-ai/gramaton/internal/setup"
@@ -20,6 +19,7 @@ func TestHookDispatchCoversAllEvents(t *testing.T) {
 		"stop",
 		"pre-compact",
 		"post-compact",
+		"user-prompt-submit",
 		"kiro-agent-spawn",
 		"kiro-user-prompt-submit",
 		"kiro-stop",
@@ -73,15 +73,13 @@ func TestHookProxyEventsAreDispatchable(t *testing.T) {
 	}
 }
 
-func TestHookUnknownEventReturnsError(t *testing.T) {
-	err := runHook(nil, []string{"nonexistent-event"})
-	if err == nil {
-		t.Fatal("unknown event should return error")
-	}
-	if !strings.Contains(err.Error(), "unknown hook event") {
-		t.Errorf("error message missing context: %v", err)
-	}
-	if !strings.Contains(err.Error(), "nonexistent-event") {
-		t.Errorf("error should quote the bad event name: %v", err)
+// TestHookUnknownEventFailsOpen pins the version-skew contract: a
+// settings.json entry for an event this binary doesn't know (an
+// older binary resolved by a proxy script after a newer init wrote
+// the entry) must not error, or the harness shows a hook failure on
+// every firing. The diagnostic goes to stderr instead.
+func TestHookUnknownEventFailsOpen(t *testing.T) {
+	if err := runHook(nil, []string{"nonexistent-event"}); err != nil {
+		t.Fatalf("unknown event must fail open (exit 0), got error: %v", err)
 	}
 }

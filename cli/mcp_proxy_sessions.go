@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gramaton-ai/gramaton/api"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -42,6 +43,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_prepare",
 		Description: api.SessionPrepareDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionPrepareArgs) (*mcp.CallToolResult, any, error) {
 		if args.SessionID == "" {
 			return proxyErr("session_id is required")
@@ -57,6 +59,7 @@ func registerSessionProxyTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_save",
 		Description: api.SessionSaveDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sessionCommitArgs) (*mcp.CallToolResult, any, error) {
 		if args.SessionID == "" {
 			return proxyErr("session_id is required")

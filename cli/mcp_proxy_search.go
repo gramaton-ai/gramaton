@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gramaton-ai/gramaton/api"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -15,6 +16,7 @@ func registerSearchProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_search",
 		Description: api.SearchDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SearchRequest) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/search", args)
 	})

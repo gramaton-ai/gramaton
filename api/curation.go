@@ -62,6 +62,11 @@ type CurationDrainResponse struct {
 // Description constants are shared by HTTP, MCP, and CLI proxy
 // transports so the surface text never drifts between them.
 const (
+	// CurationDescription is the combined gramaton_curation MCP tool
+	// description (the tool multiplexes the four actions below plus
+	// drain via its action argument).
+	CurationDescription = "View or drive the curation runner. action=status returns the current state and manifest. action=trigger runs a cycle now. action=dry_run previews what an autonomous cycle would do without applying changes. action=batch classifies every pending record (LLM required). action=drain_contradictions artificially marks every in-window contradiction-candidate pair as no_contradiction without calling the LLM; see design-decisions.md D38."
+
 	CurationStatusDescription  = "Get the current curation runner status and latest store manifest. Returns immediately. pending_count = records awaiting classification (work to do); concept_candidates = keywords above emergence threshold (telemetry signal, not a backlog)."
 	CurationTriggerDescription = "Run a curation cycle now. Returns triggered=false (with the prior status) when a cycle is already in progress."
 	CurationDryRunDescription  = "Preview what an autonomous curation cycle would do without applying changes. The deterministic phase still runs (it is always safe)."

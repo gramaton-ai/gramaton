@@ -238,8 +238,15 @@ func CwdSlug(cwd string) string {
 	return strings.ReplaceAll(s, "/", "-")
 }
 
+// extractionReminder is the text the UserPromptSubmit hooks (Claude
+// Code and Kiro -- both harnesses inject a hook's plain stdout into
+// the agent's context) emit when the turn counter crosses the
+// threshold. Preserved verbatim from the legacy shell script so
+// agents see the same nudge.
+const extractionReminder = `[Gramaton reminder: You have been working for a while without extracting knowledge. Consider calling gramaton_session_prepare to review what should be captured, then gramaton_session_save to save it.]`
+
 // ExtractThreshold returns the turn-counter threshold after which
-// Kiro's user-prompt-submit hook injects an extraction reminder.
+// the UserPromptSubmit hooks inject an extraction reminder.
 // Override via GRAMATON_EXTRACT_INTERVAL env var; default 10.
 func ExtractThreshold() int {
 	if v := os.Getenv("GRAMATON_EXTRACT_INTERVAL"); v != "" {
