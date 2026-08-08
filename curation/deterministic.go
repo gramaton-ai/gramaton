@@ -1098,6 +1098,14 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 		if e.SecIdx() != nil {
 			e.SecIdx().RemoveNode(id)
 		}
+		// The access sidecar is primary bookkeeping in its own bbolt
+		// file, outside the commit substrate, so a hard delete has to
+		// reclaim the entry explicitly. Left behind it survives
+		// backup/restore and re-overlays onto the ID if the record is
+		// ever re-imported.
+		if ai := e.AccessIdx(); ai != nil {
+			ai.Remove(id)
+		}
 		e.Graph().DeleteNode(id)
 		deleted++
 		gcActions = append(gcActions, graph.CommitAction{

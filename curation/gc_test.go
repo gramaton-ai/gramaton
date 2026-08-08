@@ -137,6 +137,50 @@ func TestCollectGarbageRespectsDurableTemporality(t *testing.T) {
 	}
 }
 
+// TestCollectGarbageRemovesAccessSidecarEntry pins deletion hygiene
+// for the GC path. Access bookkeeping lives in its own bbolt file
+// outside the commit substrate, so removing the node and its derived
+// indexes reclaims nothing there: an entry left behind survives
+// backup/restore and re-overlays onto the ID if the record is ever
+// re-imported.
+func TestCollectGarbageRemovesAccessSidecarEntry(t *testing.T) {
+	eng := setupEngine(t)
+	cfg := eng.Config()
+	cfg.GC.Enabled = true
+	cfg.GC.DryRun = false
+	cfg.GC.MinAgeDays = 30
+
+	old := time.Now().UTC().AddDate(0, 0, -60)
+
+	eng.Lock()
+	debris := eng.Graph().AddNode(graph.Properties{
+		"content_full":      graph.StringProperty("aged debris that burned embed attempts"),
+		"processing_status": graph.StringProperty("captured"),
+		"created_at":        graph.TimestampProperty(old),
+		"access_count":      graph.Int64Property(0),
+	})
+	for k, v := range debris.Properties {
+		eng.PropIdx().Add(debris.ID, k, v)
+	}
+	eng.Save("seed-debris")
+	// Failed embed attempts are the sidecar writer that leaves a
+	// record GC-eligible: they bump no access count.
+	eng.SetEmbedAttempts(debris.ID, 3)
+	eng.Unlock()
+
+	if _, ok := eng.AccessIdx().Get(debris.ID); !ok {
+		t.Fatal("sidecar entry missing before GC; the removal assertion would be vacuous")
+	}
+
+	if deleted := collectGarbage(eng, cfg, nil); deleted != 1 {
+		t.Fatalf("expected 1 deletion, got %d", deleted)
+	}
+
+	if m, ok := eng.AccessIdx().Get(debris.ID); ok {
+		t.Fatalf("sidecar entry %+v survived the GC deletion", m)
+	}
+}
+
 // TestCollectGarbageRespectsAgeFloor confirms a young unclassified
 // record is preserved even when all other GC criteria pass. The
 // age check is what gives users a chance to act on captured data
