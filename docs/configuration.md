@@ -426,15 +426,24 @@ freshness:
 
 ### Chunking
 
-Long-content splitting before embedding.
+Long-document ingestion. Content saved, batched, ingested, or
+updated above the threshold is split into section/chunk child nodes
+with their own embeddings, so vector retrieval covers the whole
+document instead of just the first embedding window. Search folds a
+child hit up to the parent record (the parent takes the best child
+score, and the result names the matched section); children are
+excluded from save-guard candidacy, duplicates, and export, and are
+regenerated whenever the parent's content changes.
 
 ```yaml
 chunking:
-  threshold: 512                     # content longer than this gets chunked (characters)
-  chunk_size: 512                    # target chunk size
-  overlap: 128                       # overlap between adjacent chunks
-  section_min: 500                   # min section size for section-aware chunking
-  section_max: 5000                  # max section size
+  threshold: 8000                    # chars; content longer than this is chunked.
+                                     # Floored at the embedding window's capacity --
+                                     # content that fits one embedding never chunks.
+  chunk_size: 512                    # target chunk size in tokens (structureless fallback)
+  overlap: 128                       # overlap between adjacent chunks (tokens)
+  section_min: 500                   # min section size for structural splitting (chars)
+  section_max: 5000                  # max section size (chars)
 ```
 
 ### Concepts

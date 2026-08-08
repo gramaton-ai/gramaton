@@ -29,6 +29,18 @@ blank and records carry no author. Collected by gramaton init;
 edit here any time -- only affects records created afterwards.`,
 
 	// -------------------------------------------------------------
+	// Long-document chunking
+	// -------------------------------------------------------------
+	"chunking": `chunking: long-document ingestion. Content above
+threshold (characters) is split into section/chunk child nodes with
+their own embeddings so vector search covers the whole document;
+search folds a child hit up to the parent record. threshold is
+floored at the embedding window's capacity -- content that fits one
+embedding never chunks. section_min/section_max bound structural
+splitting (chars); chunk_size/overlap (tokens) shape the
+structureless fallback.`,
+
+	// -------------------------------------------------------------
 	// Remote access (server side and client side)
 	// -------------------------------------------------------------
 	"server.remote": `remote: opt-in exposure of this store to other

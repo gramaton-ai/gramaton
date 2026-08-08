@@ -7,6 +7,58 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Long-document ingestion: the chunking pipeline is live.**
+  Content above `chunking.threshold` (now characters, default 8000,
+  floored at the embedding window's capacity) is split into
+  section/chunk child nodes with their own embeddings on every write
+  path -- save, batch, `/v1/ingest`, and content updates -- so
+  vector retrieval covers the whole document instead of just the
+  first embedding window. The parent's own embedding is replaced
+  with a purpose-sized vector at the same time. Children inherit the
+  parent's metadata (both kinds -- dumb chunks previously inherited
+  nothing, not even the author), carry a `node_type` discriminator,
+  a section ordinal, and the heading when structural splitting found
+  one, and are created inside one batched index transaction rather
+  than one fsync per child. A content update or append re-derives
+  the children from the new text (an update that shrinks below the
+  threshold clears them), with the update path's fail-closed vector
+  contract extended to chunk embeddings and its mid-flight staleness
+  gate widened so children are never derived from content the record
+  no longer holds.
+
+### Changed
+
+- **Search folds section/chunk hits up to the parent document.** A
+  query matching one section returns the parent record's ID carrying
+  the best child score, with new `matched_section_id` /
+  `matched_section` result fields naming the fragment that hit.
+  Fragment ULIDs no longer appear as result identities (dumb chunks
+  were previously dropped from results entirely; sections surfaced
+  as their own rows). Observation hits keep their existing
+  child-row-with-parent-context shape. A folded row is suppressed
+  when the parent is soft-deleted.
+
+- **Section/chunk children are machine-owned.** They are excluded
+  from save-guard candidacy on both sides (a save is never held
+  against a fragment, and a fragment is never proposed as the
+  similar record), from `gramaton_duplicates`, and from curation's
+  orphan-linking pass; `gramaton_update`, `gramaton_classify`, and
+  `gramaton_resolve` refuse child IDs with a redirect to the parent
+  record. Export already excluded them.
+
+### Fixed
+
+- **Batch items respect `limits.max_content_length`.** Only the
+  aggregate batch cap bounded per-item content before; a single item
+  could be the entire 256MB budget.
+
+- **A content update no longer leaks secondary-index entries for
+  deleted observation children.** The update path's child deletion
+  skipped the secondary index; child teardown now purges every
+  index, shared with the new section/chunk lifecycle.
+
 ## [0.4.0-alpha.1] - 2026-08-08
 
 ### Changed
