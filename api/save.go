@@ -200,14 +200,22 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 
 	// Long-document chunking, off-lock: split and embed the pieces
 	// before the write lock. Skipped when the off-lock scan already
-	// holds this save unacknowledged -- the hold response would
-	// discard the work. A hold first found by the delta re-scan below
-	// still wastes the prechunk; that is the price of keeping
+	// holds this save unacknowledged (the hold response would discard
+	// the work) and when a client_token replay will short-circuit
+	// under the lock (the read here is advisory; the authoritative
+	// replay check below still runs). A hold first found by the delta
+	// re-scan still wastes the prechunk; that is the price of keeping
 	// embedding I/O out of the write critical section.
 	var preChunk *core.PreChunkResult
 	if a.engine.ShouldChunk(len(req.Content)) {
 		likelyHeld := outcome.Hold != nil && !ackContains(req.AllowSimilar, outcome.Hold.NodeID)
-		if !likelyHeld {
+		likelyReplay := false
+		if req.ClientToken != "" {
+			a.engine.RLock()
+			likelyReplay = len(a.engine.PropIdx().Lookup("client_token", graph.StringProperty(req.ClientToken))) > 0
+			a.engine.RUnlock()
+		}
+		if !likelyHeld && !likelyReplay {
 			preChunk = a.engine.PreChunk(ctx, req.Content, req.SummaryShort)
 		}
 	}
@@ -328,6 +336,15 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		// The save-guard scan never ran; mark the record so reembed
 		// re-runs it when the deferred embedding arrives.
 		a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
+	}
+
+	// A save that reached this point above the chunking threshold
+	// without a prechunk (the predicted hold or replay did not
+	// materialize) stores the document unchunked; say so instead of
+	// leaving vector search silently blind past the first window.
+	if preChunk == nil && a.engine.ShouldChunk(len(req.Content)) {
+		warnings = append(warnings,
+			"content exceeds the chunking threshold but was saved unchunked; the next content update will chunk it")
 	}
 
 	// Apply the pre-chunked children: one batched index transaction

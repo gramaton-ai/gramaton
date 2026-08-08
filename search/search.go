@@ -359,6 +359,18 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 	if q.Random {
 		candidates := make([]string, 0, len(candidateSet))
 		for id := range candidateSet {
+			// Section/chunk children are fragments, not documents:
+			// excluding them BEFORE the shuffle keeps fragment ULIDs
+			// out of the sample and stops a 30-section document being
+			// 30x more likely to be drawn than a short record. The
+			// edge walk also covers pre-revival children that lack
+			// the node_type stamp.
+			if n, ok := t.graph.GetNode(id); ok && graph.IsSectionOrChunk(n.Properties) {
+				continue
+			}
+			if pid, edge := t.resolveParent(id); pid != "" && edge != "observation_of" {
+				continue
+			}
 			candidates = append(candidates, id)
 		}
 		n := len(candidates)
@@ -461,36 +473,7 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		sr := scored{id: id, score: score, matchedBy: matchSources[id]}
 
 		// Extract sort key if sorting by a field.
-		switch sortField {
-		case SortCreatedAt:
-			if v, ok := n.Properties.GetTimestamp("created_at"); ok {
-				sr.sortTime = v
-			}
-		case SortLastAccessed:
-			if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
-				sr.sortTime = v
-			}
-		case SortAccessCount:
-			if v, ok := n.Properties.GetInt64("access_count"); ok {
-				sr.sortVal = float64(v)
-			}
-		case SortConfidence:
-			if v, ok := n.Properties.GetFloat64("confidence"); ok {
-				sr.sortVal = v
-			}
-		case SortImportance:
-			if v, ok := n.Properties.GetFloat64("importance"); ok {
-				sr.sortVal = v
-			}
-		case SortContentLength:
-			if v, ok := n.Properties.GetString("content_full"); ok {
-				sr.sortVal = float64(len(v))
-			}
-		case SortEdgeCount:
-			sr.sortVal = float64(edgeCount(t.graph, id))
-		case SortStaleness:
-			sr.sortVal = ComputeStaleness(n, now, t.cfg.Decay)
-		}
+		t.setSortKey(&sr, n, id, sortField, now)
 
 		scoredResults = append(scoredResults, sr)
 	}
@@ -565,6 +548,24 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			if !ok {
 				continue // orphaned child; repair's territory
 			}
+			// The child passed the query's filters with values frozen
+			// at chunk time; the row the caller receives is the
+			// PARENT, so the parent must satisfy the same filters at
+			// BOTH layers -- index-level (temporality, knowledge_type,
+			// keywords, meta, ...: candidateSet membership) and
+			// property-level (ranges, dates, edge counts). Otherwise a
+			// reclassified, resolved-out, or deleted parent leaks into
+			// filtered results, and max_edges=0 orphan queries return
+			// every chunked document because its fragments are
+			// edge-free.
+			if candidateSet != nil {
+				if _, inSet := candidateSet[parentID]; !inSet {
+					continue
+				}
+			}
+			if !t.passesPropertyFilters(q, parent, parentID, now) {
+				continue
+			}
 			// A child's inherited properties are frozen at chunk
 			// time; never resurface a since-deleted parent through
 			// its stale fragments.
@@ -573,10 +574,34 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 			}
 			sr.foldedFrom = sr.id
 			sr.id = parentID
+			// Field sorts must order the row by the PARENT's key,
+			// not the child's.
+			sr.sortVal, sr.sortTime = 0, time.Time{}
+			t.setSortKey(&sr, parent, parentID, sortField, now)
 		}
 		deduped = append(deduped, sr)
 	}
 	scoredResults = deduped
+
+	// Folding rewrote sort keys for substituted rows; restore the
+	// requested order before the Top cut. Score order needs no
+	// re-sort (a folded row keeps its child's score, which is where
+	// it already sat).
+	if sortField != SortScore {
+		useTime := sortField == SortCreatedAt || sortField == SortLastAccessed
+		sort.SliceStable(scoredResults, func(i, j int) bool {
+			var less bool
+			if useTime {
+				less = scoredResults[i].sortTime.Before(scoredResults[j].sortTime)
+			} else {
+				less = scoredResults[i].sortVal < scoredResults[j].sortVal
+			}
+			if ascending {
+				return less
+			}
+			return !less
+		})
+	}
 
 	if q.Top < len(scoredResults) {
 		scoredResults = scoredResults[:q.Top]
@@ -679,6 +704,43 @@ func (t *Tool) ExecuteWithVector(_ context.Context, q Query, queryVec []float32)
 		"total_ms", time.Since(searchStart).Milliseconds())
 
 	return results, nil
+}
+
+// setSortKey extracts the field-sort key for a node into sr. Also
+// used by the step-5 fold to recompute keys from the substituted
+// parent -- a folded row ordered by the CHILD's created_at (etc.)
+// would sort the parent into the wrong position.
+func (t *Tool) setSortKey(sr *scored, n *graph.Node, id string, sortField string, now time.Time) {
+	switch sortField {
+	case SortCreatedAt:
+		if v, ok := n.Properties.GetTimestamp("created_at"); ok {
+			sr.sortTime = v
+		}
+	case SortLastAccessed:
+		if v, ok := n.Properties.GetTimestamp("last_accessed"); ok {
+			sr.sortTime = v
+		}
+	case SortAccessCount:
+		if v, ok := n.Properties.GetInt64("access_count"); ok {
+			sr.sortVal = float64(v)
+		}
+	case SortConfidence:
+		if v, ok := n.Properties.GetFloat64("confidence"); ok {
+			sr.sortVal = v
+		}
+	case SortImportance:
+		if v, ok := n.Properties.GetFloat64("importance"); ok {
+			sr.sortVal = v
+		}
+	case SortContentLength:
+		if v, ok := n.Properties.GetString("content_full"); ok {
+			sr.sortVal = float64(len(v))
+		}
+	case SortEdgeCount:
+		sr.sortVal = float64(edgeCount(t.graph, id))
+	case SortStaleness:
+		sr.sortVal = ComputeStaleness(n, now, t.cfg.Decay)
+	}
 }
 
 // resolveParent returns the parent record ID and the structural edge

@@ -45,10 +45,13 @@ const shortContentThreshold = 200
 // and source pointers; body fields (content_full, content_short,
 // embeddings) are set per-child. author is inherited (not re-composed
 // from config) so sub-nodes carry the attribution of the record they
-// were split from.
+// were split from. processing_status is deliberately NOT inherited:
+// children are always stamped "processed" (below) -- inheriting
+// "captured" from an unclassified parent would flood the pending-
+// classification queue with nodes that gramaton_classify refuses.
 var inheritedMetadataKeys = []string{
 	"temporality", "confidence", "knowledge_type", "epistemic_status",
-	"content_keywords", "source_ref", "processing_status", "author",
+	"content_keywords", "source_ref", "author",
 }
 
 // Result holds section/chunk data and their pre-computed embeddings,
@@ -294,10 +297,12 @@ func embedParent(ctx context.Context, embedder embed.Provider, result *Result, c
 // and must be read AFTER the parent's own embedding was applied, so
 // the ParentVec replacement below swaps the value actually stored.
 //
-// Returns the number of section/chunk nodes created.
-func Apply(a Applier, parentID string, pre *Result, parentProps graph.Properties) int {
+// Returns the IDs of the created children so a failed batch commit
+// can undo the in-memory side (graph nodes, edge cache, vector
+// entries) that the bbolt rollback cannot reach.
+func Apply(a Applier, parentID string, pre *Result, parentProps graph.Properties) []string {
 	if pre == nil {
-		return 0
+		return nil
 	}
 
 	// Replace the parent's embedding with the chunk-pipeline's
@@ -330,6 +335,9 @@ func childProps(nodeType string, ordinal int, parentProps graph.Properties) grap
 		"node_type":     graph.StringProperty(nodeType),
 		"created_at":    graph.TimestampProperty(time.Now().UTC()),
 		"section_index": graph.Int64Property(int64(ordinal)),
+		// Machine-derived children never need classification; see the
+		// inheritedMetadataKeys note.
+		"processing_status": graph.StringProperty("processed"),
 	}
 	for _, key := range inheritedMetadataKeys {
 		if v, ok := parentProps[key]; ok {
@@ -340,7 +348,8 @@ func childProps(nodeType string, ordinal int, parentProps graph.Properties) grap
 }
 
 // applySections creates section_of children with inherited metadata.
-func applySections(a Applier, parentID string, pre *Result, parentProps graph.Properties) int {
+func applySections(a Applier, parentID string, pre *Result, parentProps graph.Properties) []string {
+	created := make([]string, 0, len(pre.Sections))
 	for i, sec := range pre.Sections {
 		props := childProps("section", i+1, parentProps)
 		props["content_full"] = graph.StringProperty(sec.Text)
@@ -368,8 +377,9 @@ func applySections(a Applier, parentID string, pre *Result, parentProps graph.Pr
 		if vec != nil && pre.Model != "" {
 			a.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}
+		created = append(created, node.ID)
 	}
-	return len(pre.Sections)
+	return created
 }
 
 // applyChunks creates chunk_of children (overlapping dumb chunks used
@@ -377,7 +387,8 @@ func applySections(a Applier, parentID string, pre *Result, parentProps graph.Pr
 // inherited metadata and discriminator as sections: they are the
 // retrieval unit for structureless documents and must be foldable,
 // excludable, and attributable exactly like sections.
-func applyChunks(a Applier, parentID string, pre *Result, parentProps graph.Properties) int {
+func applyChunks(a Applier, parentID string, pre *Result, parentProps graph.Properties) []string {
+	created := make([]string, 0, len(pre.Texts))
 	for i, chunkText := range pre.Texts {
 		props := childProps("chunk", i+1, parentProps)
 		props["content_full"] = graph.StringProperty(chunkText)
@@ -399,8 +410,9 @@ func applyChunks(a Applier, parentID string, pre *Result, parentProps graph.Prop
 		if vec != nil && pre.Model != "" {
 			a.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}
+		created = append(created, node.ID)
 	}
-	return len(pre.Texts)
+	return created
 }
 
 // contextWindow returns the effective embedding context window in

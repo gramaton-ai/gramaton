@@ -3,10 +3,14 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/gramaton-ai/gramaton/config"
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/index"
 )
 
 // longStructuredContent builds markdown content above the chunking
@@ -300,5 +304,217 @@ func TestSearchFoldsSectionHitToParent(t *testing.T) {
 	}
 	if !foundParent {
 		t.Fatalf("parent %s not in results: %+v", resp.ID, res.Results)
+	}
+}
+
+// TestRandomSearchExcludesChildren pins the random-mode leak: the
+// sample must contain documents, never fragment ULIDs.
+func TestRandomSearchExcludesChildren(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: longStructuredContent(eng.Config().Chunking.Threshold),
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	children := sectionChildren(t, a, resp.ID)
+	if len(children) == 0 {
+		t.Fatal("no children created")
+	}
+	childSet := map[string]bool{}
+	for _, id := range children {
+		childSet[id] = true
+	}
+
+	res, apiErr := a.Search(context.Background(), SearchRequest{Random: true, Top: 50})
+	if apiErr != nil {
+		t.Fatalf("Search: %v", apiErr)
+	}
+	for _, r := range res.Results {
+		if childSet[r.ID] {
+			t.Fatalf("random search leaked child %s", r.ID)
+		}
+	}
+}
+
+// TestFoldRechecksParentAgainstFilters pins the filter-bypass leak: a
+// child whose inherited metadata (frozen at chunk time) passes the
+// query filter must not smuggle in a parent that no longer does.
+func TestFoldRechecksParentAgainstFilters(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	var sb strings.Builder
+	sb.WriteString(longStructuredContent(eng.Config().Chunking.Threshold))
+	sb.WriteString("## Xylophone appendix\n\n")
+	for i := 0; i < 40; i++ {
+		sb.WriteString("The xylophone calibration procedure lives here. ")
+	}
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:     sb.String(),
+		Temporality: "durable",
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	if len(sectionChildren(t, a, resp.ID)) == 0 {
+		t.Fatal("no children created")
+	}
+
+	// Metadata-only update: the parent moves to temporal, children
+	// keep their frozen durable inheritance.
+	if _, apiErr := a.Update(context.Background(), UpdateRequest{
+		ID: resp.ID, Temporality: "temporal",
+	}); apiErr != nil {
+		t.Fatalf("Update: %v", apiErr)
+	}
+
+	res, apiErr := a.Search(context.Background(), SearchRequest{
+		Text: "xylophone calibration", Temporality: "durable", Top: 10,
+	})
+	if apiErr != nil {
+		t.Fatalf("Search: %v", apiErr)
+	}
+	for _, r := range res.Results {
+		if r.ID == resp.ID {
+			t.Fatalf("temporal parent leaked into a temporality=durable query via its durable-stamped child")
+		}
+	}
+
+	// The unfiltered query still folds it in.
+	res, apiErr = a.Search(context.Background(), SearchRequest{Text: "xylophone calibration", Top: 10})
+	if apiErr != nil {
+		t.Fatalf("unfiltered Search: %v", apiErr)
+	}
+	found := false
+	for _, r := range res.Results {
+		if r.ID == resp.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unfiltered query no longer folds the parent in")
+	}
+}
+
+// chunkTestEmbedder is a deterministic embed.Provider whose failure
+// mode is switchable mid-test.
+type chunkTestEmbedder struct{ fail bool }
+
+func (e *chunkTestEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	if e.fail {
+		return nil, fmt.Errorf("injected embed outage")
+	}
+	vecs := make([][]float32, len(texts))
+	for i := range texts {
+		vecs[i] = []float32{float32(len(texts[i]) % 97), 1, 0.5}
+	}
+	return vecs, nil
+}
+func (e *chunkTestEmbedder) ModelID() string    { return "chunk-test-model" }
+func (e *chunkTestEmbedder) ContextWindow() int { return 512 }
+
+func setupChunkAPIWithEmbedder(t *testing.T, emb *chunkTestEmbedder) (*API, *core.Engine) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Embedding.Provider = ""
+	cfg.LLM.Provider = ""
+	cfg.Backup.Dir = t.TempDir() + "/backups"
+	if err := config.Save(cfg, dir+"/config.yaml"); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+	eng, err := core.LoadEngineWithOptions(dir, nil, []core.EngineOption{
+		core.WithLLM(noopLLM{}),
+		core.WithEmbedder(emb),
+		core.WithVectorIndex(index.NewFlatIndex()),
+		core.WithVolatileStorage(),
+	})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	a := New(Dependencies{Engine: eng, Log: slog.Default(), ConfigDir: dir})
+	t.Cleanup(a.StopPreparedSweeper)
+	return a, eng
+}
+
+// TestSaveChunksCarryVectors pins the embedder-backed path: children
+// get their own embedding_full and the parent's vector is the
+// purpose-sized replacement, stamped with the model.
+func TestSaveChunksCarryVectors(t *testing.T) {
+	emb := &chunkTestEmbedder{}
+	a, eng := setupChunkAPIWithEmbedder(t, emb)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content: longStructuredContent(eng.Config().Chunking.Threshold),
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+	children := sectionChildren(t, a, resp.ID)
+	if len(children) == 0 {
+		t.Fatal("no children created")
+	}
+
+	a.engine.RLock()
+	defer a.engine.RUnlock()
+	for _, id := range children {
+		child, _ := a.engine.Graph().GetNode(id)
+		if _, ok := child.Properties.GetVector("embedding_full"); !ok {
+			t.Fatalf("child %s has no embedding_full", id)
+		}
+		if m, _ := child.Properties.GetString("embedding_model"); m != "chunk-test-model" {
+			t.Fatalf("child %s embedding_model = %q", id, m)
+		}
+	}
+	parent, _ := a.engine.Graph().GetNode(resp.ID)
+	if _, ok := parent.Properties.GetVector("embedding_full"); !ok {
+		t.Fatal("parent lost its embedding")
+	}
+}
+
+// TestUpdateRechunkFailsClosedOnEmbedOutage pins the update path's
+// extended fail-closed contract: a degraded prechunk (embed outage)
+// rejects the update before any mutation.
+func TestUpdateRechunkFailsClosedOnEmbedOutage(t *testing.T) {
+	emb := &chunkTestEmbedder{}
+	a, eng := setupChunkAPIWithEmbedder(t, emb)
+
+	resp, apiErr := a.Save(context.Background(), SaveRequest{
+		Content:      "seed record",
+		SummaryShort: "seed summary",
+	})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+
+	emb.fail = true
+	long := longStructuredContent(eng.Config().Chunking.Threshold)
+	_, apiErr = a.Update(context.Background(), UpdateRequest{ID: resp.ID, Content: long})
+	if apiErr == nil {
+		t.Fatal("update with a failing embedder must fail closed")
+	}
+
+	// Nothing mutated: content unchanged, no children.
+	a.engine.RLock()
+	n, _ := a.engine.Graph().GetNode(resp.ID)
+	content, _ := n.Properties.GetString("content_full")
+	a.engine.RUnlock()
+	if content != "seed record" {
+		t.Fatalf("content mutated on a failed update: %q", content[:40])
+	}
+	if got := sectionChildren(t, a, resp.ID); len(got) != 0 {
+		t.Fatalf("failed update created %d children", len(got))
+	}
+
+	// Outage over: the same update succeeds and chunks.
+	emb.fail = false
+	if _, apiErr := a.Update(context.Background(), UpdateRequest{ID: resp.ID, Content: long}); apiErr != nil {
+		t.Fatalf("post-outage update: %v", apiErr)
+	}
+	if got := sectionChildren(t, a, resp.ID); len(got) == 0 {
+		t.Fatal("post-outage update did not chunk")
 	}
 }

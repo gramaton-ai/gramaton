@@ -235,6 +235,17 @@ func (a *API) validateAllBatchItems(req SaveBatchRequest) ([]bool, []BatchItemFa
 			})
 			continue
 		}
+		// Per-item content cap, mirroring the sync path and single
+		// save.
+		if maxContent := a.engine.Config().Limits.MaxContentLength; maxContent > 0 && len(item.Content) > maxContent {
+			failures = append(failures, BatchItemFailure{
+				Index:     i,
+				ClientRef: item.ClientRef,
+				Code:      "input_error",
+				Message:   fmt.Sprintf("content exceeds maximum length of %d bytes", maxContent),
+			})
+			continue
+		}
 		itemValid[i] = true
 	}
 	return itemValid, failures

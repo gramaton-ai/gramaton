@@ -1400,20 +1400,59 @@ func (e *Engine) PreChunk(ctx context.Context, content, summary string) *PreChun
 	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, summary)
 }
 
+// applyChunksFaultForTests, when non-nil, forces the ApplyChunks
+// batch to fail after the in-memory writes ran -- exercising the
+// undo path below without needing a real bbolt commit failure.
+var applyChunksFaultForTests func() error
+
 // ApplyChunks creates section/chunk child nodes from pre and swaps
 // the parent's embedding for the purpose-sized ParentVec. Caller must
 // hold the engine write lock; the child writes are batched into one
 // index transaction (a many-child document costs one bbolt commit,
 // not one fsync per child). Returns the number of children created.
+//
+// On a failed batch commit the bbolt writes roll back, but the
+// in-memory side does not: graph nodes and dirty marks, the edge
+// store's cache, and the mmap-backed vector entries all survive --
+// and the caller's engine.Save would then persist edge-less child
+// nodes as permanent pseudo-records that repair cannot reach (its
+// orphan scan keys on the very edges whose adjacency rolled back).
+// So a failed batch is undone here: children leave the graph (the
+// added-then-deleted-in-one-phase case mints no phantom version)
+// and the vector index, and the parent's pre-swap embedding is
+// restored.
 func (e *Engine) ApplyChunks(parentID string, pre *PreChunkResult, parentProps graph.Properties) (int, error) {
-	var n int
-	err := e.BatchIndexWrites(func(ws *WriteSession) {
-		n = chunking.Apply(ws, parentID, pre, parentProps)
+	var created []string
+	oldVec, hadOldVec := parentProps.GetVector("embedding_full")
+	oldModel, _ := parentProps.GetString("embedding_model")
+
+	err := e.indexes.batch(e, func(ws *WriteSession) error {
+		created = chunking.Apply(ws, parentID, pre, parentProps)
+		if applyChunksFaultForTests != nil {
+			return applyChunksFaultForTests()
+		}
+		return nil
 	})
 	if err != nil {
+		for _, id := range created {
+			e.indexes.vecIdx.Remove(id)
+			e.graph.DeleteNode(id)
+		}
+		if pre != nil && pre.ParentVec != nil {
+			if hadOldVec {
+				e.graph.SetNodeProperty(parentID, "embedding_full", graph.VectorProperty(oldVec))
+				e.indexes.vecIdx.Add(parentID, oldVec)
+				if oldModel != "" {
+					e.graph.SetNodeProperty(parentID, "embedding_model", graph.StringProperty(oldModel))
+				}
+			} else {
+				e.graph.RemoveNodeProperty(parentID, "embedding_full")
+				e.indexes.vecIdx.Remove(parentID)
+			}
+		}
 		return 0, fmt.Errorf("apply chunks: %w", err)
 	}
-	return n, nil
+	return len(created), nil
 }
 
 // IndexNode populates all indexes for a node already added to the

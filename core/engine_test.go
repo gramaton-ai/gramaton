@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1008,5 +1009,53 @@ func TestSaveStampsCommitAuthor(t *testing.T) {
 	}
 	if curCommit.Author != CurationAuthor {
 		t.Fatalf("curation commit author = %q, want %q", curCommit.Author, CurationAuthor)
+	}
+}
+
+// TestApplyChunksFailedBatchUndoesInMemoryState pins the undo path:
+// a failed batch commit must leave no zombie children in the
+// in-memory graph or vector index -- the bbolt rollback cannot reach
+// those, and a subsequent engine.Save would otherwise persist
+// edge-less pseudo-records repair cannot detect.
+func TestApplyChunksFailedBatchUndoesInMemoryState(t *testing.T) {
+	eng := setupTestEngine(t)
+	longContent := strings.Repeat("word ", eng.Config().Chunking.Threshold/4)
+
+	pre := eng.PreChunk(context.Background(), longContent, "")
+	if pre == nil {
+		t.Fatal("PreChunk returned nil for long content")
+	}
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(longContent),
+	})
+	applyChunksFaultForTests = func() error { return fmt.Errorf("injected batch failure") }
+	created, err := eng.ApplyChunks(n.ID, pre, n.Properties)
+	applyChunksFaultForTests = nil
+	eng.Unlock()
+
+	if err == nil {
+		t.Fatal("expected the injected failure to surface")
+	}
+	if created != 0 {
+		t.Fatalf("failed apply reported %d children", created)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, e := range eng.Graph().EdgesTo(n.ID) {
+		if e.Type == "section_of" || e.Type == "chunk_of" {
+			t.Fatalf("child edge %s survived the rollback", e.ID)
+		}
+	}
+	zombies := 0
+	for id := range eng.Graph().NodeIDSet() {
+		if child, ok := eng.Graph().GetNode(id); ok && graph.IsSectionOrChunk(child.Properties) {
+			zombies++
+		}
+	}
+	if zombies != 0 {
+		t.Fatalf("%d zombie children survived the failed batch", zombies)
 	}
 }

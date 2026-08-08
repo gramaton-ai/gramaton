@@ -1102,10 +1102,12 @@ type ChunkingConfig struct {
 	// this setting.
 	Threshold int `yaml:"threshold"`
 
-	// ChunkSize: target chunk length in chars.
+	// ChunkSize: target chunk length in TOKENS for the structureless
+	// fallback splitter (graph.ChunkText sizes chunks at ~4
+	// chars/token), capped at the embedding model's window.
 	ChunkSize int `yaml:"chunk_size"`
 
-	// Overlap: adjacent chunks share this many chars.
+	// Overlap: adjacent chunks share this many tokens.
 	Overlap int `yaml:"overlap"`
 
 	// SectionMin: minimum section size in chars (default 500).

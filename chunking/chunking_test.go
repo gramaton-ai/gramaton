@@ -167,7 +167,8 @@ func TestApplyStampsChildIdentity(t *testing.T) {
 			}
 
 			a := newFakeApplier()
-			n := Apply(a, "parent-1", pre, parentProps)
+			created := Apply(a, "parent-1", pre, parentProps)
+			n := len(created)
 			if n == 0 {
 				t.Fatal("Apply created no children")
 			}
@@ -193,6 +194,11 @@ func TestApplyStampsChildIdentity(t *testing.T) {
 					if _, ok := props[key]; !ok {
 						t.Fatalf("child %s missing inherited %s", id, key)
 					}
+				}
+				// Never inherited: an unclassified parent must not
+				// flood the pending queue with unclassifiable children.
+				if ps, _ := props.GetString("processing_status"); ps != "processed" {
+					t.Fatalf("child %s processing_status = %q, want processed", id, ps)
 				}
 			}
 			if len(ordinals) != n {
