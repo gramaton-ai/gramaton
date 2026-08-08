@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/gramaton-ai/gramaton/similarity"
@@ -316,6 +317,18 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			})
 			continue
 		}
+		// Per-item content cap, matching the single-save path
+		// (api/save.go). Previously only the aggregate MaxBatchBytes
+		// bounded batch items, so one item could be the whole 256MB.
+		if maxContent := a.engine.Config().Limits.MaxContentLength; maxContent > 0 && len(item.Content) > maxContent {
+			failures = append(failures, BatchItemFailure{
+				Index:     i,
+				ClientRef: item.ClientRef,
+				Code:      "input_error",
+				Message:   fmt.Sprintf("content exceeds maximum length of %d bytes", maxContent),
+			})
+			continue
+		}
 		itemValid[i] = true
 	}
 
@@ -378,6 +391,21 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 				}
 			}
 		}
+	}
+
+	// Phase 2.7: long-document chunking off-lock, per item. Items the
+	// guard already holds skip (the hold response discards the work);
+	// a delta hold under the lock still wastes the prechunk -- the
+	// same speculative tradeoff as the single-save path.
+	itemPreChunk := make([]*core.PreChunkResult, len(req.Items))
+	for i, item := range req.Items {
+		if !itemValid[i] || itemStoreHold[i] != nil || itemSiblingOf[i] >= 0 {
+			continue
+		}
+		if !a.engine.ShouldChunk(len(item.Content)) {
+			continue
+		}
+		itemPreChunk[i] = a.engine.PreChunk(ctx, item.Content, item.SummaryShort)
 	}
 
 	// Phase 3: lock once; commit valid items together; rollback the
@@ -500,6 +528,19 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			}
 		}
 
+		// Apply pre-chunked children (see api/save.go for the fresh-
+		// props rationale). Children ride the same commit; a failed
+		// Save purges them in the rollback loop below.
+		if pc := itemPreChunk[i]; pc != nil {
+			if parent, ok := a.engine.Graph().GetNode(n.ID); ok {
+				if _, err := a.engine.ApplyChunks(n.ID, pc, parent.Properties); err != nil {
+					itemWarnings = append(itemWarnings, fmt.Sprintf("chunking failed: %s", err))
+				} else if pc.ParentVec != nil {
+					a.engine.NoteRecentWrite(n.ID, pc.ParentVec)
+				}
+			}
+		}
+
 		added[i] = CaptureBatchAdded{
 			ID:        n.ID,
 			ClientRef: item.ClientRef,
@@ -609,6 +650,24 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 			}
 		}
 		for _, e := range rollback {
+			// Section/chunk children created by ApplyChunks are not in
+			// rollback[] (it holds parent IDs only); purge them first
+			// or they survive as orphaned index entries for nodes that
+			// never reached disk.
+			for _, ce := range a.engine.Graph().EdgesTo(e.nodeID) {
+				if ce.Type != "section_of" && ce.Type != "chunk_of" {
+					continue
+				}
+				if child, ok := a.engine.Graph().GetNode(ce.SourceID); ok {
+					a.engine.PropIdx().RemoveNode(child.ID, child.Properties)
+					a.engine.VecIdx().Remove(child.ID)
+					a.engine.BM25Full().Remove(child.ID)
+					if sec := a.engine.SecIdx(); sec != nil {
+						sec.RemoveNode(child.ID)
+					}
+					a.engine.Graph().DeleteNode(child.ID)
+				}
+			}
 			// Re-read current props so RemoveNode purges every entry
 			// added after AddNode (meta, embedding, orphan stamp).
 			// AddNode's snapshot misses those because it cloned the

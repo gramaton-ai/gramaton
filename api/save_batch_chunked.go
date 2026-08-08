@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/jobs"
 	"github.com/gramaton-ai/gramaton/similarity"
@@ -89,11 +90,23 @@ func (a *API) runCaptureBatchAsyncChunked(ctx context.Context, jobID string, req
 			return
 		}
 
+		// Long-document chunking for this slice, off-lock before the
+		// chunk's write phase. (Document chunking; the surrounding
+		// "chunks" are batch slices -- unrelated mechanisms that
+		// happen to share a word.)
+		itemPreChunk := make([]*core.PreChunkResult, rng.end-rng.start)
+		for i := rng.start; i < rng.end; i++ {
+			if !itemValid[i] || !a.engine.ShouldChunk(len(req.Items[i].Content)) {
+				continue
+			}
+			itemPreChunk[i-rng.start] = a.engine.PreChunk(ctx, req.Items[i].Content, req.Items[i].SummaryShort)
+		}
+
 		chunkData, saveErr := a.commitItemsChunk(jobID, chunkIdx+1, len(chunks),
 			rng.start,
 			req.Items[rng.start:rng.end], itemValid[rng.start:rng.end],
 			itemVecs[rng.start:rng.end], itemEmbedErrs[rng.start:rng.end],
-			embedderModel, req.AllowSimilar)
+			itemPreChunk, embedderModel, req.AllowSimilar)
 		if saveErr != nil {
 			a.finalizeChunkSaveFailure(jobID, chunkIdx+1, summary, saveErr)
 			return
@@ -252,7 +265,8 @@ type chunkData struct {
 func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	baseIdx int,
 	items []SaveBatchItem, itemValid []bool, itemVecs [][]float32,
-	itemEmbedErrs []error, embedderModel string, allowSimilar bool,
+	itemEmbedErrs []error, itemPreChunk []*core.PreChunkResult,
+	embedderModel string, allowSimilar bool,
 ) (*chunkData, error) {
 	type rollbackEntry struct {
 		nodeID string
@@ -404,6 +418,19 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 			}
 		}
 
+		// Apply pre-chunked children (see api/save.go for the fresh-
+		// props rationale); the rollback loop below purges them on a
+		// failed Save.
+		if pc := itemPreChunk[i]; pc != nil {
+			if parent, ok := a.engine.Graph().GetNode(n.ID); ok {
+				if _, err := a.engine.ApplyChunks(n.ID, pc, parent.Properties); err != nil {
+					itemWarnings = append(itemWarnings, fmt.Sprintf("chunking failed: %s", err))
+				} else if pc.ParentVec != nil {
+					a.engine.NoteRecentWrite(n.ID, pc.ParentVec)
+				}
+			}
+		}
+
 		added = append(added, CaptureBatchAdded{
 			ID:        n.ID,
 			ClientRef: item.ClientRef,
@@ -422,6 +449,22 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 	}
 	if saveErr != nil {
 		for _, e := range rollback {
+			// Purge section/chunk children first -- rollback[] holds
+			// parent IDs only (mirrors the sync path).
+			for _, ce := range a.engine.Graph().EdgesTo(e.nodeID) {
+				if ce.Type != "section_of" && ce.Type != "chunk_of" {
+					continue
+				}
+				if child, ok := a.engine.Graph().GetNode(ce.SourceID); ok {
+					a.engine.PropIdx().RemoveNode(child.ID, child.Properties)
+					a.engine.VecIdx().Remove(child.ID)
+					a.engine.BM25Full().Remove(child.ID)
+					if sec := a.engine.SecIdx(); sec != nil {
+						sec.RemoveNode(child.ID)
+					}
+					a.engine.Graph().DeleteNode(child.ID)
+				}
+			}
 			currentProps := e.props
 			if n, ok := a.engine.Graph().GetNode(e.nodeID); ok && n != nil {
 				currentProps = n.Properties
