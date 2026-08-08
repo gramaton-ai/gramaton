@@ -504,6 +504,19 @@ func (a *API) searchCursor(req SearchRequest, requestPageSize int) (SearchRespon
 		a.engine.RUnlock()
 	}
 
+	// Access bookkeeping mirrors the fresh-search page: the caller
+	// reads THESE records too, and before page-scoping, later pages
+	// were covered incidentally by the bump-everything behavior.
+	if len(pageResults) > 0 && !a.engine.ReadOnly() {
+		ids := make([]string, len(pageResults))
+		for i, r := range pageResults {
+			ids[i] = r.ID
+		}
+		a.engine.Lock()
+		a.engine.RecordAccessAll(ids, time.Now().UTC())
+		a.engine.Unlock()
+	}
+
 	// Page number from cursor's start + encoded page size. Always
 	// exact because the page table aligns to pageSize boundaries.
 	pageNum := (start / pageSize) + 1

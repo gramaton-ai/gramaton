@@ -44,7 +44,7 @@ type InspectResponse struct {
 
 	// EffectiveCuration is the resolved per-record curation behaviour
 	// computed from the node's member_of edges. Tells callers exactly
-	// what curation work will run on this record (curation, supersession,
+	// what curation work will run on this record (curation,
 	// contradictions). Absent on structural/container nodes (collections,
 	// sessions, topics) and concept-synthesis nodes -- those are not
 	// records that flow through curation.
@@ -154,8 +154,6 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		related = append(related, rel)
 	}
 	out.Related = related
-
-	// Track inspected ID for observe feedback loop detection.
 
 	return out, nil
 }

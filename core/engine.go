@@ -489,7 +489,7 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	// self-deadlock here.
 	if stamp, ok := idx.pendingBatchHead(); ok && stamp == e.headHash {
 		slog.Warn("a write batch committed its index changes but the graph commit that should have followed never landed (crash between the two); "+
-			"the indexes may be ahead of the graph -- run 'gramaton validate' to assess and 'gramaton repair' to reconcile",
+			"the indexes may be ahead of the graph -- run 'gramaton validate' to assess; restoring the newest backup rebuilds the indexes from a consistent snapshot",
 			"component", "engine", "head", e.headHash)
 	}
 
@@ -548,17 +548,23 @@ func (e *Engine) reconcileActiveRef() {
 		return
 	}
 	// Bounded ancestor walk: the crash window loses at most the tip
-	// write, so a genuine repair terminates within a step or two.
+	// write, so a genuine repair terminates within a step or two. On
+	// a pruned store the chain ends at the floor's oldest kept
+	// commit; stop there instead of failing on the absent parent, so
+	// a genuinely diverged ref still gets the warning below.
 	const maxWalk = 1000
 	hash := e.headHash
 	for i := 0; i < maxWalk && hash != ""; i++ {
 		commit, cerr := graph.LoadCommitMeta(e.store, hash)
 		if cerr != nil {
-			return
+			break
 		}
 		if commit.Parent == ref {
 			fastForward(short(ref))
 			return
+		}
+		if e.pruneFloor != nil && hash == e.pruneFloor.OldestKeptCommit {
+			break
 		}
 		hash = commit.Parent
 	}

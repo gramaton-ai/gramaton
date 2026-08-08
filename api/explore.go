@@ -58,12 +58,6 @@ func (a *API) Explore(ctx context.Context, req ExploreRequest) (ExploreResponse,
 	}
 	sub := a.engine.Graph().Traverse(req.NodeID, opts)
 
-	ids := make([]string, 0, len(sub.Nodes)+1)
-	ids = append(ids, req.NodeID)
-	for _, n := range sub.Nodes {
-		ids = append(ids, n.ID)
-	}
-
 	maxNodes := req.MaxNodes
 	if maxNodes <= 0 {
 		maxNodes = 100

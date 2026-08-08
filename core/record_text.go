@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -34,16 +35,31 @@ func RecordIndexText(n *graph.Node) string {
 	}
 	// Keywords and meta key:value terms are part of the insert-time
 	// BM25 text (save appends meta; update appends both); a rebuild
-	// must reproduce them or those search contracts silently degrade
-	// after any revert, checkout, restore, or index-loss boot.
+	// must reproduce the same TERM SET or those search contracts
+	// silently degrade after any revert, checkout, restore, or
+	// index-loss boot. List-valued meta emits one key:elem term per
+	// element to match the insert paths; keys are sorted so the
+	// output is deterministic.
 	if kws, ok := n.Properties.GetStringList("content_keywords"); ok && len(kws) > 0 {
 		parts = append(parts, strings.Join(kws, " "))
 	}
-	for key, v := range n.Properties {
-		if !strings.HasPrefix(key, "meta.") {
+	metaKeys := make([]string, 0, 4)
+	for key := range n.Properties {
+		if strings.HasPrefix(key, "meta.") {
+			metaKeys = append(metaKeys, key)
+		}
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
+		bare := strings.TrimPrefix(key, "meta.")
+		v := n.Properties[key]
+		if elems := v.StringList(); len(elems) > 0 {
+			for _, elem := range elems {
+				parts = append(parts, bare+":"+elem)
+			}
 			continue
 		}
-		parts = append(parts, strings.TrimPrefix(key, "meta.")+":"+v.FormatValue())
+		parts = append(parts, bare+":"+v.FormatValue())
 	}
 	return strings.Join(parts, " ")
 }

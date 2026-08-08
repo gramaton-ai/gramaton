@@ -449,11 +449,12 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	})
 
 	type resolveArgs struct {
-		ID              string `json:"id" jsonschema:"record ID to resolve"`
-		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
-		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
-		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
-		ChangeNote      string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		ID                        string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution                string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote            string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ExpectedVersion           string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
+		ChangeNote                string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		AutoCloseCollectionStatus *bool  `json:"auto_close_collection_status,omitempty" jsonschema:"default true; when false, skip flipping the collection item's status field even if the schema has one"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -468,6 +469,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		resp, apiErr := s.api.Resolve(ctx, api.ResolveRequest{
 			ID: args.ID, Resolution: args.Resolution, ResolutionNote: args.ResolutionNote,
 			ExpectedVersion: args.ExpectedVersion, ChangeNote: args.ChangeNote,
+			AutoCloseCollectionStatus: args.AutoCloseCollectionStatus,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

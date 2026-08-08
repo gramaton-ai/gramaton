@@ -15,7 +15,7 @@ import (
 // stuck job.
 type SaveBatchResultRequest struct {
 	JobID     string `json:"job_id" jsonschema:"the job_id returned by gramaton_save_batch"`
-	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"max ms to wait for terminal state; 0 = use cfg.Jobs.ResultDefaultTimeout (30 min); max 30 minutes (1800000 ms)"`
+	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"max ms to wait for terminal state; 0 = server default. A single wait is bounded by the transport (~2 min over HTTP); on the retryable timeout error, call again to keep waiting"`
 }
 
 // SaveBatchResultDescription is the MCP tool description for

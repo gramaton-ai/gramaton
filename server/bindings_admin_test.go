@@ -293,6 +293,11 @@ func TestBranchDiscardActiveRefused(t *testing.T) {
 		t.Fatalf("BranchDiscard after checkout: %v", e)
 	}
 }
+
+// TestCurationBatchRequiresLLM pins the runner != nil but
+// engine.LLM() == nil branch: a server constructed without an LLM
+// provider must reject a batch curation trigger cleanly instead of
+// dispatching LLM work it cannot run.
 func TestCurationBatchRequiresLLM(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

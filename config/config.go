@@ -385,7 +385,7 @@ type GCConfig struct {
 }
 
 // CurationConfig controls the background curation loop. Curation handles
-// deterministic maintenance (auto-supersession, orphan linking, lifecycle
+// deterministic maintenance (orphan linking, lifecycle
 // expiry, concept emergence) and, when LLM is configured, autonomous
 // classification / summarization / contradiction detection / concept
 // synthesis / manifest rollup.

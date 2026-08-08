@@ -162,7 +162,12 @@ func (e *Engine) Repair() *RepairResult {
 		return mutated, nil
 	})
 	if err != nil {
-		r.Messages = append(r.Messages, fmt.Sprintf("repair failed: %v", err))
+		// The tx rolled back: nothing the closure counted actually
+		// happened. Report only the failure.
+		return &RepairResult{
+			StaleEmbeddings: r.StaleEmbeddings,
+			Messages:        []string{fmt.Sprintf("repair failed and applied nothing: %v", err)},
+		}
 	}
 
 	return r

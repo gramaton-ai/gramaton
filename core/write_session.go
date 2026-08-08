@@ -144,7 +144,6 @@ func (ws *WriteSession) DeleteNode(id string) error {
 	return ws.engine.graph.DeleteNodeTx(ws.tx, ws.edges, id)
 }
 
-// DeleteEdge removes an edge via the session's tx + edge batch.
 // DeleteEdge removes an edge inside the session's shared write
 // transaction. This is the MANDATORY in-batch path: the plain
 // Graph.DeleteEdge opens its own bbolt update and would self-deadlock

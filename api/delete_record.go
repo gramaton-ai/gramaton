@@ -31,7 +31,9 @@ const DeleteRecordDescription = "Soft-delete a record. Sets processing_status=de
 // Unlike Update, Classify, and Resolve, this path deliberately accepts
 // concept nodes: editing one would fight curation over a derived
 // summary, but discarding a bad one is a supported move -- the next
-// synthesis pass regenerates the concept from its members.
+// synthesis pass regenerates the concept from its members. Session
+// segments are likewise accepted: append-only protects their content
+// from rewriting, and a soft delete rewrites nothing.
 func (a *API) DeleteRecord(ctx context.Context, req DeleteRecordRequest) (DeleteRecordResponse, *APIError) {
 	if apiErr := a.rejectIfReadOnly("delete"); apiErr != nil {
 		return DeleteRecordResponse{}, apiErr

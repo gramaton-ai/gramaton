@@ -361,7 +361,7 @@ func inspectMetadataSummary(props graph.Properties) string {
 // Returns "" when nothing on the branch is reachable. Caller holds
 // at least the read lock.
 func (a *API) snapToCurrentBranch(hash string) string {
-	const bound = 100000
+	const bound = 200000 // matches core's OnCurrentBranch walk bound
 	cur := hash
 	for range bound {
 		if cur == "" {

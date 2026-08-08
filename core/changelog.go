@@ -489,8 +489,10 @@ func (e *Engine) IndexCommitDiffByHash(parentHash, commitHash string) {
 // history honest: access churn rode INSIDE logical commits, and a
 // label-only backfill would mint phantom versions at 10-40x on
 // heavily-read stores. Appends batch across commits to amortize
-// fsync; the marker advances per batch, so an interrupted run
-// resumes idempotently. progress is called per batch when non-nil.
+// fsync. The marker never rewinds below live coverage (see the
+// preMarker pin below), so an interrupted run resumes without
+// retracting entries the append path already owns. progress is
+// called per batch when non-nil.
 func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) {
 	if e.changelog == nil {
 		return 0, nil
