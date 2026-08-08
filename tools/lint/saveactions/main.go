@@ -12,8 +12,9 @@
 // Exemptions: a comment line `//gramaton:saveactions:exempt`
 // immediately above the call site (no blank line between, but the
 // pragma can be preceded by other comment lines on the same comment
-// group). Use sparingly -- typical legitimate cases are setup and
-// access-flush paths that don't represent a logical mutation.
+// group). Use sparingly -- typical legitimate cases are setup paths
+// and periodic background flushes that don't represent a logical
+// mutation.
 //
 // Implementation: AST walk via go/parser. For each file, find every
 // CallExpr whose callee is a SelectorExpr ending in "Save" or
