@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
+
+	"github.com/gramaton-ai/gramaton/server"
 )
 
 // stepHooks is Step 5: install automatic-capture hooks for detected
@@ -78,6 +81,9 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 			"manually by inspecting ~/.gramaton/hooks/ and wiring the",
 			"scripts into your client's hook config.",
 		)
+		// Permissions are consent-gated independently: declining
+		// hooks shouldn't cost the user the prompt-free tool calls.
+		w.offerPermissions(ctx, clients)
 		return nil
 	}
 
@@ -130,9 +136,80 @@ func (w *Wizard) stepHooks(ctx context.Context) error {
 		}
 	}
 
+	w.offerPermissions(ctx, clients)
+
 	if installed > 0 {
 		w.writer.Blank()
 		w.writer.Warn("Restart your AI client(s) so the hooks take effect.")
 	}
 	return nil
+}
+
+// offerPermissions is the consent-gated permission pre-approval half
+// of Step 5, offered to every detected client whose harness has a
+// WirePermissions strategy (Claude Code today). Kept separate from
+// the hooks consent because the two grants differ in kind: hooks run
+// gramaton code on lifecycle events, permissions let the agent call
+// gramaton's MCP tools without per-call prompts. A user may
+// reasonably want either without the other.
+func (w *Wizard) offerPermissions(ctx context.Context, clients []DetectedClient) {
+	var eligible []*Harness
+	for _, c := range clients {
+		if h := harnessByName(c.Name); h != nil && h.WirePermissions != nil {
+			eligible = append(eligible, h)
+		}
+	}
+	if len(eligible) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(eligible))
+	for _, h := range eligible {
+		names = append(names, h.Name)
+	}
+	w.writer.Blank()
+	w.writer.Paragraph(
+		fmt.Sprintf("%s asks before every tool call that isn't", strings.Join(names, " / ")),
+		"pre-approved, so automatic saves would stop on a permission",
+		"prompt each time. Gramaton can pre-approve its own tools",
+		"(entries starting mcp__gramaton__ only -- your other",
+		"permission entries and every deny rule are left untouched,",
+		"and renamed tools are reconciled on re-run).",
+		"",
+		"Pre-approve Gramaton's tools?",
+	)
+	w.writer.Blank()
+	w.writer.Raw("    [Y] Yes, pre-approve")
+	w.writer.Raw("    [n] Not now")
+	w.writer.Blank()
+	w.writer.Prompt(">")
+
+	confirm, err := w.prompter.YesNo(true)
+	if err != nil {
+		w.writer.ErrorLine(err.Error())
+		w.writer.Prompt(">")
+		confirm, err = w.prompter.YesNo(true)
+		if err != nil {
+			w.writer.Warn("Couldn't parse answer twice; skipping permission pre-approval.")
+			return
+		}
+	}
+	if !confirm {
+		w.writer.Warn("Skipping permission pre-approval.")
+		return
+	}
+
+	toolNames := server.MCPAgentSurfaceToolNames()
+	for _, h := range eligible {
+		unchanged, err := w.hookBackend.RegisterPermissions(ctx, h.HookEmbedDir, toolNames)
+		if err != nil {
+			w.writer.Warn(fmt.Sprintf("%s: permission update failed: %v", h.Name, err))
+			continue
+		}
+		if unchanged {
+			w.writer.Check(fmt.Sprintf("%s: permissions already up to date", h.Name))
+		} else {
+			w.writer.Check(fmt.Sprintf("%s: pre-approved %d tools in %s", h.Name, len(toolNames), h.HookConfigPathHint()))
+		}
+	}
 }

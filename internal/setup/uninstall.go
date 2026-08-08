@@ -117,6 +117,9 @@ type harnessPlan struct {
 	hookPresent  bool
 	hookProbeErr error
 
+	permPresent  bool
+	permProbeErr error
+
 	scriptsDir     string
 	scriptsPresent bool
 
@@ -187,6 +190,10 @@ func probeHarness(ctx context.Context, configDir string, h *Harness) harnessPlan
 		hp.hookPresent, _, hp.hookProbeErr = h.UnwireHooks(ctx, hp.ownPaths, false)
 	}
 
+	if h.UnwirePermissions != nil {
+		hp.permPresent, _, hp.permProbeErr = h.UnwirePermissions(ctx, false)
+	}
+
 	// The configDir != "" guard keeps a misconfigured caller from
 	// ever aiming the scripts RemoveAll at a cwd-relative "hooks/"
 	// path.
@@ -224,6 +231,9 @@ func reportHarness(ctx context.Context, hp *harnessPlan, apply bool) []Uninstall
 	var results []UninstallResult
 	results = append(results, reportMCP(ctx, hp, apply)...)
 	if r := reportHookConfig(ctx, hp, apply); r != nil {
+		results = append(results, *r)
+	}
+	if r := reportPermissions(ctx, hp, apply); r != nil {
 		results = append(results, *r)
 	}
 	if r := reportHookScripts(hp, apply); r != nil {
@@ -347,6 +357,49 @@ func reportHookConfig(ctx context.Context, hp *harnessPlan, apply bool) *Uninsta
 		return &r
 	}
 	changed, backup, err := h.UnwireHooks(ctx, hp.ownPaths, true)
+	if err != nil {
+		r.Outcome = UninstallFailed
+		r.Detail = err.Error()
+		r.Backup = backup
+		return &r
+	}
+	if !changed {
+		// Raced away between probe and apply; gone either way.
+		r.Outcome = UninstallNotPresent
+		return &r
+	}
+	r.Outcome = UninstallRemoved
+	r.Backup = backup
+	return &r
+}
+
+// reportPermissions handles the gramaton-owned permission
+// pre-approval entries: the permissions twin of reportHookConfig,
+// same probe/apply/race contract.
+func reportPermissions(ctx context.Context, hp *harnessPlan, apply bool) *UninstallResult {
+	h := hp.h
+	if h.UnwirePermissions == nil {
+		return nil
+	}
+	surface := "permission pre-approvals"
+	if h.HookConfigPathHint != nil {
+		surface = fmt.Sprintf("permission pre-approvals in %s", h.HookConfigPathHint())
+	}
+	r := UninstallResult{Harness: h.Name, Surface: surface}
+	if hp.permProbeErr != nil {
+		r.Outcome = UninstallFailed
+		r.Detail = hp.permProbeErr.Error()
+		return &r
+	}
+	if !hp.permPresent {
+		r.Outcome = UninstallNotPresent
+		return &r
+	}
+	if !apply {
+		r.Outcome = UninstallPresent
+		return &r
+	}
+	changed, backup, err := h.UnwirePermissions(ctx, true)
 	if err != nil {
 		r.Outcome = UninstallFailed
 		r.Detail = err.Error()

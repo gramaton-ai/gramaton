@@ -34,6 +34,13 @@ type fakeHookBackend struct {
 	// behavior for the single registration the wizard triggers.
 	registerUnchanged bool
 	registerErr       error
+
+	// RegisterPermissions mirror of the RegisterHooks recording
+	// and behavior-control fields.
+	permissionCalls     [][]string
+	permissionClients   []string
+	permissionUnchanged bool
+	permissionErr       error
 }
 
 func (f *fakeHookBackend) Materialize(client, configDir string) ([]string, error) {
@@ -48,6 +55,12 @@ func (f *fakeHookBackend) RegisterHooks(_ context.Context, client string, paths 
 	f.registerCalls = append(f.registerCalls, paths)
 	f.registerClients = append(f.registerClients, client)
 	return f.registerUnchanged, f.registerErr
+}
+
+func (f *fakeHookBackend) RegisterPermissions(_ context.Context, client string, toolNames []string) (bool, error) {
+	f.permissionCalls = append(f.permissionCalls, toolNames)
+	f.permissionClients = append(f.permissionClients, client)
+	return f.permissionUnchanged, f.permissionErr
 }
 
 // newWizardForHooksTest mirrors newWizardForMCPTest but reaches Step
@@ -68,16 +81,25 @@ func (f *fakeHookBackend) RegisterHooks(_ context.Context, client string, paths 
 //	                                 step_instructions_test.go and
 //	                                 don't need full-wizard driving)
 //	[7] Step 5 hooks confirm:        "y" or "n" (caller picks)
+//	[8+] extra answers (variadic):   consumed by Step 5's permission
+//	                                 pre-approval prompt when an
+//	                                 eligible client was detected.
+//	                                 Omitting them exhausts the
+//	                                 prompter there (ErrAborted twice
+//	                                 -> warn + skip), which is the
+//	                                 not-exercised default for tests
+//	                                 that predate the prompt.
 //
 // HOME is pointed at the tmpDir so the skipped instructions step
 // (and any other step that might touch $HOME) doesn't scribble on
 // the real user's home directory.
-func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend HookBackend, mcpConfirm, hookConfirm string) (*Wizard, *bytes.Buffer) {
+func newWizardForHooksTest(t *testing.T, mcpBackend MCPBackend, hookBackend HookBackend, mcpConfirm, hookConfirm string, extraAnswers ...string) (*Wizard, *bytes.Buffer) {
 	t.Helper()
 
 	var buf bytes.Buffer
 	writer := NewWriter(&buf)
-	prompter := NewScriptedPrompter("1", "", "", "5", "5", mcpConfirm, "n", hookConfirm)
+	answers := append([]string{"1", "", "", "5", "5", mcpConfirm, "n", hookConfirm}, extraAnswers...)
+	prompter := NewScriptedPrompter(answers...)
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -1158,5 +1180,254 @@ func TestRegisterHooksUnknownClient(t *testing.T) {
 	// kiro exists but has no WireHooks strategy.
 	if _, err := (DefaultHookBackend{}).RegisterHooks(context.Background(), "kiro", nil); err == nil {
 		t.Error("expected error for client without a wiring strategy")
+	}
+}
+
+// TestStepHooksPermissionsConsent drives Step 5 with a yes on the
+// permission pre-approval prompt and asserts the wizard threads the
+// full agent tool surface through RegisterPermissions for the
+// eligible client.
+func TestStepHooksPermissionsConsent(t *testing.T) {
+	mcp := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook := &fakeHookBackend{}
+	wiz, buf := newWizardForHooksTest(t, mcp, hook, "y", "y", "y")
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := buf.String()
+
+	if len(hook.permissionCalls) != 1 {
+		t.Fatalf("want 1 RegisterPermissions call, got %d", len(hook.permissionCalls))
+	}
+	if hook.permissionClients[0] != "claude-code" {
+		t.Errorf("RegisterPermissions client = %q, want claude-code", hook.permissionClients[0])
+	}
+	tools := hook.permissionCalls[0]
+	if len(tools) == 0 {
+		t.Fatal("RegisterPermissions got an empty tool list")
+	}
+	want := map[string]bool{}
+	for _, name := range tools {
+		want[name] = true
+	}
+	// The surface must carry the write tools whose prompts defeat
+	// automatic capture, and must NOT carry the agent-excluded intake.
+	for _, name := range []string{"gramaton_session_save", "gramaton_save", "gramaton_session_prepare"} {
+		if !want[name] {
+			t.Errorf("tool surface missing %s", name)
+		}
+	}
+	if want["gramaton_intake"] {
+		t.Error("gramaton_intake is agent-excluded and must not be pre-approved")
+	}
+	if !strings.Contains(out, "pre-approved") {
+		t.Errorf("missing pre-approved success line:\n%s", out)
+	}
+}
+
+// TestStepHooksPermissionsDeclined asserts a no on the permission
+// prompt writes nothing, and that declining hooks does not skip the
+// permission offer (the two consents are independent).
+func TestStepHooksPermissionsDeclined(t *testing.T) {
+	mcp := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	hook := &fakeHookBackend{}
+	// Hooks declined, permissions accepted: the offer must still run.
+	wiz, buf := newWizardForHooksTest(t, mcp, hook, "y", "n", "y")
+
+	if err := wiz.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(hook.registerCalls) != 0 {
+		t.Errorf("hooks were declined; RegisterHooks should not fire: %v", hook.registerCalls)
+	}
+	if len(hook.permissionCalls) != 1 {
+		t.Fatalf("permission offer should survive a hooks decline; got %d calls", len(hook.permissionCalls))
+	}
+	if !strings.Contains(buf.String(), "pre-approved") {
+		t.Errorf("missing pre-approved line after hooks decline:\n%s", buf.String())
+	}
+
+	// And the inverse: permissions declined writes nothing.
+	hook2 := &fakeHookBackend{}
+	mcp2 := &fakeMCPBackend{
+		clients:   []DetectedClient{{Name: "Claude Code", Binary: "/fake/bin/claude"}},
+		registers: []fakeRegisterResult{{false, nil}},
+	}
+	wiz2, _ := newWizardForHooksTest(t, mcp2, hook2, "y", "y", "n")
+	if err := wiz2.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(hook2.permissionCalls) != 0 {
+		t.Errorf("permissions were declined; RegisterPermissions should not fire: %v", hook2.permissionCalls)
+	}
+}
+
+// TestRegisterClaudePermissionsReconcilesAndPreserves is the critical
+// test for the permissions patcher, mirroring the hooks twin: seeds a
+// settings.json whose allow list carries a stale gramaton entry (the
+// pre-rename gramaton_session_commit shape that motivated the
+// feature), a user's own non-gramaton entry, and a deny on one
+// current gramaton tool. Asserts the stale entry is dropped, current
+// tools are added, the denied tool is NOT added, deny and non-gramaton
+// entries survive verbatim, and a second run is a byte-identical
+// no-op.
+func TestRegisterClaudePermissionsReconcilesAndPreserves(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	claudeDir := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	initial := `{
+  "permissions": {
+    "allow": [
+      "Bash(sed *)",
+      "mcp__gramaton__gramaton_session_commit",
+      "mcp__gramaton-bench__gramaton_search"
+    ],
+    "deny": ["mcp__gramaton__gramaton_backup"]
+  },
+  "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/user/custom/stop.sh"}]}]}
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tools := []string{"gramaton_search", "gramaton_session_save", "gramaton_backup"}
+	backend := DefaultHookBackend{}
+	unchanged, err := backend.RegisterPermissions(context.Background(), "claude-code", tools)
+	if err != nil {
+		t.Fatalf("first RegisterPermissions: %v", err)
+	}
+	if unchanged {
+		t.Error("first call should have reported changed")
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+
+	for _, want := range []string{
+		`"mcp__gramaton__gramaton_search"`,
+		`"mcp__gramaton__gramaton_session_save"`,
+		`"Bash(sed *)"`,
+		// Different server prefix = not ours; preserved.
+		`"mcp__gramaton-bench__gramaton_search"`,
+		// Deny list untouched.
+		`"deny": [`,
+		`"mcp__gramaton__gramaton_backup"`,
+		// Unrelated top-level keys intact.
+		`/user/custom/stop.sh`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("expected %s in settings.json:\n%s", want, content)
+		}
+	}
+	// Stale rename orphan reconciled away.
+	if strings.Contains(content, "gramaton_session_commit") {
+		t.Errorf("stale renamed entry survived:\n%s", content)
+	}
+	// The denied tool must not be in allow: its only occurrence is
+	// the deny list.
+	if got := strings.Count(content, `"mcp__gramaton__gramaton_backup"`); got != 1 {
+		t.Errorf("denied tool appears %d times, want 1 (deny only)", got)
+	}
+
+	unchanged, err = backend.RegisterPermissions(context.Background(), "claude-code", tools)
+	if err != nil {
+		t.Fatalf("second RegisterPermissions: %v", err)
+	}
+	if !unchanged {
+		t.Error("second call should have reported unchanged")
+	}
+	raw2, _ := os.ReadFile(settingsPath)
+	if string(raw) != string(raw2) {
+		t.Error("settings.json changed on idempotent second call")
+	}
+}
+
+// TestRegisterClaudePermissionsFreshFile covers the first-time Claude
+// Code user: no settings.json at all. The patcher must create the
+// file with only the permissions block.
+func TestRegisterClaudePermissionsFreshFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	backend := DefaultHookBackend{}
+	unchanged, err := backend.RegisterPermissions(context.Background(), "claude-code", []string{"gramaton_search"})
+	if err != nil {
+		t.Fatalf("RegisterPermissions: %v", err)
+	}
+	if unchanged {
+		t.Error("creating the file should report changed")
+	}
+	raw, err := os.ReadFile(filepath.Join(tmp, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"mcp__gramaton__gramaton_search"`) {
+		t.Errorf("fresh settings.json missing the entry:\n%s", raw)
+	}
+}
+
+// TestUnregisterClaudePermissionsStripsOnlyOurs pins the uninstall
+// counterpart: gramaton-prefixed allow entries go, everything else
+// (other prefixes, deny, unrelated keys) stays; the probe (apply
+// false) reports presence without writing.
+func TestUnregisterClaudePermissionsStripsOnlyOurs(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	claudeDir := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	initial := `{"permissions": {"allow": ["Bash(sed *)", "mcp__gramaton__gramaton_search"], "deny": ["mcp__gramaton__gramaton_backup"]}}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, _, err := unregisterClaudePermissions(context.Background(), false)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !changed {
+		t.Error("probe should report a gramaton entry present")
+	}
+	if raw, _ := os.ReadFile(settingsPath); string(raw) != initial {
+		t.Error("probe must not modify the file")
+	}
+
+	changed, backup, err := unregisterClaudePermissions(context.Background(), true)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !changed || backup == "" {
+		t.Errorf("apply should report changed with a backup, got changed=%v backup=%q", changed, backup)
+	}
+	raw, _ := os.ReadFile(settingsPath)
+	content := string(raw)
+	if strings.Contains(content, "mcp__gramaton__gramaton_search") {
+		t.Errorf("gramaton allow entry survived uninstall:\n%s", content)
+	}
+	for _, want := range []string{`"Bash(sed *)"`, `"mcp__gramaton__gramaton_backup"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("non-owned entry %s was removed:\n%s", want, content)
+		}
 	}
 }

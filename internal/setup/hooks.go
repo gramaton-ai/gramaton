@@ -244,6 +244,13 @@ type HookBackend interface {
 	// present and unchanged, (false, nil) on a successful update,
 	// (false, err) on failure.
 	RegisterHooks(ctx context.Context, client string, scriptPaths []string) (unchanged bool, err error)
+
+	// RegisterPermissions pre-approves the given gramaton MCP tool
+	// names in the named client's permission config, replacing the
+	// gramaton-owned slice wholesale (rename reconciliation) and
+	// preserving everything else. Same unchanged/err contract as
+	// RegisterHooks.
+	RegisterPermissions(ctx context.Context, client string, toolNames []string) (unchanged bool, err error)
 }
 
 // DefaultHookBackend is the production implementation.
@@ -297,6 +304,17 @@ func (DefaultHookBackend) RegisterHooks(ctx context.Context, client string, scri
 		return false, fmt.Errorf("no hook auto-wiring strategy for client %q", client)
 	}
 	return h.WireHooks(ctx, scriptPaths)
+}
+
+// RegisterPermissions dispatches to the harness's permission-wiring
+// strategy. Same contract as RegisterHooks: the wizard only calls it
+// for registry entries that have one.
+func (DefaultHookBackend) RegisterPermissions(ctx context.Context, client string, toolNames []string) (bool, error) {
+	h := harnessByEmbedDir(client)
+	if h == nil || h.WirePermissions == nil {
+		return false, fmt.Errorf("no permission auto-wiring strategy for client %q", client)
+	}
+	return h.WirePermissions(ctx, toolNames)
 }
 
 // hookEventForConfig maps a proxy filename to the claude-protocol
