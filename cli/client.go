@@ -312,12 +312,22 @@ func noAutostartSentinelHolder(cfgDir string) (int, bool) {
 }
 
 // writeNoAutostartSentinel installs the sentinel for this process.
-// The returned release func removes it; callers defer it on every
-// exit path.
+// Refuses over a live holder (a second concurrent maintenance run
+// must not clobber the first's suppression), and the returned
+// release removes the file only while it still names this process --
+// so a racing run can never delete a suppression it does not own.
 func writeNoAutostartSentinel(cfgDir string) (func(), error) {
+	if pid, held := noAutostartSentinelHolder(cfgDir); held && pid != os.Getpid() {
+		return nil, fmt.Errorf("another offline maintenance run holds the auto-start suspension (pid %d)", pid)
+	}
 	path := noAutostartSentinelPath(cfgDir)
-	if err := core.AtomicWriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+	self := strconv.Itoa(os.Getpid())
+	if err := core.AtomicWriteFile(path, []byte(self), 0o600); err != nil {
 		return nil, err
 	}
-	return func() { _ = os.Remove(path) }, nil
+	return func() {
+		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) == self {
+			_ = os.Remove(path)
+		}
+	}, nil
 }

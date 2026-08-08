@@ -97,7 +97,10 @@ func prunePlanPath(dataDir string) string {
 }
 
 func runPrune(cmd *cobra.Command, _ []string) error {
+	// Both streams: an agent capturing only stderr from a failed run
+	// must still see the stop instruction before the actionable error.
 	fmt.Println(pruneAgentBanner)
+	fmt.Fprintln(os.Stderr, pruneAgentBanner)
 	fmt.Println()
 	if err := guardLocalStore("prune"); err != nil {
 		return err
