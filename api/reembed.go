@@ -121,10 +121,17 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 				continue
 			}
 		}
+		isSectionChunk := graph.IsSectionOrChunk(n.Properties)
 		model, ok := n.Properties.GetString("embedding_model")
 		if ok && model == currentModel {
 			hasGap := false
-			if _, has := n.Properties.GetString("content_short"); has {
+			// Section/chunk children carry exactly one vector
+			// (content_full); their content_short is a heading or
+			// prefix label, never an embedding source, so the
+			// missing-embedding_short gap does not apply -- without
+			// this branch every child re-enters the candidate set on
+			// every run.
+			if _, has := n.Properties.GetString("content_short"); has && !isSectionChunk {
 				if _, has := n.Properties["embedding_short"]; !has {
 					hasGap = true
 				}
@@ -154,6 +161,14 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 			{"content_keywords", "embedding_keywords"},
 			{"content_full", "embedding_full"},
 			{"content_short", "embedding_short"},
+		}
+		// Section/chunk children: the section text is the ONLY
+		// semantic anchor. Running the full source list would make
+		// content_short -- the heading -- win as the primary search
+		// vector (last-present source wins), silently replacing every
+		// child's section-text embedding with a heading embedding.
+		if isSectionChunk {
+			embedSources = embedSources[1:2] // content_full -> embedding_full only
 		}
 
 		var texts []string

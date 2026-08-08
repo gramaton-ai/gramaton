@@ -289,12 +289,13 @@ func RunDeterministic(e *core.Engine, cfg config.Config, logger *slog.Logger) *D
 				}
 			}
 
-			// Observations are sub-records (always have an observation_of
-			// edge to their parent, filtered out of SemanticEdgeCount as
-			// structural). Treating them as orphans makes the linking
-			// pass below add weak related_to edges against arbitrary
-			// similar records every cycle, polluting the graph.
-			if nodeType != "observation" {
+			// Observations and section/chunk children are sub-records
+			// (structural edge to their parent, filtered out of
+			// SemanticEdgeCount). Treating them as orphans makes the
+			// linking pass below add weak related_to edges against
+			// arbitrary similar records every cycle, polluting the
+			// graph.
+			if nodeType != "observation" && nodeType != "section" && nodeType != "chunk" {
 				ec := nonChunkEdgeCount(g, id)
 				if ec == 0 {
 					conf, hasConf := n.Properties.GetFloat64("confidence")

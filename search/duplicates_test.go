@@ -106,3 +106,26 @@ func TestStructurallyRelatedMatrix(t *testing.T) {
 		t.Fatal("related_to must NOT count as structural (semantic edge)")
 	}
 }
+
+// TestFindDuplicatesSkipsSectionChildren pins the cross-record gap:
+// a section child of doc A is cosine-identical to unrelated records,
+// and structurallyRelated only spares the child-vs-own-parent pair.
+// The node_type-keyed skip must keep sections out of EVERY pair, on
+// both the scanning and the found side.
+func TestFindDuplicatesSkipsSectionChildren(t *testing.T) {
+	g, vec, nodes := setupDupGraph(t)
+	section := g.AddNode(graph.Properties{
+		"content_full":   graph.StringProperty("section fragment"),
+		"content_short":  graph.StringProperty("section fragment"),
+		"embedding_full": graph.VectorProperty([]float32{0.9, 0.1, 0.0}),
+		"node_type":      graph.StringProperty("section"),
+	})
+	vec.Add(section.ID, []float32{0.9, 0.1, 0.0})
+	g.AddEdge(section.ID, nodes["parent"].ID, "section_of", 1.0, nil)
+
+	for _, p := range FindDuplicates(g, vec, 0.5, 100) {
+		if p.IDA == section.ID || p.IDB == section.ID {
+			t.Fatalf("section child appeared in a duplicate pair: %+v", p)
+		}
+	}
+}

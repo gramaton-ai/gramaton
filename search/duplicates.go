@@ -86,6 +86,15 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 		if graph.IsConcept(n.Properties) {
 			continue
 		}
+		// Section/chunk children are mechanical fragments of one
+		// document; a section of doc A pairing with an unrelated
+		// record is fragment noise, not actionable duplication (the
+		// child-vs-own-parent pair is already suppressed by
+		// structurallyRelated, but that never covered cross-record
+		// pairs).
+		if graph.IsSectionOrChunk(n.Properties) {
+			continue
+		}
 		if v, ok := n.Properties["embedding_full"]; ok {
 			nodes = append(nodes, embedded{id: n.ID, vec: v.Vector()})
 		}
@@ -112,8 +121,10 @@ func FindDuplicates(g graph.NodeReader, vecIdx index.VectorIndex, threshold floa
 				continue
 			}
 			// The found side can be a concept when a legacy store's
-			// vector index still carries pre-exclusion entries.
-			if fn, ok := g.GetNode(r.NodeID); ok && graph.IsConcept(fn.Properties) {
+			// vector index still carries pre-exclusion entries; the
+			// section/chunk check mirrors the scanning side.
+			if fn, ok := g.GetNode(r.NodeID); ok &&
+				(graph.IsConcept(fn.Properties) || graph.IsSectionOrChunk(fn.Properties)) {
 				continue
 			}
 

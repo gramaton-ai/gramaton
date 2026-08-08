@@ -149,6 +149,7 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 	type precomputed struct {
 		file     ingestFile
 		embedded *preEmbeddedVectors
+		preChunk *core.PreChunkResult
 	}
 	var prepared []precomputed
 	var warnings []string
@@ -167,10 +168,17 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 			continue
 		}
 		capReq := &saveRequest{Content: f.Content}
-		prepared = append(prepared, precomputed{
+		p := precomputed{
 			file:     f,
 			embedded: s.preEmbedContent(ctx, capReq),
-		})
+		}
+		// Long-document chunking, off-lock. Ingest is the primary
+		// long-document entry; a file the guard later holds wastes
+		// the prechunk (the scan runs under the lock on this path).
+		if s.engine.ShouldChunk(len(f.Content)) {
+			p.preChunk = s.engine.PreChunk(ctx, f.Content, "")
+		}
+		prepared = append(prepared, p)
 	}
 
 	s.engine.Lock()
@@ -223,6 +231,23 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 			// Never similarity-checked; the deferred re-scan at
 			// reembed gates on this flag (parity with save/batch).
 			s.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
+		}
+
+		// Apply pre-chunked children (see api/save.go for the fresh-
+		// props rationale). Children ride the same ingest commit.
+		if p.preChunk != nil {
+			if parent, ok := s.engine.Graph().GetNode(n.ID); ok {
+				if created, err := s.engine.ApplyChunks(n.ID, p.preChunk, parent.Properties); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%s: chunking failed: %s", p.file.Filename, err))
+				} else {
+					if p.preChunk.ParentVec != nil {
+						s.engine.NoteRecentWrite(n.ID, p.preChunk.ParentVec)
+					}
+					s.log.Info("long document chunked",
+						"component", "ingest", "file", p.file.Filename,
+						"node", n.ID, "children", created)
+				}
+			}
 		}
 
 		ingested++

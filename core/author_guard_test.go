@@ -88,9 +88,9 @@ func TestAuthorStampCoversEveryAddNodeSite(t *testing.T) {
 		filepath.Join("curation", "deterministic.go"): 1,
 		// CURATION: observation nodes carry the "curation" constant.
 		filepath.Join("curation", "observe.go"): 1,
-		// INHERITS x2: section sub-nodes inherit the parent's author via
-		// inheritedMetadataKeys; legacy dumb chunks inherit no metadata
-		// at all (pre-existing design), so no stamp there either.
+		// INHERITS x2: section AND chunk sub-nodes inherit the parent's
+		// author via inheritedMetadataKeys (childProps); never
+		// re-stamped from config.
 		filepath.Join("chunking", "chunking.go"): 2,
 		// PRESERVES x2 (JSONL line 170-ish, CSV line 322-ish): source
 		// row's author survives via safePropTypes; absent stays absent.

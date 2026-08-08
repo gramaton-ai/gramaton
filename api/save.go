@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 	"github.com/gramaton-ai/gramaton/internal/sanitize"
 	"github.com/gramaton-ai/gramaton/similarity"
@@ -197,6 +198,28 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		}
 	}
 
+	// Long-document chunking, off-lock: split and embed the pieces
+	// before the write lock. Skipped when the off-lock scan already
+	// holds this save unacknowledged (the hold response would discard
+	// the work) and when a client_token replay will short-circuit
+	// under the lock (the read here is advisory; the authoritative
+	// replay check below still runs). A hold first found by the delta
+	// re-scan still wastes the prechunk; that is the price of keeping
+	// embedding I/O out of the write critical section.
+	var preChunk *core.PreChunkResult
+	if a.engine.ShouldChunk(len(req.Content)) {
+		likelyHeld := outcome.Hold != nil && !ackContains(req.AllowSimilar, outcome.Hold.NodeID)
+		likelyReplay := false
+		if req.ClientToken != "" {
+			a.engine.RLock()
+			likelyReplay = len(a.engine.PropIdx().Lookup("client_token", graph.StringProperty(req.ClientToken))) > 0
+			a.engine.RUnlock()
+		}
+		if !likelyHeld && !likelyReplay {
+			preChunk = a.engine.PreChunk(ctx, req.Content, req.SummaryShort)
+		}
+	}
+
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
@@ -313,6 +336,40 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 		// The save-guard scan never ran; mark the record so reembed
 		// re-runs it when the deferred embedding arrives.
 		a.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
+	}
+
+	// A save that reached this point above the chunking threshold
+	// without a prechunk (the predicted hold or replay did not
+	// materialize) stores the document unchunked; say so instead of
+	// leaving vector search silently blind past the first window.
+	if preChunk == nil && a.engine.ShouldChunk(len(req.Content)) {
+		warnings = append(warnings,
+			"content exceeds the chunking threshold but was saved unchunked; the next content update will chunk it")
+	}
+
+	// Apply the pre-chunked children: one batched index transaction
+	// creates the section/chunk nodes and swaps the parent's
+	// embedding for the purpose-sized ParentVec. Properties are
+	// re-read so metadata inheritance and the vector replacement see
+	// what is actually stored (author, processing_status, the
+	// just-applied embedding), not the pre-insert map.
+	if preChunk != nil {
+		if parent, ok := a.engine.Graph().GetNode(n.ID); ok {
+			created, err := a.engine.ApplyChunks(n.ID, preChunk, parent.Properties)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("chunking failed: %s", err))
+			} else {
+				// The delta ring noted the pre-chunk vector; re-note
+				// so concurrent saves compare against the vector the
+				// parent actually carries now.
+				if preChunk.ParentVec != nil {
+					a.engine.NoteRecentWrite(n.ID, preChunk.ParentVec)
+				}
+				a.log.Info("long document chunked",
+					"component", "save", "node", n.ID,
+					"children", created, "content_len", len(req.Content))
+			}
+		}
 	}
 
 	// Advisory: the save succeeded; attach the non-blocking notice if

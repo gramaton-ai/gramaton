@@ -136,3 +136,27 @@ func TestScanSelfSkipPreserved(t *testing.T) {
 		t.Fatalf("Scan(a, selfID=a) = %+v, want the sibling %q, never self", out.Hold, b.ID)
 	}
 }
+
+// TestScanExcludesSectionAndChunkChildren pins the machine-derived
+// exclusion for long-document children: a cosine-identical section
+// or chunk child must produce neither a hold nor an advisory -- a
+// save can never be held against a fragment its author cannot
+// meaningfully update.
+func TestScanExcludesSectionAndChunkChildren(t *testing.T) {
+	for _, nt := range []string{"section", "chunk"} {
+		g := graph.New()
+		idx := index.NewFlatIndex()
+		vec := []float32{0.5, 0.5, 0.1}
+		n := g.AddNode(graph.Properties{
+			"content_full":   graph.StringProperty("identical text for the exclusion test"),
+			"embedding_full": graph.VectorProperty(vec),
+			"node_type":      graph.StringProperty(nt),
+		})
+		idx.Add(n.ID, vec)
+
+		out := Scan(g, idx, guardCfg(), vec, "identical text for the exclusion test", "")
+		if out.Hold != nil || out.Advisory != nil {
+			t.Fatalf("node_type=%s candidate produced %+v, want no hold and no advisory", nt, out)
+		}
+	}
+}

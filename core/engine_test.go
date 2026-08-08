@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -400,13 +401,13 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 	eng := setupTestEngine(t)
 	cfg := eng.Config()
 
-	// Create content longer than chunk threshold.
+	// Create content longer than the chunking trigger.
 	longContent := ""
 	for i := 0; i < cfg.Chunking.Threshold+100; i++ {
 		longContent += "word "
 	}
 
-	pre := eng.PreChunk(context.Background(), longContent, "", "")
+	pre := eng.PreChunk(context.Background(), longContent, "")
 	if pre == nil {
 		t.Fatal("PreChunk should return result for long content")
 	}
@@ -418,21 +419,36 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 	n := eng.Graph().AddNode(graph.Properties{
 		"content_full": graph.StringProperty(longContent),
 	})
-	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
+	numChunks, err := eng.ApplyChunks(n.ID, pre, n.Properties)
 	eng.Unlock()
-
+	if err != nil {
+		t.Fatalf("ApplyChunks: %v", err)
+	}
 	if numChunks == 0 {
 		t.Fatal("ApplyChunks should create child nodes")
 	}
 
-	// Verify child nodes have chunk_of or section_of edges.
+	// Verify child nodes have chunk_of or section_of edges and carry
+	// the machine-derived discriminator the exclusion surfaces key on.
 	eng.RLock()
 	defer eng.RUnlock()
 	edges := eng.Graph().EdgesTo(n.ID)
 	childEdges := 0
 	for _, e := range edges {
-		if e.Type == "chunk_of" || e.Type == "section_of" {
-			childEdges++
+		if e.Type != "chunk_of" && e.Type != "section_of" {
+			continue
+		}
+		childEdges++
+		child, ok := eng.Graph().GetNode(e.SourceID)
+		if !ok {
+			t.Fatalf("child node %s missing", e.SourceID)
+		}
+		nt, _ := child.Properties.GetString("node_type")
+		if nt != "chunk" && nt != "section" {
+			t.Fatalf("child %s node_type = %q, want chunk or section", e.SourceID, nt)
+		}
+		if _, has := child.Properties["section_index"]; !has {
+			t.Fatalf("child %s missing section_index ordinal", e.SourceID)
 		}
 	}
 	if childEdges != numChunks {
@@ -442,9 +458,17 @@ func TestPreChunkAndApplyChunks(t *testing.T) {
 
 func TestPreChunkShortContent(t *testing.T) {
 	eng := setupTestEngine(t)
-	pre := eng.PreChunk(context.Background(), "short content", "", "")
+	pre := eng.PreChunk(context.Background(), "short content", "")
 	if pre != nil {
 		t.Fatal("PreChunk should return nil for short content")
+	}
+	// Content above the window floor but at or below the configured
+	// threshold must also stay unchunked: the raised threshold is the
+	// user-facing trigger.
+	mid := strings.Repeat("word ", eng.Config().Chunking.Threshold/5)
+	if pre := eng.PreChunk(context.Background(), mid, ""); pre != nil {
+		t.Fatalf("PreChunk should return nil at threshold (len=%d, threshold=%d)",
+			len(mid), eng.Config().Chunking.Threshold)
 	}
 }
 
@@ -459,21 +483,23 @@ func TestApplyChunksInheritsAuthor(t *testing.T) {
 	// Markdown-structured content so SplitSections detects sections
 	// (the metadata-inheriting path); long enough to exceed the
 	// chunking threshold.
+	// Enough body per section to clear the raised chunking threshold
+	// while keeping each section under SectionMax.
 	var sb strings.Builder
 	for i := 0; i < 4; i++ {
 		sb.WriteString("## Section heading ")
 		sb.WriteString(strings.Repeat("x", i+1))
 		sb.WriteString("\n\n")
-		for j := 0; j < 20; j++ {
+		for j := 0; j < 60; j++ {
 			sb.WriteString("Body sentence for the author inheritance test. ")
 		}
 		sb.WriteString("\n\n")
 	}
 	content := sb.String()
 
-	pre := eng.PreChunk(context.Background(), content, "", "")
+	pre := eng.PreChunk(context.Background(), content, "")
 	if pre == nil {
-		t.Fatal("PreChunk should return a result for long content")
+		t.Fatalf("PreChunk should return a result for long content (len=%d)", len(content))
 	}
 	if len(pre.Sections) == 0 {
 		t.Fatal("expected structural sections (the author-inheriting path); markdown headings were not detected")
@@ -484,8 +510,11 @@ func TestApplyChunksInheritsAuthor(t *testing.T) {
 		"content_full": graph.StringProperty(content),
 		"author":       graph.StringProperty(author),
 	})
-	numChunks := eng.ApplyChunks(n.ID, pre, n.Properties)
+	numChunks, err := eng.ApplyChunks(n.ID, pre, n.Properties)
 	eng.Unlock()
+	if err != nil {
+		t.Fatalf("ApplyChunks: %v", err)
+	}
 	if numChunks == 0 {
 		t.Fatal("ApplyChunks should create section nodes")
 	}
@@ -980,5 +1009,53 @@ func TestSaveStampsCommitAuthor(t *testing.T) {
 	}
 	if curCommit.Author != CurationAuthor {
 		t.Fatalf("curation commit author = %q, want %q", curCommit.Author, CurationAuthor)
+	}
+}
+
+// TestApplyChunksFailedBatchUndoesInMemoryState pins the undo path:
+// a failed batch commit must leave no zombie children in the
+// in-memory graph or vector index -- the bbolt rollback cannot reach
+// those, and a subsequent engine.Save would otherwise persist
+// edge-less pseudo-records repair cannot detect.
+func TestApplyChunksFailedBatchUndoesInMemoryState(t *testing.T) {
+	eng := setupTestEngine(t)
+	longContent := strings.Repeat("word ", eng.Config().Chunking.Threshold/4)
+
+	pre := eng.PreChunk(context.Background(), longContent, "")
+	if pre == nil {
+		t.Fatal("PreChunk returned nil for long content")
+	}
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty(longContent),
+	})
+	applyChunksFaultForTests = func() error { return fmt.Errorf("injected batch failure") }
+	created, err := eng.ApplyChunks(n.ID, pre, n.Properties)
+	applyChunksFaultForTests = nil
+	eng.Unlock()
+
+	if err == nil {
+		t.Fatal("expected the injected failure to surface")
+	}
+	if created != 0 {
+		t.Fatalf("failed apply reported %d children", created)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	for _, e := range eng.Graph().EdgesTo(n.ID) {
+		if e.Type == "section_of" || e.Type == "chunk_of" {
+			t.Fatalf("child edge %s survived the rollback", e.ID)
+		}
+	}
+	zombies := 0
+	for id := range eng.Graph().NodeIDSet() {
+		if child, ok := eng.Graph().GetNode(id); ok && graph.IsSectionOrChunk(child.Properties) {
+			zombies++
+		}
+	}
+	if zombies != 0 {
+		t.Fatalf("%d zombie children survived the failed batch", zombies)
 	}
 }

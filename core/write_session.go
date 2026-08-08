@@ -94,6 +94,17 @@ func (ws *WriteSession) SetContentProp(nodeID, key, content string) {
 	ws.indexes.setContentPropSession(ws, nodeID, key, content)
 }
 
+// AddVector writes (or overwrites in place) a node's entry in the
+// vector index without touching BM25 or the property index. Used by
+// chunking's parent-embedding replacement, where the property write
+// goes through SetProp and only the vector posting needs syncing.
+// The vector index is mmap-backed and persists outside the session's
+// bbolt transaction; on the rare rolled-back batch, reembed heals the
+// resulting vector/property divergence.
+func (ws *WriteSession) AddVector(nodeID string, vec []float32) {
+	ws.indexes.vecIdx.Add(nodeID, vec)
+}
+
 // IndexNode populates every index for a node via the session's tx +
 // caches. Mirrors Engine.IndexNode.
 func (ws *WriteSession) IndexNode(nodeID, content string, vec []float32) {
