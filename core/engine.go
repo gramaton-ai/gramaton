@@ -391,6 +391,10 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.headHash = headHash
 	e.loadPruneFloor()
 
+	// Repair the ref half of the Save durability contract before the
+	// changelog walk -- both repairs read the same chain.
+	e.reconcileActiveRef()
+
 	// Repair changelog marker drift now that HEAD is known -- a
 	// crash between a commit's HEAD write and its changelog append
 	// left the marker behind; the walk re-derives what's missing.
@@ -491,6 +495,67 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 
 	success = true // disarm the deferred cleanup
 	return nil
+}
+
+// reconcileActiveRef repairs the crash window between a Save's HEAD
+// write and its branch-ref write: the two are separate fsynced
+// renames, and a crash between them leaves the active branch's ref
+// behind HEAD. Left alone, a later checkout of that same branch (or
+// a discard-switch) would read the stale ref and silently rewind
+// the branch, and the changelog rebuild would then retract the tip
+// commits' entries as a pure rewind. When the stale ref is an
+// ancestor of HEAD (or missing outright -- a crash on a store's
+// first save), fast-forwarding it to HEAD is the write the crash
+// interrupted. A ref that is NOT an ancestor is real divergence:
+// never auto-repaired, only reported.
+func (e *Engine) reconcileActiveRef() {
+	if e.headHash == "" {
+		return
+	}
+	branch := ActiveBranch(e.cfg.DataDir)
+	ref, err := ReadRef(e.cfg.DataDir, branch)
+	if err == nil && ref == e.headHash {
+		return
+	}
+	short := func(h string) string {
+		if len(h) > 12 {
+			return h[:12]
+		}
+		if h == "" {
+			return "(missing)"
+		}
+		return h
+	}
+	fastForward := func(from string) {
+		if werr := writeRef(e.cfg.DataDir, branch, e.headHash, !e.volatile); werr != nil {
+			slog.Warn("active branch ref fast-forward failed",
+				"component", "engine", "branch", branch, "err", werr)
+			return
+		}
+		slog.Warn("active branch ref trailed HEAD (crash between the HEAD and ref writes); fast-forwarded",
+			"component", "engine", "branch", branch, "from", from, "to", short(e.headHash))
+	}
+	if err != nil || ref == "" {
+		fastForward(short(""))
+		return
+	}
+	// Bounded ancestor walk: the crash window loses at most the tip
+	// write, so a genuine repair terminates within a step or two.
+	const maxWalk = 1000
+	hash := e.headHash
+	for i := 0; i < maxWalk && hash != ""; i++ {
+		commit, cerr := graph.LoadCommitMeta(e.store, hash)
+		if cerr != nil {
+			return
+		}
+		if commit.Parent == ref {
+			fastForward(short(ref))
+			return
+		}
+		hash = commit.Parent
+	}
+	slog.Warn("active branch ref matches neither HEAD nor an ancestor; leaving both untouched",
+		"component", "engine", "branch", branch, "ref", short(ref), "head", short(e.headHash))
 }
 
 // UnsavedBatchDetected reports whether the most recent mutating
