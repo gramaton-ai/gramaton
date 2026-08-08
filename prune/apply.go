@@ -46,7 +46,7 @@ func ApplyKeepVersions(eng *core.Engine, plan *KeepVersionsPlan) (*ApplyResult, 
 	}
 	ts.Union(eng.HistoryFloor())
 
-	root, err := ts.Save(store)
+	root, err := ts.WriteChunk(store)
 	if err != nil {
 		return nil, fmt.Errorf("tombstone: %w", err)
 	}

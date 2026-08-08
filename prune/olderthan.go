@@ -138,7 +138,7 @@ func ApplyOlderThan(eng *core.Engine, plan *OlderThanPlan, refTips map[string]st
 	ts.OldestKeptCommit = plan.OldestKept
 	ts.Baseline = baseline
 
-	root, err := ts.Save(store)
+	root, err := ts.WriteChunk(store)
 	if err != nil {
 		return nil, fmt.Errorf("tombstone: %w", err)
 	}

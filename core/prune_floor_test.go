@@ -35,7 +35,7 @@ func TestHistoryFloorLoadsAcrossReopen(t *testing.T) {
 		},
 		PrunedAt: time.Now().UTC(),
 	}
-	hash, err := ts.Save(eng.Store())
+	hash, err := ts.WriteChunk(eng.Store())
 	if err != nil {
 		t.Fatalf("tombstone save: %v", err)
 	}

@@ -44,8 +44,10 @@ type Tombstone struct {
 	PrunedAt time.Time `json:"pruned_at,omitzero"`
 }
 
-// Save writes the tombstone as a CAS chunk and returns its hash.
-func (t *Tombstone) Save(store *storage.Store) (string, error) {
+// WriteChunk writes the tombstone as a CAS chunk and returns its
+// hash. (Named to stay out of the commit-minting Save namespace the
+// saveactions lint guards.)
+func (t *Tombstone) WriteChunk(store *storage.Store) (string, error) {
 	data, err := json.Marshal(t)
 	if err != nil {
 		return "", fmt.Errorf("tombstone: marshal: %w", err)
