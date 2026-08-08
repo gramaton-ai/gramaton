@@ -175,7 +175,9 @@ func (a *API) HistorySearch(ctx context.Context, req HistorySearchRequest) (Hist
 
 	scanned := 0
 	dateExcluded := 0
+	contentPruned := 0
 	budgetTruncated := snapshotCapped
+	floor := a.engine.HistoryFloor()
 	var hits []HistorySearchHit
 scan:
 	for _, tgt := range targets {
@@ -194,6 +196,13 @@ scan:
 
 			commit := loadCachedCommit(entry.Commit)
 			note := changeNoteFor(commit, tgt.id)
+			// A blob removed by retention is counted, not silently
+			// unmatched -- the coverage line must distinguish "did not
+			// match" from "could not be read by policy". The
+			// change_note channel still applies.
+			if entry.NodeHash != "" && floor.CoversRecordVersion(tgt.id, entry.Timestamp) && !store.Has(entry.NodeHash) {
+				contentPruned++
+			}
 			matchedContent, snippet := matchVersionBlob(store, entry.NodeHash, needle)
 			matchedNote := note != "" && strings.Contains(strings.ToLower(note), needle)
 			if !matchedContent && !matchedNote {
@@ -275,6 +284,9 @@ scan:
 	coverage := fmt.Sprintf("scanned %d of %d versions in scope", scanned, totalVersions)
 	if dateExcluded > 0 {
 		coverage += fmt.Sprintf(" (%d outside date window)", dateExcluded)
+	}
+	if contentPruned > 0 {
+		coverage += fmt.Sprintf("; %d versions content-pruned by retention (metadata and change_notes still searched)", contentPruned)
 	}
 	if budgetTruncated {
 		coverage += "; truncated at budget -- raise budget or narrow with since/until for full coverage"

@@ -129,6 +129,17 @@ the record summaries inline in the log response, no fan-out.
 The CLI (`gramaton log`, `gramaton history`, `gramaton diff`) has
 the same date/action/mutation flags.
 
+## Pruned stores: the history floor
+
+`gramaton prune` (a human-run CLI command) can remove old history.
+Afterwards every temporal surface states the boundary rather than
+erroring: `as_of` below the floor answers "history available from
+<date> (store pruned)", timeline entries whose content was removed
+are marked `content_pruned` (metadata, author, and change_note
+survive), and history search reports "N versions content-pruned" in
+its coverage line. Absent history on a pruned store means removed by
+policy -- do not report it as corruption, and do not retry harder.
+
 ## Semantics: point_in_time vs live state
 
 When a tool answers "records from 12 weeks ago," two contracts

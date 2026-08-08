@@ -469,8 +469,13 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 		return 0, nil
 	}
 
-	// Collect the chain HEAD-back-to-root, then process in reverse.
+	// Collect the chain HEAD-back-to-root -- or back to the floor of
+	// a prune, where the chain deliberately grounds out (the parent
+	// chunk was swept by policy). The grounded commit diffs against
+	// the tombstone's baseline, which captures the pre-floor state
+	// precisely so this walk still computes true diffs.
 	var chain []*graph.Commit
+	var grounded bool
 	cur := e.headHash
 	for cur != "" {
 		c, err := loadCommit(e.store, cur)
@@ -478,6 +483,10 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 			return 0, err
 		}
 		chain = append(chain, c)
+		if e.pruneFloor != nil && cur == e.pruneFloor.OldestKeptCommit {
+			grounded = true
+			break
+		}
 		cur = c.Parent
 	}
 
@@ -510,7 +519,16 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 			continue
 		}
 		var parent *graph.Commit
-		if c.Parent != "" {
+		switch {
+		case grounded && i == len(chain)-1:
+			// The grounded commit's real parent was swept; the
+			// baseline stands in for it.
+			if e.pruneFloor.Baseline != "" {
+				if p, err := loadCommit(e.store, e.pruneFloor.Baseline); err == nil {
+					parent = p
+				}
+			}
+		case c.Parent != "":
 			if p, err := loadCommit(e.store, c.Parent); err == nil {
 				parent = p
 			}

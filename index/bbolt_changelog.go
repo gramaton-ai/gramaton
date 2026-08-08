@@ -248,3 +248,90 @@ func (c *BboltChangelog) ForEach(fn func(nodeID string, entries []ChangelogEntry
 		})
 	})
 }
+
+// pruneTombstoneKey points at the newest retention-tombstone chunk.
+// A CACHE of the prune commit's PruneTombstoneRoot (the substrate
+// authority), kept here so boot finds the floor without a chain
+// walk. sidecar.db rides backups, so the pointer survives restores;
+// if it is ever lost the store degrades to unexplained-missing-blob
+// reporting until the next prune rewrites it.
+var pruneTombstoneKey = []byte("prune_tombstone")
+
+// PruneTombstoneRef returns the newest tombstone chunk hash, or ""
+// when the store has never been pruned.
+func (c *BboltChangelog) PruneTombstoneRef() string {
+	var h string
+	_ = c.db.View(func(tx *bolt.Tx) error {
+		if raw := tx.Bucket(changelogMetaBucket).Get(pruneTombstoneKey); raw != nil {
+			h = string(raw)
+		}
+		return nil
+	})
+	return h
+}
+
+// SetPruneTombstoneRef records the newest tombstone chunk hash.
+func (c *BboltChangelog) SetPruneTombstoneRef(hash string) error {
+	return c.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(changelogMetaBucket).Put(pruneTombstoneKey, []byte(hash))
+	})
+}
+
+// RetractBefore removes every entry with a timestamp strictly before
+// t (chain truncation: those commits no longer exist). Returns the
+// number of entries removed. Records left with no entries are
+// deleted outright. Unlike RetractCommits' set-membership contract,
+// this is a horizon predicate -- the entry timestamps make it
+// answerable without loading commits.
+func (c *BboltChangelog) RetractBefore(t time.Time) (int, error) {
+	removed := 0
+	err := c.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(changelogBucket)
+		cur := b.Cursor()
+		type rewrite struct {
+			key  []byte
+			data []byte
+			del  bool
+		}
+		var rewrites []rewrite
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			var list []ChangelogEntry
+			if err := json.Unmarshal(v, &list); err != nil {
+				continue
+			}
+			kept := list[:0]
+			for _, e := range list {
+				if e.Timestamp.Before(t) {
+					removed++
+					continue
+				}
+				kept = append(kept, e)
+			}
+			if len(kept) == len(list) {
+				continue
+			}
+			if len(kept) == 0 {
+				rewrites = append(rewrites, rewrite{key: append([]byte(nil), k...), del: true})
+				continue
+			}
+			data, err := json.Marshal(kept)
+			if err != nil {
+				return err
+			}
+			rewrites = append(rewrites, rewrite{key: append([]byte(nil), k...), data: data})
+		}
+		for _, rw := range rewrites {
+			if rw.del {
+				if err := b.Delete(rw.key); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := b.Put(rw.key, rw.data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return removed, err
+}

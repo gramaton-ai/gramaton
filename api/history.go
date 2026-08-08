@@ -31,11 +31,15 @@ type HistoryChange struct {
 // version with bookkeeping fields masked -- always computed; the
 // note is color on top.
 type VersionEntry struct {
-	Commit        string   `json:"commit"`
-	Timestamp     string   `json:"timestamp"`
-	Author        string   `json:"author,omitempty"`
-	ChangeNote    string   `json:"change_note,omitempty"`
-	Deleted       bool     `json:"deleted,omitempty"`
+	Commit     string `json:"commit"`
+	Timestamp  string `json:"timestamp"`
+	Author     string `json:"author,omitempty"`
+	ChangeNote string `json:"change_note,omitempty"`
+	Deleted    bool   `json:"deleted,omitempty"`
+	// ContentPruned marks a version whose metadata survives but whose
+	// content blob was removed by a retention prune -- readable via
+	// neither as_of nor the field diff, by policy rather than damage.
+	ContentPruned bool     `json:"content_pruned,omitempty"`
 	FieldsChanged []string `json:"fields_changed,omitempty"`
 }
 
@@ -194,11 +198,17 @@ func (a *API) attachVersionTimeline(out *HistoryResponse, id string, limit int) 
 			}
 		}
 		if !v.Deleted {
-			prevHash := ""
-			if i > 0 {
-				prevHash = entries[i-1].NodeHash
+			if floor := a.engine.HistoryFloor(); floor != nil &&
+				floor.CoversRecordVersion(id, e.Timestamp) && !store.Has(e.NodeHash) {
+				// Metadata retained, content removed by policy.
+				v.ContentPruned = true
+			} else {
+				prevHash := ""
+				if i > 0 {
+					prevHash = entries[i-1].NodeHash
+				}
+				v.FieldsChanged = a.engine.DiffVersionFields(prevHash, e.NodeHash)
 			}
-			v.FieldsChanged = a.engine.DiffVersionFields(prevHash, e.NodeHash)
 		}
 		out.Versions = append(out.Versions, v)
 	}

@@ -53,6 +53,7 @@ const (
 	ActionClassify               = "classify"
 	ActionUpdate                 = "update"
 	ActionResolve                = "resolve"
+	ActionPrune                  = "prune"
 	ActionDelete                 = "delete"
 	ActionLink                   = "link"
 	ActionUnlink                 = "unlink"
@@ -127,6 +128,14 @@ type Commit struct {
 	// commits deserialize with Author == "" and the timeline reports
 	// them unattributed.
 	Author string `json:"author,omitempty"`
+	// PruneTombstoneRoot references the retention tombstone chunk a
+	// prune run minted: the history floor plus per-record swept-depth
+	// watermarks, unioned across prunes. Only prune commits carry it.
+	// Living on a commit keeps it in the substrate proper -- it
+	// survives index rebuilds and rides backups, unlike anything in
+	// indexes.db. Readers consult it to answer "pruned by policy"
+	// instead of reporting a missing blob as corruption.
+	PruneTombstoneRoot string `json:"prune_tombstone_root,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.
@@ -337,6 +346,24 @@ func (g *Graph) PrepareCommit(s *storage.Store, parent string, message string, a
 	}
 
 	return commit, nil
+}
+
+// WriteCommitChunk persists a standalone commit chunk without graph
+// state (the prune baseline: a synthetic parentless commit that is
+// referenced from the tombstone, never from the chain). Returns the
+// content hash.
+func WriteCommitChunk(s *storage.Store, c *Commit) (string, error) {
+	c.Hash = ""
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "", fmt.Errorf("write commit chunk: marshal: %w", err)
+	}
+	hash, err := s.Write(data)
+	if err != nil {
+		return "", fmt.Errorf("write commit chunk: %w", err)
+	}
+	c.Hash = hash
+	return hash, nil
 }
 
 // WriteCommit serializes c, writes it as a content-addressed chunk,

@@ -33,12 +33,18 @@ func (a *API) inspectAsOf(req InspectRequest, includeContent bool) (InspectRespo
 	if t, err := parseDateArg(req.AsOf); err == nil {
 		h, ok := a.engine.TSIndex().CommitAt(t)
 		if !ok {
+			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && t.Before(floor.FloorDate) {
+				return InspectResponse{}, ErrNotFound(fmt.Sprintf("history available from %s (store pruned); earlier state was removed by retention policy", floor.FloorDate.UTC().Format(time.RFC3339)))
+			}
 			return InspectResponse{}, ErrNotFound("no commit at or before that time")
 		}
 		commitHash = h
 	} else {
 		commitHash = req.AsOf
 		if _, err := store.Read(commitHash); err != nil {
+			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() {
+				return InspectResponse{}, ErrNotFound(fmt.Sprintf("commit not found; note this store is pruned -- history available from %s", floor.FloorDate.UTC().Format(time.RFC3339)))
+			}
 			return InspectResponse{}, ErrNotFound("as_of is neither a parseable date nor a known full commit hash")
 		}
 	}
