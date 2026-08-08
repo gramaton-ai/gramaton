@@ -21,10 +21,31 @@ func RecordIndexText(n *graph.Node) string {
 	if n == nil {
 		return ""
 	}
+	var parts []string
 	if s, ok := n.Properties.GetString("content_full"); ok {
-		return s
+		parts = append(parts, s)
+	} else if s, ok := n.Properties.GetString("content"); ok {
+		// Session segments carry their text under "content"; a
+		// rebuild that only reads content_full re-indexes every
+		// segment as empty and store="sessions" search goes dark.
+		parts = append(parts, s)
+	} else if f := collectFieldStrings(n); f != "" {
+		parts = append(parts, f)
 	}
-	return collectFieldStrings(n)
+	// Keywords and meta key:value terms are part of the insert-time
+	// BM25 text (save appends meta; update appends both); a rebuild
+	// must reproduce them or those search contracts silently degrade
+	// after any revert, checkout, restore, or index-loss boot.
+	if kws, ok := n.Properties.GetStringList("content_keywords"); ok && len(kws) > 0 {
+		parts = append(parts, strings.Join(kws, " "))
+	}
+	for key, v := range n.Properties {
+		if !strings.HasPrefix(key, "meta.") {
+			continue
+		}
+		parts = append(parts, strings.TrimPrefix(key, "meta.")+":"+v.FormatValue())
+	}
+	return strings.Join(parts, " ")
 }
 
 // RecordContent returns the LLM/embedding-grade text representation

@@ -301,3 +301,38 @@ func TestSearchMemoryRanksAboveSession(t *testing.T) {
 		t.Errorf("expected both memory and session results, got memory=%v session=%v", foundMemory, foundSession)
 	}
 }
+
+// TestSegmentsSurviveIndexRebuild pins the rebuild/insert symmetry:
+// session segments carry their text under "content", and a forced
+// index rebuild (revert, checkout, restore, index-loss boot) must
+// re-index them from stored properties -- not re-index them as
+// empty and silently blind store="sessions" search.
+func TestSegmentsSurviveIndexRebuild(t *testing.T) {
+	srv, eng := setupTestServer(t)
+	ctx := context.Background()
+
+	createSessionWithSegments(t, srv, "rebuild-survival-test", []api.SaveSegment{
+		{Content: "the reactor uses molten salt cooling", TopicName: "Design"},
+	})
+
+	search := func() int {
+		resp, apiErr := srv.api.Search(ctx, api.SearchRequest{
+			Text: "molten salt cooling", Store: "sessions", Top: 10,
+		})
+		if apiErr != nil {
+			t.Fatalf("search: %v", apiErr)
+		}
+		return len(resp.Results)
+	}
+	if got := search(); got == 0 {
+		t.Fatal("fixture: segment not findable before rebuild")
+	}
+
+	eng.Lock()
+	eng.RebuildAllIndexes()
+	eng.Unlock()
+
+	if got := search(); got == 0 {
+		t.Fatal("segment lost from BM25 after index rebuild")
+	}
+}

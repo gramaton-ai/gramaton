@@ -114,3 +114,48 @@ func TestWriteSessionDeleteEdge(t *testing.T) {
 		t.Fatalf("reverse edge count = %d, want 1", len(es))
 	}
 }
+
+// TestDeletedUncommittedNodeStaysDeleted pins the lazy-load window:
+// between DeleteNode and the commit, the tree still holds the node,
+// and the GetNode slow path must NOT resurrect it into the cache (a
+// rebuild iterating the pre-commit tree would then re-index it, and
+// search would serve a deleted record until restart).
+func TestDeletedUncommittedNodeStaysDeleted(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("doomed record"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+
+	// Reopen so the cache is cold and the tree is the only source --
+	// the exact shape where the slow path resurrects.
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	eng2 := openReadOnlyTestEngine(t, dir)
+
+	eng2.Lock()
+	eng2.Graph().DeleteNode(n.ID)
+	// BEFORE the commit: a lookup must miss even though the tree
+	// still holds the blob.
+	if _, ok := eng2.Graph().GetNode(n.ID); ok {
+		eng2.Unlock()
+		t.Fatal("deleted-but-uncommitted node resurrected by the lazy load")
+	}
+	if _, err := eng2.Save("delete"); err != nil {
+		eng2.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng2.Unlock()
+
+	if _, ok := eng2.Graph().GetNode(n.ID); ok {
+		t.Fatal("node readable after committed deletion")
+	}
+}
