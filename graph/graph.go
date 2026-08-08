@@ -156,8 +156,14 @@ func (g *Graph) PendingChanges() (dirty, deleted []string, prevHash map[string]s
 }
 
 // NodeHashOf returns a node's current content hash as of the last
-// save/load, "" when unknown (new since last save).
-func (g *Graph) NodeHashOf(id string) string { return g.nodeHashes[id] }
+// save/load, "" when unknown (new since last save). Takes cacheMu:
+// GetNode's lazy-load path writes nodeHashes under the engine READ
+// lock, so an engine-RLock caller here races that write without it.
+func (g *Graph) NodeHashOf(id string) string {
+	g.cacheMu.RLock()
+	defer g.cacheMu.RUnlock()
+	return g.nodeHashes[id]
+}
 
 func (g *Graph) ClearDirty() {
 	g.dirtyNodes = make(map[string]struct{})
