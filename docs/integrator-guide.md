@@ -16,7 +16,7 @@ Best-match retrieval ranked by composite score. Not exhaustive.
 
 **Use for:** decisions, design rationale, research findings, user preferences, domain knowledge, "what did we figure out about X" — anything where the goal is surfacing the most relevant few results, not every result.
 
-**Retrieval:** `gramaton_search` with optional metadata filters. Results are ranked by a weighted combination of vector similarity (fused with BM25 keyword match via RRF), knowledge freshness (time-decay keyed to temporality), access recency (activation), and confidence. Importance acts as a floor.
+**Retrieval:** `gramaton_search` with optional metadata filters. Results are ranked by a weighted combination of vector similarity (fused with BM25 keyword match via RRF), knowledge freshness (time-decay keyed to temporality, anchored to the record's revision date), and confidence. Importance acts as a floor.
 
 **Write paths:**
 - `gramaton_save` — user-initiated direct save. Full control over metadata.
@@ -274,9 +274,9 @@ The server rejects the duplicate. The caller decides what to do: update the exis
 
 ### Closing items is an explicit action — sessions don't do it
 
-Resolving a collection item (marking it `completed` / `superseded` / `abandoned` / `obsolete`) requires an explicit `gramaton_resolve` call. Session prepare/save saves the conversation that led to the work being finished but does NOT touch the item — `field.status` stays whatever it was, no `valid_until`, no resolution edge.
+Resolving a collection item (marking it `completed` / `superseded` / `abandoned` / `obsolete`) requires an explicit `gramaton_resolve` call. Session prepare/save saves the conversation that led to the work being finished but does NOT touch the item — `field.status` stays whatever it was, no `valid_until`, no history entry claiming closure.
 
-This is intentional. Closure is a deliberate state change with audit consequences (write to `valid_until`, `resolution`, optional `resolution_note`, plus an edge for the audit trail). Inferring closure from "the session said we shipped it" produces false positives that silently lose state on partial work.
+This is intentional. Closure is a deliberate state change with audit consequences (write to `valid_until`, `resolution`, optional `resolution_note`, recorded as a commit in the record's history). Inferring closure from "the session said we shipped it" produces false positives that silently lose state on partial work.
 
 The pattern for an agent wrapping up a topic:
 
@@ -343,7 +343,9 @@ For "what changed", "when did this happen", or "what did the store look like at 
 
 - **`gramaton_log`** — commit history. Filters: `actions` (semantic activity-level filter), `exclude_curation` (drop autonomous-curation noise), `include_record_mutations` (CRUD-level commit shapes). Date-range params: `since`, `until`.
 - **`gramaton_diff`** — what changed between two commits or two dates. Accepts `since`/`until` for date-bounded queries.
-- **`gramaton_history`** — per-record change history.
+- **`gramaton_history`** — per-record change history, including the logical-version timeline (one entry per real knowledge change, with author, optional `change_note`, and the field diff against the previous version).
+- **`gramaton_inspect(id, as_of=T)`** — a record's frozen state at a past date or commit (`semantics: point_in_time`).
+- **`gramaton_history_search`** — lexical search over PAST versions ("did we ever know X?"); three scopes by cost (one record / retrieval-nominated candidates / whole store, budgeted).
 - **`gramaton_collection_items(as_of=T)`** — membership at a historical commit.
 
 Search itself is the live (latest-only) axis. Call `gramaton_guide(topic="temporal-queries")` for the full taxonomy and patterns.
@@ -361,7 +363,7 @@ When writing system prompts or agent instructions for Gramaton integration:
 3. **Be specific about when to save.** For Memory, save only when the user explicitly asks. For Sessions, save at the triggers listed above. For Collections, add when the user describes a task / backlog item / checklist entry.
 4. **Don't tell the agent to classify everything at save time.** Let curation handle unclassified records. Classify only when the agent is confident about metadata.
 5. **For collections, be explicit about the target.** "Add this to the Sprint Backlog collection" beats "save this task."
-6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before saving Memory records — the server handles auto-supersession at ≥0.92 cosine, scoped per the collection's `supersession` knob. For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
+6. **Trust the dedup.** Don't instruct agents to pre-check for duplicates before saving Memory records — at high similarity (≥0.94) the server refuses the save with the existing record's content and version token so you revise it via `gramaton_update` (or acknowledge with `allow_similar`). For Collections with `curation: standard` (declared via curation=standard templates or explicit `content_fields`), the server returns `ErrConflict` on duplicate titles; the agent decides what to do in response. For `curation: none` collections (the default for ad-hoc collections, plus shopping-list / packing-list templates), a duplicate returns the existing id with `deduplicated: true` — idempotent adds, no retry logic needed.
 7. **Point the agent at `gramaton_guide`.** It's the live topic-addressable reference for save / search / sessions / collections / metadata / curation. Tell the agent to call it when unsure rather than guessing.
 
 Working examples — all rendered from the same canonical template set and drift-tested: [Claude Code](../integration/claude-code/CLAUDE.md), [Codex](../integration/codex/AGENTS.md), [Cursor](../integration/cursor/SKILL.md), and [custom agent frameworks](../integration/docs/custom-agents.md).

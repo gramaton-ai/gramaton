@@ -40,7 +40,7 @@ Knowledge evolves by mutation, not accumulation. When a fact changes, update the
 
 Records can still be closed out (resolved as completed, superseded, abandoned, obsolete) and manually linked to a replacement when the lineage is itself knowledge — that vocabulary survives. What the system never does is manufacture a new record to represent a change to an existing fact.
 
-Delete and purge exist as **repair tools** — for corrupt data, bad ingests, and compliance/PII requirements. They are not part of normal knowledge management. They require explicit reason strings and are logged.
+Delete and purge exist as **repair tools** — for corrupt data, bad ingests, and compliance/PII requirements. They are not part of normal knowledge management. They require explicit reason strings and are logged. `gramaton prune` is the same kind of deliberate exception, applied to manual retention rather than repair: an operator trims per-record content depth (`--keep-versions`) or truncates the commit chain (`--older-than`). Pruned history is tombstoned, not silently dropped — a reader that asks for it below the retained floor gets "pruned by policy," never corruption.
 
 ## 9. Capture is a one-way door, curation is a two-way door.
 
@@ -69,4 +69,4 @@ The primary consumer of Gramaton's CLI output is an LLM. Every field name, every
 
 ## 13. No magic values.
 
-Every tunable constant lives in a config file with a sensible default. Decay rates, ACT-R activation parameters, BM25 tuning, prolly tree chunk sizes, emergence thresholds. Users aren't expected to touch the config, but it must exist for testing and tuning.
+Every tunable constant lives in a config file with a sensible default. Decay rates, BM25 tuning, prolly tree chunk sizes, emergence thresholds. Users aren't expected to touch the config, but it must exist for testing and tuning.

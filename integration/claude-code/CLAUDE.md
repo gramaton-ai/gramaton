@@ -379,6 +379,11 @@ need to classify pending records manually as a fallback.
   edits.
 - **`gramaton_explore`** — Graph traversal from a node; returns
   connected nodes and edges within a depth.
+- History: **`gramaton_history`** (a record's version timeline —
+  what changed, when, by whom, with the change note and field diff),
+  **`gramaton_history_search`** (lexical search over past versions —
+  "what did this record used to say"), and `gramaton_inspect` with
+  `as_of` (read a record as it stood at a date).
 - Store admin (rarely needed mid-conversation): `gramaton_branch`
   (store version control), `gramaton_backup`, `gramaton_reembed`,
-  `gramaton_log` (commit / per-record history).
+  `gramaton_log` (the commit log).
