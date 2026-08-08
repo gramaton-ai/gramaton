@@ -65,15 +65,15 @@ func runRepair(cmd *cobra.Command, args []string) error {
 	// after.
 	defer func() { _ = eng.Close() }()
 
-	// Read-only gate for every mutating path of this command: Repair
-	// and the --content-quality self-heal both write DURABLY before
-	// Save (Repair's DeleteEdge persists straight to the bbolt edge
-	// store; self-heal's SetProp to the property index), so the
-	// engine's Save backstop alone would reject the commit AFTER the
-	// mutation already stuck -- the worst of both worlds on a frozen
-	// artifact. Refuse up front instead, same message shape as the
-	// api guards. The --dry-run path stays allowed: it only runs
-	// Validate, like `gramaton validate`.
+	// Read-only gate for every mutating path of this command. Repair
+	// itself now rejects inside WithWriteBatch, but the
+	// --content-quality self-heal writes DURABLY before Save
+	// (SetProp to the property index), so the engine's Save backstop
+	// alone would reject the commit AFTER the mutation already stuck
+	// -- the worst of both worlds on a frozen artifact. Refuse up
+	// front instead, same message shape as the api guards. The
+	// --dry-run path stays allowed: it only runs Validate, like
+	// `gramaton validate`.
 	if !repairDryRun && eng.ReadOnly() {
 		return fmt.Errorf("store is read-only: repair is not permitted (make it writable first: gramaton store thaw)")
 	}
@@ -105,10 +105,8 @@ func runRepair(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Actual repair.
-	eng.Lock()
+	// Actual repair. Repair manages its own locking (WithWriteBatch).
 	result := eng.Repair()
-	eng.Unlock()
 
 	for _, msg := range result.Messages {
 		fmt.Printf("  %s\n", msg)
