@@ -19,10 +19,13 @@ import (
 // re-derivable and model-bound; a re-embed sweep must mint no
 // versions).
 var bookkeepingProps = map[string]bool{
-	"access_count":      true,
-	"last_accessed":     true,
-	"activation_boost":  true,
-	"embedding_model":   true,
+	"access_count":  true,
+	"last_accessed": true,
+	// activation_boost has no live writer, but pre-v0.4 version blobs
+	// still carry it; masking keeps the comparison from minting a
+	// version when a legacy record sheds the prop.
+	"activation_boost": true,
+	"embedding_model":  true,
 	"embed_attempts":    true,
 	"repaired_at":       true,
 	"repair_method":     true,
@@ -127,6 +130,12 @@ func (e *Engine) appendChangelog(commit *graph.Commit, dirty, deleted []string, 
 		}
 	}
 	for _, id := range deleted {
+		// A node created and deleted within the same write phase never
+		// existed in any commit -- a deletion-only entry would mint a
+		// phantom version for a record no reader can ever resolve.
+		if prevHash[id] == "" {
+			continue
+		}
 		if e.blobIsConcept(prevHash[id]) {
 			continue
 		}

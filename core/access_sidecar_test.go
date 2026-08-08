@@ -207,6 +207,33 @@ func TestChangelogRecordsLogicalVersions(t *testing.T) {
 // marker left behind (simulating a crash between the HEAD write and
 // the changelog append) is repaired at the next open by re-deriving
 // the missing commits' entries from the chain.
+// TestChangelogSkipsNeverCommittedDeletion: a node created and
+// deleted within one write phase never existed in any commit, so
+// the changelog must not mint a deletion-only entry for it -- a
+// phantom version no reader could ever resolve to content.
+func TestChangelogSkipsNeverCommittedDeletion(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("born and gone in one phase"),
+	})
+	if err := eng.Graph().DeleteNode(n.ID); err != nil {
+		eng.Unlock()
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := eng.Save("churn"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+
+	if versions := eng.Changelog().Versions(n.ID); len(versions) != 0 {
+		t.Fatalf("versions = %+v, want none for a never-committed node", versions)
+	}
+}
+
 func TestChangelogGapWalkRepairsDrift(t *testing.T) {
 	dir := newReadOnlyTestDir(t)
 	eng := openReadOnlyTestEngine(t, dir)
