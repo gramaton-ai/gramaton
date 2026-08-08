@@ -1272,10 +1272,12 @@ func IsContextLengthError(err error) bool {
 	return chunking.IsContextLengthError(err)
 }
 
-// PreChunk determines whether content needs splitting and pre-embeds
-// the pieces. Runs OUTSIDE the engine lock (embedding is I/O-bound);
-// call ApplyChunks with the result under the write lock. Returns nil
-// when content fits in a single embedding.
+// PreChunk splits long content into chunk nodes.
+//
+// PARKED: the chunking pipeline has no production caller since the
+// capture pipeline deferred chunking; it is retained deliberately
+// for long-document ingestion (research papers and similar), which
+// is planned work. Do not delete as dead code.
 func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) *PreChunkResult {
 	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, medium, summary)
 }

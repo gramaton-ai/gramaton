@@ -63,7 +63,6 @@ func (a *API) Explore(ctx context.Context, req ExploreRequest) (ExploreResponse,
 	for _, n := range sub.Nodes {
 		ids = append(ids, n.ID)
 	}
-	a.retrieval.Track(ids...)
 
 	maxNodes := req.MaxNodes
 	if maxNodes <= 0 {

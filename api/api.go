@@ -45,8 +45,6 @@ type API struct {
 	preparedMu       sync.Mutex
 	preparedSessions map[string]time.Time
 
-	retrieval *RetrievalTracker
-
 	// preparedSweepCancel cancels the prepared-sessions sweeper
 	// goroutine on shutdown. Set by startPreparedSweeper.
 	preparedSweepCancel context.CancelFunc
@@ -130,7 +128,6 @@ func New(deps Dependencies) *API {
 		configDir:        deps.ConfigDir,
 		storeName:        deps.StoreName,
 		preparedSessions: make(map[string]time.Time),
-		retrieval:        NewRetrievalTracker(),
 	}
 	if a.log == nil {
 		a.log = slog.Default()

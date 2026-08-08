@@ -102,7 +102,6 @@ type Server struct {
 	lastBackup     time.Time
 	curationCancel context.CancelFunc
 
-	retrieval    *retrievalTracker
 	usageTracker *llm.UsageTracker
 
 	// shutdownCh carries the reason for a graceful shutdown.
@@ -209,10 +208,6 @@ func (d *panicLogDedup) shouldLog(fingerprint string) bool {
 	return true
 }
 
-// retrievalTracker records which node IDs were served to agents via
-// search, inspect, and explore. Used by the observe pipeline's
-// feedback loop detection (Gate 3) to prevent re-extracting knowledge
-// that was just retrieved.
 type retrievalTracker struct {
 	mu      sync.Mutex
 	entries map[string]time.Time // nodeID -> when last served
@@ -357,7 +352,6 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		cfg:              cfg,
 		log:              logger,
 		lastRequest:      time.Now(),
-		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
 		shutdownCh:       make(chan string, 1),
 		curationCacheTTL: 5 * time.Second,

@@ -146,7 +146,6 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 	out.Related = related
 
 	// Track inspected ID for observe feedback loop detection.
-	a.retrieval.Track(req.ID)
 
 	return out, nil
 }

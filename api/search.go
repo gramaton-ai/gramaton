@@ -393,12 +393,12 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 	pageResults := results[:pageEnd]
 
-	// Access bookkeeping and retrieval tracking cover the RETURNED
-	// page, not the snapshot's full candidate set: bumping all ~500
-	// ranked candidates per query floods last_accessed/access_count
-	// (staleness sorts, access filters, and lifecycle curation all
-	// read them) with records the caller never saw. Read-only stores
-	// skip the bump so the read path never touches the write lock.
+	// Access bookkeeping covers the RETURNED page, not the snapshot's
+	// full candidate set: bumping all ~500 ranked candidates per query
+	// floods last_accessed/access_count (staleness sorts, access
+	// filters, and lifecycle curation all read them) with records the
+	// caller never saw. Read-only stores skip the bump so the read
+	// path never touches the write lock.
 	if len(pageResults) > 0 {
 		ids := make([]string, len(pageResults))
 		for i, r := range pageResults {
@@ -409,7 +409,6 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 			a.engine.RecordAccessAll(ids, time.Now().UTC())
 			a.engine.Unlock()
 		}
-		a.retrieval.Track(ids...)
 	}
 
 	resp := SearchResponse{
