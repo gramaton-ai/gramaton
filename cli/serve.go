@@ -31,7 +31,8 @@ background and exits immediately. Use --fg for foreground mode
 
 The server loads the store into memory, serves the REST
 API on the configured port (default 42982), and shuts down after
-an idle timeout (default 30 minutes).`,
+an idle timeout (default 4 hours; 0 disables). Idle shutdown is
+suspended while MCP proxies are attached or remote serving is on.`,
 	RunE: runServe,
 }
 
@@ -76,9 +77,8 @@ func startForeground() error {
 	if engineCfg.Server.Port > 0 {
 		cfg.Port = engineCfg.Server.Port
 	}
-	// IdleTimeout: 0 means no timeout, >0 overrides default.
-	// Only skip override when the YAML field was absent (defaults
-	// set it to 30m, which we already have from DefaultConfig).
+	// IdleTimeout comes from the effective config (default 4h);
+	// 0 disables idle shutdown entirely.
 	cfg.IdleTimeout = engineCfg.Server.IdleTimeout
 
 	// Resolve remote access, failing closed on missing material.
@@ -219,8 +219,19 @@ func startBackground() error {
 		stderrFile.Close()
 	}
 
+	// Reap the child on exit and signal waiters. Without the Wait a
+	// long-lived parent (an MCP proxy auto-starting per tool call
+	// against a broken config) accumulates a zombie per attempt; the
+	// closed channel lets waitForServer fail in milliseconds instead
+	// of burning its full timeout on a child that already died.
+	childExited := make(chan struct{})
+	go func() {
+		_ = child.Wait()
+		close(childExited)
+	}()
+
 	// Wait for the server to be ready.
-	if err := waitForServer(dir, 10*time.Second); err != nil {
+	if err := waitForServer(dir, 10*time.Second, childExited); err != nil {
 		if tail := tailServerStderr(stderrPath, 2048); tail != "" {
 			return fmt.Errorf("server failed to start: %w\n--- last stderr from child (%s) ---\n%s", err, stderrPath, tail)
 		}
@@ -299,9 +310,19 @@ func tailServerStderr(path string, maxBytes int64) string {
 // status endpoint queues behind it while /v1/health responds promptly.
 // Using /v1/health here avoids artificial startup-wait timeouts when
 // the child is mid-init.
-func waitForServer(cfgDir string, timeout time.Duration) error {
+//
+// childExited, when closed, means the server process died before
+// becoming healthy (a config-load failure exits immediately): return
+// at once so the caller can surface the stderr tail instead of
+// spinning out the full timeout. A nil channel never fires.
+func waitForServer(cfgDir string, timeout time.Duration, childExited <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		select {
+		case <-childExited:
+			return fmt.Errorf("server process exited during startup")
+		default:
+		}
 		info, err := server.ReadServerInfo(cfgDir)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)

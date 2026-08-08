@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -1608,7 +1609,8 @@ func Validate(cfg *Config) error {
 //
 // The decoder runs with KnownFields(true): unknown keys fail loud with
 // the offending name and line so typos surface at startup instead of
-// silently reverting to defaults.
+// silently reverting to defaults. Keys that were once valid and have
+// since been removed get upgrade guidance appended (annotateRemovedKeys).
 func overlay(cfg *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1624,9 +1626,48 @@ func overlay(cfg *Config, path string) error {
 			// Empty file is a valid no-op overlay.
 			return nil
 		}
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return annotateRemovedKeys(fmt.Errorf("config: parse %s: %w", path, err))
 	}
 	return nil
+}
+
+// removedConfigKeys maps config keys that past releases removed to the
+// removal note shown when strict decoding rejects them. To a user
+// upgrading across the removal, the bare unknown-key error reads like
+// a typo report or a Gramaton bug; the note says the key was valid
+// once and the fix is deletion. Keys here are the YAML field names as
+// they appear in the decode error (leaf name only, not the dotted path).
+var removedConfigKeys = map[string]string{
+	"dedup":                "removed in v0.4.0; the save guard replaces dedup (save_guard.similar_hold_threshold / advisory_threshold)",
+	"max_dedup_per_run":    "removed in v0.4.0; curation no longer runs a dedup sweep",
+	"activation":           "removed in v0.4.0; spreading activation is gone from scoring",
+	"weight_activation":    "removed in v0.4.0; its scoring weight was redistributed to freshness and confidence",
+	"graph":                "removed in v0.4.0; its only knob served the removed spreading activation",
+	"hnsw_threshold":       "removed in v0.4.0 with the never-wired HNSW index",
+	"hnsw_m":               "removed in v0.4.0 with the never-wired HNSW index",
+	"hnsw_ef_construction": "removed in v0.4.0 with the never-wired HNSW index",
+	"hnsw_ef_search":       "removed in v0.4.0 with the never-wired HNSW index",
+}
+
+// annotateRemovedKeys appends per-key removal guidance to a strict-decode
+// error that names known-removed config keys. Errors naming only
+// genuinely unknown keys (typos) pass through untouched. The yaml.v3
+// TypeError aggregates every unknown key in one message, so one load
+// failure carries the complete strip list.
+func annotateRemovedKeys(err error) error {
+	msg := err.Error()
+	var hints []string
+	for key, note := range removedConfigKeys {
+		if strings.Contains(msg, fmt.Sprintf("field %s not found", key)) {
+			hints = append(hints, fmt.Sprintf("  %s: %s", key, note))
+		}
+	}
+	if len(hints) == 0 {
+		return err
+	}
+	sort.Strings(hints)
+	return fmt.Errorf("%w\nthis config predates the running version -- delete these keys from the file:\n%s\n(details in each release's CHANGELOG \"Removed\" section)",
+		err, strings.Join(hints, "\n"))
 }
 
 // trimConfigStrings strips leading/trailing whitespace from string

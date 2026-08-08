@@ -50,9 +50,15 @@ const mcpReadOnlyInstructions = "This Gramaton store is read-only (frozen): " +
 	"Search and the other read tools work normally."
 
 func runMCP(cmd *cobra.Command, args []string) error {
-	// Ensure the HTTP server is running (auto-starts if needed).
+	// Ensure the HTTP server is running (auto-starts if needed). A
+	// failure here is NOT fatal: exiting before the MCP handshake
+	// shows the client a dead MCP server and buries the actual error
+	// in a log. Proceed to serve MCP instead -- every tool call
+	// re-runs serverURL(), so each call returns the real startup
+	// error (config guidance included) inside the session, where the
+	// agent can see it and relay the fix.
 	if _, err := serverURL(); err != nil {
-		return fmt.Errorf("server: %w", err)
+		fmt.Fprintf(os.Stderr, "warning: server unavailable, serving MCP anyway (tool calls will carry the error): %v\n", err)
 	}
 
 	// Register this proxy so `gramaton stop` can reap it and
