@@ -1,11 +1,14 @@
 package api
 
 // rejectIfReadOnly returns ErrForbidden when the engine is in
-// store-level read-only mode (frozen via the STORE manifest or forced
-// via core.WithReadOnly). Every mutating API method calls this as its
-// FIRST statement -- before validation, lock acquisition, and any
-// in-memory graph mutation -- so a frozen store rejects logical
-// writes uniformly with code "forbidden" (HTTP 403).
+// store-level read-only mode. In production this flag comes from the
+// STORE manifest (set by `gramaton store freeze`, read at engine open
+// -- see core/engine.go's openFiles); core.WithReadOnly only forces it
+// in tests that attach to a store they must not mutate. Every
+// mutating API method calls this as its FIRST statement -- before
+// validation, lock acquisition, and any in-memory graph mutation --
+// so a frozen store rejects logical writes uniformly with code
+// "forbidden" (HTTP 403).
 //
 // WHY a guard AND an engine backstop: the guard is the UX layer. It
 // is the canonical rejection point and names the refused operation,

@@ -762,11 +762,12 @@ func (a *API) heldPromotionsForSession(sessionID string) []map[string]any {
 // PromoteToMemory implements the two-tier extraction model: when true
 // (or unset), the segment becomes both a Session segment (BM25-indexed)
 // and a Memory record (vector + BM25 indexed, full epistemic metadata,
-// auto-supersession). When false, only the Session segment is created
-// -- BM25-searchable but not vector-embedded, no Memory record, no
-// extracted_as edge. Use false for exploration, dead ends, open
-// questions, and other "valuable context" content that shouldn't
-// pollute the Memory store's vector space.
+// subject to the save-guard similarity hold). When false, only the
+// Session segment is created -- BM25-searchable but not
+// vector-embedded, no Memory record, no extracted_as edge. Use false
+// for exploration, dead ends, open questions, and other "valuable
+// context" content that shouldn't pollute the Memory store's vector
+// space.
 type SaveSegment struct {
 	Content         string   `json:"content"`
 	TopicName       string   `json:"topic"`
@@ -804,6 +805,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 	}
 	if len(segments) == 0 {
 		return SessionSaveResponse{}, ErrMissing("segments is required and must not be empty")
+	}
+	if len(segments) > MaxSessionSegments {
+		return SessionSaveResponse{}, ErrInvalid(fmt.Sprintf("segments exceeds maximum of %d", MaxSessionSegments))
 	}
 
 	// Validate all segments before consuming the prepared flag so that a
@@ -1142,6 +1146,13 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			// save whose off-lock scan predates this commit must
 			// still see the promoted record under its write lock.
 			a.engine.NoteRecentWrite(memNode.ID, vec)
+		} else {
+			// No vector means the promotion was never
+			// similarity-checked (embedder outage or unconfigured).
+			// The deferred re-scan at reembed gates on this flag; the
+			// save and batch paths set it, and a promotion that
+			// skipped it let hold-grade duplicates land silently.
+			a.engine.SetProp(memNode.ID, "similar_check_pending", graph.BoolProperty(true))
 		}
 
 		// Mark the embedding model on success so gramaton_reembed
@@ -1295,10 +1306,15 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 	if len(resolutions) > MaxHeldResolutions {
 		return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("at most %d resolutions per call", MaxHeldResolutions))
 	}
+	seen := make(map[string]struct{}, len(resolutions))
 	for i, r := range resolutions {
 		if r.SegmentID == "" {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment_id is required", i))
 		}
+		if _, dup := seen[r.SegmentID]; dup {
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment %s appears more than once", i, r.SegmentID))
+		}
+		seen[r.SegmentID] = struct{}{}
 		if len(r.SegmentID) > MaxIDArgLen || len(r.TargetID) > MaxIDArgLen {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: identifier exceeds maximum length of %d", i, MaxIDArgLen))
 		}
@@ -1395,15 +1411,16 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 		}
 	}
 
-	// Phase 3: re-verify and apply under the write lock, one commit.
+	// Phase 3: re-verify, then apply, under the write lock, one
+	// commit. The verify pass covers the WHOLE batch before the first
+	// mutation: a mid-batch conflict discovered during apply would
+	// leave earlier resolutions' edges, props, and promoted records in
+	// the live graph with no commit recording them.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
-	results := make([]HeldResolutionResult, 0, len(work))
-	actions := []graph.CommitAction{{Kind: graph.ActionSessionSave, RecordID: sessionID}}
-	now := time.Now().UTC()
-	author := a.engine.Config().Author.String()
-	for _, w := range work {
+	segs := make([]*graph.Node, len(work))
+	for i, w := range work {
 		seg, ok := a.engine.Graph().GetNode(w.res.SegmentID)
 		if !ok {
 			return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("segment %s vanished", w.res.SegmentID))
@@ -1411,13 +1428,28 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 		if held, _ := seg.Properties.GetBool("promotion_held"); !held {
 			return SessionResolveHeldResponse{}, ErrConflict(fmt.Sprintf("segment %s was resolved concurrently", w.res.SegmentID))
 		}
+		if w.res.Action == "update_target" {
+			tn, ok := a.engine.Graph().GetNode(w.target)
+			if !ok {
+				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s vanished", w.target))
+			}
+			if !isKnowledgeRecordNode(tn) {
+				return SessionResolveHeldResponse{}, ErrConflict(fmt.Sprintf("target %s is no longer a Memory knowledge record", w.target))
+			}
+		}
+		segs[i] = seg
+	}
+
+	results := make([]HeldResolutionResult, 0, len(work))
+	actions := []graph.CommitAction{{Kind: graph.ActionSessionSave, RecordID: sessionID}}
+	now := time.Now().UTC()
+	author := a.engine.Config().Author.String()
+	for i, w := range work {
+		seg := segs[i]
 
 		var result HeldResolutionResult
 		switch w.res.Action {
 		case "update_target":
-			if _, ok := a.engine.Graph().GetNode(w.target); !ok {
-				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s vanished", w.target))
-			}
 			if _, err := a.engine.Graph().AddEdge(w.res.SegmentID, w.target, "extracted_as", 1.0, nil); err != nil {
 				a.log.Warn("resolve_held: extracted_as edge failed", "component", "session",
 					"segment_id", w.res.SegmentID, "target", w.target, "err", err)

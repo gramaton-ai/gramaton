@@ -39,9 +39,9 @@ thaw a store. It is a lid, not a lock.
   updates, links, collection changes, session capture, curation
   triggers, branch operations, restores, imports.
 - Background writers never start: the curation runner, startup
-  self-heal, the access flusher, and the jobs sweeper are all gated.
-- Search and inspect stop updating access counts and activation, so
-  reads on a frozen store never touch the write lock at all.
+  self-heal, and the jobs sweeper are all gated.
+- Search and inspect stop updating access counts, so reads on a
+  frozen store never touch the write lock at all.
 - Reads work in full: search, inspect, explore, stats, history,
   collection listing, and export all behave normally. Export is how
   a frozen store is shared onward.

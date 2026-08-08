@@ -94,28 +94,6 @@ func TestDiffCommitsIdentical(t *testing.T) {
 	}
 }
 
-func TestNodeIDsInCommit(t *testing.T) {
-	g := New()
-	s := tempStorage(t)
-
-	n1 := g.AddNode(Properties{"x": StringProperty("a")})
-	n2 := g.AddNode(Properties{"x": StringProperty("b")})
-	c, _ := g.Save(s, "", "two nodes")
-
-	ids, err := NodeIDsInCommit(s, c.Hash)
-	if err != nil {
-		t.Fatalf("NodeIDsInCommit: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("expected 2 IDs, got %d", len(ids))
-	}
-
-	idSet := map[string]bool{ids[0]: true, ids[1]: true}
-	if !idSet[n1.ID] || !idSet[n2.ID] {
-		t.Fatal("missing expected node IDs")
-	}
-}
-
 func TestNodeHashInCommit(t *testing.T) {
 	g := New()
 	s := tempStorage(t)

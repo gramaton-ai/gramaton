@@ -391,6 +391,10 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.headHash = headHash
 	e.loadPruneFloor()
 
+	// Repair the ref half of the Save durability contract before the
+	// changelog walk -- both repairs read the same chain.
+	e.reconcileActiveRef()
+
 	// Repair changelog marker drift now that HEAD is known -- a
 	// crash between a commit's HEAD write and its changelog append
 	// left the marker behind; the walk re-derives what's missing.
@@ -477,8 +481,110 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.searchSnapshots = NewSnapshotStore(e.cfg.Search.Pagination.SnapshotTTL)
 	cleanups = append(cleanups, func() { e.searchSnapshots.Stop() })
 
+	// Two-fsync-window probe: a batched write whose graph commit
+	// never landed leaves the index DB ahead of the graph. Advisory
+	// only -- the store boots, but the operator should reconcile.
+	// Reads e.headHash directly: the Restore path reaches openFiles
+	// under the write lock, so the RLock-taking accessors would
+	// self-deadlock here.
+	if stamp, ok := idx.pendingBatchHead(); ok && stamp == e.headHash {
+		slog.Warn("a write batch committed its index changes but the graph commit that should have followed never landed (crash between the two); "+
+			"the indexes may be ahead of the graph -- run 'gramaton validate' to assess; restoring the newest backup rebuilds the indexes from a consistent snapshot",
+			"component", "engine", "head", e.headHash)
+	}
+
 	success = true // disarm the deferred cleanup
 	return nil
+}
+
+// reconcileActiveRef repairs the crash window between a Save's HEAD
+// write and its branch-ref write: the two are separate fsynced
+// renames, and a crash between them leaves the active branch's ref
+// behind HEAD. Left alone, a later checkout of that same branch (or
+// a discard-switch) would read the stale ref and silently rewind
+// the branch, and the changelog rebuild would then retract the tip
+// commits' entries as a pure rewind. When the stale ref is an
+// ancestor of HEAD (or missing outright -- a crash on a store's
+// first save), fast-forwarding it to HEAD is the write the crash
+// interrupted. A ref that is NOT an ancestor is real divergence:
+// never auto-repaired, only reported.
+func (e *Engine) reconcileActiveRef() {
+	if e.headHash == "" {
+		return
+	}
+	branch := ActiveBranch(e.cfg.DataDir)
+	ref, err := ReadRef(e.cfg.DataDir, branch)
+	if err == nil && ref == e.headHash {
+		return
+	}
+	// A frozen store is a byte-stable artifact: report the drift,
+	// never repair it. The read-only flag is seeded from the store
+	// manifest before openFiles reaches this point.
+	if e.readOnly.Load() {
+		slog.Warn("active branch ref does not match HEAD on a read-only store; leaving it untouched",
+			"component", "engine", "branch", branch)
+		return
+	}
+	short := func(h string) string {
+		if len(h) > 12 {
+			return h[:12]
+		}
+		if h == "" {
+			return "(missing)"
+		}
+		return h
+	}
+	fastForward := func(from string) {
+		if werr := writeRef(e.cfg.DataDir, branch, e.headHash, !e.volatile); werr != nil {
+			slog.Warn("active branch ref fast-forward failed",
+				"component", "engine", "branch", branch, "err", werr)
+			return
+		}
+		slog.Warn("active branch ref trailed HEAD (crash between the HEAD and ref writes); fast-forwarded",
+			"component", "engine", "branch", branch, "from", from, "to", short(e.headHash))
+	}
+	if err != nil || ref == "" {
+		fastForward(short(""))
+		return
+	}
+	// Bounded ancestor walk: the crash window loses at most the tip
+	// write, so a genuine repair terminates within a step or two. On
+	// a pruned store the chain ends at the floor's oldest kept
+	// commit; stop there instead of failing on the absent parent, so
+	// a genuinely diverged ref still gets the warning below.
+	const maxWalk = 1000
+	hash := e.headHash
+	for i := 0; i < maxWalk && hash != ""; i++ {
+		commit, cerr := graph.LoadCommitMeta(e.store, hash)
+		if cerr != nil {
+			break
+		}
+		if commit.Parent == ref {
+			fastForward(short(ref))
+			return
+		}
+		if e.pruneFloor != nil && hash == e.pruneFloor.OldestKeptCommit {
+			break
+		}
+		hash = commit.Parent
+	}
+	slog.Warn("active branch ref matches neither HEAD nor an ancestor; leaving both untouched",
+		"component", "engine", "branch", branch, "ref", short(ref), "head", short(e.headHash))
+}
+
+// UnsavedBatchDetected reports whether the most recent mutating
+// write batch committed its index transaction without the graph
+// commit that should have followed -- a crash inside the two-fsync
+// window between the batch tx and Save. A healthy batch's Save
+// moves HEAD off the stamp, so no clearing write is needed. A
+// checkout back to the exact pre-batch commit can produce a false
+// positive; the probe is advisory and never blocks boot.
+func (e *Engine) UnsavedBatchDetected() bool {
+	if e.indexes == nil {
+		return false
+	}
+	stamp, ok := e.indexes.pendingBatchHead()
+	return ok && stamp == e.HeadHash()
 }
 
 // recoverInFlightJobs flips any pending/running job from a prior
@@ -631,9 +737,19 @@ func (e *Engine) AdoptGraph(staged *graph.Graph) {
 	// must overlay sidecar access values on every materialization.
 	staged.SetNodeLoadHook(e.overlayAccess)
 	e.graph = staged
-	e.adoptedCommitPending = true
 	e.invalidateAncestry()
 }
+
+// ArmAdoptedCommit marks that the NEXT Save commits an adopted
+// staged graph (revert/merge): its mutation set is empty, so the
+// Save-time changelog append must leave the marker behind for the
+// explicit tree-diff indexing. NOT set by AdoptGraph itself --
+// checkout also adopts but never Saves, and a flag armed there
+// silently skipped the changelog on the first post-checkout save
+// until the next boot's gap walk. Callers that Save after adopting
+// arm explicitly and disarm on their Save error paths.
+func (e *Engine) ArmAdoptedCommit()    { e.adoptedCommitPending = true }
+func (e *Engine) DisarmAdoptedCommit() { e.adoptedCommitPending = false }
 
 // EdgeStore returns the engine's persistent edge store. Mostly
 // internal since AdoptGraph took over the state-changing swap path;
@@ -1089,6 +1205,13 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 	batchErr := e.indexes.batch(e, func(ws *WriteSession) error {
 		mutated, fnErr = fn(ws)
 		collectedActions = ws.actions
+		if fnErr == nil && mutated {
+			// Boot-probe stamp for the two-fsync window between this
+			// tx and the Save below (see batchMetaBucket).
+			if err := e.indexes.stampPendingBatchHeadTx(ws.tx, e.headHash); err != nil {
+				return err
+			}
+		}
 		return fnErr
 	})
 	batchDur := time.Since(lockStart)
@@ -1262,10 +1385,12 @@ func IsContextLengthError(err error) bool {
 	return chunking.IsContextLengthError(err)
 }
 
-// PreChunk determines whether content needs splitting and pre-embeds
-// the pieces. Runs OUTSIDE the engine lock (embedding is I/O-bound);
-// call ApplyChunks with the result under the write lock. Returns nil
-// when content fits in a single embedding.
+// PreChunk splits long content into chunk nodes.
+//
+// PARKED: the chunking pipeline has no production caller since the
+// capture pipeline deferred chunking; it is retained deliberately
+// for long-document ingestion (research papers and similar), which
+// is planned work. Do not delete as dead code.
 func (e *Engine) PreChunk(ctx context.Context, content, medium, summary string) *PreChunkResult {
 	return chunking.PreChunk(ctx, e.prov.embedder, e.cfg.Chunking, e.cfg.Embedding, content, medium, summary)
 }

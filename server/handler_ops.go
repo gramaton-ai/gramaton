@@ -78,10 +78,12 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	s.engine.RebuildAllIndexes()
 	preRevert := s.engine.HeadHashLocked()
 
+	s.engine.ArmAdoptedCommit()
 	commit, err := s.engine.Save(fmt.Sprintf("revert to %s", core.TruncHash(fullHash)), graph.CommitAction{
 		Kind: graph.ActionRevert,
 	})
 	if err != nil {
+		s.engine.DisarmAdoptedCommit()
 		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
 		return
 	}
@@ -218,6 +220,9 @@ func (s *Server) handleIngestFiles(ctx context.Context, w http.ResponseWriter, f
 
 		if err := s.applyPreEmbedded(n.ID, p.embedded); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: embedding failed: %s", p.file.Filename, err))
+			// Never similarity-checked; the deferred re-scan at
+			// reembed gates on this flag (parity with save/batch).
+			s.engine.SetProp(n.ID, "similar_check_pending", graph.BoolProperty(true))
 		}
 
 		ingested++

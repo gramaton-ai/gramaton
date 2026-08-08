@@ -201,38 +201,37 @@ func RunSelfHeal(e *core.Engine, logger *slog.Logger) *SelfHealResult {
 	// block search for minutes on a store with thousands of
 	// contaminated records. Repair decisions are independent per
 	// record — no cross-record invariants to protect.
-	var selfHealActions []graph.CommitAction
+	//
+	// Each repair commits inside the lock window that made it.
+	// Engine.Save commits whatever the graph currently holds, so a
+	// repair left uncommitted when the lock is released belongs to
+	// whichever writer saves next: an unrelated user save would carry
+	// self-heal's mutations under its own author and message. Saving
+	// in-window is also what makes the pass resumable — a crash
+	// mid-scan keeps the repairs already made.
 	for _, id := range ids {
 		result.Scanned++
 		e.Lock()
 		outcome := DetectAndRepairSummary(e, id, logger)
-		e.Unlock()
+		var repaired bool
 		switch outcome {
 		case outcomeStripped, outcomeFallback:
 			result.Repaired++
-			selfHealActions = append(selfHealActions, graph.CommitAction{
-				Kind: graph.ActionCurationSelfHeal, RecordID: id,
-			})
+			repaired = true
 		case outcomeFlagged:
 			result.FlaggedForLLM++
-			selfHealActions = append(selfHealActions, graph.CommitAction{
+			repaired = true
+		}
+		var saveErr error
+		if repaired {
+			_, saveErr = e.Save("curation: self-heal summary repairs", graph.CommitAction{
 				Kind: graph.ActionCurationSelfHeal, RecordID: id,
 			})
 		}
-	}
-
-	// Persist once at the end rather than per-record. Engine.Save
-	// expects the caller to hold the write lock (see callers like
-	// curation/batch.go:212 and api/save.go — Save flushes bbolt
-	// indexes + writes the HEAD ref, none of which it synchronizes
-	// internally). Concurrent readers during that window would
-	// observe torn state. Take the Lock explicitly.
-	if result.Repaired+result.FlaggedForLLM > 0 {
-		e.Lock()
-		_, err := e.Save("curation: self-heal summary repairs", selfHealActions...)
 		e.Unlock()
-		if err != nil {
-			logger.Warn("self-heal: save failed", "component", "curation", "err", err)
+		if saveErr != nil {
+			logger.Warn("self-heal: save failed",
+				"component", "curation", "record", id, "err", saveErr)
 		}
 	}
 

@@ -26,28 +26,12 @@ func errInvalid(msg string) *serviceError {
 	return &serviceError{Status: http.StatusBadRequest, Code: "input_error", Message: msg, Retryable: true}
 }
 
-func errNotFound(msg string) *serviceError {
-	return &serviceError{Status: http.StatusNotFound, Code: "not_found", Message: msg}
-}
-
 func errForbidden(msg string) *serviceError {
 	return &serviceError{Status: http.StatusForbidden, Code: "forbidden", Message: msg}
 }
 
-func errConflict(msg string) *serviceError {
-	return &serviceError{Status: http.StatusConflict, Code: "duplicate", Message: msg}
-}
-
 func errInternal(msg string) *serviceError {
 	return &serviceError{Status: http.StatusInternalServerError, Code: "internal_error", Message: msg}
-}
-
-func errUnavailable(msg string) *serviceError {
-	return &serviceError{Status: http.StatusServiceUnavailable, Code: "unavailable", Message: msg}
-}
-
-func errTooMany(msg string) *serviceError {
-	return &serviceError{Status: http.StatusTooManyRequests, Code: "too_many_requests", Message: msg, Retryable: true}
 }
 
 // writeServiceError writes a serviceError as an HTTP JSON error response.

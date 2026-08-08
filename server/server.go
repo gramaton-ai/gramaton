@@ -32,6 +32,13 @@ import (
 	xrate "golang.org/x/time/rate"
 )
 
+// httpWriteTimeout bounds one HTTP response write. Embedding and
+// bulk ops can be slow, hence the generous window. Anything that
+// deliberately holds a response open -- the blocking batch-result
+// wait -- must finish under it (see resultWaitBudgetMS in
+// bindings_records.go).
+const httpWriteTimeout = 120 * time.Second
+
 // Config holds server configuration.
 type Config struct {
 	Port        int           `yaml:"port"`
@@ -102,7 +109,6 @@ type Server struct {
 	lastBackup     time.Time
 	curationCancel context.CancelFunc
 
-	retrieval    *retrievalTracker
 	usageTracker *llm.UsageTracker
 
 	// shutdownCh carries the reason for a graceful shutdown.
@@ -209,84 +215,6 @@ func (d *panicLogDedup) shouldLog(fingerprint string) bool {
 	return true
 }
 
-// retrievalTracker records which node IDs were served to agents via
-// search, inspect, and explore. Used by the observe pipeline's
-// feedback loop detection (Gate 3) to prevent re-extracting knowledge
-// that was just retrieved.
-type retrievalTracker struct {
-	mu      sync.Mutex
-	entries map[string]time.Time // nodeID -> when last served
-	maxAge  time.Duration
-	maxSize int
-}
-
-func newRetrievalTracker() *retrievalTracker {
-	return &retrievalTracker{
-		entries: make(map[string]time.Time),
-		maxAge:  4 * time.Hour,
-		maxSize: 500,
-	}
-}
-
-// Track records that one or more node IDs were served to the agent.
-func (rt *retrievalTracker) Track(ids ...string) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	now := time.Now().UTC()
-	for _, id := range ids {
-		rt.entries[id] = now
-	}
-	// Enforce size bound.
-	if len(rt.entries) > rt.maxSize {
-		rt.pruneOldest()
-	}
-}
-
-// RetrievedIDs returns all currently tracked node IDs (not expired).
-func (rt *retrievalTracker) RetrievedIDs() []string {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	rt.pruneExpired()
-	ids := make([]string, 0, len(rt.entries))
-	for id := range rt.entries {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-// Len returns the number of tracked entries.
-func (rt *retrievalTracker) Len() int {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return len(rt.entries)
-}
-
-func (rt *retrievalTracker) pruneExpired() {
-	cutoff := time.Now().UTC().Add(-rt.maxAge)
-	for id, t := range rt.entries {
-		if t.Before(cutoff) {
-			delete(rt.entries, id)
-		}
-	}
-}
-
-func (rt *retrievalTracker) pruneOldest() {
-	// Find and remove the oldest entry until under maxSize.
-	for len(rt.entries) > rt.maxSize {
-		var oldestID string
-		var oldestTime time.Time
-		for id, t := range rt.entries {
-			if oldestID == "" || t.Before(oldestTime) {
-				oldestID = id
-				oldestTime = t
-			}
-		}
-		if oldestID != "" {
-			delete(rt.entries, oldestID)
-		}
-	}
-}
-
 // New creates a server. An engine without a configured LLM provider
 // is fine: autonomous curation (classification, summarization,
 // contradiction detection, concept synthesis) silently skips when
@@ -357,7 +285,6 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		cfg:              cfg,
 		log:              logger,
 		lastRequest:      time.Now(),
-		retrieval:        newRetrievalTracker(),
 		usageTracker:     usageTracker,
 		shutdownCh:       make(chan string, 1),
 		curationCacheTTL: 5 * time.Second,
@@ -408,7 +335,7 @@ func New(engine *core.Engine, cfg Config, logger *slog.Logger) (*Server, error) 
 		Handler:           s.securityHeaders(s.authenticate(s.admitWrites(mux))),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      120 * time.Second, // embedding and bulk ops can be slow
+		WriteTimeout:      httpWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -821,9 +748,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// /v1/sessions/{id}/save, /v1/sessions/{id}/archive.
 	s.registerSessionsRoutes(mux)
 }
-
-// Log returns the server's structured logger.
-func (s *Server) Log() *slog.Logger { return s.log }
 
 // runAutoBackup creates a backup if enough time has elapsed since the last one.
 func (s *Server) runAutoBackup() {

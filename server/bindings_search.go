@@ -182,6 +182,9 @@ func (s *Server) registerSearchMCPTools(mcpServer *mcp.Server) {
 		if storeName == "" {
 			storeName = "(default)"
 		}
+		s.engine.RLock()
+		curation := computeCuration(s.engine, s.runner, s.usageTracker)
+		s.engine.RUnlock()
 		out := map[string]any{
 			"store": map[string]any{
 				"name":  storeName,
@@ -189,7 +192,7 @@ func (s *Server) registerSearchMCPTools(mcpServer *mcp.Server) {
 				"edges": resp.Edges,
 			},
 			"embedding": resp.Embedding,
-			"curation":  computeCuration(s.engine, s.runner, s.usageTracker),
+			"curation":  curation,
 		}
 		// Same only-when-frozen contract as the HTTP envelope's
 		// store_readonly field; status is the one direct-MCP tool

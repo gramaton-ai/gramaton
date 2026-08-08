@@ -165,11 +165,6 @@ func (e *Engine) Validate() *ValidationResult {
 	return r
 }
 
-// OK returns true if no errors were found.
-func (r *ValidationResult) OK() bool {
-	return len(r.Errors) == 0
-}
-
 func (r *ValidationResult) addError(format string, args ...any) {
 	r.Errors = append(r.Errors, fmt.Sprintf(format, args...))
 }

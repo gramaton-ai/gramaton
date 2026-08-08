@@ -124,14 +124,6 @@ func (s *SnapshotStore) Get(queryID string) (*SearchSnapshot, bool) {
 	return snap, true
 }
 
-// Len returns the number of currently-stored snapshots, including
-// any that are expired but not yet swept. For tests and metrics.
-func (s *SnapshotStore) Len() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.snapshots)
-}
-
 // Stop terminates the eviction goroutine and blocks until it
 // exits. Idempotent; subsequent calls are no-ops.
 func (s *SnapshotStore) Stop() {

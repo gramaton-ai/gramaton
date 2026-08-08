@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,63 @@ func TestConceptLiveIndexPathsSkipBM25(t *testing.T) {
 	eng.Unlock()
 	if hits := eng.BM25Full().Search([]string{"synthesistermbeta"}, 5, nil); len(hits) != 0 {
 		t.Fatalf("synthesis rewrite landed concept text in BM25: %+v", hits)
+	}
+}
+
+// TestConceptSynthesisRewriteInWriteBatchSkipsBM25 pins the batched
+// twin of the synthesis-rewrite gate. SetContentProp and its
+// WriteSession counterpart write the same index, so a gate present on
+// only one of them lets a batched curation pass reinstate exactly
+// what the non-batched path refuses -- including shedding the entries
+// a pre-exclusion store still carries.
+func TestConceptSynthesisRewriteInWriteBatchSkipsBM25(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	var conceptID string
+	err := eng.WithWriteBatch("curation: concept emerge", func(ws *WriteSession) (bool, error) {
+		n := ws.AddNode(graph.Properties{
+			"content_full":    graph.StringProperty("Concept: batching"),
+			"node_type":       graph.StringProperty("concept"),
+			"concept_keyword": graph.StringProperty("batching"),
+		})
+		conceptID = n.ID
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch: %v", err)
+	}
+
+	// Plant the entry a store written before the exclusion would carry.
+	eng.Lock()
+	eng.BM25Full().Add(conceptID, "legacytermgamma")
+	eng.Unlock()
+	if hits := eng.BM25Full().Search([]string{"legacytermgamma"}, 5, nil); len(hits) != 1 {
+		t.Fatalf("legacy BM25 entry did not take; the shed assertion would be vacuous: %+v", hits)
+	}
+
+	err = eng.WithWriteBatch("curation: enrich concepts", func(ws *WriteSession) (bool, error) {
+		ws.SetContentProp(conceptID, "content_full", "The synthesized theme with batchsynthesistermdelta.")
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch rewrite: %v", err)
+	}
+
+	if hits := eng.BM25Full().Search([]string{"batchsynthesistermdelta"}, 5, nil); len(hits) != 0 {
+		t.Fatalf("batched synthesis rewrite landed concept text in BM25: %+v", hits)
+	}
+	if hits := eng.BM25Full().Search([]string{"legacytermgamma"}, 5, nil); len(hits) != 0 {
+		t.Fatalf("batched synthesis rewrite left the pre-exclusion entry behind: %+v", hits)
+	}
+	// The rewrite itself must still have landed on the node.
+	eng.RLock()
+	defer eng.RUnlock()
+	n, ok := eng.Graph().GetNode(conceptID)
+	if !ok {
+		t.Fatal("concept vanished")
+	}
+	if c, _ := n.Properties.GetString("content_full"); !strings.Contains(c, "batchsynthesistermdelta") {
+		t.Fatalf("content_full = %q, want the rewritten synthesis text", c)
 	}
 }

@@ -334,3 +334,82 @@ func TestRerankPicksUpTaskTierOverride(t *testing.T) {
 		t.Errorf("rerank with high-tier override used %v, want [test-rerank-model-high]", rec.gotModels)
 	}
 }
+
+// TestRerankResultsOffLock pins the lock-free rerank path: the
+// prompt is built purely from Result fields (metadata prefix
+// included, so lifecycle still steers ordering), the LLM's order is
+// applied to the head, and unmentioned or overflow results keep
+// their positions. This is the path api.Search uses so no engine
+// lock is held across the LLM call.
+func TestRerankResultsOffLock(t *testing.T) {
+	rec := &promptRecordingReranker{response: "[2, 1]"}
+	cfg := config.Defaults()
+	cfg.LLM.Rerank.Enabled = true
+	tool := New(graph.New(), index.NewPropertyIndex(), index.NewFlatIndex(), nil, nil, cfg, WithReranker(rec))
+
+	results := []Result{
+		{ID: "a", SummaryShort: "old plan", Resolution: "superseded", EpistemicStatus: "probable", Confidence: 0.9, UpdatedAt: "2026-08-05T12:00:00Z", ConflictCount: 1},
+		{ID: "b", SummaryShort: "current plan"},
+		{ID: "c", SummaryShort: "unmentioned tail"},
+	}
+	got := tool.RerankResults("plan", results)
+	if len(got) != 3 || got[0].ID != "b" || got[1].ID != "a" || got[2].ID != "c" {
+		t.Fatalf("order = %v, want b,a,c", []string{got[0].ID, got[1].ID, got[2].ID})
+	}
+	rec.mu.Lock()
+	prompt := rec.gotPrompts[0]
+	rec.mu.Unlock()
+	if !strings.Contains(prompt, "(superseded; probable; conf 0.9; updated 2026-08-05; in conflict with 1 record(s)) old plan") {
+		t.Fatalf("prompt missing Result-derived metadata prefix:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "rank both highly rather than suppressing either side") {
+		t.Fatal("prompt missing the shared guidance block")
+	}
+
+	// Disabled or failing reranking returns the input unchanged.
+	cfg.LLM.Rerank.Enabled = false
+	tool2 := New(graph.New(), index.NewPropertyIndex(), index.NewFlatIndex(), nil, nil, cfg, WithReranker(rec))
+	if got := tool2.RerankResults("plan", results); got[0].ID != "a" {
+		t.Fatal("disabled rerank must not reorder")
+	}
+}
+
+// TestRerankIncludesSummarylessCandidates: a record with no
+// content_short -- a fresh capture pending curation, or a session
+// segment -- must still enter the rerank prompt via its content
+// prefix. The in-pipeline reranker always had this fallback; the
+// off-lock path must not silently shed those candidates.
+func TestRerankIncludesSummarylessCandidates(t *testing.T) {
+	rec := &promptRecordingReranker{response: "[1, 2]"}
+	cfg := config.Defaults()
+	cfg.LLM.Rerank.Enabled = true
+	g := graph.New()
+	tool := New(g, index.NewPropertyIndex(), index.NewFlatIndex(), nil, nil, cfg, WithReranker(rec))
+
+	summaryless := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("a fresh capture about reactor coolant thresholds, not yet summarized"),
+	})
+	segment := g.AddNode(graph.Properties{
+		"content":        graph.StringProperty("segment text about coolant discussion"),
+		"knowledge_type": graph.StringProperty("segment"),
+	})
+
+	now := time.Now().UTC()
+	results := []Result{
+		tool.buildResult(summaryless, 0.9, now),
+		tool.buildResult(segment, 0.8, now),
+	}
+	got := tool.RerankResults("coolant", results)
+	if len(got) != 2 {
+		t.Fatalf("results dropped: %d", len(got))
+	}
+	rec.mu.Lock()
+	prompt := rec.gotPrompts[0]
+	rec.mu.Unlock()
+	if !strings.Contains(prompt, "reactor coolant thresholds") {
+		t.Fatalf("summaryless record missing from the rerank prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "segment text about coolant") {
+		t.Fatalf("session segment missing from the rerank prompt:\n%s", prompt)
+	}
+}

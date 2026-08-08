@@ -23,7 +23,7 @@ var curationCmd = &cobra.Command{
 	Short: "View curation status or trigger a curation cycle",
 	Long: `Curation is the background process that maintains a store after records
 land: it classifies pending records, links orphans to related records,
-consolidates duplicates, and expires stale records as their temporality
+links orphans, and expires stale records as their temporality
 lapses. The classification and contradiction-detection passes call a
 configured LLM; without one they are skipped while the mechanical passes
 (orphan linking, expiry) still run.

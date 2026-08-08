@@ -1,6 +1,7 @@
 package core
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -21,10 +22,46 @@ func RecordIndexText(n *graph.Node) string {
 	if n == nil {
 		return ""
 	}
+	var parts []string
 	if s, ok := n.Properties.GetString("content_full"); ok {
-		return s
+		parts = append(parts, s)
+	} else if s, ok := n.Properties.GetString("content"); ok {
+		// Session segments carry their text under "content"; a
+		// rebuild that only reads content_full re-indexes every
+		// segment as empty and store="sessions" search goes dark.
+		parts = append(parts, s)
+	} else if f := collectFieldStrings(n); f != "" {
+		parts = append(parts, f)
 	}
-	return collectFieldStrings(n)
+	// Keywords and meta key:value terms are part of the insert-time
+	// BM25 text (save appends meta; update appends both); a rebuild
+	// must reproduce the same TERM SET or those search contracts
+	// silently degrade after any revert, checkout, restore, or
+	// index-loss boot. List-valued meta emits one key:elem term per
+	// element to match the insert paths; keys are sorted so the
+	// output is deterministic.
+	if kws, ok := n.Properties.GetStringList("content_keywords"); ok && len(kws) > 0 {
+		parts = append(parts, strings.Join(kws, " "))
+	}
+	metaKeys := make([]string, 0, 4)
+	for key := range n.Properties {
+		if strings.HasPrefix(key, "meta.") {
+			metaKeys = append(metaKeys, key)
+		}
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
+		bare := strings.TrimPrefix(key, "meta.")
+		v := n.Properties[key]
+		if elems := v.StringList(); len(elems) > 0 {
+			for _, elem := range elems {
+				parts = append(parts, bare+":"+elem)
+			}
+			continue
+		}
+		parts = append(parts, bare+":"+v.FormatValue())
+	}
+	return strings.Join(parts, " ")
 }
 
 // RecordContent returns the LLM/embedding-grade text representation
