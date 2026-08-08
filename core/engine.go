@@ -477,8 +477,35 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.searchSnapshots = NewSnapshotStore(e.cfg.Search.Pagination.SnapshotTTL)
 	cleanups = append(cleanups, func() { e.searchSnapshots.Stop() })
 
+	// Two-fsync-window probe: a batched write whose graph commit
+	// never landed leaves the index DB ahead of the graph. Advisory
+	// only -- the store boots, but the operator should reconcile.
+	// Reads e.headHash directly: the Restore path reaches openFiles
+	// under the write lock, so the RLock-taking accessors would
+	// self-deadlock here.
+	if stamp, ok := idx.pendingBatchHead(); ok && stamp == e.headHash {
+		slog.Warn("a write batch committed its index changes but the graph commit that should have followed never landed (crash between the two); "+
+			"the indexes may be ahead of the graph -- run 'gramaton validate' to assess and 'gramaton repair' to reconcile",
+			"component", "engine", "head", e.headHash)
+	}
+
 	success = true // disarm the deferred cleanup
 	return nil
+}
+
+// UnsavedBatchDetected reports whether the most recent mutating
+// write batch committed its index transaction without the graph
+// commit that should have followed -- a crash inside the two-fsync
+// window between the batch tx and Save. A healthy batch's Save
+// moves HEAD off the stamp, so no clearing write is needed. A
+// checkout back to the exact pre-batch commit can produce a false
+// positive; the probe is advisory and never blocks boot.
+func (e *Engine) UnsavedBatchDetected() bool {
+	if e.indexes == nil {
+		return false
+	}
+	stamp, ok := e.indexes.pendingBatchHead()
+	return ok && stamp == e.HeadHash()
 }
 
 // recoverInFlightJobs flips any pending/running job from a prior
@@ -1099,6 +1126,13 @@ func (e *Engine) WithWriteBatch(message string, fn func(*WriteSession) (mutated 
 	batchErr := e.indexes.batch(e, func(ws *WriteSession) error {
 		mutated, fnErr = fn(ws)
 		collectedActions = ws.actions
+		if fnErr == nil && mutated {
+			// Boot-probe stamp for the two-fsync window between this
+			// tx and the Save below (see batchMetaBucket).
+			if err := e.indexes.stampPendingBatchHeadTx(ws.tx, e.headHash); err != nil {
+				return err
+			}
+		}
 		return fnErr
 	})
 	batchDur := time.Since(lockStart)
