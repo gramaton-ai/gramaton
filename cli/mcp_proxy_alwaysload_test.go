@@ -47,8 +47,9 @@ func TestProxyHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 		t.Fatalf("list tools: %v", err)
 	}
 
-	wantPinned := make(map[string]bool, len(server.HotPathToolsAlwaysLoad))
-	for _, name := range server.HotPathToolsAlwaysLoad {
+	hotPath := server.HotPathToolsAlwaysLoad()
+	wantPinned := make(map[string]bool, len(hotPath))
+	for _, name := range hotPath {
 		wantPinned[name] = true
 	}
 
@@ -70,8 +71,8 @@ func TestProxyHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 			t.Errorf("proxy tool %q is pinned alwaysLoad but not in server.HotPathToolsAlwaysLoad -- either pin was added without weighing context-budget tradeoff, or the canonical list is stale", tool.Name)
 		}
 	}
-	if seen != len(server.HotPathToolsAlwaysLoad) {
-		t.Errorf("proxy registers %d of %d hot-path tools -- canonical list and proxy surface disagree", seen, len(server.HotPathToolsAlwaysLoad))
+	if seen != len(hotPath) {
+		t.Errorf("proxy registers %d of %d hot-path tools -- canonical list and proxy surface disagree", seen, len(hotPath))
 	}
 }
 

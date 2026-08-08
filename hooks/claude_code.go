@@ -128,8 +128,9 @@ func stopCore(log *Logger, in HookInput) {
 
 // ClaudeCodeUserPromptSubmit handles Claude Code's UserPromptSubmit
 // event. Claude Code injects a hook's plain stdout (on exit 0) into
-// the model's context alongside the submitted prompt -- the same
-// contract Kiro documents for this event -- so this is the one
+// the model's context alongside the submitted prompt (vendor hook
+// docs, read 2026-08) -- the same contract Kiro documents for this
+// event -- so this is the one
 // Claude Code hook that can actively remind the agent to extract,
 // backstopping the CLAUDE.md cadence guidance and the tool
 // descriptions that tool-search deferral can hide.

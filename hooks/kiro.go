@@ -62,7 +62,10 @@ func KiroAgentSpawn(stdin io.Reader, stdout io.Writer) {
 // Stdin: JSON with session_id OR agent_id.
 // Stdout: extraction reminder text when threshold crossed.
 func KiroUserPromptSubmit(stdin io.Reader, stdout io.Writer) {
-	log := OpenLogger("user-prompt-submit")
+	// Tag is kiro-prefixed (matching the cliEvent and the kiro-stop
+	// precedent) because Claude Code's handler shares hooks.log and
+	// owns the bare "user-prompt-submit" tag.
+	log := OpenLogger("kiro-user-prompt-submit")
 	defer log.Close()
 
 	in, err := DecodeInput(stdin)

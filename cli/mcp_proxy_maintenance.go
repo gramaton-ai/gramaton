@@ -22,7 +22,7 @@ type proxyCurationInput struct {
 func registerCurationProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_curation",
-		Description: "View or drive the curation runner. action=status returns the current state and manifest. action=trigger runs a cycle now. action=dry_run previews what an autonomous cycle would do without applying changes. action=batch classifies every pending record (LLM required). action=drain_contradictions artificially marks every in-window contradiction-candidate pair as no_contradiction without calling the LLM; see design-decisions.md D38.",
+		Description: api.CurationDescription,
 		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCurationInput) (*mcp.CallToolResult, any, error) {
 		switch args.Action {

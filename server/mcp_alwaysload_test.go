@@ -41,17 +41,22 @@ func TestMCPHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 		t.Fatalf("list tools: %v", err)
 	}
 
-	wantPinned := make(map[string]bool, len(HotPathToolsAlwaysLoad))
-	for _, name := range HotPathToolsAlwaysLoad {
+	hotPath := HotPathToolsAlwaysLoad()
+	wantPinned := make(map[string]bool, len(hotPath))
+	for _, name := range hotPath {
 		wantPinned[name] = true
 	}
 
+	seen := 0
 	for _, tool := range res.Tools {
 		isPinned := false
 		if v, ok := tool.Meta["anthropic/alwaysLoad"]; ok {
 			if b, ok := v.(bool); ok && b {
 				isPinned = true
 			}
+		}
+		if wantPinned[tool.Name] {
+			seen++
 		}
 
 		shouldBePinned := wantPinned[tool.Name]
@@ -61,5 +66,8 @@ func TestMCPHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 		case !shouldBePinned && isPinned:
 			t.Errorf("tool %q is pinned alwaysLoad but not in HotPathToolsAlwaysLoad -- either pin was added without weighing context-budget tradeoff, or this list is stale", tool.Name)
 		}
+	}
+	if seen != len(hotPath) {
+		t.Errorf("server surface registers %d of %d hot-path tools -- canonical list and registration disagree", seen, len(hotPath))
 	}
 }

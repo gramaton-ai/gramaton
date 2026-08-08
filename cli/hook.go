@@ -53,11 +53,18 @@ func runHook(cmd *cobra.Command, args []string) error {
 	event := args[0]
 	handler, ok := hookEvents[event]
 	if !ok {
-		// Unknown events ARE surfaced (vs. hook handler errors
-		// which are always swallowed). A proxy script calling a
-		// non-existent event is a programmer error and should be
-		// visible to whoever's installing / debugging the hook.
-		return fmt.Errorf("unknown hook event %q (valid: session-start, stop, pre-compact, post-compact, user-prompt-submit, kiro-agent-spawn, kiro-user-prompt-submit, kiro-stop, cursor-session-start, cursor-stop, cursor-pre-compact)", event)
+		// Unknown events log to stderr but exit 0. An unknown event
+		// usually means version skew, not a programmer error: a
+		// settings.json entry for a newly-added event outlives
+		// whichever older binary a proxy script resolves (init from
+		// a build tree, a rollback, a second install on PATH), and
+		// a non-zero exit would surface as a harness hook error on
+		// every firing -- for user-prompt-submit, every prompt. The
+		// build-time programmer-error case is already covered by
+		// cli/hook_test.go's dispatchability test. Stderr keeps the
+		// diagnostic visible in hook debug output.
+		fmt.Fprintf(os.Stderr, "gramaton hook: unknown event %q (this binary predates it; re-run gramaton init or upgrade)\n", event)
+		return nil
 	}
 	// Handlers are fail-open — they log errors to
 	// ~/.gramaton/hooks.log and return without raising. We

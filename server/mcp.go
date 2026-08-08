@@ -114,27 +114,32 @@ func MCPAlwaysLoadMeta() mcp.Meta {
 	return mcp.Meta{"anthropic/alwaysLoad": true}
 }
 
-// HotPathToolsAlwaysLoad is the canonical list of MCP tools pinned
-// via MCPAlwaysLoadMeta. Both registration surfaces (server bindings
-// and CLI proxy) must pin exactly this set; the alwaysload tests in
-// server/ and cli/ each assert their surface against this one list,
-// which is what keeps the two from drifting.
+// HotPathToolsAlwaysLoad returns the canonical list of MCP tools
+// pinned via MCPAlwaysLoadMeta. Both registration surfaces (server
+// bindings and CLI proxy) must pin exactly this set; the alwaysload
+// tests in server/ and cli/ each assert their surface against this
+// one list, which is what keeps the two from drifting. A function
+// returning a fresh slice (the MCPWriteToolNames pattern) rather
+// than an exported var, so no importer can mutate the invariant the
+// tests check.
 //
 // Adding to this list: pin the tool via MCPAlwaysLoadMeta() in BOTH
 // registrations. Removing: drop both helper calls and the entry here.
-var HotPathToolsAlwaysLoad = []string{
-	"gramaton_save",
-	"gramaton_collection_add",
-	"gramaton_collection_items",
-	"gramaton_collection_list",
-	"gramaton_collection_update",
-	"gramaton_curation",
-	"gramaton_inspect",
-	"gramaton_link",
-	"gramaton_resolve",
-	"gramaton_search",
-	"gramaton_session_save",
-	"gramaton_session_prepare",
+func HotPathToolsAlwaysLoad() []string {
+	return []string{
+		"gramaton_save",
+		"gramaton_collection_add",
+		"gramaton_collection_items",
+		"gramaton_collection_list",
+		"gramaton_collection_update",
+		"gramaton_curation",
+		"gramaton_inspect",
+		"gramaton_link",
+		"gramaton_resolve",
+		"gramaton_search",
+		"gramaton_session_save",
+		"gramaton_session_prepare",
+	}
 }
 
 // mcpToolStart records the start of an MCP tool call and returns a

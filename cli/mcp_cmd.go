@@ -46,8 +46,8 @@ func init() {
 // model when the per-tool descriptions do not. It therefore carries
 // the load-bearing usage guidance -- above all the session-capture
 // cadence -- in compressed form. Claude Code truncates instructions
-// at 2KB; keep this comfortably under that with the critical content
-// first.
+// at 2KB (vendor docs, read 2026-08); keep this comfortably under
+// that with the critical content first.
 const mcpBaseInstructions = "Gramaton is the user's persistent knowledge store: " +
 	"semantic memory records, conversation session capture, and structured " +
 	"collections (tasks, TODOs, checklists), plus graph links, history, and " +
@@ -76,7 +76,9 @@ const mcpBaseInstructions = "Gramaton is the user's persistent knowledge store: 
 // this server, ahead of mcpBaseInstructions.
 const mcpReadOnlyInstructions = "This Gramaton store is read-only (frozen): " +
 	"all writes are rejected and no write tools are registered. " +
-	"Search and the other read tools work normally."
+	"Search and the other read tools work normally; the guidance " +
+	"below about saving, session capture, and collections does not " +
+	"apply until the store is thawed."
 
 func runMCP(cmd *cobra.Command, args []string) error {
 	// Ensure the HTTP server is running (auto-starts if needed). A

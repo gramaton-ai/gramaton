@@ -318,11 +318,21 @@ func TestClaudeCodeUserPromptSubmitHonorsEnvThreshold(t *testing.T) {
 
 func TestClaudeCodeUserPromptSubmitSilentOnMissingOrUnsafeID(t *testing.T) {
 	withTempHome(t)
-	for _, in := range []string{`{}`, `{"session_id":"../escape"}`} {
+	// Threshold 1 plus a pre-seeded counter for each rejected id
+	// makes the validation guards the ONLY thing suppressing output:
+	// without this seeding, ReadCounter's zero default exits at the
+	// threshold check and the test passes even with the guards
+	// deleted.
+	t.Setenv("GRAMATON_EXTRACT_INTERVAL", "1")
+	for _, tc := range []struct{ input, id string }{
+		{`{}`, ""},
+		{`{"session_id":"../escape"}`, "../escape"},
+	} {
+		_ = WriteCounter(tc.id, 5)
 		var stdout bytes.Buffer
-		ClaudeCodeUserPromptSubmit(strings.NewReader(in), &stdout)
+		ClaudeCodeUserPromptSubmit(strings.NewReader(tc.input), &stdout)
 		if stdout.Len() > 0 {
-			t.Errorf("input %s: stdout should be empty, got %q", in, stdout.String())
+			t.Errorf("input %s: stdout should be empty, got %q", tc.input, stdout.String())
 		}
 	}
 }
