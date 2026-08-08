@@ -1302,10 +1302,15 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 	if len(resolutions) > MaxHeldResolutions {
 		return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("at most %d resolutions per call", MaxHeldResolutions))
 	}
+	seen := make(map[string]struct{}, len(resolutions))
 	for i, r := range resolutions {
 		if r.SegmentID == "" {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment_id is required", i))
 		}
+		if _, dup := seen[r.SegmentID]; dup {
+			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: segment %s appears more than once", i, r.SegmentID))
+		}
+		seen[r.SegmentID] = struct{}{}
 		if len(r.SegmentID) > MaxIDArgLen || len(r.TargetID) > MaxIDArgLen {
 			return SessionResolveHeldResponse{}, ErrInvalid(fmt.Sprintf("resolution %d: identifier exceeds maximum length of %d", i, MaxIDArgLen))
 		}
@@ -1402,15 +1407,16 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 		}
 	}
 
-	// Phase 3: re-verify and apply under the write lock, one commit.
+	// Phase 3: re-verify, then apply, under the write lock, one
+	// commit. The verify pass covers the WHOLE batch before the first
+	// mutation: a mid-batch conflict discovered during apply would
+	// leave earlier resolutions' edges, props, and promoted records in
+	// the live graph with no commit recording them.
 	a.engine.Lock()
 	defer a.engine.Unlock()
 
-	results := make([]HeldResolutionResult, 0, len(work))
-	actions := []graph.CommitAction{{Kind: graph.ActionSessionSave, RecordID: sessionID}}
-	now := time.Now().UTC()
-	author := a.engine.Config().Author.String()
-	for _, w := range work {
+	segs := make([]*graph.Node, len(work))
+	for i, w := range work {
 		seg, ok := a.engine.Graph().GetNode(w.res.SegmentID)
 		if !ok {
 			return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("segment %s vanished", w.res.SegmentID))
@@ -1418,13 +1424,28 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 		if held, _ := seg.Properties.GetBool("promotion_held"); !held {
 			return SessionResolveHeldResponse{}, ErrConflict(fmt.Sprintf("segment %s was resolved concurrently", w.res.SegmentID))
 		}
+		if w.res.Action == "update_target" {
+			tn, ok := a.engine.Graph().GetNode(w.target)
+			if !ok {
+				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s vanished", w.target))
+			}
+			if !isKnowledgeRecordNode(tn) {
+				return SessionResolveHeldResponse{}, ErrConflict(fmt.Sprintf("target %s is no longer a Memory knowledge record", w.target))
+			}
+		}
+		segs[i] = seg
+	}
+
+	results := make([]HeldResolutionResult, 0, len(work))
+	actions := []graph.CommitAction{{Kind: graph.ActionSessionSave, RecordID: sessionID}}
+	now := time.Now().UTC()
+	author := a.engine.Config().Author.String()
+	for i, w := range work {
+		seg := segs[i]
 
 		var result HeldResolutionResult
 		switch w.res.Action {
 		case "update_target":
-			if _, ok := a.engine.Graph().GetNode(w.target); !ok {
-				return SessionResolveHeldResponse{}, ErrNotFound(fmt.Sprintf("target record %s vanished", w.target))
-			}
 			if _, err := a.engine.Graph().AddEdge(w.res.SegmentID, w.target, "extracted_as", 1.0, nil); err != nil {
 				a.log.Warn("resolve_held: extracted_as edge failed", "component", "session",
 					"segment_id", w.res.SegmentID, "target", w.target, "err", err)
