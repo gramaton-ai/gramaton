@@ -7,33 +7,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// hotPathToolsAlwaysLoad enumerates the MCP tools we expect to be
-// pinned via `_meta: {"anthropic/alwaysLoad": true}` so Claude Code's
-// tool-search deferral doesn't trip up first-call latency on the
-// agent's most-used surface.
-//
-// Adding to this list: pin a new tool via mcpAlwaysLoadMeta() in its
-// registration. Removing: drop both the helper call and the entry
-// here. The list pairs with the deferred-by-default rest of the
-// surface (~24 tools) which stays unpinned.
-var hotPathToolsAlwaysLoad = []string{
-	"gramaton_save",
-	"gramaton_collection_add",
-	"gramaton_collection_items",
-	"gramaton_collection_list",
-	"gramaton_collection_update",
-	"gramaton_curation",
-	"gramaton_inspect",
-	"gramaton_link",
-	"gramaton_resolve",
-	"gramaton_search",
-	"gramaton_session_save",
-	"gramaton_session_prepare",
-}
-
 // TestMCPHotPathToolsHaveAlwaysLoadMeta asserts every tool in
-// hotPathToolsAlwaysLoad ships the `anthropic/alwaysLoad: true` meta
-// flag and that no other tool ships it.
+// HotPathToolsAlwaysLoad (the canonical pin list in mcp.go, shared
+// with the CLI proxy's mirror test) ships the
+// `anthropic/alwaysLoad: true` meta flag and that no other tool
+// ships it.
 //
 // The asymmetric check (must-have-it for hot path; must-NOT-have-it
 // for the rest) catches both dropped pins (e.g., a refactor that
@@ -63,8 +41,8 @@ func TestMCPHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 		t.Fatalf("list tools: %v", err)
 	}
 
-	wantPinned := make(map[string]bool, len(hotPathToolsAlwaysLoad))
-	for _, name := range hotPathToolsAlwaysLoad {
+	wantPinned := make(map[string]bool, len(HotPathToolsAlwaysLoad))
+	for _, name := range HotPathToolsAlwaysLoad {
 		wantPinned[name] = true
 	}
 
@@ -81,7 +59,7 @@ func TestMCPHotPathToolsHaveAlwaysLoadMeta(t *testing.T) {
 		case shouldBePinned && !isPinned:
 			t.Errorf("hot-path tool %q is missing _meta:{anthropic/alwaysLoad: true} -- did its registration drop the Meta field?", tool.Name)
 		case !shouldBePinned && isPinned:
-			t.Errorf("tool %q is pinned alwaysLoad but not in hotPathToolsAlwaysLoad -- either pin was added without weighing context-budget tradeoff, or this list is stale", tool.Name)
+			t.Errorf("tool %q is pinned alwaysLoad but not in HotPathToolsAlwaysLoad -- either pin was added without weighing context-budget tradeoff, or this list is stale", tool.Name)
 		}
 	}
 }

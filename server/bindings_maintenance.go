@@ -126,7 +126,7 @@ func (s *Server) registerMaintenanceMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_curation",
 		Description: "View or drive the curation runner. action=status returns the current state and manifest. action=trigger runs a cycle now. action=dry_run previews what an autonomous cycle would do without applying changes. action=batch classifies every pending record (LLM required). action=drain_contradictions artificially marks every in-window contradiction-candidate pair as no_contradiction without calling the LLM; see design-decisions.md D38.",
-		Meta:        mcpAlwaysLoadMeta(),
+		Meta:        MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args curationArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_curation")
 		defer done(nil)

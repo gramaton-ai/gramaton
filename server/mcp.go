@@ -88,7 +88,7 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 	}
 }
 
-// mcpAlwaysLoadMeta returns the `_meta` payload that pins an MCP
+// MCPAlwaysLoadMeta returns the `_meta` payload that pins an MCP
 // tool as always-loaded for clients that implement tool-search
 // deferral (Claude Code v2.1.121+). With tool search on (the default
 // in current Claude Code), tool schemas are deferred until the agent
@@ -99,13 +99,42 @@ func (s *Server) registerMCPTools(mcpServer *mcp.Server) {
 // haven't shipped the per-tool alwaysLoad feature) ignore the
 // metadata and behave as before.
 //
+// Exported because the pin must ride BOTH registration surfaces: the
+// server's own MCP endpoints here and the CLI stdio proxy
+// (cli/mcp_proxy_*.go) that `gramaton init` wires every harness to.
+// A pin that exists only server-side never reaches a real agent
+// session.
+//
 // We pin a curated subset (search/inspect/save/session_*/
 // collection_{add,items,update,list}/resolve/link/curation) rather
 // than every tool to avoid bloating the system prompt with infrequent
 // administrative or diagnostic tools (branch, backup, reembed,
 // classify, log, etc.); those stay deferred and load on demand.
-func mcpAlwaysLoadMeta() mcp.Meta {
+func MCPAlwaysLoadMeta() mcp.Meta {
 	return mcp.Meta{"anthropic/alwaysLoad": true}
+}
+
+// HotPathToolsAlwaysLoad is the canonical list of MCP tools pinned
+// via MCPAlwaysLoadMeta. Both registration surfaces (server bindings
+// and CLI proxy) must pin exactly this set; the alwaysload tests in
+// server/ and cli/ each assert their surface against this one list,
+// which is what keeps the two from drifting.
+//
+// Adding to this list: pin the tool via MCPAlwaysLoadMeta() in BOTH
+// registrations. Removing: drop both helper calls and the entry here.
+var HotPathToolsAlwaysLoad = []string{
+	"gramaton_save",
+	"gramaton_collection_add",
+	"gramaton_collection_items",
+	"gramaton_collection_list",
+	"gramaton_collection_update",
+	"gramaton_curation",
+	"gramaton_inspect",
+	"gramaton_link",
+	"gramaton_resolve",
+	"gramaton_search",
+	"gramaton_session_save",
+	"gramaton_session_prepare",
 }
 
 // mcpToolStart records the start of an MCP tool call and returns a

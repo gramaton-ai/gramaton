@@ -112,7 +112,7 @@ func (s *Server) registerSearchMCPTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_search",
 		Description: api.SearchDescription,
-		Meta:        mcpAlwaysLoadMeta(),
+		Meta:        MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SearchRequest) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_search")
 		defer done(nil)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gramaton-ai/gramaton/api"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -60,6 +61,7 @@ func registerCollectionListProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_list",
 		Description: api.CollectionListDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionListInput) (*mcp.CallToolResult, any, error) {
 		path := "/v1/collections"
 		params := url.Values{}
@@ -93,6 +95,7 @@ func registerCollectionItemsProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_items",
 		Description: api.CollectionItemsDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionItemsInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -162,6 +165,7 @@ func registerCollectionAddProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_add",
 		Description: api.CollectionAddDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionAddInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" {
 			return proxyErr("collection_id is required")
@@ -206,6 +210,7 @@ func registerCollectionUpdateProxy(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_collection_update",
 		Description: api.CollectionUpdateDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args proxyCollectionUpdateInput) (*mcp.CallToolResult, any, error) {
 		if args.CollectionID == "" || args.ItemID == "" {
 			return proxyErr("collection_id and item_id are required")

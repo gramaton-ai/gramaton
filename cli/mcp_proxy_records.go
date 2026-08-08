@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/gramaton-ai/gramaton/api"
+	"github.com/gramaton-ai/gramaton/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -17,6 +18,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_save",
 		Description: api.SaveDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args api.SaveRequest) (*mcp.CallToolResult, any, error) {
 		return proxyPost("/v1/records", args)
 	})
@@ -108,6 +110,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_inspect",
 		Description: api.InspectDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args inspectArgs) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return proxyErr("id is required")
@@ -249,6 +252,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_resolve",
 		Description: api.ResolveDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args resolveArgs) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return proxyErr("id is required")
@@ -280,6 +284,7 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_link",
 		Description: api.LinkDescription,
+		Meta:        server.MCPAlwaysLoadMeta(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args linkArgs) (*mcp.CallToolResult, any, error) {
 		if args.ID == "" {
 			return proxyErr("id is required")
