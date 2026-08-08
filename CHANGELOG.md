@@ -165,6 +165,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gramaton prune`: deliberate, manual history retention (CLI
+  only).** Gramaton keeps everything until an operator prunes. Two
+  composable rules: `--keep-versions N` keeps the newest N logical
+  versions of each record's content and removes older version blobs
+  (the timeline survives as metadata, marked `content_pruned`);
+  `--older-than DATE` truncates commit history below the date (at
+  least 5 commits always survive). Planning and executing are
+  separate runs -- the plan is persisted with a one-time token and
+  `--confirm=<token>` re-validates that HEAD and every ref are
+  unchanged. Execution refuses without a verified backup of this
+  store (the newest archive is opened and its snapshot HEAD checked
+  against what is being removed; `--backup` takes one inline,
+  `--skip-backup-check` overrides). A retention tombstone lands in
+  the substrate BEFORE anything is deleted, so afterwards every
+  history surface states the floor: as_of below it answers "history
+  available from <date> (store pruned)", the timeline marks swept
+  versions, and history search counts them in coverage -- pruned by
+  policy is never presented as corruption. The command is never
+  exposed over MCP, and every invocation leads with an agent-directed
+  warning: destructive history removal is a human decision.
+
 - **`gramaton_history_search`: lexical search over past versions.**
   Live search answers "what do we know"; this answers "what did we
   used to know." Matching covers version content and `change_note`s.
