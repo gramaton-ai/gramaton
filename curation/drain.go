@@ -38,7 +38,8 @@ type DrainResult struct {
 //
 // Safety: writes only edges. No records are modified or deleted.
 // Already-connected pairs are skipped, so pre-existing contradicts /
-// supersedes / no_contradiction edges survive unchanged.
+// no_contradiction edges -- and the supersedes edges legacy stores
+// still carry -- survive unchanged.
 func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Config, logger *slog.Logger) (*DrainResult, error) {
 	logger = ensureLogger(logger)
 	start := time.Now()
@@ -112,7 +113,7 @@ func DrainContradictionsNoLLM(ctx context.Context, e *core.Engine, cfg config.Co
 			// Skip pairs that already have an edge in either direction.
 			// Mirrors the read-phase hasEdge guard in detectContradictions
 			// so we neither create duplicate edges nor overwrite real
-			// contradicts/supersedes relationships.
+			// contradicts relationships (or legacy supersedes edges).
 			hasEdge := false
 			for _, edge := range e.Graph().EdgesFrom(idA) {
 				if edge.TargetID == sr.NodeID {

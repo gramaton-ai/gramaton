@@ -1855,15 +1855,16 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 			// Check if they already have an edge between them. The A->B
 			// direction is always checked; the B->A direction is checked
 			// only when ContradictionCheckReverseEdges is true (default)
-			// -- some edges (notably supersedes) are unidirectional.
+			// -- some edge types are unidirectional, including the
+			// supersedes edges legacy stores still carry.
 			//
 			// A contradiction_check_skipped edge with attempts <
 			// MaxContradictionAttempts is a SOFT skip: the pair stays
 			// in the candidate pool, gets retried until it either
-			// succeeds (edge replaced by a normal contradicts /
-			// supersedes / no_contradiction edge) or hits the threshold
-			// (edge becomes a hard skip). Any other edge type is a
-			// hard skip immediately.
+			// succeeds (edge replaced by a contradicts or
+			// no_contradiction edge) or hits the threshold (edge
+			// becomes a hard skip). Any other edge type is a hard skip
+			// immediately.
 			maxContradictionAttempts := cfg.LLM.Curation.Retries.MaxContradictionAttempts
 			isHardSkip := func(edge *graph.Edge) bool {
 				if edge.Type != contradictionCheckSkippedEdge {
@@ -1936,8 +1937,8 @@ func detectContradictions(ctx context.Context, e *core.Engine, llmProv llm.Provi
 	}
 	var findings []detected
 
-	// Pairs the LLM successfully checked but reported NO contradiction
-	// or supersession. Each gets a "no_contradiction" edge written in
+	// Pairs the LLM successfully checked but reported as NOT
+	// contradicting. Each gets a "no_contradiction" edge written in
 	// the write phase so the hasEdge guard in the next cycle's read
 	// phase skips them, allowing the candidate pool to drain. See
 	// design-decisions.md D38 for the bug this addresses.
