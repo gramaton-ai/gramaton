@@ -45,14 +45,17 @@ type hookEventSpec struct {
 	configEvent string
 }
 
-// claudeCodeEvents are the four lifecycle events Gramaton wires
+// claudeCodeEvents are the five lifecycle events Gramaton wires
 // into Claude Code. Order is stable for deterministic Materialize
-// output and test assertions.
+// output and test assertions. UserPromptSubmit is the one event
+// whose handler emits to stdout (the extraction reminder); the
+// other four are state-file side effects only.
 var claudeCodeEvents = []hookEventSpec{
 	{cliEvent: "session-start", fileBase: "session-start", configEvent: "SessionStart"},
 	{cliEvent: "stop", fileBase: "stop", configEvent: "Stop"},
 	{cliEvent: "pre-compact", fileBase: "pre-compact", configEvent: "PreCompact"},
 	{cliEvent: "post-compact", fileBase: "post-compact", configEvent: "PostCompact"},
+	{cliEvent: "user-prompt-submit", fileBase: "user-prompt-submit", configEvent: "UserPromptSubmit"},
 }
 
 // codexEvents are the four lifecycle events Gramaton wires into

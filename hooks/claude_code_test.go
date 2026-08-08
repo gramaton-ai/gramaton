@@ -274,3 +274,55 @@ func TestFirstLine(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeCodeUserPromptSubmitBelowThresholdNoReminder(t *testing.T) {
+	withTempHome(t)
+	_ = WriteCounter("cc-sess-1", 5) // below default threshold 10
+	var stdout bytes.Buffer
+	ClaudeCodeUserPromptSubmit(strings.NewReader(`{"session_id":"cc-sess-1"}`), &stdout)
+	if stdout.Len() > 0 {
+		t.Errorf("stdout should be empty below threshold, got %q", stdout.String())
+	}
+	if got := ReadCounter("cc-sess-1"); got != 5 {
+		t.Errorf("counter = %d, want 5 (preserved)", got)
+	}
+}
+
+func TestClaudeCodeUserPromptSubmitAtThresholdInjectsReminderAndResets(t *testing.T) {
+	withTempHome(t)
+	_ = WriteCounter("cc-sess-1", 10)
+	var stdout bytes.Buffer
+	ClaudeCodeUserPromptSubmit(strings.NewReader(`{"session_id":"cc-sess-1"}`), &stdout)
+	out := stdout.String()
+	if !strings.Contains(out, "Gramaton reminder") {
+		t.Errorf("stdout missing reminder text: %q", out)
+	}
+	if !strings.Contains(out, "gramaton_session_prepare") {
+		t.Errorf("reminder should name the prepare tool: %q", out)
+	}
+	if got := ReadCounter("cc-sess-1"); got != 0 {
+		t.Errorf("counter = %d, want 0 (reset after injection)", got)
+	}
+}
+
+func TestClaudeCodeUserPromptSubmitHonorsEnvThreshold(t *testing.T) {
+	withTempHome(t)
+	t.Setenv("GRAMATON_EXTRACT_INTERVAL", "3")
+	_ = WriteCounter("cc-sess-1", 3)
+	var stdout bytes.Buffer
+	ClaudeCodeUserPromptSubmit(strings.NewReader(`{"session_id":"cc-sess-1"}`), &stdout)
+	if !strings.Contains(stdout.String(), "Gramaton reminder") {
+		t.Errorf("reminder should fire at env threshold 3: %q", stdout.String())
+	}
+}
+
+func TestClaudeCodeUserPromptSubmitSilentOnMissingOrUnsafeID(t *testing.T) {
+	withTempHome(t)
+	for _, in := range []string{`{}`, `{"session_id":"../escape"}`} {
+		var stdout bytes.Buffer
+		ClaudeCodeUserPromptSubmit(strings.NewReader(in), &stdout)
+		if stdout.Len() > 0 {
+			t.Errorf("input %s: stdout should be empty, got %q", in, stdout.String())
+		}
+	}
+}

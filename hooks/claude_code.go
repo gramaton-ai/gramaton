@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -123,6 +124,58 @@ func stopCore(log *Logger, in HookInput) {
 		return
 	}
 	log.Info("turn counter for %s now %d", sessionID, n)
+}
+
+// ClaudeCodeUserPromptSubmit handles Claude Code's UserPromptSubmit
+// event. Claude Code injects a hook's plain stdout (on exit 0) into
+// the model's context alongside the submitted prompt -- the same
+// contract Kiro documents for this event -- so this is the one
+// Claude Code hook that can actively remind the agent to extract,
+// backstopping the CLAUDE.md cadence guidance and the tool
+// descriptions that tool-search deferral can hide.
+//
+// When the turn counter (incremented by the Stop hook) reaches
+// ExtractThreshold (env GRAMATON_EXTRACT_INTERVAL, default 10),
+// write the extraction reminder to stdout and reset the counter so
+// the nudge doesn't fire on every subsequent turn.
+//
+// Stdin: JSON with session_id.
+// Stdout: extraction reminder text when the threshold is crossed.
+func ClaudeCodeUserPromptSubmit(stdin io.Reader, stdout io.Writer) {
+	log := OpenLogger("user-prompt-submit")
+	defer log.Close()
+
+	in, err := DecodeInput(stdin)
+	if err != nil {
+		log.Info("parse stdin: %v", err)
+		return
+	}
+	sessionID := in.SessionID
+	if sessionID == "" {
+		// Silent exit matches the other handlers for non-session
+		// contexts.
+		return
+	}
+	if !ValidSessionID(sessionID) {
+		log.Info("session_id has unsafe shape, skipping")
+		return
+	}
+
+	count := ReadCounter(sessionID)
+	threshold := ExtractThreshold()
+	if count < threshold {
+		return
+	}
+
+	if _, err := fmt.Fprintln(stdout, extractionReminder); err != nil {
+		log.Info("write reminder to stdout: %v", err)
+		return
+	}
+	log.Info("reminder injected at turn %d (threshold %d) for session %s", count, threshold, sessionID)
+
+	if err := ResetCounter(sessionID); err != nil {
+		log.Info("reset counter: %v", err)
+	}
 }
 
 // preCompactFlag is what we write to the precompact-uncaptured flag

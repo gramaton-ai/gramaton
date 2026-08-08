@@ -20,6 +20,7 @@ func TestHookDispatchCoversAllEvents(t *testing.T) {
 		"stop",
 		"pre-compact",
 		"post-compact",
+		"user-prompt-submit",
 		"kiro-agent-spawn",
 		"kiro-user-prompt-submit",
 		"kiro-stop",
