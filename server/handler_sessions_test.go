@@ -328,7 +328,15 @@ func TestSegmentsSurviveIndexRebuild(t *testing.T) {
 		t.Fatal("fixture: segment not findable before rebuild")
 	}
 
+	// Clear the segment's insert-time BM25 entry first: the rebuild
+	// only ever adds, so with the entry still present the assertion
+	// below would pass even if the rebuild indexed nothing.
 	eng.Lock()
+	it := eng.Graph().NodeIterator()
+	for it.Next() {
+		eng.BM25Full().Remove(it.Node().ID)
+	}
+	it.Close()
 	eng.RebuildAllIndexes()
 	eng.Unlock()
 

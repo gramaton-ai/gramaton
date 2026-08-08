@@ -47,14 +47,16 @@ func TestUnsavedBatchProbe(t *testing.T) {
 		t.Fatal("stamp == HEAD must report the unsaved batch")
 	}
 
-	// A rolled-back batch must not stamp: the tx never committed, so
-	// there is no divergence to report.
-	preStamp, _ := eng.indexes.pendingBatchHead()
-	_ = eng.WithWriteBatch("rollback pin", func(ws *WriteSession) (bool, error) {
+	// A rolled-back batch must not stamp. Asserted on a FRESH engine
+	// where no stamp exists at all: on the engine above the pre-batch
+	// stamp already equals the would-be value, so a buggy write would
+	// be invisible.
+	eng2 := setupTestEngine(t)
+	_ = eng2.WithWriteBatch("rollback pin", func(ws *WriteSession) (bool, error) {
 		return true, errRollbackPin
 	})
-	if got, _ := eng.indexes.pendingBatchHead(); got != preStamp {
-		t.Fatalf("rolled-back batch changed the stamp: %q -> %q", preStamp, got)
+	if _, ok := eng2.indexes.pendingBatchHead(); ok {
+		t.Fatal("rolled-back batch left a stamp; the tx never committed, so there is no divergence to report")
 	}
 }
 
