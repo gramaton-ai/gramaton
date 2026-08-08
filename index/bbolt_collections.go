@@ -101,35 +101,6 @@ func (c *BboltCollectionCache) Members(collectionID string) []string {
 	return ids
 }
 
-// MemberCount returns the cached member count for a collection.
-func (c *BboltCollectionCache) MemberCount(collectionID string) int {
-	count := 0
-	c.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(collMembersBucket)
-		data := b.Get([]byte(collectionID))
-		if len(data) >= 4 {
-			count = int(binary.LittleEndian.Uint32(data[:4]))
-		}
-		return nil
-	})
-	return count
-}
-
-// DeleteCollection removes the cache entry for a collection via its own tx.
-func (c *BboltCollectionCache) DeleteCollection(collectionID string) {
-	if err := c.db.Update(func(tx *bolt.Tx) error {
-		c.DeleteCollectionTx(tx, collectionID)
-		return nil
-	}); err != nil {
-		slog.Error("collection cache: delete collection failed", "collection", collectionID, "err", err)
-	}
-}
-
-// DeleteCollectionTx removes the cache entry via the caller's tx.
-func (c *BboltCollectionCache) DeleteCollectionTx(tx *bolt.Tx, collectionID string) {
-	tx.Bucket(collMembersBucket).Delete([]byte(collectionID))
-}
-
 // --- Encoding: uint32(count) + for each: uint16(len) + []byte(id) ---
 
 func encodeIDList(ids []string) []byte {

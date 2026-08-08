@@ -89,7 +89,7 @@ func importJSON(data []byte) error {
 func importCSV(data []byte) error {
 	// TODO: implement CSV import (parse client-side, send as JSON
 	// records to the import endpoint).
-	return fmt.Errorf("CSV import via CLI is not yet implemented. Use the REST API directly: POST /v1/import")
+	return fmt.Errorf("CSV import is not wired up yet (planned); JSON import works today via POST /v1/import")
 }
 
 func importObsidian(vaultPath string) error {
@@ -99,5 +99,5 @@ func importObsidian(vaultPath string) error {
 
 	// TODO: implement Obsidian import by reading .md files and
 	// sending them as JSON records
-	return fmt.Errorf("Obsidian import via CLI is not yet implemented. Use the REST API directly")
+	return fmt.Errorf("Obsidian import is not wired up yet (planned); JSON import works today via POST /v1/import")
 }

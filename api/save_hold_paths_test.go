@@ -258,6 +258,58 @@ func TestSessionResolveHeldAllowSimilar(t *testing.T) {
 	}
 }
 
+// TestSessionResolveHeldPartialBatchChangesNothing pins the
+// atomicity contract: a batch that cannot fully apply leaves the
+// graph untouched. A duplicated segment used to pass upfront
+// validation and fail phase-3 re-verification only on its second
+// occurrence -- after the first had already promoted a record,
+// wired provenance, and cleared the hold, all uncommitted.
+func TestSessionResolveHeldPartialBatchChangesNothing(t *testing.T) {
+	emb := &dedupEmbedder{dim: 16}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	ctx := context.Background()
+
+	const text = "atomic resolve-held leaves nothing behind on failure"
+	_, sessionID, segID := holdSessionFixture(t, a, text)
+	baseline := eng.NodeCount()
+
+	_, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: segID, Action: "allow_similar"},
+		{SegmentID: segID, Action: "allow_similar"},
+	})
+	if apiErr == nil {
+		t.Fatal("a batch naming the same segment twice must fail")
+	}
+	if got := eng.NodeCount(); got != baseline {
+		t.Fatalf("node count %d after failed batch, want unchanged %d", got, baseline)
+	}
+	eng.RLock()
+	seg, _ := eng.Graph().GetNode(segID)
+	if held, _ := seg.Properties.GetBool("promotion_held"); !held {
+		t.Error("failed batch must leave the hold in place")
+	}
+	if captured, _ := seg.Properties.GetString("captured_as"); captured != "" {
+		t.Errorf("failed batch stamped captured_as = %q", captured)
+	}
+	for _, e := range eng.Graph().EdgesFrom(segID) {
+		if e.Type == "extracted_as" {
+			t.Errorf("failed batch left a provenance edge to %s", e.TargetID)
+		}
+	}
+	eng.RUnlock()
+
+	resp, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: segID, Action: "allow_similar"},
+	})
+	if apiErr != nil {
+		t.Fatalf("resolve after failed batch: %v", apiErr)
+	}
+	if len(resp.Resolved) != 1 || resp.Resolved[0].MemoryRecordID == "" {
+		t.Fatalf("expected a clean promotion after the failed batch, got %+v", resp.Resolved)
+	}
+}
+
 // TestSessionResolveHeldUpdateTarget: update_target wires the
 // segment's provenance to the existing record -- no new Memory record
 // -- and defaults the target to the record the hold named.

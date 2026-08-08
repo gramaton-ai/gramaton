@@ -47,12 +47,12 @@ func runRepair(cmd *cobra.Command, args []string) error {
 	}
 	dir := configDir()
 
-	// Refuse to run while the server is active to prevent concurrent
-	// writes to the same store.
-	if !repairDryRun {
-		if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
-			return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
-		}
+	// Refuse to run while the server is active. UNCONDITIONAL: even a
+	// dry run must LoadEngine, and bbolt's open has no timeout -- a
+	// dry run against a live server hung silently on the file lock
+	// instead of refusing.
+	if info, err := server.ReadServerInfo(dir); err == nil && server.IsProcessAlive(info.PID) {
+		return fmt.Errorf("server is running (pid %d). Stop it first: gramaton stop", info.PID)
 	}
 
 	eng, err := core.LoadEngine(dir, baseConfigDir())
@@ -65,15 +65,15 @@ func runRepair(cmd *cobra.Command, args []string) error {
 	// after.
 	defer func() { _ = eng.Close() }()
 
-	// Read-only gate for every mutating path of this command: Repair
-	// and the --content-quality self-heal both write DURABLY before
-	// Save (Repair's DeleteEdge persists straight to the bbolt edge
-	// store; self-heal's SetProp to the property index), so the
-	// engine's Save backstop alone would reject the commit AFTER the
-	// mutation already stuck -- the worst of both worlds on a frozen
-	// artifact. Refuse up front instead, same message shape as the
-	// api guards. The --dry-run path stays allowed: it only runs
-	// Validate, like `gramaton validate`.
+	// Read-only gate for every mutating path of this command. Repair
+	// itself now rejects inside WithWriteBatch, but the
+	// --content-quality self-heal writes DURABLY before Save
+	// (SetProp to the property index), so the engine's Save backstop
+	// alone would reject the commit AFTER the mutation already stuck
+	// -- the worst of both worlds on a frozen artifact. Refuse up
+	// front instead, same message shape as the api guards. The
+	// --dry-run path stays allowed: it only runs Validate, like
+	// `gramaton validate`.
 	if !repairDryRun && eng.ReadOnly() {
 		return fmt.Errorf("store is read-only: repair is not permitted (make it writable first: gramaton store thaw)")
 	}
@@ -105,10 +105,8 @@ func runRepair(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Actual repair.
-	eng.Lock()
+	// Actual repair. Repair manages its own locking (WithWriteBatch).
 	result := eng.Repair()
-	eng.Unlock()
 
 	for _, msg := range result.Messages {
 		fmt.Printf("  %s\n", msg)

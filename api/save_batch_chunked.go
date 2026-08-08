@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -373,6 +374,9 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 		rollback = append(rollback, rollbackEntry{nodeID: n.ID, props: n.Properties})
 
 		bm25Text := item.Content
+		if len(item.Keywords) > 0 {
+			bm25Text += " " + strings.Join(item.Keywords, " ")
+		}
 		if metaText := metaBM25Text(item.Meta); metaText != "" {
 			bm25Text += " " + metaText
 		}

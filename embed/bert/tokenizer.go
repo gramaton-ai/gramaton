@@ -78,38 +78,6 @@ func NewTokenizerFromJSON(data []byte) (*Tokenizer, error) {
 	return t, nil
 }
 
-// NewTokenizerFromVocab parses a plain vocab.txt file (one token per line,
-// indexed by line number). Uses default BERT normalizer settings.
-func NewTokenizerFromVocab(data []byte) (*Tokenizer, error) {
-	lines := strings.Split(string(data), "\n")
-	vocab := make(map[string]int32, len(lines))
-	for i, line := range lines {
-		if line == "" && i == len(lines)-1 {
-			continue // trailing newline
-		}
-		vocab[line] = int32(i)
-	}
-	if len(vocab) == 0 {
-		return nil, fmt.Errorf("tokenizer: empty vocab")
-	}
-
-	t := &Tokenizer{
-		vocab:    vocab,
-		maxLen:   DefaultMaxLen,
-		doLower:  true,
-		stripAcc: true,
-	}
-	t.unkID = t.id("[UNK]")
-	t.clsID = t.id("[CLS]")
-	t.sepID = t.id("[SEP]")
-	t.padID = t.id("[PAD]")
-
-	if err := t.validateSpecialTokens(); err != nil {
-		return nil, err
-	}
-	return t, nil
-}
-
 // Encode tokenizes a text string and returns input tensors for BERT.
 // Returns token IDs, attention mask (1 for real tokens, 0 for padding),
 // and token type IDs (all 0 for single-segment input).

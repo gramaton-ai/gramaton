@@ -263,10 +263,21 @@ type Result struct {
 	ContentLength       int      `json:"content_length,omitempty"`
 	EdgeCount           int      `json:"edge_count,omitempty"`
 	Staleness           float64  `json:"staleness,omitempty"`
+	UpdatedAt           string   `json:"updated_at,omitempty"`
+	ConflictCount       int      `json:"conflict_count,omitempty"` // live contradicts edges (built under the lock so reranking needs none)
 	Collections         []string `json:"collections,omitempty"`
 	Store               string   `json:"store,omitempty"`      // "memory" or "sessions"
 	SessionID           string   `json:"session_id,omitempty"` // for session segments: parent session node ID
-	TopicName           string   `json:"topic_name,omitempty"` // for session segments: parent topic name
+
+	// RerankSnippet is the text the off-lock reranker shows the LLM
+	// for this candidate: content_short when present, else a prefix
+	// of the record's content. Built under the lock alongside the
+	// rest of the result so reranking needs no graph access -- and so
+	// records without a summary (fresh captures pending curation,
+	// session segments) still enter the rerank prompt. Never
+	// serialized to clients.
+	RerankSnippet string `json:"-"`
+	TopicName     string `json:"topic_name,omitempty"` // for session segments: parent topic name
 }
 
 // Execute runs the search query and returns results. This calls
@@ -1137,12 +1148,28 @@ func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 	if v, ok := n.Properties.GetString("content_short"); ok {
 		r.SummaryShort = v
 	}
+	r.RerankSnippet = r.SummaryShort
+	if r.RerankSnippet == "" {
+		if v, ok := n.Properties.GetString("content_full"); ok {
+			r.RerankSnippet = v
+		} else if v, ok := n.Properties.GetString("content"); ok {
+			// Session segments store their text under "content".
+			r.RerankSnippet = v
+		}
+		if len(r.RerankSnippet) > 200 {
+			r.RerankSnippet = r.RerankSnippet[:200]
+		}
+	}
 	if v, ok := n.Properties.GetFloat64("confidence"); ok {
 		r.Confidence = v
 	}
 	if v, ok := n.Properties.GetString("temporality"); ok {
 		r.Temporality = v
 	}
+	if v, ok := n.Properties.GetTimestamp("updated_at"); ok {
+		r.UpdatedAt = v.UTC().Format(time.RFC3339)
+	}
+	r.ConflictCount = len(ConflictingRecordIDs(t.graph, n.ID))
 	if v, ok := n.Properties.GetString("knowledge_type"); ok {
 		r.KnowledgeType = v
 	}

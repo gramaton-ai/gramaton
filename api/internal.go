@@ -351,3 +351,30 @@ func inspectMetadataSummary(props graph.Properties) string {
 	}
 	return result
 }
+
+// snapToCurrentBranch resolves a timestamp-index hit onto the active
+// lineage. The index is global across branches (and a crash window
+// can leave a commit indexed that never became HEAD), so a date can
+// resolve to an abandoned lineage's commit; walking parents from the
+// hit finds the nearest ancestor on the current branch, which is
+// still at/before the requested time since parents are older.
+// Returns "" when nothing on the branch is reachable. Caller holds
+// at least the read lock.
+func (a *API) snapToCurrentBranch(hash string) string {
+	const bound = 200000 // matches core's OnCurrentBranch walk bound
+	cur := hash
+	for range bound {
+		if cur == "" {
+			return ""
+		}
+		if a.engine.OnCurrentBranch(cur) {
+			return cur
+		}
+		c, err := loadCommitMeta(a.engine.Store(), cur)
+		if err != nil {
+			return ""
+		}
+		cur = c.Parent
+	}
+	return ""
+}

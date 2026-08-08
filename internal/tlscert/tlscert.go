@@ -236,24 +236,6 @@ func SPKIFingerprint(cert *x509.Certificate) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// LoadFingerprint reads a PEM certificate file and returns its SPKI
-// fingerprint.
-func LoadFingerprint(certPath string) (string, error) {
-	data, err := os.ReadFile(certPath)
-	if err != nil {
-		return "", fmt.Errorf("read certificate: %w", err)
-	}
-	block, _ := pem.Decode(data)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return "", fmt.Errorf("%s is not a PEM certificate", certPath)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("parse certificate: %w", err)
-	}
-	return SPKIFingerprint(cert), nil
-}
-
 // VerifyPeerPinned returns a tls.Config.VerifyPeerCertificate
 // callback that accepts exactly the certificate whose SPKI
 // fingerprint matches pin. Callers set InsecureSkipVerify: true

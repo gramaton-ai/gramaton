@@ -66,6 +66,14 @@ func (a *API) inspectAsOf(req InspectRequest, includeContent bool) (InspectRespo
 	}
 	data, err := store.Read(nodeHash)
 	if err != nil {
+		// A keep-versions prune sweeps old node blobs while commits
+		// and trees remain -- absence covered by the floor is policy,
+		// not corruption.
+		if floor := a.engine.HistoryFloor(); floor != nil {
+			if c, cerr := loadCommitMeta(store, commitHash); cerr == nil && floor.CoversRecordVersion(req.ID, c.Timestamp) {
+				return InspectResponse{}, ErrNotFound("this version's content was removed by retention policy (store pruned); newer versions and the record's metadata timeline remain")
+			}
+		}
 		return InspectResponse{}, ErrInternal("failed to read record at commit")
 	}
 	n, err := graph.UnmarshalNode(data)

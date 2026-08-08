@@ -102,6 +102,70 @@ func TestHistoryRC4DeleteRecreateSameHashSurfacesBoth(t *testing.T) {
 	}
 }
 
+// TestHistoryAttributesChangesToTheChangingCommit pins change
+// attribution. The walk compares consecutive commits newest-first;
+// each difference was made by the newer commit of the pair, so the
+// entry must carry that commit's hash and message. The pre-fix
+// walker attributed every modification to the older side (whatever
+// unrelated commit preceded the change), stamped a bogus entry on
+// the walk's first visited commit, and never reported deletions.
+func TestHistoryAttributesChangesToTheChangingCommit(t *testing.T) {
+	a, eng := setupTestAPI(t)
+
+	commit := func(msg string, mutate func()) {
+		t.Helper()
+		eng.Lock()
+		defer eng.Unlock()
+		mutate()
+		if _, err := eng.Save(msg); err != nil {
+			t.Fatalf("%s: %v", msg, err)
+		}
+	}
+	noise := func(msg string) {
+		commit(msg, func() {
+			eng.Graph().AddNode(graph.Properties{
+				"content_full": graph.StringProperty("noise for " + msg),
+			})
+		})
+	}
+
+	var id string
+	commit("create", func() {
+		id = eng.Graph().AddNode(graph.Properties{
+			"content_full": graph.StringProperty("v1"),
+		}).ID
+	})
+	noise("noise-1")
+	commit("update", func() {
+		eng.Graph().SetNodeProperty(id, "content_full", graph.StringProperty("v2"))
+	})
+	noise("noise-2")
+	commit("delete", func() {
+		if err := eng.Graph().DeleteNode(id); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+	})
+	noise("noise-3")
+
+	resp, apiErr := a.History(context.Background(), HistoryRequest{ID: id})
+	if apiErr != nil {
+		t.Fatalf("History: %v", apiErr)
+	}
+	got := make([]string, 0, len(resp.Changes))
+	for _, e := range resp.Changes {
+		got = append(got, e.Action)
+	}
+	want := []string{"delete", "update", "create"}
+	if len(got) != len(want) {
+		t.Fatalf("actions = %v, want exactly %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("actions = %v, want %v", got, want)
+		}
+	}
+}
+
 // TestHistorySinceUntilNarrowsWalk confirms the Since/Until fields
 // (Phase 2) restrict the per-record walker to a date range and
 // bypass MaxLogTraversal for date-bounded calls. The test seeds

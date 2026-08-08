@@ -45,8 +45,6 @@ type API struct {
 	preparedMu       sync.Mutex
 	preparedSessions map[string]time.Time
 
-	retrieval *RetrievalTracker
-
 	// preparedSweepCancel cancels the prepared-sessions sweeper
 	// goroutine on shutdown. Set by startPreparedSweeper.
 	preparedSweepCancel context.CancelFunc
@@ -130,7 +128,6 @@ func New(deps Dependencies) *API {
 		configDir:        deps.ConfigDir,
 		storeName:        deps.StoreName,
 		preparedSessions: make(map[string]time.Time),
-		retrieval:        NewRetrievalTracker(),
 	}
 	if a.log == nil {
 		a.log = slog.Default()
@@ -140,17 +137,6 @@ func New(deps Dependencies) *API {
 	a.loadPreparedSessions()
 	return a
 }
-
-// Engine returns the underlying engine. Exposed for transport-layer
-// wiring that needs direct access (e.g. MCP request bindings that
-// want to acquire engine locks around registered tool metadata).
-// Prefer calling API methods over reaching through this accessor.
-func (a *API) Engine() *core.Engine { return a.engine }
-
-// UsageTracker returns the LLM usage tracker. Exposed for transports
-// that need to surface cost information outside of a specific
-// operation call (e.g. /v1/llm/stats).
-func (a *API) UsageTracker() *llm.UsageTracker { return a.usageTracker }
 
 // Runner returns the curation runner. Exposed for transports that
 // need to trigger or inspect curation state directly.

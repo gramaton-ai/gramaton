@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
@@ -289,9 +290,14 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 
 	n := a.engine.Graph().AddNode(props)
 
-	// Index content for BM25. Append meta values so keyword search
-	// matches structured metadata fields.
+	// Index content for BM25, with the caller's keywords and meta
+	// values appended -- keywords are promised as BM25 terms by the
+	// tool description, and the rebuild path (RecordIndexText) unions
+	// the same three sources.
 	bm25Text := req.Content
+	if len(req.Keywords) > 0 {
+		bm25Text += " " + strings.Join(req.Keywords, " ")
+	}
 	if metaText := metaBM25Text(req.Meta); metaText != "" {
 		bm25Text += " " + metaText
 	}

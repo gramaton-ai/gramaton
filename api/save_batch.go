@@ -466,6 +466,9 @@ func (a *API) runCaptureBatchCore(ctx context.Context, jobID string, req SaveBat
 		rollback = append(rollback, rollbackEntry{nodeID: n.ID, props: n.Properties})
 
 		bm25Text := item.Content
+		if len(item.Keywords) > 0 {
+			bm25Text += " " + strings.Join(item.Keywords, " ")
+		}
 		if metaText := metaBM25Text(item.Meta); metaText != "" {
 			bm25Text += " " + metaText
 		}

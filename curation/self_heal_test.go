@@ -469,6 +469,38 @@ func TestRunSelfHealScansAndRepairs(t *testing.T) {
 	}
 }
 
+// TestRunSelfHealCommitsEachRepairInItsOwnLockWindow pins the
+// attribution boundary. Engine.Save commits whatever the graph
+// currently holds, so a repair left uncommitted when the write lock
+// is released is picked up by whichever writer saves next -- an
+// unrelated user save would carry self-heal's mutations under its own
+// author and message. Two repairs landing in one commit is the
+// signature of that floating window.
+func TestRunSelfHealCommitsEachRepairInItsOwnLockWindow(t *testing.T) {
+	eng := setupSelfHealTest(t)
+	idA := seedContaminated(t, eng,
+		strings.Repeat("Good prefix sentence with enough characters. ", 3), "Body full a. Body full b.")
+	idB := seedContaminated(t, eng,
+		strings.Repeat("Another good prefix with enough characters. ", 3), "Body c. Body d.")
+
+	result := RunSelfHeal(eng, slog.Default())
+	if result.Repaired != 2 {
+		t.Fatalf("Repaired = %d, want 2", result.Repaired)
+	}
+
+	verA := eng.Changelog().Versions(idA)
+	verB := eng.Changelog().Versions(idB)
+	if len(verA) < 2 || len(verB) < 2 {
+		t.Fatalf("repairs minted no new logical version: A=%+v B=%+v", verA, verB)
+	}
+	commitA := verA[len(verA)-1].Commit
+	commitB := verB[len(verB)-1].Commit
+	if commitA == commitB {
+		t.Fatalf("both repairs landed in commit %s; each must commit inside the lock window that made it",
+			commitA)
+	}
+}
+
 // --- firstSentences helper ---
 
 func TestFirstSentencesBasic(t *testing.T) {

@@ -59,7 +59,6 @@ type Config struct {
 	Chunking  ChunkingConfig  `yaml:"chunking"`
 	Concepts  ConceptsConfig  `yaml:"concepts"`
 	SaveGuard SaveGuardConfig `yaml:"save_guard"`
-	Graph     GraphConfig     `yaml:"graph"`
 	Storage   StorageConfig   `yaml:"storage"`
 	Merge     MergeConfig     `yaml:"merge"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
@@ -386,7 +385,7 @@ type GCConfig struct {
 }
 
 // CurationConfig controls the background curation loop. Curation handles
-// deterministic maintenance (auto-supersession, orphan linking, lifecycle
+// deterministic maintenance (orphan linking, lifecycle
 // expiry, concept emergence) and, when LLM is configured, autonomous
 // classification / summarization / contradiction detection / concept
 // synthesis / manifest rollup.
@@ -905,21 +904,6 @@ type SearchConfig struct {
 	// suggestions are returned alongside the results.
 	SuggestionThreshold float64 `yaml:"suggestion_threshold"`
 
-	// HNSWThreshold: vector count above which HNSW is used instead of
-	// flat scan. Smaller stores don't benefit from HNSW overhead.
-	HNSWThreshold int `yaml:"hnsw_threshold"`
-
-	// HNSWM: HNSW maximum connections per layer. Higher = better
-	// recall, more memory.
-	HNSWM int `yaml:"hnsw_m"`
-
-	// HNSWEfConstruction: HNSW build-time quality parameter.
-	HNSWEfConstruction int `yaml:"hnsw_ef_construction"`
-
-	// HNSWEfSearch: HNSW query-time search width. Higher = better
-	// recall, slower.
-	HNSWEfSearch int `yaml:"hnsw_ef_search"`
-
 	// VectorOnlyPenalty: score multiplier for results that matched via
 	// vector similarity but have no BM25 match. Penalizes
 	// semantic-only matches to favor lexical+semantic hits.
@@ -1210,14 +1194,6 @@ type SaveGuardConfig struct {
 	AdvisoryThreshold float64 `yaml:"advisory_threshold"`
 }
 
-// GraphConfig controls graph traversal behavior.
-type GraphConfig struct {
-	// EdgeWeightTraversalThreshold: minimum edge weight required for
-	// traversal during spreading activation and explore queries.
-	// Edges weaker than this are treated as absent.
-	EdgeWeightTraversalThreshold float64 `yaml:"edge_weight_traversal_threshold"`
-}
-
 // StorageConfig controls the on-disk prolly-tree parameters. These
 // directly affect the write-amplification / storage-overhead tradeoff
 // and should not be changed on existing stores (would require rebuild).
@@ -1381,10 +1357,6 @@ func Defaults() Config {
 			BM25WeightShort:     3.0,
 			RRFK:                60,
 			SuggestionThreshold: 0.75,
-			HNSWThreshold:       5000,
-			HNSWM:               16,
-			HNSWEfConstruction:  200,
-			HNSWEfSearch:        100,
 			VectorOnlyPenalty:   0.1,
 			RetrievalCandidates: 200,
 			SessionDedupEnabled: true,
@@ -1462,10 +1434,6 @@ func Defaults() Config {
 			AdvisoryThreshold:    0.85,
 		},
 
-		Graph: GraphConfig{
-			EdgeWeightTraversalThreshold: 0.3,
-		},
-
 		Storage: StorageConfig{
 			ProllyTargetChunkSize: 64,
 			ProllySplitBits:       6,
@@ -1480,11 +1448,6 @@ func Defaults() Config {
 // DefaultDir returns the default Gramaton configuration directory.
 func DefaultDir() string {
 	return filepath.Join(defaultHomeDir(), ".gramaton")
-}
-
-// DefaultConfigPath returns the default config file path.
-func DefaultConfigPath() string {
-	return filepath.Join(DefaultDir(), "config.yaml")
 }
 
 // LoadWithFallback loads config with deep-merge semantics: start from
@@ -1743,9 +1706,10 @@ func trimConfigStrings(cfg *Config) {
 // loaded config. Runs once per load after all overlays have been applied.
 func normalize(cfg *Config) error {
 	// Whitespace trim first: downstream checks in this function
-	// (empty-string comparisons for e.g. provider vs dedup.action)
-	// assume strings are already trimmed. Also positions the trim
-	// to run regardless of which error path follows.
+	// (empty-string comparisons for e.g. embedding.provider vs
+	// remote.token_file) assume strings are already trimmed. Also
+	// positions the trim to run regardless of which error path
+	// follows.
 	trimConfigStrings(cfg)
 
 	if cfg.LLM.Curation.MaxCallsPerRun > 10000 {

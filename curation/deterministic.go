@@ -1098,6 +1098,14 @@ func collectGarbage(e *core.Engine, cfg config.Config, logger *slog.Logger) int 
 		if e.SecIdx() != nil {
 			e.SecIdx().RemoveNode(id)
 		}
+		// The access sidecar is primary bookkeeping in its own bbolt
+		// file, outside the commit substrate, so a hard delete has to
+		// reclaim the entry explicitly. Left behind it survives
+		// backup/restore and re-overlays onto the ID if the record is
+		// ever re-imported.
+		if ai := e.AccessIdx(); ai != nil {
+			ai.Remove(id)
+		}
 		e.Graph().DeleteNode(id)
 		deleted++
 		gcActions = append(gcActions, graph.CommitAction{
@@ -1137,6 +1145,14 @@ func enrichConcepts(e *core.Engine, logger *slog.Logger) {
 	for _, id := range conceptIDs {
 		n, ok := e.Graph().GetNode(id)
 		if !ok {
+			continue
+		}
+		// "conceptual" is also a normal USER classification; only
+		// machine-owned concept nodes get evidence machinery. Stamping
+		// a user record would additionally mint a changelog version on
+		// every edge-count drift (evidence props are not bookkeeping
+		// for non-concept nodes by design).
+		if !graph.IsConcept(n.Properties) {
 			continue
 		}
 		if ps, ok := n.Properties.GetString("processing_status"); ok && ps == "deleted" {

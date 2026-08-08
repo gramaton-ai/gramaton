@@ -34,10 +34,10 @@ const (
 // curation defaults to "none": LLM costs are explicitly opt-in via
 // templates that declare curation=standard or via explicit caller
 // values, not via the default. Templates that want LLM enrichment
-// declare curation=standard explicitly. The flip from "standard"
-// happened when activation made the knob load-bearing on collection
-// items -- standard had been theatre while content_full was
-// uniformly absent.
+// declare curation=standard explicitly. The earlier "standard"
+// default was inert while collection items uniformly lacked
+// content_full; it flipped to "none" once the knob began driving
+// real spend on every collection.
 //
 // contradictions defaults to "on" matching the additive-knob /
 // most-permissive-wins resolution principle.

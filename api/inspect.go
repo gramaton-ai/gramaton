@@ -33,11 +33,18 @@ type InspectResponse struct {
 	ID              string         `json:"id"`
 	Properties      map[string]any `json:"properties"`
 	MetadataSummary string         `json:"metadata_summary"`
-	Related         []RelatedEdge  `json:"related"`
+	// Version is the record's current version token, usable as
+	// expected_version on update/resolve for optimistic concurrency.
+	// The update and resolve docs have always pointed callers here;
+	// the token is a private content-hash derivation an agent cannot
+	// compute, so inspect must actually serve it. Empty on as_of
+	// reads (historical states are not updatable).
+	Version string        `json:"version,omitempty"`
+	Related []RelatedEdge `json:"related"`
 
 	// EffectiveCuration is the resolved per-record curation behaviour
 	// computed from the node's member_of edges. Tells callers exactly
-	// what curation work will run on this record (curation, supersession,
+	// what curation work will run on this record (curation,
 	// contradictions). Absent on structural/container nodes (collections,
 	// sessions, topics) and concept-synthesis nodes -- those are not
 	// records that flow through curation.
@@ -55,9 +62,11 @@ type InspectResponse struct {
 const InspectDescription = "Get full content, metadata, and related records for a specific record by ULID. PREFER OVER SEARCH when the user's prompt names a specific ID (any ULID -- 26 chars starting with 0 or 1, e.g. 01KPED88HKK...) or when you already know the target record's ID from earlier context. Inspect is one call that returns the record plus its one-hop related edges with summaries; search on the same topic returns ranked candidates and takes two calls (search then inspect) to get the same depth. Set include_content=false for lightweight mode (omits content_full)."
 
 // Inspect returns a record with its properties, metadata summary, and
-// related edges. Records access and spreads activation (D14). When
-// IncludeContent is false, content_full is omitted from the properties
-// map. Lazily loads the node from storage if not cached.
+// related edges. Bumps the record's access metadata in the sidecar
+// (skipped on a read-only store); this is bookkeeping only, never a
+// commit. When IncludeContent is false, content_full is omitted from
+// the properties map. Lazily loads the node from storage if not
+// cached.
 func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse, *APIError) {
 	if req.ID == "" {
 		return InspectResponse{}, ErrMissing("id is required")
@@ -107,6 +116,7 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		ID:              n.ID,
 		Properties:      props,
 		MetadataSummary: inspectMetadataSummary(n.Properties),
+		Version:         recordVersionToken(n),
 	}
 	// Conflict visibility (Tenet 12): mirror the search renderer.
 	if conflicts := search.ConflictingRecordIDs(a.engine.Graph(), n.ID); len(conflicts) > 0 {
@@ -144,9 +154,6 @@ func (a *API) Inspect(ctx context.Context, req InspectRequest) (InspectResponse,
 		related = append(related, rel)
 	}
 	out.Related = related
-
-	// Track inspected ID for observe feedback loop detection.
-	a.retrieval.Track(req.ID)
 
 	return out, nil
 }

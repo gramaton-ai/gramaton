@@ -128,3 +128,17 @@ func TestValidateAcceptsInBounds(t *testing.T) {
 		t.Errorf("Validate on valid input returned error: %v", err)
 	}
 }
+
+// TestValidateWhitespaceOnlyIsEmpty: whitespace-only input collapses
+// to an empty field after sanitization -- an allowed empty value,
+// not "contains only structured-output tokens".
+func TestValidateWhitespaceOnlyIsEmpty(t *testing.T) {
+	orig := "   \t  "
+	cleaned := Field(orig)
+	if cleaned != "" {
+		t.Fatalf("Field(whitespace) = %q, want empty", cleaned)
+	}
+	if err := Validate(orig, cleaned, "context_about", 100); err != nil {
+		t.Fatalf("whitespace-only input must validate as an empty field, got: %v", err)
+	}
+}

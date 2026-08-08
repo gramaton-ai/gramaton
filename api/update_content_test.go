@@ -444,3 +444,79 @@ func TestResolveChangeNoteCap(t *testing.T) {
 		t.Fatal("oversized change_note on resolve must be rejected")
 	}
 }
+
+// racingAppendEmbedder embeds deterministically, and -- once armed --
+// mutates the target record's content during the embed call. The
+// embed runs in update's off-lock phase 2, so this reproduces a
+// concurrent content change landing between the phase-1 snapshot and
+// the phase-3 apply.
+type racingAppendEmbedder struct {
+	eng      *core.Engine
+	targetID string
+	armed    bool
+	dim      int
+}
+
+func (e *racingAppendEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	if e.armed && e.targetID != "" {
+		e.armed = false
+		e.eng.Lock()
+		e.eng.SetContentProp(e.targetID, "content_full", "concurrently rewritten base")
+		if _, err := e.eng.Save("concurrent rewrite"); err != nil {
+			e.eng.Unlock()
+			return nil, err
+		}
+		e.eng.Unlock()
+	}
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = make([]float32, e.dim)
+		for j := range out[i] {
+			out[i][j] = float32((i + j + 1) % 7)
+		}
+	}
+	return out, nil
+}
+
+func (e *racingAppendEmbedder) ModelID() string    { return "racing-append-embedder" }
+func (e *racingAppendEmbedder) ContextWindow() int { return 512 }
+
+// TestUpdateAppendConflictsWhenBaseMovesMidEmbed: a no-summary append
+// derives its vector from the phase-1 content snapshot but rebases
+// the append onto live content under the lock. If the base moves
+// between the two, applying would pair the stored text with a vector
+// embedded from text it no longer contains -- the update must return
+// a version conflict with nothing applied instead.
+func TestUpdateAppendConflictsWhenBaseMovesMidEmbed(t *testing.T) {
+	emb := &racingAppendEmbedder{dim: 8}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	emb.eng = eng
+	ctx := context.Background()
+
+	saved, apiErr := a.Save(ctx, SaveRequest{Content: "the original base text"})
+	if apiErr != nil {
+		t.Fatalf("save: %v", apiErr)
+	}
+	emb.targetID = saved.ID
+	emb.armed = true
+
+	resp, apiErr := a.Update(ctx, UpdateRequest{
+		ID:            saved.ID,
+		ContentAppend: "an addendum prepared against the old base",
+	})
+	if apiErr != nil {
+		t.Fatalf("Update: %v", apiErr)
+	}
+	if resp.VersionConflict == nil {
+		t.Fatal("append over a mid-embed base change must return a version conflict")
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(saved.ID)
+	content, _ := n.Properties.GetString("content_full")
+	if content != "concurrently rewritten base" {
+		t.Fatalf("content = %q; the conflicted append must apply nothing", content)
+	}
+}

@@ -228,36 +228,19 @@ func TestGELUSmallValues(t *testing.T) {
 	requireApprox(t, "gelu_small", x, want)
 }
 
-// Golden values: softmax([1,2,3]) = [0.0900, 0.2447, 0.6652]
-func TestSoftmax(t *testing.T) {
-	x := []float32{1, 2, 3}
-	Softmax(x, 1, 3)
-	want := []float32{0.09003057, 0.24472848, 0.66524094}
-	requireApprox(t, "softmax", x, want)
-
-	// Sum should be 1.
-	var sum float32
-	for _, v := range x {
-		sum += v
-	}
-	if !approxEqual(sum, 1.0) {
-		t.Errorf("softmax sum: got %v, want 1.0", sum)
-	}
-}
-
-func TestSoftmaxMultiRow(t *testing.T) {
+func TestSoftmaxMaskedMultiRow(t *testing.T) {
 	x := []float32{1, 2, 3, 100, 100, 100}
-	Softmax(x, 2, 3)
+	SoftmaxMasked(x, 2, 3, []int32{1, 1, 1})
 
 	// Row 2: equal values -> uniform distribution.
 	want2 := []float32{1.0 / 3, 1.0 / 3, 1.0 / 3}
 	requireApprox(t, "softmax_row2", x[3:6], want2)
 }
 
-func TestSoftmaxNumericalStability(t *testing.T) {
+func TestSoftmaxMaskedNumericalStability(t *testing.T) {
 	// Large values that would overflow without max subtraction.
 	x := []float32{1000, 1001, 1002}
-	Softmax(x, 1, 3)
+	SoftmaxMasked(x, 1, 3, []int32{1, 1, 1})
 	want := []float32{0.09003057, 0.24472848, 0.66524094}
 	requireApprox(t, "softmax_stable", x, want)
 }
@@ -441,18 +424,5 @@ func BenchmarkLayerNorm(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		LayerNorm(x, w, bias, 128, 384, 1e-12)
-	}
-}
-
-// BenchmarkSoftmax benchmarks row-wise softmax on [128, 128] (attention scores).
-func BenchmarkSoftmax(b *testing.B) {
-	x := make([]float32, 128*128)
-	for i := range x {
-		x[i] = float32(i%100) * 0.01
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		Softmax(x, 128, 128)
 	}
 }

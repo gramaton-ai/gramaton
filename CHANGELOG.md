@@ -172,6 +172,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity; the timeline surfaces it per version. Pre-existing
   commits read back unattributed.
 
+- **Discarding the active branch is refused (breaking).** BranchDiscard
+  previously switched HEAD to main and then discarded; it now
+  returns an error directing the caller to check out another branch
+  first -- an implicit branch switch buried inside a discard is how
+  work gets lost.
+
+- **New request bounds.** A single `gramaton_session_save` accepts
+  at most 500 segments (matching the batch path), and a single
+  `gramaton_save_batch_result` wait is bounded by the transport
+  (about two minutes over HTTP; the retryable timeout says to call
+  again). Requests beyond either bound were previously accepted --
+  and, for the wait, died as a connection reset.
+
+- **Wire additions and shape changes.** `gramaton_inspect` returns
+  the record's `version` token; search results carry `updated_at`
+  and `conflict_count` (live contradicts edges); access bookkeeping
+  (access_count / last_accessed) now covers exactly the results a
+  query returns rather than every ranked candidate; the repair
+  result drops its `indexes_rebuilt` field (repair deletes through
+  the canonical index-maintaining path and no longer mass-rebuilds);
+  and `gramaton repair --dry-run` refuses while the server is
+  running instead of hanging on the database lock.
+
 ### Added
 
 - **`gramaton prune`: deliberate, manual history retention (CLI
@@ -275,6 +298,108 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now stage the commit into a fresh graph (edges always from the
   commit's tree) and adopt it by rewriting the shared store's
   contents under the write lock.
+
+- **Per-record history attributes changes to the commit that made
+  them.** The raw commit walk stamped each change entry with the
+  older commit of its comparison pair, so modifications were
+  credited to whatever unrelated commit happened to precede them,
+  the walk start minted a bogus entry from an arbitrary commit's
+  message, and deletions were never reported at all. Entries now
+  carry the commit that made the change -- creations,
+  modifications, and deletions alike.
+
+- **Held session promotions resolve atomically.** A
+  `gramaton_session_resolve_held` batch that failed partway
+  (duplicate segment, concurrent resolution) used to leave earlier
+  resolutions' promoted records, provenance edges, and cleared
+  holds floating uncommitted for the next unrelated save to
+  persist. The whole batch is now verified before the first
+  mutation, and a batch naming the same segment twice is rejected
+  outright.
+
+- **Intake enforces the save path's input contract.** The
+  `gramaton_intake` MCP tool now carries `allow_similar` (the hold
+  response's documented exit was previously unexpressable over
+  MCP); summary and context fields are sanitized for
+  tool-use-format leakage instead of stored dirty; malformed
+  `valid_from`/`valid_until`/`asserted_as_of` dates are rejected
+  instead of silently dropped; and an acknowledged hold can no
+  longer shadow a different hold-grade record that committed in the
+  scan-to-lock window. Caller keywords are BM25-indexed at save
+  time on both intake and save -- previously the promise that
+  "keywords are BM25 terms" only became true after an index
+  rebuild.
+
+- **Blocking batch-result waits respect the transport.**
+  `gramaton_save_batch_result` advertised a 30-minute wait, but
+  every production transport rides the HTTP server, whose write
+  timeout killed the connection after two minutes -- a reset
+  instead of the documented retryable-timeout snapshot. The wait is
+  now clamped so the snapshot always arrives; call again to keep
+  waiting (the tool description says so).
+
+- **Repair finds what it is designed to find and deletes
+  completely.** The orphan-chunk scan ran after the dangling-edge
+  pass had already destroyed the chunk_of evidence, so orphan
+  removal never actually fired; deletions also bypassed the
+  collection member cache, the secondary index, and the access
+  sidecar. Repair now scans everything first, deletes through the
+  canonical write-session path, and commits as a single
+  transaction.
+
+- **Crash windows repair themselves at boot.** A crash between a
+  write batch's index commit and its graph commit is detected (the
+  store boots with a warning naming `gramaton validate` /
+  `repair`); a crash between the HEAD write and the branch-ref
+  write fast-forwards the trailing ref so a later checkout cannot
+  silently rewind the branch; `gramaton migrate`'s timestamp
+  backfill grounds at the prune floor instead of failing on pruned
+  stores; and a record created and deleted within one write phase
+  no longer mints a phantom deletion version.
+
+- **A content append cannot pair a record with a stale vector.** A
+  no-summary `content_append` whose base content moved concurrently
+  between snapshot and apply now returns a version conflict to
+  retry against the fresh state, instead of storing text embedded
+  from content the record no longer contains.
+
+- **Curation counts, guards, and cleanup corrected.** The store
+  manifest no longer counts concepts as records; self-heal repairs
+  commit inside their own lock windows so a concurrent save cannot
+  adopt them under the wrong author; curation garbage collection
+  reclaims the access-sidecar entry; a batched concept synthesis
+  rewrite stays out of BM25 like its unbatched twin; concept
+  telemetry treats a future `valid_until` as live; and
+  `gramaton_classify` / `gramaton_resolve` refuse session segments
+  (append-only), matching update's existing refusal.
+
+- **Transport parity and store gates tightened.** The MCP status
+  handler takes the engine read lock (a concurrent restore could
+  race it); the CLI proxy's `gramaton_session_start` forwards the
+  `source` argument it silently dropped; an over-limit jobs-list
+  page size is rejected identically on every transport;
+  `gramaton migrate` refuses to run against a remote store instead
+  of fabricating a local data directory; the changelog and collapse
+  backfills refuse read-only stores before touching them (collapse
+  previously ran its full backup and archive first); a `gramaton_diff`
+  `since` equal to the prune-floor date now carries the floor note
+  instead of returning a silently empty diff; and a single
+  `gramaton_session_save` is capped at 500 segments, matching the
+  batch path's bound.
+
+### Removed
+
+- **Dead scaffolding is gone, and five config keys with it
+  (breaking for config).** The never-wired HNSW vector index and
+  its search knobs -- `search.hnsw_threshold`, `search.hnsw_m`,
+  `search.hnsw_ef_construction`, `search.hnsw_ef_search` -- and the
+  `graph:` section (its one traversal knob served the removed
+  spreading activation) leave the config schema; configs still
+  carrying these keys fail at load -- delete them. Also removed
+  with no wire or config impact: a query-decomposition experiment,
+  the export-all wrapper family (exports stream per-record and
+  never hold the engine lock across a file), and unused accessors
+  and helpers across the codebase.
 
 ## [0.3.0-alpha.6] - 2026-07-06
 

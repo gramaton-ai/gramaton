@@ -80,8 +80,10 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 	var sinceHash string
 	if !sinceT.IsZero() {
 		if h, ok := tsIdx.CommitBefore(sinceT); ok {
-			sinceHash = h
-		} else {
+			// Branch-scope: the index spans every lineage.
+			sinceHash = a.snapToCurrentBranch(h)
+		}
+		if sinceHash == "" {
 			resp := DiffResponse{
 				Added:    []DiffEntry{},
 				Modified: []DiffEntry{},
@@ -89,8 +91,10 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 			}
 			// State the floor instead of returning silently empty --
 			// on a pruned store, "no commit before since" usually
-			// means the window starts below removed history.
-			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && sinceT.Before(floor.FloorDate) {
+			// means the window starts at or below removed history.
+			// !After (not Before) so a since exactly on the floor date
+			// still gets the note instead of a silent empty diff.
+			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && !sinceT.After(floor.FloorDate) {
 				resp.Note = fmt.Sprintf("history available from %s (store pruned); the requested window starts before it", floor.FloorDate.UTC().Format(time.RFC3339))
 			}
 			return resp, nil
@@ -102,16 +106,21 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 	// BEFORE until -- use CommitAt. Empty => HEAD.
 	untilHash := headHash
 	if !untilT.IsZero() {
-		if h, ok := tsIdx.CommitAt(untilT); ok {
-			untilHash = h
-		} else {
-			// until is before the earliest indexed commit; no range.
+		h, ok := tsIdx.CommitAt(untilT)
+		if ok {
+			// Branch-scope the hit: the index spans every lineage.
+			h = a.snapToCurrentBranch(h)
+		}
+		if !ok || h == "" {
+			// until predates every indexed commit, or nothing at or
+			// before it exists on this branch; no range.
 			return DiffResponse{
 				Added:    []DiffEntry{},
 				Modified: []DiffEntry{},
 				Removed:  []DiffEntry{},
 			}, nil
 		}
+		untilHash = h
 	}
 
 	if untilHash == "" {

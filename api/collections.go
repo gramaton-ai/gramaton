@@ -836,6 +836,14 @@ func (a *API) collectionItemsAtCommit(
 	if !ok {
 		return emptyHistoricalResponse(collectionID, asOfT), nil
 	}
+	// Branch-scope the hit: the index spans every lineage, and an
+	// as_of must never report another branch's membership as this
+	// one's history.
+	if snapped := a.snapToCurrentBranch(commitHash); snapped != "" {
+		commitHash = snapped
+	} else {
+		return emptyHistoricalResponse(collectionID, asOfT), nil
+	}
 	store := a.engine.Store()
 
 	commit, err := graph.LoadCommitMeta(store, commitHash)

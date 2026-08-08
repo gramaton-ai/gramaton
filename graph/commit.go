@@ -598,48 +598,6 @@ func (g *Graph) MigrateEdgesTo(dst EdgeStore) {
 	g.edgeStore = dst
 }
 
-// NodeIDsInCommit returns all node IDs in a commit without loading
-// the full graph. Uses the prolly tree for v1 commits, falls back
-// to reading all chunks for v0 commits.
-func NodeIDsInCommit(s *storage.Store, commitHash string) ([]string, error) {
-	commitData, err := s.Read(commitHash)
-	if err != nil {
-		return nil, err
-	}
-	var commit Commit
-	if err := json.Unmarshal(commitData, &commit); err != nil {
-		return nil, err
-	}
-
-	if commit.Version >= 1 && commit.NodeTreeRoot != "" {
-		tree := storage.LoadProllyTree(s, commit.NodeTreeRoot)
-		entries, err := tree.AllEntries()
-		if err != nil {
-			return nil, err
-		}
-		ids := make([]string, len(entries))
-		for i, e := range entries {
-			ids[i] = e.Key
-		}
-		return ids, nil
-	}
-
-	// v0 fallback: read each chunk to get the node ID.
-	var ids []string
-	for _, hash := range commit.NodeHashes {
-		data, err := s.Read(hash)
-		if err != nil {
-			continue
-		}
-		n, err := UnmarshalNode(data)
-		if err != nil {
-			continue
-		}
-		ids = append(ids, n.ID)
-	}
-	return ids, nil
-}
-
 // NodeHashInCommit returns the content hash for a specific node ID
 // in a commit. Uses prolly tree lookup for v1 commits (O(log N)).
 func NodeHashInCommit(s *storage.Store, commitHash, nodeID string) (string, bool, error) {

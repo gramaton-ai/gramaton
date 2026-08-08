@@ -157,35 +157,6 @@ func GELU(x []float32) {
 	}
 }
 
-// Softmax applies row-wise softmax in-place. x is [rows, cols].
-// Numerically stable: subtracts row max before exponentiation.
-func Softmax(x []float32, rows, cols int) {
-	for i := 0; i < rows; i++ {
-		row := x[i*cols : (i+1)*cols]
-
-		// Find row max for numerical stability.
-		max := row[0]
-		for _, v := range row[1:] {
-			if v > max {
-				max = v
-			}
-		}
-
-		// Exponentiate and sum.
-		var sum float32
-		for j := range row {
-			row[j] = float32(math.Exp(float64(row[j] - max)))
-			sum += row[j]
-		}
-
-		// Normalize.
-		invSum := 1.0 / sum
-		for j := range row {
-			row[j] *= invSum
-		}
-	}
-}
-
 // SoftmaxMasked applies row-wise softmax in-place with an attention mask.
 // x is [rows, cols]. mask is [cols] where 0 means masked (set to -inf before softmax).
 func SoftmaxMasked(x []float32, rows, cols int, mask []int32) {
