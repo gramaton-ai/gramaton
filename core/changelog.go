@@ -27,10 +27,21 @@ var bookkeepingProps = map[string]bool{
 	"repaired_at":       true,
 	"repair_method":     true,
 	"repair_needed_llm": true,
-	// Reembed retry bookkeeping and the deferred save-guard flag:
-	// both are written by sweeps that must never mint versions.
-	"last_embed_error":      true,
-	"similar_check_pending": true,
+	// Retry bookkeeping and the deferred save-guard flag: all written
+	// by sweeps that must never mint versions. Every curation task's
+	// attempts/last-error pair belongs here -- a record whose LLM
+	// calls keep failing must not accrue a phantom version per retry.
+	"last_embed_error":               true,
+	"similar_check_pending":          true,
+	"classify_attempts":              true,
+	"last_classify_error":            true,
+	"summary_attempts":               true,
+	"last_summary_error":             true,
+	"observation_extract_attempts":   true,
+	"last_observation_extract_error": true,
+	"synthesis_attempts":             true,
+	"last_synthesis_error":           true,
+	"repair_input_hash":              true,
 }
 
 func isBookkeepingProp(key string) bool {
@@ -506,9 +517,20 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 	total := len(chain)
 	indexed := 0
 	batch := make(map[string][]index.ChangelogEntry)
+	// The marker must never move BACKWARDS past live coverage: an
+	// interrupted backfill that left it mid-chain would make the boot
+	// gap walk replay already-indexed commits. While live coverage
+	// exists, flushes keep the existing marker; the walk itself is
+	// idempotent (entry-level dedupe), so resumability doesn't need
+	// marker progress.
+	preMarker := e.changelog.Marker()
 	var batchMarker string
 	flush := func() error {
-		if err := e.changelog.AppendBatch(batch, batchMarker); err != nil {
+		m := batchMarker
+		if preMarker != "" {
+			m = preMarker
+		}
+		if err := e.changelog.AppendBatch(batch, m); err != nil {
 			return err
 		}
 		batch = make(map[string][]index.ChangelogEntry)

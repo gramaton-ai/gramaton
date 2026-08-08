@@ -396,3 +396,52 @@ func TestAccessOverlayConcurrentLoad(t *testing.T) {
 		t.Fatalf("access_count = %d, want the bumps to have landed", c)
 	}
 }
+
+// TestBackfillMergesHistoryUnderLiveCoverage pins the oldest-first
+// contract when the backfill runs AFTER live coverage began (the
+// advertised upgrade flow): history indexed later must merge UNDER
+// the live entries, not append at the tail -- every consumer of the
+// list is positional, and retention slots are counted from it.
+func TestBackfillMergesHistoryUnderLiveCoverage(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("v1"),
+	})
+	c1, err := eng.Save("create")
+	if err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 1: %v", err)
+	}
+	eng.SetContentProp(n.ID, "content_full", "v2")
+	if _, err := eng.Save("revise"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save 2: %v", err)
+	}
+	eng.Unlock()
+
+	// Simulate coverage that began at v2: v1's entry absent, marker
+	// current. The backfill must merge v1 back UNDER v2.
+	if err := eng.Changelog().RetractCommits(map[string]bool{c1.Hash: true}); err != nil {
+		t.Fatalf("RetractCommits: %v", err)
+	}
+	if _, err := eng.BackfillChangelog(nil); err != nil {
+		t.Fatalf("BackfillChangelog: %v", err)
+	}
+	got := eng.Changelog().Versions(n.ID)
+	if len(got) != 2 {
+		t.Fatalf("versions = %d, want 2", len(got))
+	}
+	if got[0].Commit != c1.Hash {
+		t.Fatalf("first entry = %s, want the OLDER commit %s (history merged at the tail)", trunc12(got[0].Commit), trunc12(c1.Hash))
+	}
+	if !got[0].Timestamp.Before(got[1].Timestamp) && !got[0].Timestamp.Equal(got[1].Timestamp) {
+		t.Fatalf("entries out of chronological order: %v then %v", got[0].Timestamp, got[1].Timestamp)
+	}
+	// The marker never moved backwards past live coverage.
+	if eng.Changelog().Marker() != eng.HeadHash() {
+		t.Fatalf("marker = %s, want HEAD (backfill must not rewind coverage)", trunc12(eng.Changelog().Marker()))
+	}
+}

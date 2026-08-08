@@ -3,6 +3,7 @@ package index
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -102,6 +103,12 @@ func (c *BboltChangelog) Versions(nodeID string) []ChangelogEntry {
 			_ = json.Unmarshal(raw, &list)
 		}
 		return nil
+	})
+	// Defensive: stores whose backfill ran on an earlier binary can
+	// carry lists with history merged at the tail; every consumer is
+	// positional, so order is restored at the read boundary.
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].Timestamp.Before(list[j].Timestamp)
 	})
 	return list
 }
@@ -217,6 +224,14 @@ func (c *BboltChangelog) AppendBatch(perNode map[string][]ChangelogEntry, marker
 			if !changed {
 				continue
 			}
+			// The oldest-first contract must survive a backfill that
+			// runs AFTER live coverage began: history merged under
+			// existing entries would otherwise append at the tail and
+			// corrupt every positional consumer (timeline diffs,
+			// keep-versions retention slots).
+			sort.SliceStable(list, func(i, j int) bool {
+				return list[i].Timestamp.Before(list[j].Timestamp)
+			})
 			data, err := json.Marshal(list)
 			if err != nil {
 				return err
