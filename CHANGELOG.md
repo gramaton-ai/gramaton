@@ -9,6 +9,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Claude Code gets the extraction-reminder hook.** A new
+  `UserPromptSubmit` hook (registered by `gramaton init`) injects
+  the same threshold-based session-capture reminder Kiro has had:
+  when the turn counter the Stop hook maintains reaches
+  `GRAMATON_EXTRACT_INTERVAL` (default 10), the next prompt carries
+  a nudge to run `gramaton_session_prepare` /
+  `gramaton_session_save`, and the counter resets. Until now the
+  counter was written on every Claude Code turn but read by
+  nothing. Existing installs: re-run `gramaton init` and restart
+  Claude Code to register the new hook.
+
+- **The MCP proxy announces server instructions.** Every `gramaton
+  mcp` handshake now carries an instructions string describing the
+  store's tool families, when to search for them, and the
+  session-capture cadence. Clients that defer tool schemas behind
+  tool search still deliver server instructions at session start,
+  so the usage guidance reaches the model even when per-tool
+  descriptions are deferred. A frozen store's read-only notice now
+  leads this text instead of replacing it.
+
 - **Long-document ingestion: the chunking pipeline is live.**
   Content above `chunking.threshold` (now characters, default 8000,
   floored at the embedding window's capacity) is split into
@@ -49,6 +69,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   record. Export already excluded them.
 
 ### Fixed
+
+- **The always-load pins now reach real agent sessions.** The
+  `_meta: {"anthropic/alwaysLoad": true}` pin that exempts hot-path
+  tools (search, save, session prepare/save, inspect, and the rest
+  of the curated dozen) from client-side tool-search deferral was
+  only applied on the server's own MCP surface -- the CLI stdio
+  proxy that `gramaton init` actually wires every harness to never
+  carried it, so clients with tool search enabled deferred the
+  entire tool surface, descriptions included. The pins now ride
+  both registration surfaces, the canonical pin list is shared, and
+  a proxy-side test mirrors the server-side one so the two cannot
+  drift apart again.
 
 - **Batch items respect `limits.max_content_length`.** Only the
   aggregate batch cap bounded per-item content before; a single item
