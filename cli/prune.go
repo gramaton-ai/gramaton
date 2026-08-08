@@ -265,19 +265,8 @@ func executePrunePlan(eng *core.Engine, cfgDir string, refs map[string]string) e
 	if err := json.Unmarshal(data, &plan); err != nil {
 		return fmt.Errorf("plan file unreadable: %w", err)
 	}
-	if plan.Token == "" || pruneConfirmToken != plan.Token {
-		return fmt.Errorf("confirmation token does not match the persisted plan; re-read the plan output or re-plan")
-	}
-	if plan.Head != eng.HeadHash() {
-		return fmt.Errorf("the store changed since planning (HEAD moved); re-plan")
-	}
-	for name, tip := range plan.Refs {
-		if cur, ok := refs[name]; !ok || cur != tip {
-			return fmt.Errorf("ref %q changed since planning; re-plan", name)
-		}
-	}
-	if len(refs) != len(plan.Refs) {
-		return fmt.Errorf("refs changed since planning; re-plan")
+	if err := validatePrunePlan(&plan, pruneConfirmToken, eng.HeadHash(), refs); err != nil {
+		return err
 	}
 
 	var coverageNeeded time.Time
@@ -380,4 +369,27 @@ func parsePruneDate(s string) (time.Time, error) {
 		return t.UTC(), nil
 	}
 	return time.Time{}, fmt.Errorf("invalid date %q (expected RFC3339 or YYYY-MM-DD)", s)
+}
+
+// validatePrunePlan checks a persisted plan against the store's
+// current state -- the highest-stakes refusals in the command, kept
+// pure so they are testable: a wrong token, a moved HEAD, or any
+// changed ref means the plan's evidence is stale and executing it
+// would delete on assumptions that no longer hold.
+func validatePrunePlan(plan *prunePlanFile, token, head string, refs map[string]string) error {
+	if plan.Token == "" || token != plan.Token {
+		return fmt.Errorf("confirmation token does not match the persisted plan; re-read the plan output or re-plan")
+	}
+	if plan.Head != head {
+		return fmt.Errorf("the store changed since planning (HEAD moved); re-plan")
+	}
+	for name, tip := range plan.Refs {
+		if cur, ok := refs[name]; !ok || cur != tip {
+			return fmt.Errorf("ref %q changed since planning; re-plan", name)
+		}
+	}
+	if len(refs) != len(plan.Refs) {
+		return fmt.Errorf("refs changed since planning; re-plan")
+	}
+	return nil
 }

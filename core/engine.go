@@ -365,15 +365,6 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.accessIdx = accessIdx
 	e.changelog = changelog
 	e.pruneFloor = nil
-	if ref := changelog.PruneTombstoneRef(); ref != "" {
-		ts, err := graph.LoadTombstone(e.store, ref)
-		if err != nil {
-			slog.Warn("prune tombstone unreadable; missing history will report as unexplained until the next prune",
-				"component", "engine", "ref", trunc12(ref), "err", err)
-		} else {
-			e.pruneFloor = ts
-		}
-	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
 	// Installed before Load so eagerly-loaded nodes overlay too.
@@ -398,6 +389,7 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.indexes = idx
 	e.graph = g
 	e.headHash = headHash
+	e.loadPruneFloor()
 
 	// Repair changelog marker drift now that HEAD is known -- a
 	// crash between a commit's HEAD write and its changelog append
@@ -1343,3 +1335,51 @@ func (e *Engine) SetHistoryFloor(t *graph.Tombstone) { e.pruneFloor = t }
 // tombstone reference. Offline prune use only; caller must hold the
 // write lock and follow with a Save.
 func (e *Engine) SetPendingTombstoneRoot(hash string) { e.pendingTombstoneRoot = hash }
+
+// loadPruneFloor caches the retention tombstone at open. The sidecar
+// pointer is the fast path; when it is missing (sidecar rebuilt or
+// replaced) a bounded scan of recent commits recovers it from the
+// substrate authority -- the prune commit's tombstone reference --
+// so a sidecar loss cannot silently downgrade pruned blobs to
+// unexplained-missing. The bound keeps never-pruned boots cheap;
+// a prune deeper than it re-establishes the pointer at the next
+// prune run.
+func (e *Engine) loadPruneFloor() {
+	if e.changelog == nil {
+		return
+	}
+	ref := e.changelog.PruneTombstoneRef()
+	if ref == "" && e.headHash != "" {
+		const recoveryScan = 100
+		cur := e.headHash
+		for range recoveryScan {
+			c, err := loadCommit(e.store, cur)
+			if err != nil {
+				break
+			}
+			if c.PruneTombstoneRoot != "" {
+				ref = c.PruneTombstoneRoot
+				slog.Info("prune tombstone pointer recovered from the commit chain",
+					"component", "engine", "ref", trunc12(ref))
+				if err := e.changelog.SetPruneTombstoneRef(ref); err != nil {
+					slog.Warn("tombstone pointer re-cache failed", "component", "engine", "err", err)
+				}
+				break
+			}
+			if c.Parent == "" {
+				break
+			}
+			cur = c.Parent
+		}
+	}
+	if ref == "" {
+		return
+	}
+	ts, err := graph.LoadTombstone(e.store, ref)
+	if err != nil {
+		slog.Warn("prune tombstone unreadable; missing history will report as unexplained until the next prune",
+			"component", "engine", "ref", trunc12(ref), "err", err)
+		return
+	}
+	e.pruneFloor = ts
+}

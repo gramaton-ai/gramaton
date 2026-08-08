@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/graph"
 )
@@ -34,6 +35,9 @@ type DiffResponse struct {
 	Removed   []DiffEntry `json:"removed"`
 	Truncated bool        `json:"truncated,omitempty"`
 	Limit     int         `json:"limit,omitempty"`
+	// Note carries a boundary caveat (e.g. the requested window
+	// starts below a pruned store's history floor).
+	Note string `json:"note,omitempty"`
 }
 
 // DiffDescription is shared by HTTP, MCP, and CLI proxy transports.
@@ -78,11 +82,18 @@ func (a *API) Diff(ctx context.Context, req DiffRequest) (DiffResponse, *APIErro
 		if h, ok := tsIdx.CommitBefore(sinceT); ok {
 			sinceHash = h
 		} else {
-			return DiffResponse{
+			resp := DiffResponse{
 				Added:    []DiffEntry{},
 				Modified: []DiffEntry{},
 				Removed:  []DiffEntry{},
-			}, nil
+			}
+			// State the floor instead of returning silently empty --
+			// on a pruned store, "no commit before since" usually
+			// means the window starts below removed history.
+			if floor := a.engine.HistoryFloor(); floor != nil && !floor.FloorDate.IsZero() && sinceT.Before(floor.FloorDate) {
+				resp.Note = fmt.Sprintf("history available from %s (store pruned); the requested window starts before it", floor.FloorDate.UTC().Format(time.RFC3339))
+			}
+			return resp, nil
 		}
 	}
 

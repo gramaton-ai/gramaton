@@ -92,3 +92,54 @@ func TestTombstoneUnion(t *testing.T) {
 		t.Fatalf("merged record floor = %+v, want accumulated sweeps with the newer watermark", got)
 	}
 }
+
+// TestHistoryFloorRecoversFromChain pins the sidecar-loss fallback:
+// with the pointer wiped, the next open recovers the floor from the
+// prune commit's tombstone reference and re-caches the pointer.
+func TestHistoryFloorRecoversFromChain(t *testing.T) {
+	dir := newReadOnlyTestDir(t)
+	eng := openReadOnlyTestEngine(t, dir)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("recovery fixture"),
+	})
+	if _, err := eng.Save("seed"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+
+	ts := &graph.Tombstone{
+		Records: map[string]graph.RecordFloor{
+			n.ID: {KeptFromTS: time.Now().UTC(), SweptVersions: 1},
+		},
+		PrunedAt: time.Now().UTC(),
+	}
+	root, err := ts.WriteChunk(eng.Store())
+	if err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+	eng.Lock()
+	eng.SetPendingTombstoneRoot(root)
+	if _, err := eng.Save("prune: content depth sweep", graph.CommitAction{Kind: graph.ActionPrune}); err != nil {
+		eng.Unlock()
+		t.Fatalf("prune commit: %v", err)
+	}
+	eng.Unlock()
+	// Simulate sidecar loss: the pointer is never set (or wiped).
+	if err := eng.Changelog().SetPruneTombstoneRef(""); err != nil {
+		t.Fatalf("wipe pointer: %v", err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	eng2 := openReadOnlyTestEngine(t, dir)
+	if eng2.HistoryFloor() == nil {
+		t.Fatal("floor not recovered from the commit chain")
+	}
+	if eng2.Changelog().PruneTombstoneRef() != root {
+		t.Fatal("pointer not re-cached after recovery")
+	}
+}

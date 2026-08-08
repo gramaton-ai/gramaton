@@ -48,3 +48,40 @@ func TestNoAutostartSentinelLifecycle(t *testing.T) {
 		t.Fatal("stale sentinel treated as live")
 	}
 }
+
+// TestValidatePrunePlanRefusals pins the confirm-path staleness
+// checks: wrong token, moved HEAD, changed/removed/added refs all
+// refuse; the exact planned state passes.
+func TestValidatePrunePlanRefusals(t *testing.T) {
+	plan := &prunePlanFile{
+		Token: "tok",
+		Head:  "head-a",
+		Refs:  map[string]string{"main": "head-a", "side": "tip-b"},
+	}
+	refs := map[string]string{"main": "head-a", "side": "tip-b"}
+
+	if err := validatePrunePlan(plan, "tok", "head-a", refs); err != nil {
+		t.Fatalf("exact planned state refused: %v", err)
+	}
+	if err := validatePrunePlan(plan, "wrong", "head-a", refs); err == nil {
+		t.Fatal("wrong token accepted")
+	}
+	if err := validatePrunePlan(&prunePlanFile{Head: "head-a"}, "", "head-a", nil); err == nil {
+		t.Fatal("empty token accepted")
+	}
+	if err := validatePrunePlan(plan, "tok", "head-b", refs); err == nil {
+		t.Fatal("moved HEAD accepted")
+	}
+	if err := validatePrunePlan(plan, "tok", "head-a",
+		map[string]string{"main": "head-a", "side": "tip-MOVED"}); err == nil {
+		t.Fatal("moved ref accepted")
+	}
+	if err := validatePrunePlan(plan, "tok", "head-a",
+		map[string]string{"main": "head-a"}); err == nil {
+		t.Fatal("removed ref accepted")
+	}
+	if err := validatePrunePlan(plan, "tok", "head-a",
+		map[string]string{"main": "head-a", "side": "tip-b", "new": "tip-c"}); err == nil {
+		t.Fatal("added ref accepted")
+	}
+}
