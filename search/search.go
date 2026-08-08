@@ -263,6 +263,8 @@ type Result struct {
 	ContentLength       int      `json:"content_length,omitempty"`
 	EdgeCount           int      `json:"edge_count,omitempty"`
 	Staleness           float64  `json:"staleness,omitempty"`
+	UpdatedAt           string   `json:"updated_at,omitempty"`
+	ConflictCount       int      `json:"conflict_count,omitempty"` // live contradicts edges (built under the lock so reranking needs none)
 	Collections         []string `json:"collections,omitempty"`
 	Store               string   `json:"store,omitempty"`      // "memory" or "sessions"
 	SessionID           string   `json:"session_id,omitempty"` // for session segments: parent session node ID
@@ -1143,6 +1145,10 @@ func (t *Tool) buildResult(n *graph.Node, score float64, now time.Time) Result {
 	if v, ok := n.Properties.GetString("temporality"); ok {
 		r.Temporality = v
 	}
+	if v, ok := n.Properties.GetTimestamp("updated_at"); ok {
+		r.UpdatedAt = v.UTC().Format(time.RFC3339)
+	}
+	r.ConflictCount = len(ConflictingRecordIDs(t.graph, n.ID))
 	if v, ok := n.Properties.GetString("knowledge_type"); ok {
 		r.KnowledgeType = v
 	}

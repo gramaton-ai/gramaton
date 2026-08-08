@@ -292,6 +292,13 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 	a.log.Debug("search: embed done, acquiring read lock", "component", "search", "embed_ms", time.Since(embedStart).Milliseconds())
 
+	// The in-pipeline rerank stage would hold the read lock across an
+	// LLM network call (30s timeout) -- one slow rerank would stall
+	// every writer and, through the queued writer, every new reader.
+	// Skip it and run the lock-free rerank over the assembled results
+	// after release.
+	q.SkipRerank = true
+
 	lockStart := time.Now()
 	a.engine.RLock()
 	a.log.Debug("search: read lock acquired, executing", "component", "search", "lock_wait_ms", time.Since(lockStart).Milliseconds())
@@ -303,6 +310,10 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	if err != nil {
 		return SearchResponse{}, ErrInternal("search failed")
 	}
+
+	// Off-lock rerank: reorders the head using data already copied
+	// into the results. No engine lock held during the LLM call.
+	results = a.engine.Searcher().RerankResults(q.Text, results)
 
 	// Access bookkeeping (access_count, last_accessed) is
 	// knowledge-graph state, so a read-only store skips the whole
