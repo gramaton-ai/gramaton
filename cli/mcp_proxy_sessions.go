@@ -14,6 +14,7 @@ import (
 func registerSessionProxyTools(mcpServer *mcp.Server) {
 	type sessionStartArgs struct {
 		ClientSessionID string `json:"client_session_id" jsonschema:"unique session identifier from the client"`
+		Source          string `json:"source,omitempty" jsonschema:"startup|resume -- controls session chaining. Omit for idempotent lookup."`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_session_start",

@@ -112,11 +112,12 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 	}
 
 	// Cap candidates per cycle. The constraint is write lock duration,
-	// not embed speed: ~50 parents * ~10 observations = ~500 nodes
-	// committed in one transaction, keeping the write lock under ~5s.
-	// Embed cost varies by provider but happens outside the lock.
-	// Default 0 = auto-detect: 50 for local (bert/ollama), 10 for
-	// external (API rate limits and cost).
+	// not embed speed: every selected parent's observations commit in
+	// one transaction, so this cap is what bounds how long the write
+	// lock is held. Embed cost varies by provider but happens outside
+	// the lock. Default 0 = auto-detect: 500 parents for a local
+	// embedder (bert/ollama), 10 for an external one (API rate limits
+	// and cost), 50 when no embedder is configured.
 	maxPerCycle := cfg.Curation.ObservationBatchSize
 	if maxPerCycle <= 0 {
 		if emb := e.Embedder(); emb != nil {

@@ -256,15 +256,15 @@ func TestBranchCheckoutEdgeStorePersistence(t *testing.T) {
 	}
 }
 
-// TestBranchDiscardActiveSwitchesToMain covers the branch.go path
-// where the discarded branch is the currently-active one. HEAD must
-// be moved to main BEFORE the ref is deleted; a failure in the
-// HEAD-write path must abort and leave HEAD pointing somewhere valid.
-func TestBranchDiscardActiveSwitchesToMain(t *testing.T) {
+// TestBranchDiscardActiveRefused pins the grafting guard: discarding
+// the ACTIVE branch is refused outright. The old path moved only the
+// on-disk HEAD, leaving the in-memory graph on the discarded lineage
+// -- the next save then grafted the discarded tip onto main.
+// Checkout owns the adopt choreography; discard requires it first.
+func TestBranchDiscardActiveRefused(t *testing.T) {
 	srv, eng := setupTestServer(t)
 	addRecord(t, eng, "main commit")
 
-	// Create + check out experiment branch.
 	if _, e := srv.api.BranchCreate(context.Background(), api.BranchCreateRequest{Name: "experiment"}); e != nil {
 		t.Fatalf("BranchCreate: %v", e)
 	}
@@ -272,34 +272,32 @@ func TestBranchDiscardActiveSwitchesToMain(t *testing.T) {
 		t.Fatalf("BranchCheckout: %v", e)
 	}
 
-	// Discard the active branch.
-	if _, e := srv.api.BranchDiscard(context.Background(), "experiment"); e != nil {
-		t.Fatalf("BranchDiscard active branch: %v", e)
+	_, apiErr := srv.api.BranchDiscard(context.Background(), "experiment")
+	if apiErr == nil || apiErr.Code != "input_error" {
+		t.Fatalf("discard of the active branch = %+v, want input_error refusal", apiErr)
 	}
-
-	// HEAD must now point at main and active-branch must be main.
+	// Nothing moved: still on the branch, ref intact.
 	listResp, apiErr := srv.api.BranchList(context.Background())
 	if apiErr != nil {
 		t.Fatalf("BranchList: %v", apiErr)
 	}
-	if listResp.Current != "main" {
-		t.Errorf("active branch = %q after discard, want main", listResp.Current)
+	if listResp.Current != "experiment" {
+		t.Errorf("active branch = %q after refused discard, want experiment", listResp.Current)
 	}
-	for _, b := range listResp.Branches {
-		if b.Name == "experiment" {
-			t.Errorf("discarded branch %q still in list", b.Name)
-		}
+
+	// After checking out main, the discard succeeds.
+	if _, e := srv.api.BranchCheckout(context.Background(), "main"); e != nil {
+		t.Fatalf("BranchCheckout main: %v", e)
 	}
-	// And the engine must still respond to reads (HEAD valid).
-	if _, e := srv.api.Status(context.Background(), api.StatusRequest{}); e != nil {
-		t.Errorf("Status after active-branch discard: %v", e)
+	if _, e := srv.api.BranchDiscard(context.Background(), "experiment"); e != nil {
+		t.Fatalf("BranchDiscard after checkout: %v", e)
 	}
 }
 
-// TestCurationBatchRequiresLLM proves that BackupCreate and other
-// LLM-required ops surface ErrUnavailable when no LLM is configured,
-// rather than panicking or returning ErrInternal. Guards the
-// "runner != nil but engine.LLM() == nil" branch in api/curation.go.
+// TestCurationBatchRequiresLLM pins the runner != nil but
+// engine.LLM() == nil branch: a server constructed without an LLM
+// provider must reject a batch curation trigger cleanly instead of
+// dispatching LLM work it cannot run.
 func TestCurationBatchRequiresLLM(t *testing.T) {
 	srv, _ := setupTestServer(t)
 

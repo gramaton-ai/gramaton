@@ -13,26 +13,6 @@ func TestExtractObservationsShortContent(t *testing.T) {
 	}
 }
 
-func TestExtractObservationsSlidingScale(t *testing.T) {
-	tests := []struct {
-		contentLen int
-		wantMax    int
-	}{
-		{400, 0},    // <500: no extraction
-		{1000, 1},   // 1000/1000 = 1
-		{5000, 5},   // 5000/1000 = 5
-		{10000, 10}, // 10000/1000 = 10
-		{25000, 20}, // 25000/1000 = 25, capped at 20
-	}
-
-	for _, tt := range tests {
-		got := maxObservations(tt.contentLen, 20)
-		if got != tt.wantMax {
-			t.Errorf("maxObservations(%d, 20) = %d, want %d", tt.contentLen, got, tt.wantMax)
-		}
-	}
-}
-
 func TestExtractObservationsBasic(t *testing.T) {
 	// Build a ~2000 char document with distinct sentences.
 	sentences := []string{
@@ -213,13 +193,5 @@ func TestSplitSentencesUTF8Boundary(t *testing.T) {
 	}
 	if len(idspaceSents) < 2 {
 		t.Fatalf("ideographic-space boundary: expected 2 sentences, got %d (pre-fix would miss this boundary)", len(idspaceSents))
-	}
-}
-
-func TestMaxObservationsZeroCap(t *testing.T) {
-	// Zero cap should default to 20.
-	got := maxObservations(50000, 0)
-	if got != 20 {
-		t.Fatalf("maxObservations with zero cap: got %d, want 20", got)
 	}
 }

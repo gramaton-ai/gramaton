@@ -89,6 +89,13 @@ func runBackfillCollapse(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Refuse before the backup/archive work below, not after: both
+	// are real disk I/O against a store that a frozen check would
+	// reject anyway once the mutation itself lands.
+	if eng.ReadOnly() {
+		return fmt.Errorf("store is read-only: backfill collapse is not permitted (make it writable first: gramaton store thaw)")
+	}
+
 	// Inline backup before any mutation: restore-from-backup is the
 	// documented wholesale rollback.
 	cfg := eng.Config()

@@ -106,13 +106,6 @@ func (idx *BboltAccessIndex) Remove(nodeID string) {
 	})
 }
 
-// Len reports how many records carry sidecar entries.
-func (idx *BboltAccessIndex) Len() int {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return len(idx.cache)
-}
-
 // PutBatch stores many records' access metadata in one transaction:
 // cache first, then a single bucket update. Search bumps every
 // result under the engine write lock, and one fsynced transaction

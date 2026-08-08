@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -93,7 +94,7 @@ func TestGenerateRefusesOverwriteWithoutForce(t *testing.T) {
 		t.Fatalf("second Generate = %v, want ErrExists", err)
 	}
 	// The refusal must not have touched the originals.
-	if got, err := LoadFingerprint(first.CertPath); err != nil || got != first.Fingerprint {
+	if got, err := loadFingerprint(first.CertPath); err != nil || got != first.Fingerprint {
 		t.Fatalf("original cert changed after refused overwrite: %q/%v", got, err)
 	}
 }
@@ -144,7 +145,7 @@ func TestGenerateForceBacksUpWithISO8601Stamp(t *testing.T) {
 func TestLoadFingerprintMatchesGenerate(t *testing.T) {
 	dir := t.TempDir()
 	res := mustGenerate(t, dir, []string{"localhost"}, GenerateOptions{})
-	got, err := LoadFingerprint(res.CertPath)
+	got, err := loadFingerprint(res.CertPath)
 	if err != nil {
 		t.Fatalf("LoadFingerprint: %v", err)
 	}
@@ -237,11 +238,11 @@ func TestBackupMissingSource(t *testing.T) {
 
 func TestLoadFingerprintErrorBranches(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := LoadFingerprint(filepath.Join(dir, "missing.pem")); err == nil {
+	if _, err := loadFingerprint(filepath.Join(dir, "missing.pem")); err == nil {
 		t.Fatal("missing file must error")
 	}
 	res := mustGenerate(t, dir, []string{"localhost"}, GenerateOptions{})
-	_, err := LoadFingerprint(res.KeyPath)
+	_, err := loadFingerprint(res.KeyPath)
 	if err == nil || !strings.Contains(err.Error(), "not a PEM certificate") {
 		t.Fatalf("key file as input = %v, want the not-a-certificate error", err)
 	}
@@ -337,4 +338,22 @@ func TestPinnedHandshakeEndToEnd(t *testing.T) {
 	if handlerHits != 1 {
 		t.Fatalf("handler hits = %d; the wrong-pin request must never reach the handler", handlerHits)
 	}
+}
+
+// loadFingerprint reads a PEM certificate file and returns its SPKI
+// fingerprint.
+func loadFingerprint(certPath string) (string, error) {
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return "", fmt.Errorf("read certificate: %w", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", fmt.Errorf("%s is not a PEM certificate", certPath)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse certificate: %w", err)
+	}
+	return SPKIFingerprint(cert), nil
 }

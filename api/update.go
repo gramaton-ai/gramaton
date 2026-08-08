@@ -222,6 +222,25 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		}, nil
 	}
 
+	// A no-summary append derives its vector from the phase-1 content
+	// snapshot, but the append itself rebases onto the live content.
+	// If the content moved between phases, storing the rebase would
+	// silently pair the record with a vector embedded from text it no
+	// longer contains -- surface it as the version conflict it is,
+	// before any mutation, and let the caller retry against the fresh
+	// state.
+	if req.ContentAppend != "" && req.SummaryShort == "" && existingSummary == "" &&
+		newVec != nil && currentContent != priorSnapshot {
+		return UpdateResponse{
+			ID: req.ID,
+			VersionConflict: &VersionConflict{
+				CurrentVersion: currentToken,
+				CurrentContent: currentContent,
+				Note:           "The record's content changed while the append was being prepared. Nothing was applied. Retry the append against current_content.",
+			},
+		}, nil
+	}
+
 	// The rebased append is checked against the content cap before any
 	// mutation: the per-field cap in phase 0 bounds the increment, not
 	// the sum, and repeated appends must not grow a record past the
@@ -417,18 +436,31 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 // the pair re-enters the contradiction-detection window naturally.
 // Caller must hold the engine write lock.
 func (a *API) reopenConflicts(recordID string) {
+	// Every contradiction VERDICT reopens on content change -- the
+	// positive edge, and equally the negative ones (no_contradiction,
+	// contradiction_check_skipped): the curation pass hard-skips any
+	// pair carrying a prior verdict, so a stale negative would pin a
+	// pair out of re-evaluation forever even after a rewrite put the
+	// two records in direct contradiction.
+	verdictEdge := func(t string) bool {
+		return t == "contradicts" || t == "no_contradiction" || t == "contradiction_check_skipped"
+	}
 	peers := map[string]struct{}{}
 	var edgeIDs []string
 	for _, e := range a.engine.Graph().EdgesFrom(recordID) {
-		if e.Type == "contradicts" {
+		if verdictEdge(e.Type) {
 			edgeIDs = append(edgeIDs, e.ID)
-			peers[e.TargetID] = struct{}{}
+			if e.Type == "contradicts" {
+				peers[e.TargetID] = struct{}{}
+			}
 		}
 	}
 	for _, e := range a.engine.Graph().EdgesTo(recordID) {
-		if e.Type == "contradicts" {
+		if verdictEdge(e.Type) {
 			edgeIDs = append(edgeIDs, e.ID)
-			peers[e.SourceID] = struct{}{}
+			if e.Type == "contradicts" {
+				peers[e.SourceID] = struct{}{}
+			}
 		}
 	}
 	if len(edgeIDs) == 0 {

@@ -19,18 +19,32 @@ import (
 // re-derivable and model-bound; a re-embed sweep must mint no
 // versions).
 var bookkeepingProps = map[string]bool{
-	"access_count":      true,
-	"last_accessed":     true,
+	"access_count":  true,
+	"last_accessed": true,
+	// activation_boost has no live writer, but pre-v0.4 version blobs
+	// still carry it; masking keeps the comparison from minting a
+	// version when a legacy record sheds the prop.
 	"activation_boost":  true,
 	"embedding_model":   true,
 	"embed_attempts":    true,
 	"repaired_at":       true,
 	"repair_method":     true,
 	"repair_needed_llm": true,
-	// Reembed retry bookkeeping and the deferred save-guard flag:
-	// both are written by sweeps that must never mint versions.
-	"last_embed_error":      true,
-	"similar_check_pending": true,
+	// Retry bookkeeping and the deferred save-guard flag: all written
+	// by sweeps that must never mint versions. Every curation task's
+	// attempts/last-error pair belongs here -- a record whose LLM
+	// calls keep failing must not accrue a phantom version per retry.
+	"last_embed_error":               true,
+	"similar_check_pending":          true,
+	"classify_attempts":              true,
+	"last_classify_error":            true,
+	"summary_attempts":               true,
+	"last_summary_error":             true,
+	"observation_extract_attempts":   true,
+	"last_observation_extract_error": true,
+	"synthesis_attempts":             true,
+	"last_synthesis_error":           true,
+	"repair_input_hash":              true,
 }
 
 func isBookkeepingProp(key string) bool {
@@ -116,6 +130,12 @@ func (e *Engine) appendChangelog(commit *graph.Commit, dirty, deleted []string, 
 		}
 	}
 	for _, id := range deleted {
+		// A node created and deleted within the same write phase never
+		// existed in any commit -- a deletion-only entry would mint a
+		// phantom version for a record no reader can ever resolve.
+		if prevHash[id] == "" {
+			continue
+		}
 		if e.blobIsConcept(prevHash[id]) {
 			continue
 		}
@@ -341,6 +361,7 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 	oldSeen := map[string]bool{}
 	newSeen := map[string]bool{}
 	var newChain []*graph.Commit // newHead -> ... in walk order
+	var oldChain []string        // marker -> ... in walk order
 	oldCur, newCur := marker, newHead
 	base := ""
 	for range maxWalk {
@@ -353,6 +374,7 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 				break
 			}
 			oldSeen[oldCur] = true
+			oldChain = append(oldChain, oldCur)
 			c, err := loadCommit(e.store, oldCur)
 			if err != nil {
 				oldCur = ""
@@ -375,11 +397,21 @@ func (e *Engine) RebuildChangelogFor(newHead string) {
 			}
 		}
 	}
-	// old-exclusive = everything the old walk visited strictly before
-	// the base (the base itself may sit in oldSeen when the new
-	// frontier discovered it there).
-	oldExclusive := oldSeen
-	delete(oldExclusive, base)
+	// old-exclusive = the old chain's ordered prefix strictly above
+	// the base. The interleaved walk lets the old frontier pass the
+	// merge-base while the new frontier is still catching up, so
+	// oldSeen can hold SHARED ancestors -- retracting those would
+	// erase live history the replay never restores. The chain order
+	// makes the cut exact, mirroring replayFrom on the new side.
+	// (When the old frontier discovered the base in newSeen, the base
+	// was never appended and the whole old chain is exclusive.)
+	oldExclusive := map[string]bool{}
+	for _, h := range oldChain {
+		if h == base {
+			break
+		}
+		oldExclusive[h] = true
+	}
 	if base == "" {
 		slog.Warn("changelog rebuild: no merge-base with the new lineage; resetting coverage (run 'gramaton backfill changelog' to re-index history)",
 			"component", "engine", "marker", trunc12(marker), "new_head", trunc12(newHead))
@@ -457,8 +489,10 @@ func (e *Engine) IndexCommitDiffByHash(parentHash, commitHash string) {
 // history honest: access churn rode INSIDE logical commits, and a
 // label-only backfill would mint phantom versions at 10-40x on
 // heavily-read stores. Appends batch across commits to amortize
-// fsync; the marker advances per batch, so an interrupted run
-// resumes idempotently. progress is called per batch when non-nil.
+// fsync. The marker never rewinds below live coverage (see the
+// preMarker pin below), so an interrupted run resumes without
+// retracting entries the append path already owns. progress is
+// called per batch when non-nil.
 func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) {
 	if e.changelog == nil {
 		return 0, nil
@@ -494,9 +528,20 @@ func (e *Engine) BackfillChangelog(progress func(done, total int)) (int, error) 
 	total := len(chain)
 	indexed := 0
 	batch := make(map[string][]index.ChangelogEntry)
+	// The marker must never move BACKWARDS past live coverage: an
+	// interrupted backfill that left it mid-chain would make the boot
+	// gap walk replay already-indexed commits. While live coverage
+	// exists, flushes keep the existing marker; the walk itself is
+	// idempotent (entry-level dedupe), so resumability doesn't need
+	// marker progress.
+	preMarker := e.changelog.Marker()
 	var batchMarker string
 	flush := func() error {
-		if err := e.changelog.AppendBatch(batch, batchMarker); err != nil {
+		m := batchMarker
+		if preMarker != "" {
+			m = preMarker
+		}
+		if err := e.changelog.AppendBatch(batch, m); err != nil {
 			return err
 		}
 		batch = make(map[string][]index.ChangelogEntry)

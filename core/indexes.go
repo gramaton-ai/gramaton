@@ -241,11 +241,20 @@ func (s *indexSet) setPropSession(ws *WriteSession, nodeID, key string, val grap
 	}
 }
 
-// setContentPropSession is setContentProp via a WriteSession.
+// setContentPropSession is setContentProp via a WriteSession,
+// including its concept exclusion: the two paths write the same
+// index, so a gate on one alone would let batched callers reinstate
+// what the non-batched path refuses.
 func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content string) {
 	s.setPropSession(ws, nodeID, key, graph.StringProperty(content))
 	if key == "content_full" {
 		s.bm25Full.RemoveTx(ws.tx, ws.bm25, nodeID)
+		// A concept's synthesis rewrite must not re-enter BM25 (the
+		// Remove above also clears any entry a pre-exclusion store
+		// left behind).
+		if n, ok := ws.engine.graph.GetNode(nodeID); ok && graph.IsConcept(n.Properties) {
+			return
+		}
 		s.bm25Full.AddTx(ws.tx, ws.bm25, nodeID, content)
 	}
 }
@@ -295,6 +304,49 @@ func (s *indexSet) batch(e *Engine, fn func(*WriteSession) error) error {
 		}
 	}
 	return nil
+}
+
+// batchMetaBucket holds cross-batch bookkeeping for the shared index
+// DB. pendingBatchHeadKey records the graph HEAD as of the last
+// mutating write batch: the batch's bbolt commit and the graph
+// commit that follows it are two separate fsyncs, and a crash
+// between them leaves the index DB ahead of the graph. A stored
+// head equal to the loaded HEAD at boot means exactly that -- the
+// batch landed, its graph commit did not.
+var (
+	batchMetaBucket     = []byte("batch_meta")
+	pendingBatchHeadKey = []byte("pending_batch_head")
+)
+
+// stampPendingBatchHeadTx records the pre-batch HEAD inside the
+// batch's own transaction. No clearing pass exists on purpose: the
+// graph commit that follows a healthy batch moves HEAD away from
+// the stamp, which is the same signal at zero extra fsyncs.
+func (s *indexSet) stampPendingBatchHeadTx(tx *bolt.Tx, head string) error {
+	b, err := tx.CreateBucketIfNotExists(batchMetaBucket)
+	if err != nil {
+		return err
+	}
+	return b.Put(pendingBatchHeadKey, []byte(head))
+}
+
+// pendingBatchHead returns the recorded pre-batch HEAD and whether a
+// stamp exists at all. The two must stay distinct: the pre-batch
+// HEAD of an empty store is legitimately "", so key presence -- not
+// a non-empty value -- is the ran-at-least-once signal.
+func (s *indexSet) pendingBatchHead() (string, bool) {
+	var h string
+	var found bool
+	_ = s.boltDB.View(func(tx *bolt.Tx) error {
+		if b := tx.Bucket(batchMetaBucket); b != nil {
+			if raw := b.Get(pendingBatchHeadKey); raw != nil {
+				h = string(raw)
+				found = true
+			}
+		}
+		return nil
+	})
+	return h, found
 }
 
 // rebuildPrimaryIfMissing populates the primary indexes (prop, bm25,

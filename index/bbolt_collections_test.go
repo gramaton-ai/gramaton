@@ -67,31 +67,6 @@ func TestCollCacheRemoveLastItem(t *testing.T) {
 	}
 }
 
-func TestCollCacheMemberCount(t *testing.T) {
-	c := newTestCollCache(t)
-	c.AddMember("coll1", "a")
-	c.AddMember("coll1", "b")
-	c.AddMember("coll1", "c")
-
-	if cnt := c.MemberCount("coll1"); cnt != 3 {
-		t.Fatalf("expected 3, got %d", cnt)
-	}
-	if cnt := c.MemberCount("nonexistent"); cnt != 0 {
-		t.Fatalf("expected 0 for nonexistent, got %d", cnt)
-	}
-}
-
-func TestCollCacheDeleteCollection(t *testing.T) {
-	c := newTestCollCache(t)
-	c.AddMember("coll1", "item1")
-	c.DeleteCollection("coll1")
-
-	ids := c.Members("coll1")
-	if len(ids) != 0 {
-		t.Fatalf("expected empty after delete, got %v", ids)
-	}
-}
-
 func TestCollCacheMultipleCollections(t *testing.T) {
 	c := newTestCollCache(t)
 	c.AddMember("c1", "a")

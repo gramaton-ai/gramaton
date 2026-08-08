@@ -3,10 +3,30 @@ package server
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// resultWaitBudgetMS bounds one blocking batch-result wait to what
+// the HTTP transport can sustain: the server aborts the response
+// write at httpWriteTimeout, so the clean retryable-timeout snapshot
+// must be written before then. Every production transport rides this
+// pipe -- REST, remote /mcp, and the CLI stdio proxy -- and a caller
+// wanting a longer wait re-calls on the timeout error.
+const resultWaitBudgetMS = int((httpWriteTimeout - 10*time.Second) / time.Millisecond)
+
+// clampResultWait applies the transport budget: 0 (which the api
+// would expand to the 30-minute server default) and anything beyond
+// the budget both become the budget.
+func clampResultWait(ms int) int {
+	if ms <= 0 || ms > resultWaitBudgetMS {
+		return resultWaitBudgetMS
+	}
+	return ms
+}
 
 // registerRecordsRoutes wires the records-cluster HTTP endpoints to
 // the api methods. Each closure: parse body/path params -> call api
@@ -72,7 +92,7 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 		timeoutMS := parseIntParam(r, "timeout_ms", 0, api.MaxResultTimeoutMS)
 		resp, apiErr := s.api.SaveBatchResult(r.Context(), api.SaveBatchResultRequest{
 			JobID:     r.PathValue("job_id"),
-			TimeoutMS: timeoutMS,
+			TimeoutMS: clampResultWait(timeoutMS),
 		})
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
@@ -83,13 +103,26 @@ func (s *Server) registerRecordsRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
+		// limit is parsed but not clamped here: validation belongs at
+		// the api layer, so an over-limit value is passed through for
+		// api.JobsList to reject. Only the parse itself is enforced at
+		// this layer, so a non-numeric value still fails fast as 400.
+		limit := 0
+		if raw := query.Get("limit"); raw != "" {
+			v, err := strconv.Atoi(raw)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "input_error", "limit must be an integer", true)
+				return
+			}
+			limit = v
+		}
 		req := api.JobsListRequest{
 			Status:      query.Get("status"),
 			Kind:        query.Get("kind"),
 			ClientToken: query.Get("client_token"),
 			Since:       query.Get("since"),
 			Until:       query.Get("until"),
-			Limit:       parseIntParam(r, "limit", 0, api.MaxJobsListLimit),
+			Limit:       limit,
 			Offset:      parseIntParam(r, "offset", 0, 1<<31-1),
 		}
 		resp, apiErr := s.api.JobsList(r.Context(), req)
@@ -295,6 +328,9 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args captureBatchResultArgs) (*mcp.CallToolResult, any, error) {
 		done := s.mcpToolStart("gramaton_save_batch_result")
 		defer done(nil)
+		// Production MCP reaches this binding via /mcp on the same
+		// HTTP server, so the same transport budget applies.
+		args.TimeoutMS = clampResultWait(args.TimeoutMS)
 		resp, apiErr := s.api.SaveBatchResult(ctx, args)
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)
@@ -413,11 +449,12 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 	})
 
 	type resolveArgs struct {
-		ID              string `json:"id" jsonschema:"record ID to resolve"`
-		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
-		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
-		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
-		ChangeNote      string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		ID                        string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution                string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote            string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ExpectedVersion           string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
+		ChangeNote                string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		AutoCloseCollectionStatus *bool  `json:"auto_close_collection_status,omitempty" jsonschema:"default true; when false, skip flipping the collection item's status field even if the schema has one"`
 	}
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -432,6 +469,7 @@ func (s *Server) registerRecordsMCPTools(mcpServer *mcp.Server) {
 		resp, apiErr := s.api.Resolve(ctx, api.ResolveRequest{
 			ID: args.ID, Resolution: args.Resolution, ResolutionNote: args.ResolutionNote,
 			ExpectedVersion: args.ExpectedVersion, ChangeNote: args.ChangeNote,
+			AutoCloseCollectionStatus: args.AutoCloseCollectionStatus,
 		})
 		if apiErr != nil {
 			return mcpAPIErr(apiErr)

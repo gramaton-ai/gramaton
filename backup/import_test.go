@@ -20,9 +20,7 @@ func TestImportJSONRoundTrip(t *testing.T) {
 
 	// Export.
 	var buf strings.Builder
-	eng.RLock()
-	ExportJSONL(&buf, eng)
-	eng.RUnlock()
+	exportAll(&buf, eng, "jsonl")
 
 	// Import into fresh engine.
 	eng2 := setupTestEngine(t)

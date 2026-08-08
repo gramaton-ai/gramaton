@@ -20,9 +20,10 @@ import (
 //
 // Opens the engine via the migration-private skipFormatCheck path;
 // the normal LoadEngine boot gate refuses v1 stores and this is the
-// only codepath that bypasses it. The engine is closed before the
-// FORMAT file is bumped so a crash between the two leaves FORMAT at
-// the older version and a rerun re-migrates cleanly.
+// only codepath that bypasses it. The FORMAT file is bumped only
+// after the backfill completes: a crash before the bump leaves
+// FORMAT at the older version and a rerun re-migrates cleanly (the
+// backfill's index writes are idempotent).
 //
 // Collection-level defaults (clear_mode, curation) are intentionally
 // NOT set here. Those fields arrive in Phase 4 of the temporal-
@@ -88,6 +89,7 @@ func backfillTSIndex(eng *Engine) error {
 			"component", "migrate")
 		return nil
 	}
+	floor := eng.HistoryFloor()
 	count := 0
 	for hash := head; hash != ""; {
 		c, err := graph.LoadCommitMeta(eng.store, hash)
@@ -102,6 +104,14 @@ func backfillTSIndex(eng *Engine) error {
 			slog.Info("backfilling timestamp index",
 				"component", "migrate",
 				"commits_processed", count)
+		}
+		// A pruned chain ends at the oldest kept commit, whose Parent
+		// still names the pruned commit by hash; following it would
+		// fail on a deliberately absent chunk.
+		if floor != nil && hash == floor.OldestKeptCommit {
+			slog.Info("timestamp index backfill grounded at the prune floor",
+				"component", "migrate", "commits", count)
+			break
 		}
 		hash = c.Parent
 	}

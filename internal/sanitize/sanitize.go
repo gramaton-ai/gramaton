@@ -100,7 +100,12 @@ func Field(s string) string {
 // summary_short (typically ~750 chars, hard-capped) and context
 // fields (shorter, via MaxContextFieldLen).
 func Validate(original, sanitized string, fieldName string, maxLen int) error {
-	if original != "" && sanitized == "" {
+	if strings.TrimSpace(original) == "" {
+		// Whitespace-only input is an empty field, not contamination;
+		// the caller stores the cleaned empty value.
+		return nil
+	}
+	if sanitized == "" {
 		// Input had bytes but sanitization left nothing — pure
 		// tool-use-format contamination. Reject; caller should not
 		// see this "cleaned" to an empty field because the loss is

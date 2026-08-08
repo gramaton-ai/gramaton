@@ -577,10 +577,19 @@ func timeEmbed(t *testing.T, p *Provider, texts []string) time.Duration {
 // gates pass. The race lane exists to catch data races, which the
 // correctness tests in this package still exercise; measuring
 // throughput under it gates on noise.
+//
+// Also skips in -short mode: the gates assert wall-clock parallel
+// speedup, which requires idle cores -- on a loaded developer
+// machine the workers time-slice against everything else and the
+// ratio collapses regardless of the code. Default (non-short) runs
+// keep the gates live for CI and idle machines.
 func skipSpeedupGateUnderRace(t *testing.T) {
 	t.Helper()
 	if raceDetectorEnabled {
 		t.Skip("throughput gate skipped under -race: instrumentation distorts the parallel/sequential ratio")
+	}
+	if testing.Short() {
+		t.Skip("throughput gate skipped in -short mode: wall-clock speedup needs idle cores")
 	}
 }
 

@@ -29,7 +29,7 @@ Gramaton is a single Go binary that runs as an on-demand daemon. The CLI auto-st
 ┌───────┐   ┌─────────────────┐   ┌──────────┐
 │ graph │   │ indexes         │   │ storage  │
 │       │   │ BM25 / Property │   │ prolly   │
-│       │   │ HNSW / Flat     │   │ tree     │
+│       │   │ Flat (mmap)     │   │ tree     │
 │       │   │ Collections /   │   │          │
 │       │   │ Secondary       │   │          │
 └───────┘   └─────────────────┘   └──────────┘
@@ -80,12 +80,12 @@ See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step pro
 `core/engine.go` owns the wiring. An `Engine` holds:
 
 - The loaded graph (`graph.Graph`).
-- The index set (`indexSet`: BM25, vector HNSW/Flat, property, secondary, collections, commit-timestamp).
+- The index set (`indexSet`: BM25, vector, property, secondary, collections, commit-timestamp).
 - A `searcherSubsystem` that wraps `search.Tool` — pure computation on top of the graph and indexes.
 - Provider references (`embed.Provider`, `llm.Provider`).
 - The storage layer (`storage.Store`).
 - A single `sync.RWMutex` that gates all mutation.
-- A dirty flag for access metadata (access counts are flushed periodically rather than on every read).
+- The non-versioned sidecar (`sidecar.db`) holding access metadata and the per-record changelog index -- reads write through it and never dirty the graph.
 
 `LoadEngine` / `LoadEngineWithOptions` are the public constructors. Options support dependency injection for tests (`WithEmbedder`, `WithLLM`, `WithVectorIndex`).
 
@@ -94,7 +94,7 @@ The Engine never knows about the transports or the api/ layer. It exposes primit
 ### 4. Data layer (`graph/`, `index/`, `storage/`)
 
 - **`graph/`**: in-memory property graph. Nodes with typed key-value properties, edges with type + weight + optional properties. Pure data structure — no I/O. `graph.Properties` is a `map[string]Property`; property types are a sum (`String`, `Float64`, `Int64`, `Bool`, `Timestamp`, `Vector`, `StringList`, `Bytes`).
-- **`index/`**: BM25 (`bbolt_bm25.go`), vector indexes (`hnsw.go`, `flat_mmap.go`, switched dynamically by candidate-set size), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
+- **`index/`**: BM25 (`bbolt_bm25.go`), the vector index (`flat_mmap.go`), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
 - **`storage/`**: prolly tree — a probabilistic B-tree with content-addressed chunks. Mutations create new root hashes; old roots stay reachable as commit history. `storage/cas.go` is the content-addressed store; `storage/prolly.go` is the tree itself; `storage/gc.go` garbage-collects unreferenced chunks.
 
 The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted alongside each commit and loaded from disk at startup, skipping re-tokenization.
@@ -119,7 +119,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `core/` | `Engine` — composition root; holds graph, indexes, providers, RWMutex. Constructors and functional options. |
-| `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), reranking, dedup, query decomposition. No I/O. |
+| `search/` | `Tool` — pure computation: hybrid vector + BM25 with RRF fusion, scoring (`score.go`), and reranking. No I/O. |
 | `curation/` | Deterministic and autonomous curation. `Runner` (timer-driven, default 1-minute cadence) inside the server process. Lifecycle transitions, orphan linking, concept candidate detection + enrichment (deterministic); classification, summary generation, contradiction detection, qualitative manifest (autonomous, LLM-gated). Per-task wall-clock timeout (`curation.task_timeout`, default 90s) prevents one hung call from starving a cycle. Startup self-heal hook (`runStartupSelfHeal`) runs a one-shot content-quality pass when the server starts. Per-collection eligibility is gated by orthogonal behavior knobs on the collection node (`curation`, `contradictions`, `clear_mode`); `EffectiveCurationFor(record)` resolves the effective level by walking `member_of` edges. New ad-hoc collections default to `curation=none`; the standard templates (`backlog`, `todo`, `reading-list`, `journal`, `references`) opt in to `curation=standard` and declare a `content_fields` list naming the fields the LLM treats as the item's content. |
 | `similarity/` | Save-guard similar-record detection: vector scan + Jaccard verification powering the hold and advisory bands. |
 | `chunking/` | Long-content splitting before embedding. |
@@ -136,8 +136,10 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `graph/` | In-memory property graph: nodes, edges, properties. Pure data structure. |
-| `index/` | Persisted indexes: BM25, vector (HNSW / Flat / mmap), property, secondary, collections. |
+| `index/` | Persisted indexes: BM25, vector (mmap'd flat), property, secondary, collections; plus the `sidecar.db` indexes (access metadata, per-record changelog) that back the version timeline. |
 | `storage/` | Prolly tree on a content-addressed store. Commit history, garbage collection. |
+| `migrate/` | One-time store migrations (the supersession-chain collapse). |
+| `prune/` | Offline retention: keep-versions content depth and older-than chain truncation, tombstone-first. CLI-only by design. |
 
 ### Support
 
@@ -146,7 +148,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
 | `backup/` | Tar archive backup/restore, export/import. The walker takes a bbolt-native coherent snapshot of `jobs.db` via `View+WriteTo` so the file is always consistent in the tarball. |
-| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_save_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
+| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_save_batch` and future async ops. State machine with an explicit transition allowlist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
 | `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop; Cursor cursor-session-start, cursor-stop, cursor-pre-compact). Exposed as `gramaton hook <event>` subcommands; thin proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them (invoking the binary by the absolute path resolved at init, with a bare PATH lookup as fallback). Proxy variants per harness: `.sh` everywhere for Claude Code (bundles Git Bash on Windows); `.cmd` on Windows for Kiro and Cursor (native, no bash); both variants on every host for Codex (its hooks.json entries carry `command` + `commandWindows` and pick per-OS at runtime). Codex shares Claude Code's stdin contract verbatim, so the same handlers serve both; Cursor renames the identifiers (`conversation_id`, `workspace_roots`), so `hooks/cursor.go` adapts its stdin and routes to the shared claude-protocol cores. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
 | `internal/setup/` | Interactive setup wizard (`gramaton init`) used to register MCP entries and install per-client agent guidance. Supported harnesses are declared in a registry (`harness.go`); wizard steps iterate it instead of switching on client names, so adding a harness is one registry entry plus an addendum template. |
@@ -187,7 +189,7 @@ The `OpenFiles` body, in order: format-version check, bbolt open, index set cons
 
 **Idle**: the server tracks last-request time. After the configured `idle_timeout` (default 4 hours) with no activity, it shuts down gracefully. CLI auto-starts a new server on the next call.
 
-**Shutdown**: `server.Stop` cancels the curation runner, stops the prepared-sessions sweeper, flushes access metadata, closes indexes, closes bbolt, closes the prolly store.
+**Shutdown**: `server.Stop` cancels the curation runner, stops the prepared-sessions sweeper, closes indexes, closes bbolt, closes the prolly store.
 
 ## Data flow examples
 
@@ -329,12 +331,12 @@ The engine uses one `sync.RWMutex`. Rules:
 Gramaton uses a prolly tree (probabilistic B-tree) for persistence:
 
 - **Content-addressed.** Every chunk is identified by its hash. Identical subtrees share storage.
-- **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history. `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
+- **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history (until an operator prunes old history with `gramaton prune`). `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
 - **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean branch merges).
 
 The graph is materialized in memory on startup and flushed incrementally on `Save`. Dirty tracking (per graph object) keeps saves O(K) where K is the number of modified nodes/edges. The BM25 index is persisted as a content-addressed chunk referenced by each commit (`bm25_root`), so startup skips re-tokenization at cost of a small per-commit storage overhead.
 
-Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep.
+Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep. The deliberate exception is `gramaton prune` (CLI-only, plan/confirm token, backup gate): it consumes the GC for chain truncation and records a tombstone so readers report removed history as "pruned by policy", never as corruption.
 
 ## Adding a new operation
 

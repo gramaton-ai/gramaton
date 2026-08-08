@@ -84,6 +84,47 @@ func TestScanConceptMatchesEmptyInputs(t *testing.T) {
 	}
 }
 
+// TestScanConceptMatchesKeepsFutureValidUntilMembers pins the
+// live/historical boundary: valid_until is an expiry timestamp, not a
+// historical flag. A member scheduled to expire next week is still
+// part of the live cluster and must be reported; only a member whose
+// valid_until has already passed drops out.
+func TestScanConceptMatchesKeepsFutureValidUntilMembers(t *testing.T) {
+	g := graph.New()
+	now := time.Now().UTC()
+	queryVec := []float32{1, 0, 0}
+
+	c := g.AddNode(graph.Properties{
+		"node_type":       graph.StringProperty("concept"),
+		"concept_keyword": graph.StringProperty("expiring"),
+		"embedding_full":  graph.VectorProperty([]float32{1, 0, 0}),
+		"created_at":      graph.TimestampProperty(now),
+	})
+
+	future := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("live member with a scheduled expiry"),
+		"created_at":   graph.TimestampProperty(now.Add(-time.Hour)),
+		"valid_until":  graph.TimestampProperty(now.Add(7 * 24 * time.Hour)),
+	})
+	past := g.AddNode(graph.Properties{
+		"content_full": graph.StringProperty("member that already expired"),
+		"created_at":   graph.TimestampProperty(now.Add(-48 * time.Hour)),
+		"valid_until":  graph.TimestampProperty(now.Add(-time.Hour)),
+	})
+	g.AddEdge(future.ID, c.ID, "instance_of", 0.8, nil)
+	g.AddEdge(past.ID, c.ID, "instance_of", 0.8, nil)
+
+	matches := ScanConceptMatches(g, queryVec, 0.7)
+	if len(matches) != 1 {
+		t.Fatalf("ScanConceptMatches: got %d matches, want 1", len(matches))
+	}
+	got := matches[0].LiveMembers
+	if len(got) != 1 || got[0] != future.ID {
+		t.Fatalf("live members = %v, want [%s]: a future valid_until marks a live record, not a historical one",
+			got, future.ID)
+	}
+}
+
 // TestScanConceptMatchesSkipsDimensionMismatch ensures concepts whose
 // embeddings have a different dimension (e.g., from a stale model
 // before reembed completes) are skipped, not crashed on.

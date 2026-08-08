@@ -233,10 +233,14 @@ func TestConceptEnrichment(t *testing.T) {
 
 	// Create a concept node.
 	eng.Lock()
+	// node_type=concept is load-bearing: enrichment now refuses
+	// user records that merely CLASSIFY as conceptual -- only
+	// machine-owned concept nodes get evidence machinery.
 	concept := eng.Graph().AddNode(graph.Properties{
 		"content_full":      graph.StringProperty("Authentication concept"),
 		"processing_status": graph.StringProperty("processed"),
 		"knowledge_type":    graph.StringProperty("conceptual"),
+		"node_type":         graph.StringProperty("concept"),
 		"temporality":       graph.StringProperty("durable"),
 		"created_at":        graph.TimestampProperty(now),
 		"access_count":      graph.Int64Property(0),

@@ -59,7 +59,10 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		if args.TimeoutMS > 0 {
 			path += fmt.Sprintf("?timeout_ms=%d", args.TimeoutMS)
 		}
-		return proxyGet(path)
+		// Slow client: a result wait legitimately holds the response
+		// open up to the server's transport budget (~2 minutes); the
+		// default 30-second client would kill it mid-wait.
+		return proxyGetSlow(path)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -236,11 +239,12 @@ func registerRecordsProxyTools(s *mcp.Server) {
 	})
 
 	type resolveArgs struct {
-		ID              string `json:"id" jsonschema:"record ID to resolve"`
-		Resolution      string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
-		ResolutionNote  string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
-		ExpectedVersion string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
-		ChangeNote      string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		ID                        string `json:"id" jsonschema:"record ID to resolve"`
+		Resolution                string `json:"resolution" jsonschema:"completed|superseded|abandoned|obsolete"`
+		ResolutionNote            string `json:"resolution_note,omitempty" jsonschema:"optional free-form note"`
+		ExpectedVersion           string `json:"expected_version,omitempty" jsonschema:"version token from a hold response, update, or inspect; the resolve applies only if the content is unchanged since (version_conflict otherwise)"`
+		ChangeNote                string `json:"change_note,omitempty" jsonschema:"optional free-text WHY for this resolution (max ~1.8KB), surfaced per-version in the record timeline"`
+		AutoCloseCollectionStatus *bool  `json:"auto_close_collection_status,omitempty" jsonschema:"default true; when false, skip flipping the collection item's status field even if the schema has one"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "gramaton_resolve",
@@ -258,6 +262,9 @@ func registerRecordsProxyTools(s *mcp.Server) {
 		}
 		if args.ChangeNote != "" {
 			body["change_note"] = args.ChangeNote
+		}
+		if args.AutoCloseCollectionStatus != nil {
+			body["auto_close_collection_status"] = *args.AutoCloseCollectionStatus
 		}
 		return proxyPost(fmt.Sprintf("/v1/records/%s/resolve", url.PathEscape(args.ID)), body)
 	})

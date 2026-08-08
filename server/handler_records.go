@@ -7,6 +7,7 @@ import (
 
 	"github.com/gramaton-ai/gramaton/api"
 	"github.com/gramaton-ai/gramaton/graph"
+	"github.com/gramaton-ai/gramaton/internal/sanitize"
 )
 
 // --- Request types ---
@@ -195,38 +196,51 @@ func validateSaveRequest(req *saveRequest) error {
 			return fmt.Errorf("allow_similar entry exceeds maximum length of %d", api.MaxIDArgLen)
 		}
 	}
-	if len(req.SummaryShort) > getMaxSummaryShort() {
-		return fmt.Errorf("summary_short exceeds maximum length of %d", getMaxSummaryShort())
+	// Sanitize LLM-generated short fields for tool-use-format
+	// leakage, mirroring the api-layer validator (api/save.go).
+	// Mutates in place so downstream storage uses the cleaned values.
+	origSummary := req.SummaryShort
+	req.SummaryShort = sanitize.Field(req.SummaryShort)
+	if err := sanitize.Validate(origSummary, req.SummaryShort, "summary_short", getMaxSummaryShort()); err != nil {
+		return err
 	}
 	if len(req.SourceRef) > maxSourceRefLen {
 		return fmt.Errorf("source_ref exceeds maximum length of %d", maxSourceRefLen)
 	}
-	if len(req.ContextAbout) > maxContextFieldLen {
-		return fmt.Errorf("context_about exceeds maximum length of %d", maxContextFieldLen)
+	contextFields := []struct {
+		name string
+		val  *string
+	}{
+		{"context_about", &req.ContextAbout},
+		{"context_who", &req.ContextWho},
+		{"context_prompted", &req.ContextPrompted},
+		{"context_findable_by", &req.ContextFindable},
+		{"context_related", &req.ContextRelated},
+		{"context_source_type", &req.ContextSourceType},
+		{"context_time_sensitivity", &req.ContextTimeSensitivity},
+		{"context_reliability", &req.ContextReliability},
+		{"context_capture_reason", &req.ContextCaptureReason},
 	}
-	if len(req.ContextWho) > maxContextFieldLen {
-		return fmt.Errorf("context_who exceeds maximum length of %d", maxContextFieldLen)
+	for _, pair := range contextFields {
+		orig := *pair.val
+		*pair.val = sanitize.Field(*pair.val)
+		if err := sanitize.Validate(orig, *pair.val, pair.name, maxContextFieldLen); err != nil {
+			return err
+		}
 	}
-	if len(req.ContextPrompted) > maxContextFieldLen {
-		return fmt.Errorf("context_prompted exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextFindable) > maxContextFieldLen {
-		return fmt.Errorf("context_findable_by exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextRelated) > maxContextFieldLen {
-		return fmt.Errorf("context_related exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextSourceType) > maxContextFieldLen {
-		return fmt.Errorf("context_source_type exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextTimeSensitivity) > maxContextFieldLen {
-		return fmt.Errorf("context_time_sensitivity exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextReliability) > maxContextFieldLen {
-		return fmt.Errorf("context_reliability exceeds maximum length of %d", maxContextFieldLen)
-	}
-	if len(req.ContextCaptureReason) > maxContextFieldLen {
-		return fmt.Errorf("context_capture_reason exceeds maximum length of %d", maxContextFieldLen)
+	// Malformed timestamps are rejected here; setOptionalProps'
+	// parse-to-store would otherwise drop them silently.
+	for _, pair := range []struct{ name, val string }{
+		{"valid_from", req.ValidFrom},
+		{"valid_until", req.ValidUntil},
+		{"asserted_as_of", req.AssertedAsOf},
+	} {
+		if pair.val == "" {
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, pair.val); err != nil {
+			return fmt.Errorf("%s is not valid RFC3339", pair.name)
+		}
 	}
 	return nil
 }

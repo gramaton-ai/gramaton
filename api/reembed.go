@@ -87,6 +87,12 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		nodeID string
 		texts  []string
 		keys   []string
+		// contentHash pins the snapshot: the embed phase can run
+		// minutes, and applying a vector computed from OLD content to
+		// a record updated mid-flight would permanently desync
+		// content and vector (the update stamped the current model,
+		// so reembed never re-selects it).
+		contentHash string
 	}
 	var targets []reembedTarget
 
@@ -134,12 +140,19 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		// collection items (no content_full), the full vector is
 		// regenerated from RecordContent (content_fields-driven
 		// text), aligning insert-time embedding with reembed.
+		// ORDER IS LOAD-BEARING: the apply step registers the LAST
+		// present vector as the record's primary search vector, so
+		// sources run lowest-priority first (keywords, then full,
+		// then short -- the summary-anchored vector wins when
+		// present, full otherwise; a keywords-only joined string
+		// must never become the ranked vector when better sources
+		// exist).
 		embedSources := []struct {
 			sourceKey string
 			embedKey  string
 		}{
-			{"content_full", "embedding_full"},
 			{"content_keywords", "embedding_keywords"},
+			{"content_full", "embedding_full"},
 			{"content_short", "embedding_short"},
 		}
 
@@ -169,7 +182,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		}
 
 		if len(texts) > 0 {
-			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys})
+			targets = append(targets, reembedTarget{nodeID: id, texts: texts, keys: keys, contentHash: a.engine.Graph().NodeHashOf(id)})
 		}
 	}
 	rit.Close()
@@ -245,6 +258,11 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		if !ok {
 			resp.Errors++
 			resp.ErrorIDs = append(resp.ErrorIDs, res.target.nodeID)
+			continue
+		}
+		// Content moved between snapshot and apply: skip -- the
+		// update path already embedded the NEW content correctly.
+		if a.engine.Graph().NodeHashOf(res.target.nodeID) != res.target.contentHash {
 			continue
 		}
 

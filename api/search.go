@@ -292,6 +292,13 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 	}
 	a.log.Debug("search: embed done, acquiring read lock", "component", "search", "embed_ms", time.Since(embedStart).Milliseconds())
 
+	// The in-pipeline rerank stage would hold the read lock across an
+	// LLM network call (30s timeout) -- one slow rerank would stall
+	// every writer and, through the queued writer, every new reader.
+	// Skip it and run the lock-free rerank over the assembled results
+	// after release.
+	q.SkipRerank = true
+
 	lockStart := time.Now()
 	a.engine.RLock()
 	a.log.Debug("search: read lock acquired, executing", "component", "search", "lock_wait_ms", time.Since(lockStart).Milliseconds())
@@ -304,19 +311,9 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		return SearchResponse{}, ErrInternal("search failed")
 	}
 
-	// Access bookkeeping (access_count, last_accessed) is
-	// knowledge-graph state, so a read-only store skips the whole
-	// block -- the read path then never touches the write lock and
-	// the frozen records' access metadata stays byte-identical.
-	if len(results) > 0 && !a.engine.ReadOnly() {
-		ids := make([]string, len(results))
-		for i, r := range results {
-			ids[i] = r.ID
-		}
-		a.engine.Lock()
-		a.engine.RecordAccessAll(ids, time.Now().UTC())
-		a.engine.Unlock()
-	}
+	// Off-lock rerank: reorders the head using data already copied
+	// into the results. No engine lock held during the LLM call.
+	results = a.engine.Searcher().RerankResults(q.Text, results)
 
 	if results == nil {
 		results = []search.Result{}
@@ -332,14 +329,6 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 			}
 		}
 		a.engine.RUnlock()
-	}
-
-	if len(results) > 0 {
-		ids := make([]string, len(results))
-		for i, r := range results {
-			ids[i] = r.ID
-		}
-		a.retrieval.Track(ids...)
 	}
 
 	// Phase 1 concept telemetry: emit a structured event when any
@@ -403,6 +392,24 @@ func (a *API) Search(ctx context.Context, req SearchRequest) (SearchResponse, *A
 		pageEnd = len(results)
 	}
 	pageResults := results[:pageEnd]
+
+	// Access bookkeeping covers the RETURNED page, not the snapshot's
+	// full candidate set: bumping all ~500 ranked candidates per query
+	// floods last_accessed/access_count (staleness sorts, access
+	// filters, and lifecycle curation all read them) with records the
+	// caller never saw. Read-only stores skip the bump so the read
+	// path never touches the write lock.
+	if len(pageResults) > 0 {
+		ids := make([]string, len(pageResults))
+		for i, r := range pageResults {
+			ids[i] = r.ID
+		}
+		if !a.engine.ReadOnly() {
+			a.engine.Lock()
+			a.engine.RecordAccessAll(ids, time.Now().UTC())
+			a.engine.Unlock()
+		}
+	}
 
 	resp := SearchResponse{
 		Results:  pageResults,
@@ -495,6 +502,19 @@ func (a *API) searchCursor(req SearchRequest, requestPageSize int) (SearchRespon
 			}
 		}
 		a.engine.RUnlock()
+	}
+
+	// Access bookkeeping mirrors the fresh-search page: the caller
+	// reads THESE records too, and before page-scoping, later pages
+	// were covered incidentally by the bump-everything behavior.
+	if len(pageResults) > 0 && !a.engine.ReadOnly() {
+		ids := make([]string, len(pageResults))
+		for i, r := range pageResults {
+			ids[i] = r.ID
+		}
+		a.engine.Lock()
+		a.engine.RecordAccessAll(ids, time.Now().UTC())
+		a.engine.Unlock()
 	}
 
 	// Page number from cursor's start + encoded page size. Always

@@ -90,6 +90,14 @@ func (g *Graph) GetNode(id string) (*Node, bool) {
 		g.cacheMu.Unlock()
 		return n, true
 	}
+	// Deleted-but-uncommitted: the tree still holds the node until
+	// the next commit, and the lazy load below would resurrect it
+	// into the cache AND the indexes of any rebuild iterating the
+	// pre-commit tree. A pending deletion is a miss.
+	if _, deleted := g.deletedNodes[id]; deleted {
+		g.cacheMu.Unlock()
+		return nil, false
+	}
 	g.cacheMu.Unlock()
 
 	// No backing store -> no lazy load possible.
@@ -107,10 +115,13 @@ func (g *Graph) GetNode(id string) (*Node, bool) {
 	}
 
 	// Re-check: another goroutine may have loaded the same node while
-	// we were doing I/O. If so, return the existing pointer so callers
-	// share state.
+	// we were doing I/O -- or deleted it, in which case publishing the
+	// loaded copy would resurrect a pending deletion.
 	g.cacheMu.Lock()
 	defer g.cacheMu.Unlock()
+	if _, deleted := g.deletedNodes[id]; deleted {
+		return nil, false
+	}
 	if existing, ok := g.nodes[id]; ok {
 		g.evictLRU(id)
 		return existing, true

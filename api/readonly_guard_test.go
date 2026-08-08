@@ -145,8 +145,6 @@ var readOnlyClassification = map[string]string{
 	"JobsList":      guardRead,
 
 	// Accessors and lifecycle plumbing (not operations).
-	"Engine":                       guardInfra,
-	"UsageTracker":                 guardInfra,
 	"Runner":                       guardInfra,
 	"SetRunner":                    guardInfra,
 	"Logger":                       guardInfra,

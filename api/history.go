@@ -65,10 +65,14 @@ const HistoryDescription = "View a record's change history. The versions list is
 // when a commit's timestamp falls before Since. Date-bounded walks
 // bypass the traversal cap -- the range itself bounds the work.
 //
-// RC-4: a record that's deleted and later recreated should surface
-// the recreation as a first-appearance, not a spurious modification
-// against the pre-deletion hash. Reset prevHash on found=false so
-// the not-found gap breaks the comparison chain cleanly.
+// Attribution: the walk visits consecutive commits newest-first and
+// compares each against the previously visited (newer) one. Any
+// difference -- created, modified, or deleted -- was made BY that
+// newer commit, so the entry carries its hash, timestamp, and
+// message. When the walk consumes the whole chain with the record
+// still present, the oldest commit introduced it. A walk cut short
+// (traversal cap, Since bound) emits nothing for the unseen older
+// side; the versions timeline is the authoritative surface there.
 func (a *API) History(ctx context.Context, req HistoryRequest) (HistoryResponse, *APIError) {
 	if req.ID == "" {
 		return HistoryResponse{}, ErrMissing("id is required")
@@ -96,7 +100,14 @@ func (a *API) History(ctx context.Context, req HistoryRequest) (HistoryResponse,
 	hash := a.engine.HeadHashLocked()
 	if !untilT.IsZero() {
 		if h, ok := tsIdx.CommitAt(untilT); ok {
-			hash = h
+			// The timestamp index is global across branches; snap the
+			// hit onto the active lineage so the walk never serves an
+			// abandoned branch's history.
+			if snapped := a.snapToCurrentBranch(h); snapped != "" {
+				hash = snapped
+			} else {
+				return HistoryResponse{ID: req.ID, Changes: []HistoryChange{}}, nil
+			}
 		} else {
 			// Until predates every indexed commit; nothing to walk.
 			return HistoryResponse{ID: req.ID, Changes: []HistoryChange{}}, nil
@@ -106,50 +117,61 @@ func (a *API) History(ctx context.Context, req HistoryRequest) (HistoryResponse,
 	dateBounded := !sinceT.IsZero() || !untilT.IsZero()
 
 	out := HistoryResponse{ID: req.ID, Changes: []HistoryChange{}}
-	var prevHash string
 	const maxTraversal = MaxLogTraversal
 	traversed := 0
+	// Transition state: the previously visited (newer) commit and
+	// whether -- and with what hash -- the record existed there. A
+	// difference between the current commit and the previous one was
+	// made by the previous commit; creation, modification, and
+	// deletion entries all attribute there, never to the older side
+	// of the pair.
+	var prev *graph.Commit
+	prevCommitHash := ""
+	prevNodeHash := ""
+	prevFound := false
+	emitPrev := func() {
+		out.Changes = append(out.Changes, HistoryChange{
+			Commit:    prevCommitHash[:12],
+			Timestamp: prev.Timestamp.Format("2006-01-02T15:04:05Z"),
+			Action:    prev.Message,
+		})
+	}
+	stoppedEarly := false
 	for hash != "" && len(out.Changes) < limit {
 		// Only apply the traversal cap when no date bounds were
 		// provided; date bounds supply their own termination condition.
 		if !dateBounded && traversed >= maxTraversal {
+			stoppedEarly = true
 			break
 		}
 		traversed++
 		commit, err := loadCommitMeta(store, hash)
 		if err != nil {
-			break
-		}
-
-		// Stop once we walk past the Since boundary.
-		if !sinceT.IsZero() && commit.Timestamp.Before(sinceT) {
+			stoppedEarly = true
 			break
 		}
 
 		nodeHash, found, _ := graph.NodeHashInCommit(store, hash, req.ID)
-		if found {
-			switch {
-			case prevHash == "":
-				// First appearance since start-of-walk OR recreation
-				// after a not-found gap: record as a change entry.
-				out.Changes = append(out.Changes, HistoryChange{
-					Commit: hash[:12], Timestamp: commit.Timestamp.Format("2006-01-02T15:04:05Z"), Action: commit.Message,
-				})
-			case nodeHash != prevHash:
-				// Hash changed -> record was modified between these two commits.
-				out.Changes = append(out.Changes, HistoryChange{
-					Commit: hash[:12], Timestamp: commit.Timestamp.Format("2006-01-02T15:04:05Z"), Action: commit.Message,
-				})
-			}
-			prevHash = nodeHash
-		} else {
-			// Record not present in this commit. Reset prevHash so a
-			// later reappearance is recognised as a first-appearance,
-			// not compared against the stale pre-deletion hash (RC-4).
-			prevHash = ""
+		if prev != nil && (prevFound != found || (found && nodeHash != prevNodeHash)) {
+			emitPrev()
 		}
 
+		// Stop once we walk past the Since boundary -- checked after
+		// the transition so a change made by the oldest in-window
+		// commit still surfaces (only its "before" state is out of
+		// window).
+		if !sinceT.IsZero() && commit.Timestamp.Before(sinceT) {
+			stoppedEarly = true
+			break
+		}
+
+		prev, prevCommitHash, prevNodeHash, prevFound = commit, hash, nodeHash, found
 		hash = commit.Parent
+	}
+	// The walk consumed the whole chain with the record present at
+	// the oldest commit: that commit introduced it.
+	if !stoppedEarly && hash == "" && prevFound && len(out.Changes) < limit {
+		emitPrev()
 	}
 
 	a.attachVersionTimeline(&out, req.ID, limit)
