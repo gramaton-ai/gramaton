@@ -43,13 +43,14 @@ Grep for `ErrInternal(fmt.Sprintf` and `ErrInternal(.*err.Error()` and `ErrInval
 
 **Severity: HIGH.** Remediation: `a.log.Warn("context", "err", err)` and return a generic message like `ErrInternal("failed to write export response")`.
 
-### 3. `SwapGraph` misuse
+### 3. Graph adoption misuse (state-changing loads)
 
-For every `SwapGraph` callsite (only expected in branch checkout/merge):
-- [ ] The replacement graph was built with `graph.NewWithCapacity(..., graph.WithEdgeStore(a.engine.EdgeStore()))`, NOT bare `graph.New()`. Bare `graph.New()` creates a fresh `MemoryEdgeStore`; edges added afterwards silently bypass bbolt persistence.
-- [ ] On-disk HEAD/ref writes happen BEFORE the `SwapGraph` call, not after. If an on-disk write fails after `SwapGraph`, in-memory and disk diverge.
+For every state-changing load (revert, checkout, merge) and every `AdoptGraph`/`SwapGraph` callsite:
+- [ ] The replacement graph is built OFF-LOCK with `graph.LoadStaged` (staged graph, memory-backed edges), then installed with `engine.AdoptGraph` under the write lock. Loading into a graph that shares the engine's populated `BboltEdgeStore` is the DEFECT, not the fix: `Load` skips edge reload entirely and the new nodes keep the old state's edges (a revert does not restore deleted edges; a checked-out branch shows the replaced branch's edges). A bare `graph.New()` handed to `SwapGraph` is the other failure mode -- its `MemoryEdgeStore` silently bypasses bbolt persistence.
+- [ ] On-disk pointer writes (HEAD, refs, BRANCH) happen BEFORE `AdoptGraph`; a failed write aborts with in-memory state untouched.
+- [ ] After adoption: `SetHeadLocked`, `RebuildAllIndexes`, and `RebuildChangelogFor` when the lineage changed. The adopted-commit changelog deferral is armed only where a Save follows, and armers disarm on their error paths.
 
-**Severity: CRITICAL** (data-loss class).
+**Severity: CRITICAL** (data-loss class). Canonical sequence: `BranchCheckout` in `api/branches.go`.
 
 ### 4. Swallowed `parseJSON` errors on optional bodies
 

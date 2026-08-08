@@ -678,36 +678,41 @@ response: %v", err))` shipped `io.Writer` error detail to clients.
 Fix: log the err with `a.log.Warn("...", "err", err)` and return a
 generic `ErrInternal("failed to write export response")`.
 
-### Don't construct a fresh graph with `graph.New()` for `SwapGraph`
+### Don't hand the engine's populated edge store to a state-changing load
 
-The engine is constructed with a shared `BboltEdgeStore`. If you
-build a replacement graph with `graph.New()`, it gets a fresh
-`MemoryEdgeStore`, and edges added on the swapped-in graph
-silently bypass bbolt persistence.
+State-changing loads (revert, branch checkout, merge) parse the
+target commit into a STAGED graph -- `graph.LoadStaged`, with
+memory-backed edges -- and install it with `engine.AdoptGraph`
+under the write lock. Two shortcuts look reasonable and both were
+real bugs at different times:
 
-We had this bug in PR #3's first version of `BranchCheckout` --
-edges added on a checked-out branch were lost on restart. The fix
-is in `core/engine.go`: use the documented `EdgeStore()` accessor
-to share the engine's edge store with the new graph:
+- Loading into a graph that shares the engine's populated
+  `BboltEdgeStore` makes `Load` skip edge reload entirely: the
+  target's nodes arrive under the CURRENT state's edges, so a
+  revert does not restore deleted edges and a checked-out branch
+  shows the edges of the branch it replaced.
+- A bare `graph.New()` handed straight to `SwapGraph` installs a
+  fresh `MemoryEdgeStore`, and edges written afterwards silently
+  bypass bbolt persistence.
 
-```go
-newGraph := graph.NewWithCapacity(graph.DefaultCacheCapacity,
-    graph.WithEdgeStore(a.engine.EdgeStore()))
-```
+`AdoptGraph` threads the needle: the staged edge set replaces the
+shared store's contents wholesale and the staged graph takes
+ownership of the store, so post-swap edge writes persist. Call
+`RebuildAllIndexes` afterwards, and `RebuildChangelogFor` when the
+lineage changed. `BranchCheckout` in `api/branches.go` is the
+canonical sequence; the doc comments on `SwapGraph` and
+`AdoptGraph` in `core/engine.go` spell out the constraint.
 
-If you call `SwapGraph` from any new code path, the documentation
-on `SwapGraph` itself spells out the constraint.
+### Don't write HEAD after adopting a graph
 
-### Don't write HEAD after `SwapGraph`
+`AdoptGraph` (like `SwapGraph`) mutates in-memory engine state. If
+a subsequent on-disk write fails (the HEAD file, a ref file, the
+BRANCH marker), the engine is on the new state but disk says
+otherwise -- a retry could silently make the broken state stick.
 
-`SwapGraph` mutates in-memory engine state. If a subsequent on-disk
-write fails (the HEAD file, a ref file), the engine is on the new
-state but disk says otherwise -- a retry could silently make the
-broken state stick.
-
-Always write the on-disk pointers FIRST, then call `SwapGraph` last.
-Both `BranchCheckout` and `BranchMerge` follow this order
-post-PR-3 review.
+Always write the on-disk pointers FIRST, then adopt last, then move
+the in-memory HEAD alongside. `BranchCheckout`, `BranchRevert`, and
+`BranchMerge` all follow this order.
 
 ### Don't silently swallow `parseJSON` errors on optional bodies
 

@@ -110,13 +110,13 @@ Checks:
 
 **Severity: MEDIUM** (info disclosure class).
 
-## 6. `SwapGraph` correctness
+## 6. Graph adoption correctness
 
-Graph replacement ops have unique invariants:
+Graph replacement ops (revert, checkout, merge) have unique invariants:
 
-- [ ] Replacement graph is built with `graph.NewWithCapacity(..., graph.WithEdgeStore(a.engine.EdgeStore()))`. Bare `graph.New()` creates a fresh `MemoryEdgeStore`; subsequent edge writes silently bypass bbolt persistence → edges lost on restart.
-- [ ] On-disk HEAD/ref writes happen BEFORE `SwapGraph`. If an on-disk write fails AFTER `SwapGraph`, in-memory and disk diverge and a retry may make the broken state stick.
-- [ ] `SwapGraph` is called under `engine.Lock()`, never under `RLock()` or off-lock.
+- [ ] The replacement graph is built OFF-LOCK with `graph.LoadStaged` (memory-backed edges) and installed via `engine.AdoptGraph`. Sharing the engine's populated `BboltEdgeStore` with the load is the DEFECT: `Load` skips edge reload and the new nodes keep the old edges. A bare `graph.New()` handed to `SwapGraph` is the other failure mode: its `MemoryEdgeStore` silently bypasses bbolt persistence → edges lost on restart.
+- [ ] On-disk pointer writes (HEAD, refs, BRANCH) happen BEFORE `AdoptGraph`. If an on-disk write fails AFTER adoption, in-memory and disk diverge and a retry may make the broken state stick.
+- [ ] `AdoptGraph`/`SwapGraph` run under `engine.Lock()`, never under `RLock()` or off-lock, and are followed by `RebuildAllIndexes` (plus `RebuildChangelogFor` on lineage change).
 
 **Severity: CRITICAL** (data-loss class, not traditional infosec but same severity rating).
 
