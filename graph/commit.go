@@ -127,6 +127,14 @@ type Commit struct {
 	// commits deserialize with Author == "" and the timeline reports
 	// them unattributed.
 	Author string `json:"author,omitempty"`
+	// PruneTombstoneRoot references the retention tombstone chunk a
+	// prune run minted: the history floor plus per-record swept-depth
+	// watermarks, unioned across prunes. Only prune commits carry it.
+	// Living on a commit keeps it in the substrate proper -- it
+	// survives index rebuilds and rides backups, unlike anything in
+	// indexes.db. Readers consult it to answer "pruned by policy"
+	// instead of reporting a missing blob as corruption.
+	PruneTombstoneRoot string `json:"prune_tombstone_root,omitempty"`
 }
 
 // Save persists the current graph state as a commit to the store.

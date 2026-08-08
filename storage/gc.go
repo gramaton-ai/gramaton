@@ -38,6 +38,16 @@ type GCOptions struct {
 
 	// HeadHash is the current HEAD commit hash.
 	HeadHash string
+
+	// ExtraRoots are chunk hashes marked reachable as-is (no tree
+	// walk): the retention tombstone, individually retained version
+	// blobs.
+	ExtraRoots []string
+
+	// ExtraCommits are commit hashes marked like chain commits (the
+	// chunk plus both trees) WITHOUT walking their parent chains: the
+	// prune baseline, which is deliberately parentless-by-reference.
+	ExtraCommits []string
 }
 
 // GCCommit is the minimal commit structure needed for GC.
@@ -48,6 +58,11 @@ type GCCommit struct {
 	Timestamp    time.Time `json:"timestamp"`
 	NodeTreeRoot string    `json:"node_tree_root,omitempty"`
 	EdgeTreeRoot string    `json:"edge_tree_root,omitempty"`
+	// PruneTombstoneRoot mirrors graph.Commit's field of the same
+	// name: the retention-tombstone chunk a prune commit references.
+	// Must be marked or the sweep collects the store's own record of
+	// what it swept.
+	PruneTombstoneRoot string `json:"prune_tombstone_root,omitempty"`
 	// Legacy index roots (may be empty after sidecar migration).
 	BM25Root       string `json:"bm25_root,omitempty"`
 	BM25FullRoot   string `json:"bm25_full_root,omitempty"`
@@ -90,6 +105,24 @@ func (s *Store) GC(opts GCOptions) (*GCResult, error) {
 		if err := s.markFromTip(tipHash, cutoff, opts.MinKeepCommits, reachable, opts.CommitLoader, result); err != nil {
 			return nil, fmt.Errorf("storage gc: mark from tip %s: %w", tipHash[:12], err)
 		}
+	}
+
+	for _, root := range opts.ExtraRoots {
+		if root != "" {
+			reachable[root] = struct{}{}
+		}
+	}
+	for _, hash := range opts.ExtraCommits {
+		if hash == "" {
+			continue
+		}
+		reachable[hash] = struct{}{}
+		c, err := opts.CommitLoader(hash)
+		if err != nil {
+			result.Errors++
+			continue
+		}
+		s.markCommitChunks(c, reachable, result)
 	}
 
 	result.ReachableCount = len(reachable)
@@ -182,10 +215,11 @@ func (s *Store) markCommitChunks(c *GCCommit, reachable map[string]struct{}, res
 		s.markProllyTree(c.EdgeTreeRoot, reachable, 0, result)
 	}
 
-	// Mark legacy index blobs (may be empty after sidecar migration).
+	// Mark legacy index blobs (may be empty after sidecar migration)
+	// and the retention tombstone, which is flat (no tree walk).
 	for _, root := range []string{
 		c.BM25Root, c.BM25FullRoot, c.BM25MediumRoot, c.BM25ShortRoot,
-		c.VecRoot, c.PropRoot, c.EdgeAdjRoot,
+		c.VecRoot, c.PropRoot, c.EdgeAdjRoot, c.PruneTombstoneRoot,
 	} {
 		if root != "" {
 			reachable[root] = struct{}{}

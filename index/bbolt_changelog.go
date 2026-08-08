@@ -248,3 +248,31 @@ func (c *BboltChangelog) ForEach(fn func(nodeID string, entries []ChangelogEntry
 		})
 	})
 }
+
+// pruneTombstoneKey points at the newest retention-tombstone chunk.
+// A CACHE of the prune commit's PruneTombstoneRoot (the substrate
+// authority), kept here so boot finds the floor without a chain
+// walk. sidecar.db rides backups, so the pointer survives restores;
+// if it is ever lost the store degrades to unexplained-missing-blob
+// reporting until the next prune rewrites it.
+var pruneTombstoneKey = []byte("prune_tombstone")
+
+// PruneTombstoneRef returns the newest tombstone chunk hash, or ""
+// when the store has never been pruned.
+func (c *BboltChangelog) PruneTombstoneRef() string {
+	var h string
+	_ = c.db.View(func(tx *bolt.Tx) error {
+		if raw := tx.Bucket(changelogMetaBucket).Get(pruneTombstoneKey); raw != nil {
+			h = string(raw)
+		}
+		return nil
+	})
+	return h
+}
+
+// SetPruneTombstoneRef records the newest tombstone chunk hash.
+func (c *BboltChangelog) SetPruneTombstoneRef(hash string) error {
+	return c.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(changelogMetaBucket).Put(pruneTombstoneKey, []byte(hash))
+	})
+}

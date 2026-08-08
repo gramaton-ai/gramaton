@@ -102,6 +102,10 @@ type Engine struct {
 	// anc memoizes the current head's ancestor set for as_of branch
 	// validation; invalidated on every head move.
 	anc ancestry
+	// pruneFloor caches the newest retention tombstone (nil on a
+	// never-pruned store). Loaded at open from the sidecar pointer;
+	// prune runs offline, so no live invalidation is needed.
+	pruneFloor *graph.Tombstone
 	// adoptedCommitPending marks that the next Save commits an
 	// adopted staged graph (revert/merge): its mutation set is empty,
 	// so the Save-time changelog append must NOT advance the marker
@@ -354,6 +358,16 @@ func (e *Engine) openFiles(skipFormatCheck bool) error {
 	e.sidecarDB = sidecarDB
 	e.accessIdx = accessIdx
 	e.changelog = changelog
+	e.pruneFloor = nil
+	if ref := changelog.PruneTombstoneRef(); ref != "" {
+		ts, err := graph.LoadTombstone(e.store, ref)
+		if err != nil {
+			slog.Warn("prune tombstone unreadable; missing history will report as unexplained until the next prune",
+				"component", "engine", "ref", trunc12(ref), "err", err)
+		} else {
+			e.pruneFloor = ts
+		}
+	}
 
 	g := graph.NewWithCapacity(graph.DefaultCacheCapacity, graph.WithEdgeStore(idx.edgeStore))
 	// Installed before Load so eagerly-loaded nodes overlay too.
@@ -1304,3 +1318,13 @@ func (e *Engine) EdgeCount() int {
 	defer e.mu.RUnlock()
 	return e.graph.EdgeCount()
 }
+
+// HistoryFloor returns the newest retention tombstone, or nil when
+// the store has never been pruned. Readers consult it before
+// reporting absent history: a missing blob or commit covered by the
+// floor is "pruned by policy", not corruption.
+func (e *Engine) HistoryFloor() *graph.Tombstone { return e.pruneFloor }
+
+// SetHistoryFloor installs a just-minted tombstone (the offline
+// prune run updates its own engine instance after committing).
+func (e *Engine) SetHistoryFloor(t *graph.Tombstone) { e.pruneFloor = t }
