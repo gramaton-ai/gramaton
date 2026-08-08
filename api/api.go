@@ -63,9 +63,10 @@ type API struct {
 	// this package set it via SetFaultInjector to exercise rare error
 	// paths (chunk_save failure, jobstore_update failure) without
 	// disturbing the underlying storage.
-	hooksMu                   sync.Mutex
-	testHookBackupSnapshotted chan struct{}
-	faultInjector             FaultInjector
+	hooksMu                          sync.Mutex
+	testHookBackupSnapshotted        chan struct{}
+	testHookHistorySearchSnapshotted chan struct{}
+	faultInjector                    FaultInjector
 
 	// asyncMu protects asyncRunners. WaitGroup is goroutine-safe.
 	// asyncShutdown gates the spawn of new runners during shutdown.
@@ -169,6 +170,35 @@ func (a *API) Logger() *slog.Logger { return a.log }
 // ConfigDir returns the configuration directory path (where hook-state
 // files and similar artifacts live).
 func (a *API) ConfigDir() string { return a.configDir }
+
+// SetHistorySearchSnapshotHook installs a two-way handshake channel
+// fired between HistorySearch's phase-1 snapshot (read lock
+// released) and the off-lock blob matching: the operation SENDS one
+// value, then RECEIVES one before proceeding. A test receives, takes
+// the engine write lock, sends, and joins the search while still
+// holding the lock -- if the match phase touched any engine lock it
+// would deadlock into the test's watchdog instead of passing by
+// luck. Pass nil to clear.
+func (a *API) SetHistorySearchSnapshotHook(ch chan struct{}) {
+	a.hooksMu.Lock()
+	defer a.hooksMu.Unlock()
+	a.testHookHistorySearchSnapshotted = ch
+}
+
+func (a *API) fireHistorySearchSnapshotHook() {
+	a.hooksMu.Lock()
+	ch := a.testHookHistorySearchSnapshotted
+	a.hooksMu.Unlock()
+	if ch != nil {
+		ch <- struct{}{}
+		<-ch
+		a.hooksMu.Lock()
+		if a.testHookHistorySearchSnapshotted == ch {
+			a.testHookHistorySearchSnapshotted = nil
+		}
+		a.hooksMu.Unlock()
+	}
+}
 
 // SetBackupSnapshotHook installs a channel that BackupCreate closes
 // after phase-1 snapshot returns. Tests use this to race a

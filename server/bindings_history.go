@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -36,6 +37,20 @@ func (s *Server) registerHistoryRoutes(mux *http.ServeMux) {
 			ExcludeCuration:        query.Get("exclude_curation") == "true",
 			IncludeRecordMutations: query.Get("include_record_mutations") == "true",
 		})
+		if apiErr != nil {
+			s.writeAPIError(w, apiErr)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("POST /v1/history/search", func(w http.ResponseWriter, r *http.Request) {
+		var req api.HistorySearchRequest
+		if err := parseJSON(r, &req, getMaxJSONSize()); err != nil && !errors.Is(err, errEmptyBody) {
+			s.writeError(w, http.StatusBadRequest, "input_error", err.Error(), true)
+			return
+		}
+		result, apiErr := s.api.HistorySearch(r.Context(), req)
 		if apiErr != nil {
 			s.writeAPIError(w, apiErr)
 			return
@@ -97,6 +112,34 @@ func (s *Server) registerHistoryMCPTools(mcpServer *mcp.Server) {
 		Topic string `json:"topic,omitempty" jsonschema:"filter by topic substring (matches content_keywords + content_short, case-insensitive)"`
 		Limit int    `json:"limit,omitempty" jsonschema:"max changes to return (default 50, max 1000)"`
 	}
+	type historySearchArgs struct {
+		Text   string `json:"text" jsonschema:"lexical query matched against version content and change_notes (case-insensitive substring)"`
+		ID     string `json:"id,omitempty" jsonschema:"scan only this record's versions (fastest scope)"`
+		Scope  string `json:"scope,omitempty" jsonschema:"'candidates' (default: retrieval nominates records, then their histories are scanned) or 'store' (budgeted scan of every logical version; slow on large stores but finds knowledge revised away entirely)"`
+		Budget int    `json:"budget,omitempty" jsonschema:"max version blobs to scan per call, any scope (default 20000, max 200000)"`
+		Since  string `json:"since,omitempty" jsonschema:"only match versions on or after this date (YYYY-MM-DD or RFC3339)"`
+		Until  string `json:"until,omitempty" jsonschema:"only match versions up to this date (YYYY-MM-DD or RFC3339)"`
+	}
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "gramaton_history_search",
+		Description: api.HistorySearchDescription,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args historySearchArgs) (*mcp.CallToolResult, any, error) {
+		done := s.mcpToolStart("gramaton_history_search")
+		defer done(nil)
+		result, apiErr := s.api.HistorySearch(ctx, api.HistorySearchRequest{
+			Text:   args.Text,
+			ID:     args.ID,
+			Scope:  args.Scope,
+			Budget: args.Budget,
+			Since:  args.Since,
+			Until:  args.Until,
+		})
+		if apiErr != nil {
+			return mcpAPIErr(apiErr)
+		}
+		return mcpJSONResult(result)
+	})
+
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "gramaton_diff",
 		Description: api.DiffDescription,

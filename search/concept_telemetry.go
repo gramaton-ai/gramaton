@@ -29,7 +29,7 @@ type ConceptMatch struct {
 //
 // Returns nil when queryVec is empty (no embedding) or threshold <= 0
 // (telemetry effectively disabled).
-func ScanConceptMatches(g *graph.Graph, queryVec []float32, threshold float64) []ConceptMatch {
+func ScanConceptMatches(g graph.NodeReader, queryVec []float32, threshold float64) []ConceptMatch {
 	if len(queryVec) == 0 || threshold <= 0 {
 		return nil
 	}

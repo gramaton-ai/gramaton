@@ -89,6 +89,11 @@ var readPostPaths = map[string]bool{
 	"/v1/export":      true,
 	"/v1/store/carve": true, // reads source store, writes a new dest store
 	"/v1/store/add":   true,
+	// HistorySearch is a genuine read (guardRead/MCPToolRead), so it
+	// is deliberately exempt from the write gate even though its
+	// store scope can be an expensive scan -- the scan is off-lock
+	// and budget-bounded, and reads are not admission-controlled.
+	"/v1/history/search": true,
 }
 
 func isReadPost(path string) bool {

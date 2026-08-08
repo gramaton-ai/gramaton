@@ -400,3 +400,12 @@ func (it *sliceNodeIterator) Node() *Node {
 func (it *sliceNodeIterator) Close() {
 	it.nodes = nil
 }
+
+// IsConcept reports whether the node is a curation-synthesized
+// concept -- derived data under the derived-layer contract: out of
+// primary retrieval indexes, out of the changelog, machine-owned
+// (curation is the sole writer), but a full graph citizen otherwise.
+func IsConcept(props Properties) bool {
+	nt, _ := props.GetString("node_type")
+	return nt == "concept"
+}

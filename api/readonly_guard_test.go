@@ -130,32 +130,34 @@ var readOnlyClassification = map[string]string{
 	"CurationListStuck":           guardRead,
 
 	// Read-only operations.
-	"Search":     guardRead, // skips its access bump when frozen (see api/search.go)
-	"Inspect":    guardRead, // skips its access bump when frozen (see api/inspect.go)
-	"Explore":    guardRead,
-	"Stats":      guardRead,
-	"Status":     guardRead,
-	"Pending":    guardRead,
-	"Duplicates": guardRead,
-	"Guide":      guardRead,
-	"History":    guardRead,
-	"Log":        guardRead,
-	"Diff":       guardRead,
-	"JobsList":   guardRead,
+	"Search":        guardRead, // skips its access bump when frozen (see api/search.go)
+	"Inspect":       guardRead, // skips its access bump when frozen (see api/inspect.go)
+	"Explore":       guardRead,
+	"Stats":         guardRead,
+	"Status":        guardRead,
+	"Pending":       guardRead,
+	"Duplicates":    guardRead,
+	"Guide":         guardRead,
+	"History":       guardRead,
+	"HistorySearch": guardRead,
+	"Log":           guardRead,
+	"Diff":          guardRead,
+	"JobsList":      guardRead,
 
 	// Accessors and lifecycle plumbing (not operations).
-	"Engine":                guardInfra,
-	"UsageTracker":          guardInfra,
-	"Runner":                guardInfra,
-	"SetRunner":             guardInfra,
-	"Logger":                guardInfra,
-	"ConfigDir":             guardInfra,
-	"SetBackupSnapshotHook": guardInfra,
-	"SetFaultInjector":      guardInfra,
-	"SetChunkSizeForTests":  guardInfra,
-	"StopPreparedSweeper":   guardInfra,
-	"StartPreparedSweeper":  guardInfra,
-	"ShutdownAsync":         guardInfra,
+	"Engine":                       guardInfra,
+	"UsageTracker":                 guardInfra,
+	"Runner":                       guardInfra,
+	"SetRunner":                    guardInfra,
+	"Logger":                       guardInfra,
+	"ConfigDir":                    guardInfra,
+	"SetBackupSnapshotHook":        guardInfra,
+	"SetHistorySearchSnapshotHook": guardInfra,
+	"SetFaultInjector":             guardInfra,
+	"SetChunkSizeForTests":         guardInfra,
+	"StopPreparedSweeper":          guardInfra,
+	"StartPreparedSweeper":         guardInfra,
+	"ShutdownAsync":                guardInfra,
 }
 
 // TestReadOnlyGuardCoversEveryAPIMethod pins the store-level
