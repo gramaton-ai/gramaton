@@ -78,10 +78,12 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	s.engine.RebuildAllIndexes()
 	preRevert := s.engine.HeadHashLocked()
 
+	s.engine.ArmAdoptedCommit()
 	commit, err := s.engine.Save(fmt.Sprintf("revert to %s", core.TruncHash(fullHash)), graph.CommitAction{
 		Kind: graph.ActionRevert,
 	})
 	if err != nil {
+		s.engine.DisarmAdoptedCommit()
 		s.writeError(w, http.StatusInternalServerError, "save_error", "failed to save", false)
 		return
 	}

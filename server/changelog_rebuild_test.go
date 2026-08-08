@@ -51,6 +51,24 @@ func TestChangelogRescopesOnCheckout(t *testing.T) {
 	if eng.Changelog().Marker() != eng.HeadHash() {
 		t.Fatal("marker did not land on HEAD after the round trip")
 	}
+
+	// The FIRST save after a checkout must mint its changelog entry
+	// immediately -- checkout adopts a staged graph but never Saves,
+	// so an adopted-commit flag armed by the adoption itself would
+	// swallow this save's entries until the next boot's gap walk.
+	eng.Lock()
+	eng.SetContentProp(recID, "content_full", "revised after checkout")
+	if _, err := eng.Save("post-checkout revise"); err != nil {
+		eng.Unlock()
+		t.Fatalf("Save: %v", err)
+	}
+	eng.Unlock()
+	if got := len(eng.Changelog().Versions(recID)); got != 3 {
+		t.Fatalf("versions after post-checkout save = %d, want 3 (entry minted immediately, not deferred to reboot)", got)
+	}
+	if eng.Changelog().Marker() != eng.HeadHash() {
+		t.Fatal("marker left behind HEAD by the post-checkout save")
+	}
 }
 
 // TestChangelogIndexesRevertCommit pins the adopted-graph seam: the

@@ -245,10 +245,12 @@ func (a *API) BranchMerge(ctx context.Context, name string) (BranchMergeResponse
 	a.engine.RebuildAllIndexes()
 
 	preMerge := a.engine.HeadHashLocked()
+	a.engine.ArmAdoptedCommit()
 	commit, err := a.engine.Save(fmt.Sprintf("merge branch %q", name), graph.CommitAction{
 		Kind: graph.ActionMerge,
 	})
 	if err != nil {
+		a.engine.DisarmAdoptedCommit()
 		a.log.Warn("branch merge: save failed", "component", "branch", "name", name, "err", err)
 		return BranchMergeResponse{}, ErrInternal("failed to save merge")
 	}

@@ -631,9 +631,19 @@ func (e *Engine) AdoptGraph(staged *graph.Graph) {
 	// must overlay sidecar access values on every materialization.
 	staged.SetNodeLoadHook(e.overlayAccess)
 	e.graph = staged
-	e.adoptedCommitPending = true
 	e.invalidateAncestry()
 }
+
+// ArmAdoptedCommit marks that the NEXT Save commits an adopted
+// staged graph (revert/merge): its mutation set is empty, so the
+// Save-time changelog append must leave the marker behind for the
+// explicit tree-diff indexing. NOT set by AdoptGraph itself --
+// checkout also adopts but never Saves, and a flag armed there
+// silently skipped the changelog on the first post-checkout save
+// until the next boot's gap walk. Callers that Save after adopting
+// arm explicitly and disarm on their Save error paths.
+func (e *Engine) ArmAdoptedCommit()    { e.adoptedCommitPending = true }
+func (e *Engine) DisarmAdoptedCommit() { e.adoptedCommitPending = false }
 
 // EdgeStore returns the engine's persistent edge store. Mostly
 // internal since AdoptGraph took over the state-changing swap path;
