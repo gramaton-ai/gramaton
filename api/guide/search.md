@@ -134,7 +134,7 @@ content competing for top-K slots.
 - `gramaton_search`: Primary search tool.
 - `gramaton_inspect`: Full record details for a match.
 - `gramaton_explore`: Graph traversal from a match (follow
-  `justifies`, `discusses`, `supersedes` edges for context).
+  `justifies`, `discusses`, `contradicts` edges for context).
 - `gramaton_duplicates`: Find near-duplicate records (cosine ≥ 0.92).
 - `gramaton_guide(topic="metadata")`: Which metadata to filter on
   for which question types.
