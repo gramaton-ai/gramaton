@@ -62,12 +62,32 @@ func TestBootFastForwardsTrailingActiveRef(t *testing.T) {
 	if err := WriteRef(dir, "main", stray); err != nil {
 		t.Fatalf("write stray ref: %v", err)
 	}
-	_ = openReadOnlyTestEngine(t, dir)
+	eng3 := openReadOnlyTestEngine(t, dir)
 	ref, err = ReadRef(dir, "main")
 	if err != nil {
 		t.Fatalf("read stray ref: %v", err)
 	}
 	if ref != stray {
 		t.Fatalf("divergent ref was rewritten to %s; must be left untouched", ref)
+	}
+	if err := eng3.Close(); err != nil {
+		t.Fatalf("close 3: %v", err)
+	}
+
+	// A frozen store is a byte-stable artifact: even a genuinely
+	// trailing ref (an ancestor of HEAD) is reported, never repaired.
+	if err := WriteRef(dir, "main", c1.Hash); err != nil {
+		t.Fatalf("rewind ref for frozen leg: %v", err)
+	}
+	if err := FreezeStore(dir, ""); err != nil {
+		t.Fatalf("freeze: %v", err)
+	}
+	_ = openReadOnlyTestEngine(t, dir)
+	ref, err = ReadRef(dir, "main")
+	if err != nil {
+		t.Fatalf("read frozen ref: %v", err)
+	}
+	if ref != c1.Hash {
+		t.Fatalf("frozen store's trailing ref was rewritten to %s; boot must not write to a read-only store", ref)
 	}
 }

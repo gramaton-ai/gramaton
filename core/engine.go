@@ -517,6 +517,14 @@ func (e *Engine) reconcileActiveRef() {
 	if err == nil && ref == e.headHash {
 		return
 	}
+	// A frozen store is a byte-stable artifact: report the drift,
+	// never repair it. The read-only flag is seeded from the store
+	// manifest before openFiles reaches this point.
+	if e.readOnly.Load() {
+		slog.Warn("active branch ref does not match HEAD on a read-only store; leaving it untouched",
+			"component", "engine", "branch", branch)
+		return
+	}
 	short := func(h string) string {
 		if len(h) > 12 {
 			return h[:12]
