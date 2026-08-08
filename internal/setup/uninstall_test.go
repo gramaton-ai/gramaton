@@ -905,6 +905,9 @@ func TestHarnessRegistryUninstallInvariants(t *testing.T) {
 		if h.WireHooks != nil && h.UnwireHooks == nil {
 			t.Errorf("%s: WireHooks set but UnwireHooks nil -- uninstall can't strip what install wires", h.Name)
 		}
+		if h.WirePermissions != nil && h.UnwirePermissions == nil {
+			t.Errorf("%s: WirePermissions set but UnwirePermissions nil -- uninstall can't strip what install grants", h.Name)
+		}
 		if h.OwnsInstructionsDir && h.InstructionsLayout != wholeFileOwned {
 			t.Errorf("%s: OwnsInstructionsDir requires the wholeFileOwned layout", h.Name)
 		}

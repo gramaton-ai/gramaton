@@ -194,6 +194,24 @@ type Harness struct {
 	// uninstall coverage automatically tracks hook-wiring coverage.
 	UnwireHooks func(ctx context.Context, scriptPaths []string, apply bool) (changed bool, backupPath string, err error)
 
+	// WirePermissions pre-approves the given gramaton MCP tool names
+	// in this harness's permission config so tool calls run without
+	// per-call prompts. Owns only recognizably-gramaton entries,
+	// replaces that slice wholesale on re-run (rename
+	// reconciliation), and never adds an entry the user has denied.
+	// Nil when the harness has no known permission schema. The
+	// wizard consent-gates it separately from hooks: permission
+	// grants are never written without an explicit yes.
+	WirePermissions func(ctx context.Context, toolNames []string) (unchanged bool, err error)
+
+	// UnwirePermissions strips the gramaton-owned permission
+	// entries: the strip-only counterpart of WirePermissions,
+	// sharing its ownership rule. apply=false probes without
+	// touching the file. Required when WirePermissions is set, so
+	// uninstall coverage automatically tracks permission-wiring
+	// coverage.
+	UnwirePermissions func(ctx context.Context, apply bool) (changed bool, backupPath string, err error)
+
 	// OwnsInstructionsDir marks a wholeFileOwned harness whose
 	// instructions file lives in a gramaton-dedicated directory
 	// (Cursor's ~/.cursor/skills/gramaton/). Uninstall removes the
@@ -234,6 +252,8 @@ var harnesses = []Harness{
 		WireHooks:           registerClaudeHooks,
 		HookConfigPathHint:  homeRelHint(".claude", "settings.json"),
 		UnwireHooks:         unregisterClaudeHooks,
+		WirePermissions:     registerClaudePermissions,
+		UnwirePermissions:   unregisterClaudePermissions,
 	},
 	{
 		Name: harnessKiroCLI,

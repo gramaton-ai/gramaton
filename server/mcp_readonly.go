@@ -180,3 +180,36 @@ func MCPRemoteExcludedToolNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// mcpAgentExcludedTools lists the classified tools the CLI proxy
+// deliberately does not register -- the agent-facing surface is
+// everything else. Distinct from mcpRemoteExcludedTools even though
+// the two coincide today: that list is a security gate on the remote
+// surface (path-taking tools stay off it), while this one is a
+// product decision about what agents see at all. A future
+// path-taking tool joins the remote list but may well stay on the
+// agent surface; conflating the lists would force a false choice.
+var mcpAgentExcludedTools = []string{
+	"gramaton_intake",
+}
+
+// MCPAgentSurfaceToolNames returns the agent-facing MCP tool surface,
+// sorted: every classified tool minus mcpAgentExcludedTools. This is
+// the list `gramaton init` pre-approves in Claude Code's permission
+// allowlist; the proxy registry test in cli/ asserts its registration
+// equals this list, which keeps the permission grants from drifting
+// ahead of or behind the real surface.
+func MCPAgentSurfaceToolNames() []string {
+	excluded := make(map[string]bool, len(mcpAgentExcludedTools))
+	for _, name := range mcpAgentExcludedTools {
+		excluded[name] = true
+	}
+	names := make([]string, 0, len(mcpToolAccess))
+	for name := range mcpToolAccess {
+		if !excluded[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}

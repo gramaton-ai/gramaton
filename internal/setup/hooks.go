@@ -244,6 +244,13 @@ type HookBackend interface {
 	// present and unchanged, (false, nil) on a successful update,
 	// (false, err) on failure.
 	RegisterHooks(ctx context.Context, client string, scriptPaths []string) (unchanged bool, err error)
+
+	// RegisterPermissions pre-approves the given gramaton MCP tool
+	// names in the named client's permission config, replacing the
+	// gramaton-owned slice wholesale (rename reconciliation) and
+	// preserving everything else. Same unchanged/err contract as
+	// RegisterHooks.
+	RegisterPermissions(ctx context.Context, client string, toolNames []string) (unchanged bool, err error)
 }
 
 // DefaultHookBackend is the production implementation.
@@ -297,6 +304,17 @@ func (DefaultHookBackend) RegisterHooks(ctx context.Context, client string, scri
 		return false, fmt.Errorf("no hook auto-wiring strategy for client %q", client)
 	}
 	return h.WireHooks(ctx, scriptPaths)
+}
+
+// RegisterPermissions dispatches to the harness's permission-wiring
+// strategy. Same contract as RegisterHooks: the wizard only calls it
+// for registry entries that have one.
+func (DefaultHookBackend) RegisterPermissions(ctx context.Context, client string, toolNames []string) (bool, error) {
+	h := harnessByEmbedDir(client)
+	if h == nil || h.WirePermissions == nil {
+		return false, fmt.Errorf("no permission auto-wiring strategy for client %q", client)
+	}
+	return h.WirePermissions(ctx, toolNames)
 }
 
 // hookEventForConfig maps a proxy filename to the claude-protocol
@@ -471,7 +489,7 @@ func registerClaudeHooks(_ context.Context, scriptPaths []string) (bool, error) 
 		return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(settingsPath), err)
 	}
 
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return false, fmt.Errorf("serialize settings: %w", err)
 	}
@@ -489,11 +507,50 @@ func writeConfigBackup(path string, original []byte) (string, error) {
 	if len(original) == 0 {
 		return "", nil
 	}
+	// O_EXCL with a numbered-suffix retry: one wizard run now writes
+	// settings.json twice (hooks, then permissions), usually within
+	// the same wall-clock second, and a plain WriteFile would let the
+	// second backup overwrite the first -- preserving the
+	// intermediate state instead of the user's original.
 	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
-		return "", fmt.Errorf("write backup %s: %w (aborting before modifying the original)", backupPath, err)
+	for i := 0; ; i++ {
+		candidate := backupPath
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", backupPath, i+1)
+		}
+		f, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("write backup %s: %w (aborting before modifying the original)", candidate, err)
+		}
+		_, werr := f.Write(original)
+		cerr := f.Close()
+		if werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return "", fmt.Errorf("write backup %s: %w (aborting before modifying the original)", candidate, werr)
+		}
+		return candidate, nil
 	}
-	return backupPath, nil
+}
+
+// marshalSettingsJSON serializes a user-maintained config document
+// with HTML escaping off: permission entries routinely carry shell
+// operators (`Bash(a && b)`, redirects) that MarshalIndent would
+// mangle into &-style escapes -- semantically identical JSON,
+// but a visible rewrite of entries we promised to preserve verbatim.
+func marshalSettingsJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // isGramatonHookCommand reports whether a hook command string points
@@ -684,7 +741,7 @@ func unwireHookConfig(hooksPath string, strip func([]any) ([]any, bool), apply b
 	if err != nil {
 		return true, "", err
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return true, backup, fmt.Errorf("serialize %s: %w", hooksPath, err)
 	}
@@ -899,7 +956,7 @@ func registerCodexHooks(_ context.Context, scriptPaths []string) (bool, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return false, fmt.Errorf("serialize hooks.json: %w", err)
 	}
@@ -1014,7 +1071,7 @@ func registerCursorHooks(_ context.Context, scriptPaths []string) (bool, error) 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	out, err := json.MarshalIndent(existing, "", "  ")
+	out, err := marshalSettingsJSON(existing)
 	if err != nil {
 		return false, fmt.Errorf("serialize hooks.json: %w", err)
 	}

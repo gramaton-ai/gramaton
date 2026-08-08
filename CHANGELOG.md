@@ -20,6 +20,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing. Existing installs: re-run `gramaton init` and restart
   Claude Code to register the new hook.
 
+- **`gramaton init` can pre-approve Gramaton's tools in Claude
+  Code.** A new consent-gated question in the hooks step writes the
+  full agent tool surface -- including tools that modify and delete
+  store data, and the prompt says so -- into
+  `~/.claude/settings.json`'s `permissions.allow` list so saves and
+  captures run without per-call permission prompts. The installer
+  owns only entries prefixed `mcp__gramaton__`: other permission
+  entries are preserved, deny and ask rules always win in every
+  shape Claude Code accepts (exact, trailing-glob, bare server
+  name; a server-wide block means nothing is written at all), and
+  re-runs reconcile renames -- a stale entry for a renamed tool is
+  dropped instead of silently prompting forever. `gramaton
+  uninstall` removes the same slice. Hooks and permissions are
+  consented separately.
+
 - **The MCP proxy announces server instructions.** Every `gramaton
   mcp` handshake now carries an instructions string describing the
   store's tool families, when to search for them, and the

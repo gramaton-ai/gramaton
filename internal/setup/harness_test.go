@@ -73,9 +73,13 @@ func TestHarnessRegistryInvariants(t *testing.T) {
 		// A wiring strategy needs the human-readable location for
 		// the wizard's success line, and it must resolve to a
 		// non-empty path.
-		if h.WireHooks != nil {
+		if h.WireHooks != nil || h.WirePermissions != nil {
+			// Both wiring strategies print the patched location on
+			// success; offerPermissions falls back gracefully on a
+			// nil hint, but a registry entry shipping one without
+			// the other is an oversight worth catching here.
 			if h.HookConfigPathHint == nil {
-				t.Errorf("%s: WireHooks set but HookConfigPathHint nil", h.Name)
+				t.Errorf("%s: WireHooks/WirePermissions set but HookConfigPathHint nil", h.Name)
 			} else if h.HookConfigPathHint() == "" {
 				t.Errorf("%s: HookConfigPathHint resolves to empty", h.Name)
 			}

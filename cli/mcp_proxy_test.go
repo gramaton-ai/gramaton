@@ -190,6 +190,20 @@ func TestProxyToolRegistry(t *testing.T) {
 			"and to the server snapshot in server/mcp_harness_test.go. If it is destructive,\n"+
 			"it should not be proxy-registered at all.", unexpected)
 	}
+
+	// The agent-surface accessor drives init's permission
+	// pre-approvals; it must equal the registration exactly or the
+	// grants drift ahead of (phantom approvals) or behind
+	// (prompt-on-every-call) the real surface.
+	agentSurface := server.MCPAgentSurfaceToolNames()
+	if m := diffToolNames(agentSurface, got); len(m) > 0 {
+		t.Errorf("server.MCPAgentSurfaceToolNames() names tools the proxy doesn't register: %v\n"+
+			"Fix the classification map or the agent-excluded list in server/mcp_readonly.go.", m)
+	}
+	if m := diffToolNames(got, agentSurface); len(m) > 0 {
+		t.Errorf("proxy registers tools missing from server.MCPAgentSurfaceToolNames(): %v\n"+
+			"Classify the tool in server/mcp_readonly.go's mcpToolAccess map.", m)
+	}
 }
 
 // diffToolNames returns elements present in a but not b.
