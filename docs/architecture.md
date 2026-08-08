@@ -85,7 +85,7 @@ See CONTRIBUTING.md's "Adding a new operation" recipe for the full five-step pro
 - Provider references (`embed.Provider`, `llm.Provider`).
 - The storage layer (`storage.Store`).
 - A single `sync.RWMutex` that gates all mutation.
-- A dirty flag for access metadata (access counts are flushed periodically rather than on every read).
+- The non-versioned sidecar (`sidecar.db`) holding access metadata and the per-record changelog index -- reads write through it and never dirty the graph.
 
 `LoadEngine` / `LoadEngineWithOptions` are the public constructors. Options support dependency injection for tests (`WithEmbedder`, `WithLLM`, `WithVectorIndex`).
 
@@ -136,8 +136,10 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | Package | Purpose |
 |---------|---------|
 | `graph/` | In-memory property graph: nodes, edges, properties. Pure data structure. |
-| `index/` | Persisted indexes: BM25, vector (HNSW / Flat / mmap), property, secondary, collections. |
+| `index/` | Persisted indexes: BM25, vector (HNSW / Flat / mmap), property, secondary, collections; plus the `sidecar.db` indexes (access metadata, per-record changelog) that back the version timeline. |
 | `storage/` | Prolly tree on a content-addressed store. Commit history, garbage collection. |
+| `migrate/` | One-time store migrations (the supersession-chain collapse). |
+| `prune/` | Offline retention: keep-versions content depth and older-than chain truncation, tombstone-first. CLI-only by design. |
 
 ### Support
 
@@ -146,7 +148,7 @@ The graph is fully materialized in memory on startup and flushed to the prolly t
 | `config/` | Config types, `Defaults()`, YAML load/save, named-store fallback resolution. |
 | `logging/` | Rotating file logger with size budgets. |
 | `backup/` | Tar archive backup/restore, export/import. The walker takes a bbolt-native coherent snapshot of `jobs.db` via `View+WriteTo` so the file is always consistent in the tarball. |
-| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_save_batch` and future async ops. State machine with explicit transition whitelist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
+| `jobs/` | Persistent async-job tracking. Bbolt-backed store (separate `jobs.db` from `indexes.db`) for `gramaton_save_batch` and future async ops. State machine with an explicit transition allowlist; per-Get schema migration via `FormatVersion`; tenant-scoped `FindByClientToken`; TTL-based GC sweep goroutine started by `core.Engine`. |
 | `hooks/` | Go implementation of agent lifecycle hooks (session-start, stop, pre-compact, post-compact; Kiro agent-spawn, user-prompt-submit, stop; Cursor cursor-session-start, cursor-stop, cursor-pre-compact). Exposed as `gramaton hook <event>` subcommands; thin proxy scripts at `~/.gramaton/hooks/**/*.{sh,cmd}` forward stdin to them (invoking the binary by the absolute path resolved at init, with a bare PATH lookup as fallback). Proxy variants per harness: `.sh` everywhere for Claude Code (bundles Git Bash on Windows); `.cmd` on Windows for Kiro and Cursor (native, no bash); both variants on every host for Codex (its hooks.json entries carry `command` + `commandWindows` and pick per-OS at runtime). Codex shares Claude Code's stdin contract verbatim, so the same handlers serve both; Cursor renames the identifiers (`conversation_id`, `workspace_roots`), so `hooks/cursor.go` adapts its stdin and routes to the shared claude-protocol cores. |
 | `internal/awscfg/` | Shared AWS credential chain loader for Bedrock providers. |
 | `internal/setup/` | Interactive setup wizard (`gramaton init`) used to register MCP entries and install per-client agent guidance. Supported harnesses are declared in a registry (`harness.go`); wizard steps iterate it instead of switching on client names, so adding a harness is one registry entry plus an addendum template. |
@@ -187,7 +189,7 @@ The `OpenFiles` body, in order: format-version check, bbolt open, index set cons
 
 **Idle**: the server tracks last-request time. After the configured `idle_timeout` (default 4 hours) with no activity, it shuts down gracefully. CLI auto-starts a new server on the next call.
 
-**Shutdown**: `server.Stop` cancels the curation runner, stops the prepared-sessions sweeper, flushes access metadata, closes indexes, closes bbolt, closes the prolly store.
+**Shutdown**: `server.Stop` cancels the curation runner, stops the prepared-sessions sweeper, closes indexes, closes bbolt, closes the prolly store.
 
 ## Data flow examples
 
@@ -329,12 +331,12 @@ The engine uses one `sync.RWMutex`. Rules:
 Gramaton uses a prolly tree (probabilistic B-tree) for persistence:
 
 - **Content-addressed.** Every chunk is identified by its hash. Identical subtrees share storage.
-- **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history. `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
+- **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history (until an operator prunes old history with `gramaton prune`). `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
 - **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean branch merges).
 
 The graph is materialized in memory on startup and flushed incrementally on `Save`. Dirty tracking (per graph object) keeps saves O(K) where K is the number of modified nodes/edges. The BM25 index is persisted as a content-addressed chunk referenced by each commit (`bm25_root`), so startup skips re-tokenization at cost of a small per-commit storage overhead.
 
-Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep.
+Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep. The deliberate exception is `gramaton prune` (CLI-only, plan/confirm token, backup gate): it consumes the GC for chain truncation and records a tombstone so readers report removed history as "pruned by policy", never as corruption.
 
 ## Adding a new operation
 
