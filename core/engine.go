@@ -1478,12 +1478,21 @@ func (e *Engine) SetProp(nodeID, key string, val graph.Property) {
 	e.indexes.setProp(e.graph, nodeID, key, val)
 }
 
-// SetContentProp updates a string property and refreshes the BM25
-// index if the property is content_full. Use this instead of SetProp
-// when changing content fields to keep BM25 in sync (D12: single
-// BM25 layer, content_full only). Caller must hold the write lock.
+// SetContentProp updates a string property and, when the property is
+// part of the lexical document (content_full or content_short),
+// re-derives the node's complete BM25 document. Use this instead of
+// SetProp when changing content fields to keep BM25 in sync. Caller
+// must hold the write lock.
 func (e *Engine) SetContentProp(nodeID, key, content string) {
 	e.indexes.setContentProp(e.graph, nodeID, key, content)
+}
+
+// ReindexLexical re-derives a record's complete BM25 document from
+// its current properties and collection context. For callers that
+// mutate lexical inputs via bare SetProp (keywords, meta values)
+// without a content-field write. Caller must hold the write lock.
+func (e *Engine) ReindexLexical(nodeID string) {
+	e.indexes.refreshLexical(e.graph, nodeID)
 }
 
 // NodeCount returns the number of nodes. Acquires a read lock.

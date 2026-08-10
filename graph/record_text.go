@@ -1,10 +1,8 @@
-package core
+package graph
 
 import (
 	"sort"
 	"strings"
-
-	"github.com/gramaton-ai/gramaton/graph"
 )
 
 // RecordIndexText returns the lexical-recall text representation of
@@ -18,20 +16,39 @@ import (
 // Iteration order over field.* properties is non-deterministic
 // (map iteration). Acceptable for BM25 (bag of words); callers
 // needing deterministic order use RecordContent.
-func RecordIndexText(n *graph.Node) string {
+//
+// This is the node-local half of the recipe; LexicalDocument wraps
+// it with the graph-derived collection context. Callers indexing a
+// node that can carry collection context should prefer
+// LexicalDocument.
+func RecordIndexText(n *Node) string {
 	if n == nil {
 		return ""
 	}
 	var parts []string
+	base := ""
 	if s, ok := n.Properties.GetString("content_full"); ok {
-		parts = append(parts, s)
+		base = s
 	} else if s, ok := n.Properties.GetString("content"); ok {
 		// Session segments carry their text under "content"; a
 		// rebuild that only reads content_full re-indexes every
 		// segment as empty and store="sessions" search goes dark.
-		parts = append(parts, s)
+		base = s
 	} else if f := collectFieldStrings(n); f != "" {
-		parts = append(parts, f)
+		base = f
+	}
+	if base != "" {
+		parts = append(parts, base)
+	}
+	// The author-written summary carries prospective search vocabulary
+	// (terms a future query would use that the prose itself may not).
+	// Insert-time indexing appends the same text via LexicalSummaryText;
+	// the two must stay in lockstep or the term set silently diverges
+	// after a rebuild.
+	if short, ok := n.Properties.GetString("content_short"); ok {
+		if s := LexicalSummaryText(base, short); s != "" {
+			parts = append(parts, s)
+		}
 	}
 	// Keywords and meta key:value terms are part of the insert-time
 	// BM25 text (save appends meta; update appends both); a rebuild
@@ -52,16 +69,99 @@ func RecordIndexText(n *graph.Node) string {
 	sort.Strings(metaKeys)
 	for _, key := range metaKeys {
 		bare := strings.TrimPrefix(key, "meta.")
-		v := n.Properties[key]
-		if elems := v.StringList(); len(elems) > 0 {
+		// The typed accessors, not a bare StringList() call: meta
+		// values are stored as string, number, bool, or string list,
+		// and the Property type asserts on wrong-type access. An
+		// empty stored list emits no terms, matching the insert-time
+		// builders.
+		if elems, ok := n.Properties.GetStringList(key); ok {
 			for _, elem := range elems {
 				parts = append(parts, bare+":"+elem)
 			}
 			continue
 		}
-		parts = append(parts, bare+":"+v.FormatValue())
+		parts = append(parts, bare+":"+n.Properties[key].FormatValue())
 	}
 	return strings.Join(parts, " ")
+}
+
+// LexicalSummaryText returns the content_short text to include in a
+// record's lexical (BM25) document alongside its base content, or ""
+// when the summary adds no vocabulary: it is empty, or it appears
+// verbatim inside the base text (observation summaries and chunk
+// children store truncated prefixes of their content; re-appending
+// those would only distort term frequencies without adding a single
+// findable term). A summary that merely paraphrases the content is
+// NOT filtered -- its shared terms count twice, which is the
+// intended mild boost for summary-worthy vocabulary.
+//
+// Every BM25 insert path and the rebuild union (RecordIndexText) must
+// route summary text through this one guard so insert-time and
+// rebuild-time documents carry identical term sets.
+func LexicalSummaryText(base, short string) string {
+	if short == "" || strings.Contains(base, short) {
+		return ""
+	}
+	return short
+}
+
+// LexicalDocument returns the complete BM25 document for a node: the
+// RecordIndexText union plus collection context. A collection
+// container node (knowledge_type "collection") contributes its name
+// and description; a collection item (member_of edge) is prefixed
+// with its owning container's name and description, so items in
+// collection "Gramaton development" surface for BM25 queries on
+// "Gramaton" even when their own fields don't carry the word. The
+// insert paths (CollectionAdd, CollectionUpdateItem) build the same
+// prefix from the container they already hold; this function is the
+// rebuild- and refresh-side twin, so the two must stay token-equal.
+//
+// g supplies the edge and container lookups; a nil g degrades to
+// RecordIndexText alone.
+func LexicalDocument(g NodeReader, n *Node) string {
+	if n == nil {
+		return ""
+	}
+	base := RecordIndexText(n)
+	if kt, ok := n.Properties.GetString("knowledge_type"); ok && kt == "collection" {
+		parts := collectionContextTerms(n)
+		if base != "" {
+			parts = append(parts, base)
+		}
+		return strings.Join(parts, " ")
+	}
+	if g == nil {
+		return base
+	}
+	var ctx []string
+	for _, e := range g.EdgesFrom(n.ID) {
+		if e.Type != "member_of" {
+			continue
+		}
+		if c, ok := g.GetNode(e.TargetID); ok {
+			ctx = append(ctx, collectionContextTerms(c)...)
+		}
+	}
+	if len(ctx) == 0 {
+		return base
+	}
+	if base != "" {
+		ctx = append(ctx, base)
+	}
+	return strings.Join(ctx, " ")
+}
+
+// collectionContextTerms returns a container node's name and
+// description parts, in that order, skipping empties.
+func collectionContextTerms(coll *Node) []string {
+	var parts []string
+	if name, _ := coll.Properties.GetString("collection_name"); name != "" {
+		parts = append(parts, name)
+	}
+	if desc, _ := coll.Properties.GetString("collection_description"); desc != "" {
+		parts = append(parts, desc)
+	}
+	return parts
 }
 
 // RecordContent returns the LLM/embedding-grade text representation
@@ -77,7 +177,7 @@ func RecordIndexText(n *graph.Node) string {
 // contentFields would be skipped here, but schema validation
 // rejects them at the collection-create boundary so that case
 // shouldn't reach this helper.
-func RecordContent(n *graph.Node, contentFields []string) string {
+func RecordContent(n *Node, contentFields []string) string {
 	if n == nil {
 		return ""
 	}
@@ -96,7 +196,7 @@ func RecordContent(n *graph.Node, contentFields []string) string {
 	return strings.Join(parts, "\n")
 }
 
-func collectFieldStrings(n *graph.Node) string {
+func collectFieldStrings(n *Node) string {
 	var parts []string
 	for k := range n.Properties {
 		if !strings.HasPrefix(k, "field.") {

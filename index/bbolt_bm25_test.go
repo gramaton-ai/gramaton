@@ -1,6 +1,7 @@
 package index
 
 import (
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 
@@ -222,5 +223,103 @@ func TestBboltBM25Batch(t *testing.T) {
 
 	if idx.Len() == 0 {
 		t.Fatal("expected non-zero length after batch")
+	}
+}
+
+// setStoredFormatVersion overwrites (or, with delete=true, removes)
+// the on-disk term-set version stamp, simulating an index built by an
+// older binary.
+func setStoredFormatVersion(t *testing.T, idx *BboltBM25Index, version uint32, del bool) {
+	t.Helper()
+	if err := idx.db.Update(func(tx *bolt.Tx) error {
+		mb := tx.Bucket(bm25MetaBucket)
+		if del {
+			return mb.Delete(bm25FormatVersionKey)
+		}
+		var buf [4]byte
+		binary.LittleEndian.PutUint32(buf[:], version)
+		return mb.Put(bm25FormatVersionKey, buf[:])
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBboltBM25FormatVersionMatchPreservesData(t *testing.T) {
+	idx := newTestBboltBM25(t)
+	idx.Add("n1", "alpha beta gamma")
+
+	// Reopen against the same db: current stamp, data survives.
+	idx2, err := NewBboltBM25Index(idx.db, 1.2, 0.75)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx2.Len() != 1 {
+		t.Fatalf("Len after same-version reopen = %d, want 1", idx2.Len())
+	}
+	if len(idx2.Search([]string{"alpha"}, 5, nil)) != 1 {
+		t.Fatal("data should survive a same-version reopen")
+	}
+}
+
+func TestBboltBM25FormatVersionMismatchWipes(t *testing.T) {
+	idx := newTestBboltBM25(t)
+	idx.Add("n1", "alpha beta gamma")
+	setStoredFormatVersion(t, idx, bm25FormatVersion-1, false)
+
+	idx2, err := NewBboltBM25Index(idx.db, 1.2, 0.75)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Old-recipe data is gone; the boot-time rebuild will repopulate.
+	if idx2.Len() != 0 {
+		t.Fatalf("Len after version-mismatch reopen = %d, want 0 (wiped)", idx2.Len())
+	}
+	if len(idx2.Search([]string{"alpha"}, 5, nil)) != 0 {
+		t.Fatal("old-recipe postings should be wiped on version mismatch")
+	}
+
+	// The wiped index is immediately usable and stamped current: a
+	// third open must NOT wipe again.
+	idx2.Add("n2", "delta epsilon")
+	idx3, err := NewBboltBM25Index(idx.db, 1.2, 0.75)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx3.Len() != 1 || len(idx3.Search([]string{"delta"}, 5, nil)) != 1 {
+		t.Fatalf("re-stamped index lost data on reopen: len=%d", idx3.Len())
+	}
+}
+
+func TestBboltBM25MissingFormatStampWipes(t *testing.T) {
+	// A pre-versioning store has documents but no stamp at all; it
+	// must be treated as an old recipe, not as current.
+	idx := newTestBboltBM25(t)
+	idx.Add("n1", "alpha beta gamma")
+	setStoredFormatVersion(t, idx, 0, true)
+
+	idx2, err := NewBboltBM25Index(idx.db, 1.2, 0.75)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx2.Len() != 0 {
+		t.Fatalf("Len after stampless reopen = %d, want 0 (wiped)", idx2.Len())
+	}
+}
+
+func TestBboltBM25FreshStoreStamped(t *testing.T) {
+	// A fresh (empty) index gets stamped with the current version at
+	// open (the mismatch wipe also runs, over empty buckets).
+	idx := newTestBboltBM25(t)
+	var stored uint32
+	if err := idx.db.View(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(bm25MetaBucket).Get(bm25FormatVersionKey); len(v) >= 4 {
+			stored = binary.LittleEndian.Uint32(v)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stored != bm25FormatVersion {
+		t.Fatalf("fresh store stamped %d, want %d", stored, bm25FormatVersion)
 	}
 }

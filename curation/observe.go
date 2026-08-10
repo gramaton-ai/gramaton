@@ -292,8 +292,12 @@ func extractAndCreateObservations(e *core.Engine, cfg config.Config, logger *slo
 					"component", "curation", "child", n.ID, "parent", o.parentID, "err", err)
 			}
 
-			// Index the node (properties + BM25 + vector).
-			ws.IndexNode(n.ID, o.text, o.vec)
+			// Index the finished node's derived document (properties +
+			// BM25 + vector): the recipe folds in the keywords the
+			// observation inherited from its parent, matching what a
+			// rebuild would produce; the prefix content_short is
+			// containment-guarded out.
+			ws.IndexNode(n.ID, graph.RecordIndexText(n), o.vec)
 
 			// Action emit per observation: the new observation node and
 			// its parent both have their stream affected (parent gains

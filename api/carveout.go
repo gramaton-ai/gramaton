@@ -279,7 +279,7 @@ func (a *API) carveGather(ctx context.Context, sel carveSelection) (*carveGather
 		cn := carveNode{
 			id:      id,
 			props:   n.Properties.Clone(),
-			content: core.RecordIndexText(n),
+			content: graph.RecordIndexText(n),
 		}
 		if v, ok := n.Properties.GetVector("embedding_full"); ok {
 			cn.vec = v

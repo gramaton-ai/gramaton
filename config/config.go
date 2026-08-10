@@ -884,19 +884,6 @@ type SearchConfig struct {
 	// BM25B: document-length normalization.
 	BM25B float64 `yaml:"bm25_b"`
 
-	// BM25WeightFull: RRF weight for the content_full BM25 lane.
-	BM25WeightFull float64 `yaml:"bm25_weight_full"`
-
-	// BM25WeightMedium: RRF weight for the content_medium BM25 lane
-	// (retained for legacy stores; content_medium is not written in
-	// current pipelines).
-	BM25WeightMedium float64 `yaml:"bm25_weight_medium"`
-
-	// BM25WeightShort: RRF weight for the content_short BM25 lane.
-	// Weighted higher than full because summaries are more
-	// discriminative for retrieval.
-	BM25WeightShort float64 `yaml:"bm25_weight_short"`
-
 	// RRFK: Reciprocal Rank Fusion constant. Lower = more weight to
 	// top ranks; higher = flatter fusion.
 	RRFK int `yaml:"rrf_k"`
@@ -1362,9 +1349,6 @@ func Defaults() Config {
 		Search: SearchConfig{
 			BM25K1:              1.2,
 			BM25B:               0.75,
-			BM25WeightFull:      1.0,
-			BM25WeightMedium:    2.0,
-			BM25WeightShort:     3.0,
 			RRFK:                60,
 			SuggestionThreshold: 0.75,
 			VectorOnlyPenalty:   0.1,
@@ -1602,9 +1586,6 @@ func Validate(cfg *Config) error {
 		{"scoring.weight_similarity", cfg.Scoring.WeightSimilarity},
 		{"scoring.weight_freshness", cfg.Scoring.WeightFreshness},
 		{"scoring.weight_confidence", cfg.Scoring.WeightConfidence},
-		{"search.bm25_weight_full", cfg.Search.BM25WeightFull},
-		{"search.bm25_weight_medium", cfg.Search.BM25WeightMedium},
-		{"search.bm25_weight_short", cfg.Search.BM25WeightShort},
 	} {
 		if w.v < 0 {
 			return fmt.Errorf("config: %s must be non-negative; got %v", w.name, w.v)
@@ -1658,6 +1639,9 @@ var removedConfigKeys = map[string]string{
 	"hnsw_m":               "removed in v0.4.0 with the never-wired HNSW index",
 	"hnsw_ef_construction": "removed in v0.4.0 with the never-wired HNSW index",
 	"hnsw_ef_search":       "removed in v0.4.0 with the never-wired HNSW index",
+	"bm25_weight_full":     "removed in v0.4.0; BM25 is one index over the whole lexical document (summaries included), so per-lane weights are gone",
+	"bm25_weight_medium":   "removed in v0.4.0; BM25 is one index over the whole lexical document (summaries included), so per-lane weights are gone",
+	"bm25_weight_short":    "removed in v0.4.0; BM25 is one index over the whole lexical document (summaries included), so per-lane weights are gone",
 }
 
 // annotateRemovedKeys appends per-key removal guidance to a strict-decode

@@ -313,11 +313,14 @@ func (a *API) Save(ctx context.Context, req SaveRequest) (SaveResponse, *APIErro
 
 	n := a.engine.Graph().AddNode(props)
 
-	// Index content for BM25, with the caller's keywords and meta
-	// values appended -- keywords are promised as BM25 terms by the
-	// tool description, and the rebuild path (RecordIndexText) unions
-	// the same three sources.
+	// Index content for BM25, with the caller's summary, keywords, and
+	// meta values appended -- keywords are promised as BM25 terms by
+	// the tool description, and the rebuild path (RecordIndexText)
+	// unions the same four sources.
 	bm25Text := req.Content
+	if s := graph.LexicalSummaryText(req.Content, req.SummaryShort); s != "" {
+		bm25Text += " " + s
+	}
 	if len(req.Keywords) > 0 {
 		bm25Text += " " + strings.Join(req.Keywords, " ")
 	}

@@ -893,6 +893,145 @@ func TestSetContentPropUpdatesBM25Layers(t *testing.T) {
 	}
 }
 
+// TestSetContentPropSummaryJoinsLexicalDocument: writing
+// content_short refreshes the BM25 document with the summary's
+// vocabulary. Curation's summary-generation pass is how most records
+// get their summary, and before the summary joined the lexical
+// document that pass never touched BM25.
+func TestSetContentPropSummaryJoinsLexicalDocument(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full": graph.StringProperty("meeting notes from tuesday"),
+	})
+	eng.IndexNode(n.ID, "meeting notes from tuesday", nil)
+	eng.SetContentProp(n.ID, "content_short", "quarterly zebrafish planning recap")
+	eng.Unlock()
+
+	if len(eng.BM25Full().Search([]string{"zebrafish"}, 10, nil)) != 1 {
+		t.Fatal("BM25 should find a summary-only term after a content_short write")
+	}
+	if len(eng.BM25Full().Search([]string{"tuesday"}, 10, nil)) != 1 {
+		t.Fatal("BM25 should still find the content vocabulary after the summary refresh")
+	}
+}
+
+// TestSetContentPropRewriteKeepsKeywordTerms: a content rewrite
+// re-derives the whole lexical document. The pre-fix code re-added
+// only the bare content string, silently dropping keyword and meta
+// terms from the index until the next full rebuild.
+func TestSetContentPropRewriteKeepsKeywordTerms(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	n := eng.Graph().AddNode(graph.Properties{
+		"content_full":     graph.StringProperty("first body"),
+		"content_keywords": graph.StringListProperty([]string{"topazamber"}),
+	})
+	eng.IndexNode(n.ID, "first body topazamber", nil)
+	eng.SetContentProp(n.ID, "content_full", "second body")
+	eng.Unlock()
+
+	if len(eng.BM25Full().Search([]string{"topazamber"}, 10, nil)) != 1 {
+		t.Fatal("keyword term lost from BM25 after a content_full rewrite")
+	}
+	if len(eng.BM25Full().Search([]string{"second"}, 10, nil)) != 1 {
+		t.Fatal("BM25 should find the new content after the rewrite")
+	}
+	if len(eng.BM25Full().Search([]string{"first"}, 10, nil)) != 0 {
+		t.Fatal("BM25 should not find the replaced content")
+	}
+}
+
+// TestWriteSessionSummaryWriteRefreshesBM25: the batched twin must
+// apply the same document refresh as the direct path -- curation's
+// quality pass writes summaries through a WriteSession.
+func TestWriteSessionSummaryWriteRefreshesBM25(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	err := eng.WithWriteBatch("test: summary write", func(ws *WriteSession) (bool, error) {
+		n := ws.AddNode(graph.Properties{
+			"content_full": graph.StringProperty("batched record body"),
+			"created_at":   graph.TimestampProperty(time.Now().UTC()),
+		})
+		ws.IndexNode(n.ID, "batched record body", nil)
+		ws.SetContentProp(n.ID, "content_short", "unique cobaltmarsh summary")
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("WithWriteBatch: %v", err)
+	}
+
+	if len(eng.BM25Full().Search([]string{"cobaltmarsh"}, 10, nil)) != 1 {
+		t.Fatal("BM25 should find a summary-only term written through a WriteSession")
+	}
+	if len(eng.BM25Full().Search([]string{"batched"}, 10, nil)) != 1 {
+		t.Fatal("BM25 should still find the content vocabulary")
+	}
+}
+
+// TestRebuildAllIndexesMatchesInsertTimeBM25 pins insert/rebuild
+// term-set parity for the node classes whose documents diverged
+// pre-fix: a meta-bearing record (the rebuild's meta loop panicked
+// on scalar meta values), a collection container (whose document is
+// its name + description, previously dropped entirely on rebuild),
+// and a member item (whose collection-context prefix was previously
+// insert-time-only). The same terms must hit before and after a
+// forced rebuild.
+func TestRebuildAllIndexesMatchesInsertTimeBM25(t *testing.T) {
+	eng := setupTestEngine(t)
+
+	eng.Lock()
+	rec := eng.Graph().AddNode(graph.Properties{
+		"content_full":     graph.StringProperty("release checklist prose"),
+		"content_short":    graph.StringProperty("release anchor tealbrook"),
+		"content_keywords": graph.StringListProperty([]string{"ochrefen"}),
+		"meta.owner":       graph.StringProperty("saffronvale"),
+	})
+	eng.IndexNode(rec.ID, graph.LexicalDocument(eng.Graph(), rec), nil)
+
+	coll := eng.Graph().AddNode(graph.Properties{
+		"knowledge_type":         graph.StringProperty("collection"),
+		"collection_name":        graph.StringProperty("corncrake tracker"),
+		"collection_description": graph.StringProperty("parity test backlog"),
+	})
+	eng.IndexNode(coll.ID, graph.LexicalDocument(eng.Graph(), coll), nil)
+
+	item := eng.Graph().AddNode(graph.Properties{
+		"field.title": graph.StringProperty("fix the sprocket"),
+	})
+	if _, err := eng.Graph().AddEdge(item.ID, coll.ID, "member_of", 1.0, nil); err != nil {
+		t.Fatal(err)
+	}
+	eng.IndexNode(item.ID, graph.LexicalDocument(eng.Graph(), item), nil)
+	eng.Unlock()
+
+	assertHit := func(term, wantID string) {
+		t.Helper()
+		for _, h := range eng.BM25Full().Search([]string{term}, 10, nil) {
+			if h.NodeID == wantID {
+				return
+			}
+		}
+		t.Errorf("term %q: no BM25 hit for node %s", term, wantID)
+	}
+	check := func() {
+		assertHit("tealbrook", rec.ID)   // summary vocabulary
+		assertHit("ochrefen", rec.ID)    // keywords
+		assertHit("saffronvale", rec.ID) // meta value (panicked pre-fix)
+		assertHit("corncrake", coll.ID)  // container name
+		assertHit("corncrake", item.ID)  // item inherits collection context
+		assertHit("sprocket", item.ID)   // item fields
+	}
+
+	check()
+	eng.Lock()
+	eng.RebuildAllIndexes()
+	eng.Unlock()
+	check()
+}
+
 // TestWithWriteBatchSaves verifies the helper takes the lock, runs fn
 // under a single bbolt transaction, and persists state when mutated
 // is true. Caller must observe the record after release.

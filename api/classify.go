@@ -87,6 +87,14 @@ func (a *API) Classify(ctx context.Context, req ClassifyRequest) (ClassifyRespon
 		a.engine.SetProp(req.ID, "content_short", graph.StringProperty(req.SummaryShort))
 	}
 
+	// Keywords and the summary are part of the record's lexical
+	// document; a classify that supplied either must re-derive the
+	// BM25 entry or the new vocabulary stays unfindable until the
+	// next full index rebuild.
+	if req.SummaryShort != "" || len(req.Keywords) > 0 {
+		a.engine.ReindexLexical(req.ID)
+	}
+
 	a.engine.SetProp(req.ID, "processing_status", graph.StringProperty("processed"))
 
 	if _, err := a.engine.Save("classify", graph.CommitAction{

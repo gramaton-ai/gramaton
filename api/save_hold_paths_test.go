@@ -358,3 +358,62 @@ func TestSessionResolveHeldUpdateTarget(t *testing.T) {
 		t.Error("promotion_held must clear after resolution")
 	}
 }
+
+// TestResolveHeldPromotionIndexesSummary: the allow_similar
+// resolution creates a Memory record from the held segment; its
+// summary vocabulary must join the record's lexical document exactly
+// as it does on the un-held promotion path.
+func TestResolveHeldPromotionIndexesSummary(t *testing.T) {
+	emb := &dedupEmbedder{dim: 16}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	ctx := context.Background()
+
+	// Seed and segment share the summary: with a summary present the
+	// embedding anchors on it, so matching summaries is what makes
+	// the promotion hold fire under the deterministic test embedder.
+	const text = "held promotion summary vocabulary must be lexically indexed"
+	const summary = "distinct hazelcove anchor"
+	if _, apiErr := a.Save(ctx, SaveRequest{Content: text, SummaryShort: summary}); apiErr != nil {
+		t.Fatalf("seed Save: %v", apiErr)
+	}
+
+	result, svcErr := a.SessionStart(ctx, "resolve-held-summary", "")
+	if svcErr != nil {
+		t.Fatalf("SessionStart: %v", svcErr)
+	}
+	sessionID := result["id"].(string)
+	if _, err := a.SessionPrepare(ctx, sessionID); err != nil {
+		t.Fatalf("SessionPrepare: %v", err)
+	}
+	resp, err := a.SessionSave(ctx, sessionID, []SaveSegment{
+		{Content: text, TopicName: "dup topic", SummaryShort: summary},
+	}, false)
+	if err != nil {
+		t.Fatalf("SessionSave: %v", err)
+	}
+	if len(resp.Held) != 1 {
+		t.Fatalf("expected 1 held promotion, got %+v", resp.Held)
+	}
+
+	res, apiErr := a.SessionResolveHeld(ctx, sessionID, []HeldResolution{
+		{SegmentID: resp.Held[0].SegmentID, Action: "allow_similar"},
+	})
+	if apiErr != nil {
+		t.Fatalf("SessionResolveHeld: %v", apiErr)
+	}
+	if len(res.Resolved) != 1 || res.Resolved[0].MemoryRecordID == "" {
+		t.Fatalf("resolution did not create a Memory record: %+v", res.Resolved)
+	}
+
+	memID := res.Resolved[0].MemoryRecordID
+	found := false
+	for _, h := range eng.BM25Full().Search([]string{"hazelcove"}, 10, nil) {
+		if h.NodeID == memID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("promoted record %s not findable by its summary term", memID)
+	}
+}

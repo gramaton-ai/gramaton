@@ -373,7 +373,12 @@ func applySections(a Applier, parentID string, pre *Result, parentProps graph.Pr
 			slog.Error("failed to add section_of edge",
 				"component", "chunking", "child", node.ID, "parent", parentID, "err", err)
 		}
-		a.IndexNode(node.ID, sec.Text, vec)
+		// Index the finished node's derived document, not sec.Text: the
+		// recipe adds the inherited keywords and applies the summary
+		// containment guard (a cleaned heading is not always a
+		// substring of the raw section text), keeping insert-time and
+		// rebuild-time term sets identical.
+		a.IndexNode(node.ID, graph.RecordIndexText(node), vec)
 		if vec != nil && pre.Model != "" {
 			a.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}
@@ -406,7 +411,9 @@ func applyChunks(a Applier, parentID string, pre *Result, parentProps graph.Prop
 			slog.Error("failed to add chunk_of edge",
 				"component", "chunking", "child", node.ID, "parent", parentID, "err", err)
 		}
-		a.IndexNode(node.ID, chunkText, vec)
+		// Same derived-document indexing as applySections: inherited
+		// keywords in, prefix content_short guarded out.
+		a.IndexNode(node.ID, graph.RecordIndexText(node), vec)
 		if vec != nil && pre.Model != "" {
 			a.SetProp(node.ID, "embedding_model", graph.StringProperty(pre.Model))
 		}

@@ -399,6 +399,9 @@ func (a *API) commitItemsChunk(jobID string, chunkNum, totalChunks int,
 		rollback = append(rollback, rollbackEntry{nodeID: n.ID, props: n.Properties})
 
 		bm25Text := item.Content
+		if s := graph.LexicalSummaryText(item.Content, item.SummaryShort); s != "" {
+			bm25Text += " " + s
+		}
 		if len(item.Keywords) > 0 {
 			bm25Text += " " + strings.Join(item.Keywords, " ")
 		}

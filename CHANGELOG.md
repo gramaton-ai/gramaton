@@ -7,6 +7,54 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Summaries are now part of the lexical search index.** A record's
+  `summary_short` vocabulary joins its BM25 document (alongside
+  content, keywords, and meta terms), so terms written into a summary
+  are keyword-findable -- previously they were visible only to vector
+  search. The guard is containment-aware: a summary that appears
+  verbatim inside the content (observation records and chunk children
+  store a truncated prefix there) is skipped rather than
+  double-counted. Applies across save, batch save, intake, classify,
+  session segments, Memory promotions (including held-promotion
+  resolutions), updates, and curation summary writes. On first start
+  after upgrading, the BM25 index detects the term-set change and
+  rebuilds itself from the graph automatically; no manual step.
+
+- **One recipe now derives every BM25 document.** Insert, update,
+  classify, curation, and rebuild paths all share the same
+  term-set derivation, which now also covers collection context:
+  collection containers are findable by their name and description
+  after an index rebuild (previously they dropped out of keyword
+  search entirely), and items keep their owning collection's
+  vocabulary through rebuilds and curation summary writes instead of
+  only at insert time.
+
+### Fixed
+
+- **Curation content rewrites no longer drop keyword and meta terms
+  from keyword search.** Rewriting a record's content through the
+  curation pipeline re-indexed only the bare content string, silently
+  removing the record's keywords and meta values from the BM25 index
+  until the next full rebuild. Re-indexing now re-derives the whole
+  lexical document. The same applies to `gramaton_update` (a
+  summary-only update now refreshes the index; previously only
+  content changes did) and to `gramaton_classify` (keywords and
+  summaries supplied at classification time are now immediately
+  keyword-findable).
+
+### Removed
+
+- **Config keys `search.bm25_weight_full`, `search.bm25_weight_medium`,
+  and `search.bm25_weight_short`.** Leftovers from an abandoned
+  multi-lane BM25 design; none of the three was read by any code
+  path. BM25 is one index over the whole lexical document, so
+  per-lane weights have nothing to weigh. Upgrade step: delete these
+  keys from `~/.gramaton/config.yaml` if present -- a config still
+  carrying them fails to load, with per-key deletion guidance in the
+  error.
+
 ## [0.4.0-alpha.2] - 2026-08-08
 
 ### Added
