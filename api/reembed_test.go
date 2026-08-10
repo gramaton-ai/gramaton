@@ -267,3 +267,54 @@ func TestReembedSuccessClearsAttempts(t *testing.T) {
 		t.Errorf("embedding_model after success: got %q, want %q", model, "configurable-embedder")
 	}
 }
+
+// TestReembedAnchorsPrimaryVectorOnCurationSummary pins the mid-band
+// vector migration chain: a record captured WITHOUT a summary is
+// embedded from its content; when curation later writes content_short
+// (which refreshes only the lexical index), gramaton_reembed detects
+// the content_short-without-embedding_short gap and re-anchors the
+// record's primary search vector on the summary -- the last-present
+// embed source wins in the apply step.
+func TestReembedAnchorsPrimaryVectorOnCurationSummary(t *testing.T) {
+	emb := &dedupEmbedder{dim: 16}
+	a, eng := setupReembedAPI(t, core.WithEmbedder(emb), nil)
+	t.Cleanup(func() { _ = a.ShutdownAsync(context.Background()) })
+	ctx := context.Background()
+
+	resp, apiErr := a.Save(ctx, SaveRequest{Content: "a captured record with no summary at save time"})
+	if apiErr != nil {
+		t.Fatalf("Save: %v", apiErr)
+	}
+
+	const summary = "curation generated semantic anchor"
+	eng.Lock()
+	eng.SetContentProp(resp.ID, "content_short", summary)
+	eng.Unlock()
+
+	rr, apiErr := a.Reembed(ctx, ReembedRequest{Batch: 10})
+	if apiErr != nil {
+		t.Fatalf("Reembed: %v", apiErr)
+	}
+	if rr.Reembedded == 0 {
+		t.Fatalf("reembed found no candidates; gap detection missed the summary write: %+v", rr)
+	}
+
+	sumVecs, err := emb.Embed(ctx, []string{summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits := eng.VecIdx().Search(sumVecs[0], 1, nil)
+	if len(hits) != 1 || hits[0].NodeID != resp.ID {
+		t.Fatalf("primary vector not summary-anchored: top hit %+v, want %s", hits, resp.ID)
+	}
+	if hits[0].Similarity < 0.999 {
+		t.Fatalf("primary vector similarity to the summary embedding = %f, want ~1.0", hits[0].Similarity)
+	}
+
+	eng.RLock()
+	defer eng.RUnlock()
+	n, _ := eng.Graph().GetNode(resp.ID)
+	if _, has := n.Properties["embedding_short"]; !has {
+		t.Fatal("embedding_short not stored after reembed")
+	}
+}
