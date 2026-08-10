@@ -88,8 +88,9 @@ func (ws *WriteSession) SetProp(nodeID, key string, val graph.Property) {
 	ws.indexes.setPropSession(ws, nodeID, key, val)
 }
 
-// SetContentProp updates a string property and refreshes the BM25
-// index if the property is content_full. Mirrors Engine.SetContentProp.
+// SetContentProp updates a string property and, for lexical-document
+// fields (content_full, content_short), re-derives the node's
+// complete BM25 document. Mirrors Engine.SetContentProp.
 func (ws *WriteSession) SetContentProp(nodeID, key, content string) {
 	ws.indexes.setContentPropSession(ws, nodeID, key, content)
 }

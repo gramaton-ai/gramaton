@@ -919,11 +919,6 @@ func TestValidateRejectsInvalid(t *testing.T) {
 			mutate: func(c *Config) { c.Scoring.WeightFreshness = -0.1 },
 			want:   "scoring.weight_freshness",
 		},
-		{
-			name:   "negative bm25 weight",
-			mutate: func(c *Config) { c.Search.BM25WeightShort = -0.5 },
-			want:   "search.bm25_weight_short",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

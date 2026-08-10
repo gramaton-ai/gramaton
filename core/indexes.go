@@ -176,20 +176,34 @@ func (s *indexSet) setProp(g *graph.Graph, nodeID, key string, val graph.Propert
 }
 
 // setContentProp updates a string property and refreshes the BM25
-// index when the property is content_full. D12 collapsed BM25 to a
-// single layer over content_full only, so other content fields skip
-// the BM25 update.
+// index when the property is part of the lexical document
+// (content_full or content_short). The refresh re-derives the FULL
+// document rather than re-adding the bare value: the indexed text is
+// a union (content + summary + collection context + keywords + meta
+// terms), and re-adding one field alone would drop the others from
+// the term set until the next full rebuild.
 func (s *indexSet) setContentProp(g *graph.Graph, nodeID, key, content string) {
 	s.setProp(g, nodeID, key, graph.StringProperty(content))
-	if key == "content_full" {
-		s.bm25Full.Remove(nodeID)
-		// A concept's synthesis rewrite must not re-enter BM25 (the
-		// Remove above also clears any entry a pre-exclusion store
-		// left behind).
-		if n, ok := g.GetNode(nodeID); ok && graph.IsConcept(n.Properties) {
-			return
-		}
-		s.bm25Full.Add(nodeID, content)
+	if key == "content_full" || key == "content_short" {
+		s.refreshLexical(g, nodeID)
+	}
+}
+
+// refreshLexical re-derives and re-writes a node's complete BM25
+// document from its current properties and collection context. The
+// concept check runs after the Remove so a synthesis rewrite also
+// clears any entry a pre-exclusion store left behind.
+func (s *indexSet) refreshLexical(g *graph.Graph, nodeID string) {
+	s.bm25Full.Remove(nodeID)
+	n, ok := g.GetNode(nodeID)
+	if !ok {
+		return
+	}
+	if graph.IsConcept(n.Properties) {
+		return
+	}
+	if text := graph.LexicalDocument(g, n); text != "" {
+		s.bm25Full.Add(nodeID, text)
 	}
 }
 
@@ -242,20 +256,24 @@ func (s *indexSet) setPropSession(ws *WriteSession, nodeID, key string, val grap
 }
 
 // setContentPropSession is setContentProp via a WriteSession,
-// including its concept exclusion: the two paths write the same
-// index, so a gate on one alone would let batched callers reinstate
-// what the non-batched path refuses.
+// including its concept exclusion and full-document refresh: the two
+// paths write the same index, so a divergence on one alone would let
+// batched callers reinstate what the non-batched path refuses.
 func (s *indexSet) setContentPropSession(ws *WriteSession, nodeID, key, content string) {
 	s.setPropSession(ws, nodeID, key, graph.StringProperty(content))
-	if key == "content_full" {
+	if key == "content_full" || key == "content_short" {
+		g := ws.engine.graph
 		s.bm25Full.RemoveTx(ws.tx, ws.bm25, nodeID)
-		// A concept's synthesis rewrite must not re-enter BM25 (the
-		// Remove above also clears any entry a pre-exclusion store
-		// left behind).
-		if n, ok := ws.engine.graph.GetNode(nodeID); ok && graph.IsConcept(n.Properties) {
+		n, ok := g.GetNode(nodeID)
+		if !ok {
 			return
 		}
-		s.bm25Full.AddTx(ws.tx, ws.bm25, nodeID, content)
+		if graph.IsConcept(n.Properties) {
+			return
+		}
+		if text := graph.LexicalDocument(g, n); text != "" {
+			s.bm25Full.AddTx(ws.tx, ws.bm25, nodeID, text)
+		}
 	}
 }
 
@@ -466,7 +484,7 @@ func rebuildIndexes(db *bolt.DB, g graph.NodeReader, propIdx index.PropertyIndex
 				}
 			}
 			if !bm25FullLoaded {
-				if text := RecordIndexText(n); text != "" {
+				if text := graph.LexicalDocument(g, n); text != "" {
 					bm25Full.AddTx(tx, bm25Batch, n.ID, text)
 				}
 			}

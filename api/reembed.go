@@ -107,7 +107,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		// content_full; collection items gate on RecordIndexText
 		// (which returns the wide concat of field.* strings).
 		_, hasContentFull := n.Properties.GetString("content_full")
-		if !hasContentFull && core.RecordIndexText(n) == "" {
+		if !hasContentFull && graph.RecordIndexText(n) == "" {
 			continue
 		}
 		// Skip records that have exhausted their reembed retry budget.
@@ -190,7 +190,7 @@ func (a *API) Reembed(ctx context.Context, req ReembedRequest) (ReembedResponse,
 		// current text after schema/field updates.
 		if !hasContentFull {
 			contentFields := a.contentFieldsFor(id)
-			if t := core.RecordContent(n, contentFields); t != "" {
+			if t := graph.RecordContent(n, contentFields); t != "" {
 				texts = append(texts, t)
 				keys = append(keys, "embedding_full")
 			}

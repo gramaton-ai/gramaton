@@ -19,7 +19,7 @@ type Tool struct {
 	graph    graph.NodeReader
 	propIdx  index.PropertyIndex
 	vecIdx   index.VectorIndex
-	bm25Full index.BM25Index // content_full BM25 (D12: single layer)
+	bm25Full index.BM25Index // single-layer BM25 over the lexical document (content + summary + keywords + meta)
 	secIdx   *index.BboltSecondaryIndex
 	embedder embedder
 	reranker reranker // LLM reranker (optional, nil disables)

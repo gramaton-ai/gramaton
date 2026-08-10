@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gramaton-ai/gramaton/core"
@@ -424,21 +423,15 @@ func (a *API) Update(ctx context.Context, req UpdateRequest) (UpdateResponse, *A
 		updated = true
 	}
 
-	// BM25 re-indexes last so the text reflects every applied change:
-	// the new content, the stored (possibly just-replaced) keywords,
-	// and post-update meta values. Mirrors save's indexing input.
-	if contentChanging {
-		a.engine.BM25Full().Remove(req.ID)
-		bm25Text := newFull
-		if fresh, ok := a.engine.Graph().GetNode(req.ID); ok {
-			if kws, ok := fresh.Properties.GetStringList("content_keywords"); ok && len(kws) > 0 {
-				bm25Text += " " + strings.Join(kws, " ")
-			}
-			if metaText := metaBM25TextFromNode(fresh); metaText != "" {
-				bm25Text += " " + metaText
-			}
-		}
-		a.engine.IndexNode(req.ID, bm25Text, nil)
+	// BM25 re-indexes last so the text reflects every applied change.
+	// A summary write alone changes the lexical document too (the
+	// summary is part of the indexed term set), so it triggers the
+	// refresh even without a content change. The document is
+	// re-derived via the rebuild recipe (LexicalDocument) -- every
+	// property it reads has been applied by this point -- so the
+	// insert, update, and rebuild paths share one term-set recipe.
+	if contentChanging || req.SummaryShort != "" {
+		a.engine.ReindexLexical(req.ID)
 	}
 
 	// Re-chunk: apply children derived from the new content and swap
@@ -599,41 +592,6 @@ func (a *API) purgeChildNode(childID string) {
 		sec.RemoveNode(childID)
 	}
 	a.engine.Graph().DeleteNode(childID)
-}
-
-// metaBM25TextFromNode rebuilds the "key:value" BM25 text from a
-// node's stored meta.* properties, mirroring metaBM25Text's output
-// for the original save across every stored meta type (string,
-// number, bool, string list).
-func metaBM25TextFromNode(n *graph.Node) string {
-	var parts []string
-	for key := range n.Properties {
-		if !strings.HasPrefix(key, "meta.") {
-			continue
-		}
-		name := strings.TrimPrefix(key, "meta.")
-		if s, ok := n.Properties.GetString(key); ok {
-			parts = append(parts, name+":"+s)
-			continue
-		}
-		if f, ok := n.Properties.GetFloat64(key); ok {
-			parts = append(parts, fmt.Sprintf("%s:%g", name, f))
-			continue
-		}
-		if b, ok := n.Properties.GetBool(key); ok {
-			parts = append(parts, fmt.Sprintf("%s:%t", name, b))
-			continue
-		}
-		if ss, ok := n.Properties.GetStringList(key); ok {
-			for _, s := range ss {
-				parts = append(parts, name+":"+s)
-			}
-		}
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, " ")
 }
 
 func validateUpdateRequest(r *UpdateRequest) error {

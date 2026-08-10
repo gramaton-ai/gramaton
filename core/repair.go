@@ -142,7 +142,7 @@ func (e *Engine) Repair() *RepairResult {
 				if !ok {
 					continue
 				}
-				if RecordIndexText(n) == "" {
+				if graph.RecordIndexText(n) == "" {
 					continue
 				}
 				model, ok := n.Properties.GetString("embedding_model")

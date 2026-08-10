@@ -136,7 +136,7 @@ func (e *Engine) Validate() *ValidationResult {
 		if !ok {
 			continue
 		}
-		if RecordIndexText(n) != "" {
+		if graph.RecordIndexText(n) != "" {
 			bm25FullExpected++
 		}
 	}

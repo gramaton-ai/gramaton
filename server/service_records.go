@@ -173,10 +173,13 @@ func (s *Server) serviceSave(ctx context.Context, req *saveRequest) (map[string]
 
 	n := s.engine.Graph().AddNode(props)
 
-	// Index content for BM25, with the caller's keywords and meta
-	// values appended -- the same three sources the api save path and
-	// the rebuild union (RecordIndexText) use.
+	// Index content for BM25, with the caller's summary, keywords, and
+	// meta values appended -- the same four sources the api save path
+	// and the rebuild union (RecordIndexText) use.
 	bm25Text := req.Content
+	if sum := graph.LexicalSummaryText(req.Content, req.SummaryShort); sum != "" {
+		bm25Text += " " + sum
+	}
 	if len(req.Keywords) > 0 {
 		bm25Text += " " + strings.Join(req.Keywords, " ")
 	}

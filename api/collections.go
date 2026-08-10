@@ -1171,7 +1171,7 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	// collection's name via the embedding-similarity path.
 	var itemVec []float32
 	if a.engine.Embedder() != nil {
-		contentText := core.RecordContentFromFields(contentFields, req.Fields)
+		contentText := graph.RecordContentFromFields(contentFields, req.Fields)
 		if contentText != "" || len(contextParts) > 0 {
 			textParts := append([]string{}, contextParts...)
 			if contentText != "" {
@@ -1269,17 +1269,17 @@ func (a *API) CollectionAdd(ctx context.Context, collectionID string, req Collec
 	n := a.engine.Graph().AddNode(props)
 	a.setFieldProps(n.ID, req.Fields)
 
-	// Index for BM25 using field values, prepended with the collection's
-	// name + description (captured into contextParts above) so the
-	// BM25 input is consistent with the embedding input. Without
-	// this, items in collection "Gramaton development" don't surface
-	// for BM25 queries on "Gramaton" unless their own fields contain
-	// the word.
+	// Index for BM25: the node's derived document (field values via
+	// RecordIndexText -- the fields are already on the node), prefixed
+	// with the collection's name + description (captured into
+	// contextParts above). Without the prefix, items in collection
+	// "Gramaton development" don't surface for BM25 queries on
+	// "Gramaton" unless their own fields contain the word. The
+	// rebuild/refresh twin (graph.LexicalDocument) derives the same
+	// prefix from the member_of edge, so the two stay token-equal.
 	bm25Parts := append([]string{}, contextParts...)
-	for _, v := range req.Fields {
-		if s, ok := v.(string); ok {
-			bm25Parts = append(bm25Parts, s)
-		}
+	if t := graph.RecordIndexText(n); t != "" {
+		bm25Parts = append(bm25Parts, t)
 	}
 	a.engine.IndexNode(n.ID, strings.Join(bm25Parts, " "), itemVec)
 	if itemVec != nil && a.engine.Embedder() != nil {
@@ -1430,7 +1430,7 @@ func (a *API) CollectionAddBatch(ctx context.Context, collectionID string, req C
 			})
 			continue
 		}
-		contentText := core.RecordContentFromFields(contentFields, item.Fields)
+		contentText := graph.RecordContentFromFields(contentFields, item.Fields)
 		parts := append([]string{}, contextParts...)
 		if contentText != "" {
 			parts = append(parts, contentText)
@@ -1754,7 +1754,7 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 		return CollectionUpdateResponse{}, ErrNotFound("item is not a member of this collection")
 	}
 	existingFields = extractFields(n)
-	contentBefore = core.RecordContent(n, contentFields)
+	contentBefore = graph.RecordContent(n, contentFields)
 	a.engine.RUnlock()
 
 	// Phase 2 (no lock): compute the merged content_fields output and
@@ -1773,7 +1773,7 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	for k, v := range req.Fields {
 		merged[k] = v
 	}
-	contentAfter := core.RecordContentFromFields(contentFields, merged)
+	contentAfter := graph.RecordContentFromFields(contentFields, merged)
 	contentChanged := contentBefore != contentAfter
 	var newVec []float32
 	if contentChanged && a.engine.Embedder() != nil && contentAfter != "" {
@@ -1830,7 +1830,7 @@ func (a *API) CollectionUpdate(ctx context.Context, collectionID, itemID string,
 	if contentChanged {
 		updated, _ := a.engine.Graph().GetNode(itemID)
 		bm25Parts := append([]string{}, contextParts...)
-		if t := core.RecordIndexText(updated); t != "" {
+		if t := graph.RecordIndexText(updated); t != "" {
 			bm25Parts = append(bm25Parts, t)
 		}
 		a.engine.IndexNode(itemID, strings.Join(bm25Parts, " "), newVec)

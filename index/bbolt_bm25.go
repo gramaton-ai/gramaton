@@ -72,7 +72,19 @@ var (
 	bm25DoclenBucket   = []byte("bm25:doclen")
 	bm25ReverseBucket  = []byte("bm25:reverse") // nodeID -> list of terms (for efficient Remove)
 	bm25MetaBucket     = []byte("bm25:meta")
+
+	bm25FormatVersionKey = []byte("format_version")
 )
+
+// bm25FormatVersion identifies the term-set recipe the persisted
+// index was built with. Bump it whenever the indexed document changes
+// shape (v2: content_short joined the lexical document -- see
+// graph.RecordIndexText). An index stamped with a different version
+// (or none: pre-versioning stores) was tokenized under another
+// recipe, so its data buckets are wiped at open; Len() then reports
+// 0 and the engine's boot-time rebuild reconstructs the index from
+// the graph with the current recipe.
+const bm25FormatVersion = 2
 
 // NewBboltBM25Index opens or creates a bbolt-backed BM25 index.
 func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
@@ -86,13 +98,16 @@ func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
 	err := db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{bm25PostingsBucket, bm25DoclenBucket, bm25ReverseBucket, bm25MetaBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
-				return err
+				return fmt.Errorf("create buckets: %w", err)
 			}
+		}
+		if err := checkFormatVersion(tx); err != nil {
+			return fmt.Errorf("format version check: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("bbolt bm25: create buckets: %w", err)
+		return nil, fmt.Errorf("bbolt bm25: %w", err)
 	}
 
 	idx := &BboltBM25Index{db: db, k1: k1, b: b}
@@ -100,6 +115,58 @@ func NewBboltBM25Index(db *bolt.DB, k1, b float64) (*BboltBM25Index, error) {
 		return nil, fmt.Errorf("bbolt bm25: load meta: %w", err)
 	}
 	return idx, nil
+}
+
+// checkFormatVersion wipes the index's data buckets when the stored
+// term-set version differs from the current recipe, then stamps the
+// current version. The wipe is unconditional on a mismatch -- even
+// when the doc counter reads zero -- so a meta/postings inconsistency
+// (e.g. a partially-applied saveMeta) can never leave old-recipe
+// postings under a current stamp, where the rebuild's decrement
+// bookkeeping would corrupt the counters and silently zero avgDL.
+// Recreating already-empty buckets costs nothing.
+//
+// Known limitation, accepted: a binary DOWNGRADE writes old-recipe
+// documents under the newer stamp (old binaries have no stamp
+// discipline), so a later re-upgrade sees a matching version over
+// mixed-recipe data. Alpha posture: downgrades are not a supported
+// path; a manual reindex (or deleting the index DB) recovers.
+func checkFormatVersion(tx *bolt.Tx) error {
+	mb := tx.Bucket(bm25MetaBucket)
+	var stored uint32
+	if v := mb.Get(bm25FormatVersionKey); len(v) >= 4 {
+		stored = binary.LittleEndian.Uint32(v)
+	}
+	if stored == bm25FormatVersion {
+		return nil
+	}
+	var numDocs uint32
+	if v := mb.Get([]byte("num_docs")); len(v) >= 4 {
+		numDocs = binary.LittleEndian.Uint32(v)
+	}
+	for _, name := range [][]byte{bm25PostingsBucket, bm25DoclenBucket, bm25ReverseBucket} {
+		if err := tx.DeleteBucket(name); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucket(name); err != nil {
+			return err
+		}
+	}
+	var zero4 [4]byte
+	if err := mb.Put([]byte("num_docs"), zero4[:]); err != nil {
+		return err
+	}
+	var zero8 [8]byte
+	if err := mb.Put([]byte("total_len"), zero8[:]); err != nil {
+		return err
+	}
+	if numDocs > 0 {
+		slog.Info("bm25 index term-set version changed; wiped for rebuild from graph",
+			"component", "index", "stored_version", stored, "current_version", bm25FormatVersion)
+	}
+	var buf4 [4]byte
+	binary.LittleEndian.PutUint32(buf4[:], bm25FormatVersion)
+	return mb.Put(bm25FormatVersionKey, buf4[:])
 }
 
 // loadMeta restores numDocs/totalLen/avgDL from the on-disk meta

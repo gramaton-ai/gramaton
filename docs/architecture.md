@@ -97,7 +97,7 @@ The Engine never knows about the transports or the api/ layer. It exposes primit
 - **`index/`**: BM25 (`bbolt_bm25.go`), the vector index (`flat_mmap.go`), property exact/range lookups (`bbolt_property.go`), secondary indexes (`bbolt_secondary.go`), and collections metadata (`bbolt_collections.go`). The commit-timestamp index (`graph/tsindex.go`) lives alongside `graph/bbolt_edges.go` since commits are graph-level concepts but it shares the same bbolt database as the index/ types. All persisted via bbolt buckets or a mmap'd flat file for vectors.
 - **`storage/`**: prolly tree — a probabilistic B-tree with content-addressed chunks. Mutations create new root hashes; old roots stay reachable as commit history. `storage/cas.go` is the content-addressed store; `storage/prolly.go` is the tree itself; `storage/gc.go` garbage-collects unreferenced chunks.
 
-The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted alongside each commit and loaded from disk at startup, skipping re-tokenization.
+The graph is fully materialized in memory on startup and flushed to the prolly tree on save. Queries never hit disk once the server is warm. Saves are incremental: the graph tracks dirty nodes/edges and only marshals what changed (O(K) instead of O(N)). The BM25 index is persisted in the shared bbolt database and loaded at startup, skipping re-tokenization; when it is empty or its stored term-set recipe version differs from the binary's, it is rebuilt from the graph during boot.
 
 ## Package map
 
@@ -209,7 +209,7 @@ Client → POST /v1/records → api.Save
      return the held_similar response (existing record's id, content,
      similarity, version token) with HTTP 409
   7. Create node with properties (content_full, processing_status, context_*, meta.*, timestamps)
-  8. IndexNode for BM25 + any meta text
+  8. IndexNode for BM25 (content + summary + keywords + meta text)
   9. Attach pre-computed embedding via applyPreEmbedded; note the write in
      the recent-writes ring; pick best vector for the search index
   10. Save incremental prolly update
@@ -334,7 +334,7 @@ Gramaton uses a prolly tree (probabilistic B-tree) for persistence:
 - **Append-only.** Mutations create new root hashes. Old roots stay reachable as commit history (until an operator prunes old history with `gramaton prune`). `gramaton log`, `gramaton diff`, `gramaton revert` work because the old state is still there.
 - **Deterministic splits.** Chunk boundaries are determined by hashing, so independent mutations to the same tree produce structurally identical results (enabling clean branch merges).
 
-The graph is materialized in memory on startup and flushed incrementally on `Save`. Dirty tracking (per graph object) keeps saves O(K) where K is the number of modified nodes/edges. The BM25 index is persisted as a content-addressed chunk referenced by each commit (`bm25_root`), so startup skips re-tokenization at cost of a small per-commit storage overhead.
+The graph is materialized in memory on startup and flushed incrementally on `Save`. Dirty tracking (per graph object) keeps saves O(K) where K is the number of modified nodes/edges. The BM25 index is persisted in the shared bbolt database (postings, doc lengths, and a reverse index, maintained on every write), so startup skips re-tokenization; a version stamp on the index records the term-set recipe it was built with, and a mismatch triggers a wipe-and-rebuild from the graph at boot.
 
 Garbage collection of unreferenced chunks is available via `storage/gc.go` but disabled by default — the "never delete" tenet means commit history is cheap to keep. The deliberate exception is `gramaton prune` (CLI-only, plan/confirm token, backup gate): it consumes the GC for chain truncation and records a tombstone so readers report removed history as "pruned by policy", never as corruption.
 

@@ -1022,8 +1022,15 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 			segProps["content_short"] = graph.StringProperty(seg.SummaryShort)
 		}
 		segNode := a.engine.Graph().AddNode(segProps)
-		// BM25-index the segment content (no vector -- BM25-only per B1).
-		a.engine.IndexNode(segNode.ID, seg.Content, nil)
+		// BM25-index the segment content plus its summary vocabulary.
+		// Segments are BM25-only by design: they are conversation-recall
+		// records, not semantic-search competitors, so they get no
+		// vector.
+		segText := seg.Content
+		if s := graph.LexicalSummaryText(seg.Content, seg.SummaryShort); s != "" {
+			segText += " " + s
+		}
+		a.engine.IndexNode(segNode.ID, segText, nil)
 
 		if _, err := a.engine.Graph().AddEdge(segNode.ID, topicID, "segment_of", 1.0, nil); err != nil {
 			a.log.Warn("segment_of edge create failed", "component", "session",
@@ -1137,6 +1144,9 @@ func (a *API) SessionSave(ctx context.Context, sessionID string, segments []Save
 		// embedder configured or embed call failed).
 		vec := embedVecs[i]
 		bm25Text := seg.Content
+		if s := graph.LexicalSummaryText(seg.Content, seg.SummaryShort); s != "" {
+			bm25Text += " " + s
+		}
 		if len(seg.Keywords) > 0 {
 			bm25Text += " " + strings.Join(seg.Keywords, " ")
 		}
@@ -1489,6 +1499,9 @@ func (a *API) SessionResolveHeld(ctx context.Context, sessionID string, resoluti
 			}
 			memNode := a.engine.Graph().AddNode(memProps)
 			bm25Text := w.content
+			if s := graph.LexicalSummaryText(w.content, w.meta.SummaryShort); s != "" {
+				bm25Text += " " + s
+			}
 			if len(w.meta.Keywords) > 0 {
 				bm25Text += " " + strings.Join(w.meta.Keywords, " ")
 			}

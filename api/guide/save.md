@@ -21,14 +21,16 @@ They are NOT nested compressions of the same text.
 - **`summary_short`** -- Target ~750 chars, max ~900. This is
   what gets vector-embedded -- the **embedding-ready semantic anchor**
   of the record. Treat as the canonical semantic representation, not
-  a tagline. Fill it with substance.
+  a tagline. Fill it with substance. Its vocabulary is also part of
+  the record's lexical (BM25) document, so terms you write here are
+  keyword-findable too.
 
 - **`keywords`** -- 3-8 search terms a **future agent would type**,
   not literal phrases from the conversation. BM25 weighting boost.
 
 Different fields feed different searches. Semantic recall hits
-`summary_short`; keyword recall hits `keywords` + BM25 of `content`;
-comprehension reads `content`.
+`summary_short`; keyword recall hits BM25 over `content` +
+`summary_short` + `keywords`; comprehension reads `content`.
 
 ## Synthesis, Not Summarization
 

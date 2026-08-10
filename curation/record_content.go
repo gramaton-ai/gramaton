@@ -1,7 +1,6 @@
 package curation
 
 import (
-	"github.com/gramaton-ai/gramaton/core"
 	"github.com/gramaton-ai/gramaton/graph"
 )
 
@@ -19,7 +18,7 @@ const propContentFields = "collection_content_fields"
 // For Memory records (content_full set), passes through
 // content_full. For collection items, walks member_of edges to find
 // a collection with content_fields declared and applies them via
-// core.RecordContent. Falls back to a wide concat of every field.*
+// graph.RecordContent. Falls back to a wide concat of every field.*
 // string when no governing collection declares content_fields
 // (schemaless / curation=none path).
 //
@@ -33,7 +32,7 @@ func RecordContentFor(g graph.NodeReader, recordID string) string {
 	if !ok {
 		return ""
 	}
-	return core.RecordContent(n, contentFieldsFor(g, recordID))
+	return graph.RecordContent(n, contentFieldsFor(g, recordID))
 }
 
 // contentFieldsFor returns the content_fields list for the first
